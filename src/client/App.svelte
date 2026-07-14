@@ -113,6 +113,10 @@
         if (!interactions.some((item) => item.requestId === interaction.requestId))
           interactions = [...interactions, interaction];
       }
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
+        const { requestId } = envelope.event.payload as { requestId: string };
+        interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
+      }
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
       });
