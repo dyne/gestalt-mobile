@@ -57,6 +57,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const occurredAt = new Date().toISOString();
           const normalized = normalizeCodexNotification(sessionId, 0, occurredAt, notification);
           if (!normalized) return;
+          if (normalized.type === 'turnCompleted') {
+            const turnId = (normalized.payload as { turn?: { id?: string } }).turn?.id;
+            const session = sessions.find(sessionId);
+            if (session && turnId && session.activeTurnId === turnId)
+              sessions.save(RelaySession.rehydrate(session).completeTurn(turnId, occurredAt).snapshot);
+          }
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
           );
