@@ -876,7 +876,11 @@ Commit: =feat: build interactive codex chat=
 
 Commit: =feat: build mobile git workspace view=
 
-** TODO [#A] Finish mobile layout and accessibility verification
+** WIP [#A] Finish mobile layout and accessibility verification
+
+- Status :: Safe-area padding, 44px controls, zoom-safe form text, visible
+  focus, reduced motion, and forced-colors styling are implemented. Playwright
+  viewport/focus verification and live-region refinement remain.
 
 - Why :: Safe areas, software keyboards, focus, and announcements are functional
   requirements, not polish.
