@@ -23,7 +23,7 @@
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string }>>([]);
   let sessionId = $state<string | null>(null);
-  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null }>>([]);
+  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null; activeTurnId?: string | null }>>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let startRequestKey = $state<string | null>(null);
@@ -60,7 +60,7 @@
       const bootstrap = (await loadBootstrap()) as {
         workspaces: Array<{ id: string; name: string }>;
         profiles: Array<{ name: string }>;
-        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null }>;
+        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null; activeTurnId?: string | null }>;
       };
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
@@ -73,6 +73,7 @@
       if (sessionId) cursor = readCursor(localStorage, sessionId);
       if (sessionId) message = readDraft(localStorage, sessionId);
       sessions = bootstrap.sessions;
+      activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
       if (sessionId) {
         await resyncHistory(sessionId);
@@ -95,6 +96,7 @@
     const session = (await relay.startSession(workspaceId, profile, startRequestKey)) as { id: string };
     startRequestKey = null;
     sessionId = session.id;
+    activeTurnId = null;
     saveSelectedSession(localStorage, session.id);
     await refreshSessions();
     messages = [];
@@ -117,6 +119,7 @@
     activities = [];
     cursor = 0;
     message = readDraft(localStorage, id);
+    activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
     await resyncHistory(id);
     connectSession(id);
     tab = 'chat';
@@ -133,6 +136,7 @@
     if (sessionId === id) {
       socket?.close();
       sessionId = null;
+      activeTurnId = null;
       saveSelectedSession(localStorage, null);
     }
     await refreshSessions();

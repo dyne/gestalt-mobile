@@ -781,8 +781,9 @@ Commit: =feat: expose safe git upstream actions=
 
 ** WIP [#A] Implement typed API, IndexedDB cache, and relay connection state
 
-- Status :: Relay client helpers, cursor replay, reconnect backoff, and draft
-  storage exist. The consolidated typed API/AppState and IndexedDB stores remain.
+- Status :: Relay client helpers, cursor replay, reconnect backoff, draft
+  storage, and active-turn rehydration from durable session metadata exist. The
+  consolidated typed API/AppState and IndexedDB stores remain.
 
 - Why :: Components should render state and dispatch intent, not own networking.
 - Change :: Create =src/client/lib/api.ts=, =problem.ts=, =idempotency.ts=,
