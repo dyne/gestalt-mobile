@@ -407,7 +407,7 @@ export interface ProfileCatalog {
 
 Commit: =feat: discover relay workspaces and profiles=
 
-** TODO [#A] Add the bootstrap REPR slice
+** WIP [#A] Add the bootstrap REPR slice
 
 - Why :: The first useful browser request needs catalog, saved sessions, and
   server capability state in one round trip.
