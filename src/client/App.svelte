@@ -25,8 +25,9 @@
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
   import { validateStartForm } from './features/sessions/start-form.js';
+  import { nextTab, type Tab } from './features/sessions/tab-state.js';
 
-  let tab = $state<'chat' | 'git' | 'sessions'>('chat');
+  let tab = $state<Tab>('chat');
   let status = $state('Loading relay…');
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
@@ -53,6 +54,7 @@
   let gitError = $state<string | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
+  const tabButtons: Partial<Record<Tab, HTMLButtonElement>> = {};
   const relay = createRelayClient();
   const messageCache = createMessageCache();
 
@@ -309,6 +311,14 @@
     void sendMessage();
   }
 
+  function handleTabKeydown(event: KeyboardEvent): void {
+    const direction = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : null;
+    if (direction === null) return;
+    event.preventDefault();
+    tab = nextTab(tab, direction);
+    tabButtons[tab]?.focus();
+  }
+
   function connectSession(id: string) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
@@ -513,8 +523,8 @@
   {/if}
 
   <nav aria-label="Primary">
-    <button aria-pressed={tab === 'chat'} onclick={() => (tab = 'chat')}>Chat</button>
-    <button aria-pressed={tab === 'git'} onclick={() => (tab = 'git')}>Git</button>
-    <button aria-pressed={tab === 'sessions'} onclick={() => (tab = 'sessions')}>Sessions</button>
+    <button bind:this={tabButtons.chat} aria-pressed={tab === 'chat'} onkeydown={handleTabKeydown} onclick={() => (tab = 'chat')}>Chat</button>
+    <button bind:this={tabButtons.git} aria-pressed={tab === 'git'} onkeydown={handleTabKeydown} onclick={() => (tab = 'git')}>Git</button>
+    <button bind:this={tabButtons.sessions} aria-pressed={tab === 'sessions'} onkeydown={handleTabKeydown} onclick={() => (tab = 'sessions')}>Sessions</button>
   </nav>
 </main>

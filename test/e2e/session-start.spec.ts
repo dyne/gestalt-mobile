@@ -395,3 +395,18 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
   await expect(page.getByText('assistant: Recovered history')).toBeVisible();
   await expect.poll(() => reads).toBe(2);
 });
+
+test('switches primary navigation with arrow keys', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [] }),
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat', pressed: true }).press('ArrowRight');
+  await expect(page.getByRole('heading', { name: 'Git' })).toBeVisible();
+  await page.getByRole('button', { name: 'Git', pressed: true }).press('ArrowLeft');
+  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+});
