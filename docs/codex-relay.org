@@ -845,8 +845,8 @@ Commit: =feat: build mobile session shell=
 - Status :: Streaming message accumulation, composer, current interaction
   renderers, and compact canonical-history activity summaries exist.
   Enter/Shift+Enter composition, single-flight send protection, preserved failed
-  drafts, and interruption UI exist. Completed-item replacement and live
-  activity projection remain.
+  drafts, interruption UI, and streamed-item completion replacement exist. Live
+  activity projection remains.
 
 - Why :: Chat is the primary product surface and must remain usable while events
   stream or connectivity changes.

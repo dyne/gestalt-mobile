@@ -7,7 +7,7 @@
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
   import { fetchAge } from './features/git/fetch-age.js';
-  import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
+  import { applyDelta, completeMessage, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
     readUserInputQuestions,
@@ -336,7 +336,11 @@
         if (!interactions.some((item) => item.requestId === interaction.requestId))
           interactions = [...interactions, interaction];
       }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') activeTurnId = null;
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') {
+        activeTurnId = null;
+        messages = completeMessage(messages, `assistant-${id}`);
+        persistMessages(id);
+      }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
         const { requestId } = envelope.event.payload as { requestId: string };
         interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
