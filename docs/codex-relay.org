@@ -985,10 +985,11 @@ Commit: =docs: add operation and ssh handoff guide=
 
 ** TODO [#A] Run final protocol and release verification
 
-- Status :: The current tree passes =format:check=, =lint=, =check=, =test=,
-  =build=, =protocol:check=, and two consecutive =test:e2e= runs. This remains
-  open until every L1/L2 heading is complete and the final post-audit run is
-  recorded.
+- Status :: On 2026-07-14, the then-current tree passed =lint=, =check=,
+  =test= (86 files/132 tests), =build=, =protocol:check= against Codex CLI
+  0.144.4, and two consecutive =test:e2e= runs (12 browser tests each).
+  This remains open until every L1/L2 heading is complete and the final
+  post-audit run, including =format:check=, is recorded.
 
 - Why :: Completion claims require fresh evidence from the exact final tree.
 - Change :: Do not change code unless a verification command fails. If a fix is
