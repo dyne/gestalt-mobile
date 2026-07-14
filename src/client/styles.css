@@ -9,9 +9,25 @@ body {
 }
 
 main {
+  min-block-size: 100dvh;
   max-inline-size: 42rem;
   margin-inline: auto;
-  padding: 1rem;
+  padding: 1rem 1rem calc(5rem + env(safe-area-inset-bottom));
+}
+
+nav {
+  position: fixed;
+  inset-inline: 0;
+  inset-block-end: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
+  background: Canvas;
+  border-block-start: 1px solid CanvasText;
+}
+button {
+  min-block-size: 44px;
 }
 
 :focus-visible {
