@@ -63,23 +63,22 @@ Use these URLs and status codes exactly:
 | GET | /health | 200 or 503 | get-health |
 | GET | /api/bootstrap | 200 | get-bootstrap |
 | GET | /api/sessions | 200 | list-sessions |
-| POST | /api/sessions | 201 | start-session |
+| POST | /api/sessions | 202 | start-session |
 | GET | /api/sessions/:sessionId | 200 | get-session |
-| POST | /api/sessions/:sessionId/stop | 200 | stop-session |
+| POST | /api/sessions/:sessionId/stop | 202 | stop-session |
 | POST | /api/sessions/:sessionId/restore | 200 | restore-session |
-| POST | /api/sessions/:sessionId/release | 200 | release-session |
+| POST | /api/sessions/:sessionId/release | 202 | release-session |
 | GET | /api/sessions/:sessionId/history | 200 | get-history |
 | POST | /api/sessions/:sessionId/turns | 202 | start-turn |
 | POST | /api/sessions/:sessionId/turns/:turnId/interrupt | 200 | interrupt-turn |
-| POST | /api/sessions/:sessionId/interactions/:requestId/approval | 200 | resolve-approval |
-| POST | /api/sessions/:sessionId/interactions/:requestId/answer | 200 | answer-user-input |
+| POST | /api/sessions/:sessionId/interactions/:requestId | 202 | respond-interaction |
 | GET | /api/sessions/:sessionId/git | 200 | get-git-summary |
 | POST | /api/sessions/:sessionId/git/refresh | 202 | refresh-git |
-| POST | /api/sessions/:sessionId/git/push | 200 | push-upstream |
-| GET upgrade | /api/events?sessionId=<id>&after=<sequence> | 101 | session-events |
+| POST | /api/sessions/:sessionId/git/push | 202 | push-upstream |
+| GET upgrade | /api/sessions/:sessionId/events?after=<sequence> | 101 | session-events |
 
-All POST routes require =Idempotency-Key= except =interrupt=, whose natural key
-is =(sessionId, turnId)=. All failures use =application/problem+json= and:
+Idempotency-Key support remains TODO; =interrupt= has the natural key
+=(sessionId, turnId)=. All failures use =application/problem+json= and:
 
 #+begin_src typescript
 export type ProblemDetail = {
