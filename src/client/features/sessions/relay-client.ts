@@ -19,6 +19,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request('/api/sessions', { workspaceId, profile }),
     startTurn: (sessionId: string, text: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { text }),
+    getHistory: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
     refreshGit: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`, {}),

@@ -79,6 +79,22 @@
     status = 'Codex is working…';
   }
 
+  async function resyncHistory(id: string) {
+    const history = (await relay.getHistory(id)) as {
+      items: Array<{ id: string; kind: string; text?: string }>;
+    };
+    messages = history.items
+      .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
+      .map((item) => ({
+        id: item.id,
+        role: item.kind === 'user' ? 'user' : 'assistant',
+        text: item.text!,
+        complete: true,
+      }));
+    cursor = 0;
+    status = 'Session history resynchronized.';
+  }
+
   async function loadGitSummary() {
     if (!sessionId) return;
     gitSummary = (await relay.getGitSummary(sessionId)) as typeof gitSummary;
@@ -138,7 +154,7 @@
     socket.onmessage = (message) => {
       const envelope = JSON.parse(String(message.data));
       if (envelope.type === 'relay.resyncRequired') {
-        status = 'Session history needs resync.';
+        void resyncHistory(id);
         return;
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
