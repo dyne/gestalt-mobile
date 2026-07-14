@@ -229,7 +229,7 @@ test('renders and resolves a relay approval request', async ({ page }) => {
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
   await page.routeWebSocket(
-    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       socket.send(
         JSON.stringify({
@@ -288,4 +288,45 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
 
   await page.goto('/');
   await expect(page.getByText('assistant: Working on it.')).toBeVisible();
+});
+
+test('resynchronizes canonical history after a pruned relay cursor', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  let reads = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currentSequence: 8,
+        items: reads === 1 ? [] : [{ id: 'agent-1', kind: 'agent', text: 'Recovered history' }],
+      }),
+    });
+  });
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) => {
+      socket.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence: 8 }));
+    },
+  );
+
+  await page.goto('/');
+  await expect(page.getByText('assistant: Recovered history')).toBeVisible();
+  await expect.poll(() => reads).toBe(2);
 });

@@ -925,7 +925,8 @@ Commit: =fix: harden mobile accessibility and layout=
   safe Git push confirmation and persisted-session canonical-history hydration.
   It also proves visible Git refresh progress and disabled Push without an
   upstream, command approval, and streamed agent text over a routed relay
-  WebSocket. Socket replay and relay restart flows remain.
+  WebSocket, plus canonical resync after a pruned cursor. Socket replay and
+  relay restart flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.
