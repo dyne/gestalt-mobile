@@ -31,7 +31,8 @@ export function registerSessionEvents(
       };
       const replay = replayOrResync(deps.since(sessionId, after), after);
       if (replay.kind === 'resync') {
-        connection.send(JSON.stringify({ type: 'relay.resyncRequired' }));
+        const currentSequence = deps.since(sessionId, 0).at(-1)?.sequence ?? after;
+        connection.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence }));
         connection.close();
         return;
       }

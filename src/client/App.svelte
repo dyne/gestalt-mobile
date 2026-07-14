@@ -88,7 +88,7 @@
     status = 'Codex turn interrupted.';
   }
 
-  async function resyncHistory(id: string) {
+  async function resyncHistory(id: string, currentSequence: number) {
     const history = (await relay.getHistory(id)) as {
       items: Array<{ id: string; kind: string; text?: string }>;
     };
@@ -100,7 +100,7 @@
         text: item.text!,
         complete: true,
       }));
-    cursor = 0;
+    cursor = currentSequence;
     status = 'Session history resynchronized.';
   }
 
@@ -163,7 +163,7 @@
     socket.onmessage = (message) => {
       const envelope = JSON.parse(String(message.data));
       if (envelope.type === 'relay.resyncRequired') {
-        void resyncHistory(id);
+        void resyncHistory(id, typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0);
         return;
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
