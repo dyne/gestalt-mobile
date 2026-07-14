@@ -21,6 +21,13 @@
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let socketGeneration = 0;
+  let gitSummary = $state<{
+    available: boolean;
+    branch: string | null;
+    upstream: string | null;
+    ahead: number;
+    behind: number;
+  } | null>(null);
   const relay = createRelayClient();
 
   onMount(async () => {
@@ -63,6 +70,23 @@
     await relay.startTurn(sessionId, message.trim());
     message = '';
     status = 'Codex is working…';
+  }
+
+  async function loadGitSummary() {
+    if (!sessionId) return;
+    gitSummary = (await relay.getGitSummary(sessionId)) as typeof gitSummary;
+  }
+
+  async function refreshGit() {
+    if (!sessionId) return;
+    await relay.refreshGit(sessionId);
+    await loadGitSummary();
+  }
+
+  async function pushGit() {
+    if (!sessionId) return;
+    await relay.pushGit(sessionId);
+    await loadGitSummary();
   }
 
   function connectSession(id: string) {
@@ -120,7 +144,24 @@
       {/if}
     </section>
   {:else if tab === 'git'}
-    <section aria-labelledby="git-title"><h2 id="git-title">Git</h2><p>Select a session to view its workspace status.</p></section>
+    <section aria-labelledby="git-title">
+      <h2 id="git-title">Git</h2>
+      {#if sessionId}
+        <button type="button" onclick={() => void loadGitSummary()}>Load status</button>
+        {#if gitSummary}
+          {#if gitSummary.available}
+            <p>Branch: {gitSummary.branch ?? 'detached'} · upstream: {gitSummary.upstream ?? 'none'}</p>
+            <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
+            <button type="button" onclick={() => void refreshGit()}>Fetch</button>
+            <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => void pushGit()}>Push</button>
+          {:else}
+            <p>This workspace is not a Git repository.</p>
+          {/if}
+        {/if}
+      {:else}
+        <p>Select a session to view its workspace status.</p>
+      {/if}
+    </section>
   {:else}
     <section aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
