@@ -28,6 +28,7 @@
     ahead: number;
     behind: number;
   } | null>(null);
+  let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   const relay = createRelayClient();
 
   onMount(async () => {
@@ -89,6 +90,12 @@
     await loadGitSummary();
   }
 
+  async function resolveInteraction(requestId: string, decision: 'approved' | 'denied') {
+    if (!sessionId) return;
+    await relay.respondInteraction(sessionId, requestId, { decision });
+    interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
+  }
+
   function connectSession(id: string) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     socket?.close();
@@ -100,6 +107,11 @@
       if (envelope.type === 'relay.resyncRequired') {
         status = 'Session history needs resync.';
         return;
+      }
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
+        const interaction = envelope.event.payload as { requestId: string; kind: string; payload: unknown };
+        if (!interactions.some((item) => item.requestId === interaction.requestId))
+          interactions = [...interactions, interaction];
       }
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
@@ -134,6 +146,18 @@
             <li><strong>{chatMessage.role}:</strong> {chatMessage.text}</li>
           {/each}
         </ol>
+        {#if interactions.length}
+          <section aria-labelledby="interactions-title">
+            <h3 id="interactions-title">Codex needs your decision</h3>
+            {#each interactions as interaction (interaction.requestId)}
+              <article>
+                <p>{interaction.kind}</p>
+                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'approved')}>Approve</button>
+                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'denied')}>Deny</button>
+              </article>
+            {/each}
+          </section>
+        {/if}
         <form onsubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <label for="message">Message</label>
           <textarea id="message" bind:value={message} rows="3" required></textarea>
