@@ -18,6 +18,7 @@ import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
+import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
 
@@ -49,6 +50,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
+  let recoverExitedSession: (sessionId: string) => void = () => {};
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
         launchCodexAppServer,
@@ -82,6 +84,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           );
           return true;
         },
+        (sessionId) => recoverExitedSession(sessionId),
       )
     : null;
   const saveSession = (
@@ -90,6 +93,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     sessions.save(session);
     events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
   };
+  if (runtime) {
+    const supervisor = new SessionSupervisor(
+      async (sessionId) => {
+        const session = sessions.find(sessionId);
+        if (!session || session.desiredState !== 'active' || !session.threadId) return;
+        const recovering = RelaySession.rehydrate(session)
+          .beginRecovery(new Date().toISOString())
+          .snapshot;
+        saveSession(recovering);
+        saveSession(await runtime.restore(recovering, new Date().toISOString()));
+      },
+      (sessionId) => {
+        const session = sessions.find(sessionId);
+        if (session)
+          saveSession(RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot);
+      },
+    );
+    recoverExitedSession = (sessionId) => supervisor.recover(sessionId);
+  }
   const app = await buildApp({
     health: {
       async read() {
