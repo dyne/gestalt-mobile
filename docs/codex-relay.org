@@ -678,8 +678,9 @@ Commit: =feat: handle codex approvals and questions=
 ** WIP [#A] Add sequenced WebSocket replay and resynchronization
 
 - Status :: Sequenced replay, gap detection, slow-client cutoff, stable client
-  retry, heartbeat liveness, and canonical history resync exist. Full handoff
-  tests remain.
+  retry, heartbeat liveness, and canonical history resync exist. History now
+  returns its durable cursor so initial browser hydration can replay only later
+  events. Full handoff tests remain.
 
 - Why :: WebSocket delivery alone loses events during mobile network changes.
 - Change :: Create =src/server/platform/events/session-event-service.ts=,
@@ -788,9 +789,10 @@ Commit: =feat: expose safe git upstream actions=
   =ApiClient= implements every fixed REST route and throws typed =ApiProblem=.
   IndexedDB database =codex-relay= version 1 has stores =settings=, =drafts=,
   =cursors=, and =messages=; retain 200 messages per session. Connection state is
-  =offline|connecting|replaying|live|resyncing=. It reconnects with the cursor,
-  applies events by sequence, ignores exact duplicates, detects forward gaps,
-  runs history resync, and persists the cursor only after applying an event.
+  =offline|connecting|replaying|live|resyncing=. It hydrates canonical history
+  with its response cursor before opening the replay socket, applies events by
+  sequence, ignores exact duplicates, detects forward gaps, runs history resync,
+  and persists the cursor only after applying an event.
 - Tests :: In jsdom, fake fetch/WebSocket/IndexedDB boundary. Prove generated
   idempotency keys remain stable for one retry, drafts survive reload, duplicate
   events do not duplicate items, gap triggers resync, and cleanup closes socket.

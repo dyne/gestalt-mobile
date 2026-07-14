@@ -8,12 +8,13 @@ export function registerGetHistory(
   deps: {
     find(id: string): RelaySessionSnapshot | null;
     read(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>>;
+    currentSequence(sessionId: string): number;
   },
 ): void {
   app.get('/api/sessions/:id/history', async (request, reply) => {
     const session = deps.find((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     const items: ChatItem[] = toChatItems(await deps.read(session));
-    return reply.send({ items });
+    return reply.send({ items, currentSequence: deps.currentSequence(session.id) });
   });
 }

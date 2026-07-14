@@ -70,7 +70,10 @@
       if (sessionId) message = readDraft(localStorage, sessionId);
       sessions = bootstrap.sessions;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
-      if (sessionId) connectSession(sessionId);
+      if (sessionId) {
+        await resyncHistory(sessionId);
+        connectSession(sessionId);
+      }
     } catch {
       status = 'Relay unavailable. Check the server connection.';
     }
@@ -103,13 +106,14 @@
     sessions = (await relay.listSessions()) as typeof sessions;
   }
 
-  function openSession(id: string) {
+  async function openSession(id: string) {
     sessionId = id;
     saveSelectedSession(localStorage, id);
     messages = [];
     activities = [];
     cursor = 0;
     message = readDraft(localStorage, id);
+    await resyncHistory(id);
     connectSession(id);
     tab = 'chat';
   }
@@ -117,7 +121,7 @@
   async function restoreSession(id: string) {
     await relay.restoreSession(id);
     await refreshSessions();
-    openSession(id);
+    await openSession(id);
   }
 
   async function releaseSession(id: string) {
@@ -153,10 +157,12 @@
     status = 'Codex turn interrupted.';
   }
 
-  async function resyncHistory(id: string, currentSequence: number) {
+  async function resyncHistory(id: string, fallbackSequence = 0) {
     const history = (await relay.getHistory(id)) as {
       items: Array<Record<string, unknown> & { id: string; kind: string; text?: string }>;
+      currentSequence?: number;
     };
+    if (sessionId !== id) return;
     messages = history.items
       .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
       .map((item) => ({
@@ -169,7 +175,7 @@
       const activity = toActivity(item);
       return activity ? [activity] : [];
     });
-    cursor = currentSequence;
+    cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
     saveCursor(localStorage, id, cursor);
     status = 'Session history resynchronized.';
   }

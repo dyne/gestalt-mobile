@@ -42,6 +42,7 @@ export type AppDependencies = {
     close?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
     readHistory?(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>>;
+    currentSequence?(sessionId: string): number;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
     release?(session: RelaySessionSnapshot): RelaySessionSnapshot;
@@ -80,6 +81,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       registerGetHistory(app, {
         find: deps.sessionRoutes.find,
         read: deps.sessionRoutes.readHistory,
+        currentSequence: deps.sessionRoutes.currentSequence ?? (() => 0),
       });
     if (deps.sessionRoutes.startTurn)
       registerStartTurn(app, {
