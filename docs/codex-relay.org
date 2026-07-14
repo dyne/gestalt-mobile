@@ -554,8 +554,8 @@ Commit: =feat: start durable codex sessions=
 
 ** WIP [#A] Add list, stop, release, restore, and resume-command slices
 
-- Status :: Stop, release, persisted state, and SSH resume formatting exist.
-  List and restore routes plus ownership-conflict coverage remain.
+- Status :: List, stop, release, restore, persisted state, and SSH resume
+  formatting exist. Ownership-conflict and idempotency coverage remain.
 
 - Why :: Mobile switching and safe SSH handoff require explicit ownership
   transitions.
