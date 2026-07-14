@@ -423,7 +423,7 @@ Commit: =feat: discover relay workspaces and profiles=
 
 Commit: =feat: add bootstrap catalog endpoint=
 
-* WIP [#A] Isolate the Codex app-server protocol
+* DONE [#A] Isolate the Codex app-server protocol
 
 - Effort :: 3 days
 - Goal :: Provide a tested, version-checked port over JSONL stdio without
@@ -451,7 +451,7 @@ Commit: =feat: add bootstrap catalog endpoint=
 
 Commit: =chore: generate codex app-server bindings=
 
-** WIP [#A] Implement the JSON-RPC client and process launcher
+** DONE [#A] Implement the JSON-RPC client and process launcher
 
 - Why :: Request correlation, server requests, incremental JSONL parsing, and
   process failure are the riskiest I/O boundary.
@@ -492,7 +492,7 @@ export interface CodexProcessLauncher {
 
 Commit: =feat: add codex app-server stdio adapter=
 
-** WIP [#A] Normalize Codex messages into relay events
+** DONE [#A] Normalize Codex messages into relay events
 
 - Why :: Generated protocol changes must stop at the adapter boundary.
 - Change :: Create =src/server/platform/codex/normalize-codex-message.ts=,
