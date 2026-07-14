@@ -22,4 +22,18 @@ describe('relay client', () => {
       { url: '/api/sessions/session-1/turns', body: JSON.stringify({ text: 'hello' }) },
     ]);
   });
+
+  it('reads and refreshes the selected session Git summary', async () => {
+    const requests: string[] = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      return new Response(JSON.stringify({ available: true }), { status: 200 });
+    });
+    await client.getGitSummary('session-1');
+    await client.refreshGit('session-1');
+    expect(requests).toEqual([
+      'GET /api/sessions/session-1/git',
+      'POST /api/sessions/session-1/git/refresh',
+    ]);
+  });
 });

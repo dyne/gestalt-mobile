@@ -8,11 +8,21 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     if (!response.ok) throw new Error('RELAY_REQUEST_FAILED');
     return response.json();
   }
+  async function get(path: string): Promise<unknown> {
+    const response = await fetcher(path);
+    if (!response.ok) throw new Error('RELAY_REQUEST_FAILED');
+    return response.json();
+  }
 
   return {
     startSession: (workspaceId: string, profile: string) =>
       request('/api/sessions', { workspaceId, profile }),
     startTurn: (sessionId: string, text: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { text }),
+    getGitSummary: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
+    refreshGit: (sessionId: string) =>
+      request(`/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`, {}),
+    pushGit: (sessionId: string) =>
+      request(`/api/sessions/${encodeURIComponent(sessionId)}/git/push`, {}),
   };
 }
