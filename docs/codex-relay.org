@@ -518,7 +518,7 @@ Commit: =feat: add codex app-server stdio adapter=
 
 Commit: =feat: normalize codex session events=
 
-* TODO [#A] Implement session lifecycle slices and supervision
+* WIP [#A] Implement session lifecycle slices and supervision
 
 - Effort :: 3 days
 - Goal :: Start, inspect, stop, release, restore, and automatically recover
@@ -526,7 +526,7 @@ Commit: =feat: normalize codex session events=
 - Notes :: =SessionRuntimeRegistry= is the only in-memory map of session ID to
   live Codex adapter. Persist state before and after side effects as specified.
 
-** TODO [#A] Add start-session and get-session slices
+** WIP [#A] Add start-session and get-session slices
 
 - Why :: Starting a correctly bound process/thread is the central use case.
 - Change :: Create =src/server/platform/runtime/session-runtime-registry.ts=,
