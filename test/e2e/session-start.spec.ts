@@ -77,6 +77,42 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Start session' })).toBeEnabled();
 });
 
+test('keeps the composer reachable at a phone viewport without horizontal overflow', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   const session = {
     id: 'session-1',
