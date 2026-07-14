@@ -141,3 +141,60 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByText('assistant: The branch is clean.')).toBeVisible();
   await expect(page.getByText('Command · completed')).toBeVisible();
 });
+
+test('shows Git fetch progress and disables push without an upstream', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  let completeRefresh: (() => void) | undefined;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/git', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        available: true,
+        branch: 'topic',
+        upstream: null,
+        ahead: 1,
+        behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
+        commits: [],
+        fetchedAt: null,
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/git/refresh', async (route) => {
+    await new Promise<void>((resolve) => {
+      completeRefresh = resolve;
+    });
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByRole('button', { name: 'Load status' }).click();
+  await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Fetch' }).click();
+  await expect(page.getByRole('button', { name: 'Fetching…' })).toBeDisabled();
+  completeRefresh?.();
+  await expect(page.getByRole('button', { name: 'Fetch' })).toBeEnabled();
+});
