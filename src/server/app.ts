@@ -9,6 +9,7 @@ import { registerRefreshGit } from './features/git/refresh/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
+import { registerListSessions } from './features/sessions/list-sessions/endpoint.js';
 import { registerGetHistory } from './features/sessions/get-history/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
@@ -31,6 +32,7 @@ export type AppDependencies = {
     now(): string;
     save(session: RelaySessionSnapshot): void;
     find(id: string): RelaySessionSnapshot | null;
+    list?(): RelaySessionSnapshot[];
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
     activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
@@ -62,6 +64,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.sessionRoutes) {
     registerStartSession(app, deps.sessionRoutes);
     registerGetSession(app, deps.sessionRoutes.find);
+    if (deps.sessionRoutes.list) registerListSessions(app, { list: deps.sessionRoutes.list });
     if (deps.sessionRoutes.readHistory)
       registerGetHistory(app, { find: deps.sessionRoutes.find, read: deps.sessionRoutes.readHistory });
     if (deps.sessionRoutes.startTurn)

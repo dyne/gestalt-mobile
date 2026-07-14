@@ -119,6 +119,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       now: () => new Date().toISOString(),
       save: saveSession,
       find: (id) => withPendingInteractions(sessions.find(id)),
+      list: () => sessions.list().map((session) => withPendingInteractions(session)!),
       workspaces,
       profiles: options.profiles,
       activate: runtime
