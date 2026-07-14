@@ -17,6 +17,7 @@ import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pen
 import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
+import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
 
@@ -44,6 +45,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
+  const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
         launchCodexAppServer,
@@ -125,7 +127,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       subscribe: (id, listener) => events.subscribe(id, listener),
     },
     interactions,
-    gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: fetchUpstream },
+    gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: (path) => gitFetches.refresh(path) },
   });
   if (runtime) {
     await Promise.all(
