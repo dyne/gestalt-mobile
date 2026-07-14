@@ -16,9 +16,9 @@ describe('relay application composition', () => {
       logger: console,
       bootstrap: {
         workspaces: {
-          list: async () => [{ id: 'workspace-1', name: 'workspace', path: '/relay/workspace' }],
+          list: async () => [{ id: 'workspace-1', name: 'workspace', isGitRepository: false }],
         },
-        profiles: { list: async () => [{ name: 'default' }] },
+        profiles: { list: async () => [{ name: 'default', state: 'ok', status: 'ready' }] },
         sessions: { list: () => sessions },
         protocolCompatible: true,
       },

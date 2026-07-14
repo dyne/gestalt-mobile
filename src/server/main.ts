@@ -1,23 +1,26 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { buildApp } from './app.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+import { CodexProfileCatalog } from './platform/catalog/codex-profile-catalog.js';
+import { composeRelayApp } from './composition.js';
 import { parseConfig } from './config.js';
 
 const config = parseConfig(process.argv.slice(2));
 const staticDir = resolve(process.cwd(), 'dist/client');
-const app = await buildApp({
-  health: {
-    async read() {
-      return {
-        status: 'degraded',
-        version: '0.1.0',
-        codex: { installedVersion: null, protocolVersion: null, compatible: false },
-      };
-    },
-  },
-  logger: console,
+const runFile = promisify(execFile);
+const installedCodexVersion = await runFile('codex', ['--version'])
+  .then(({ stdout }) => stdout.trim() || null)
+  .catch(() => null);
+const app = await composeRelayApp({
+  root: config.root,
+  dataDir: config.dataDir,
   staticDir: existsSync(resolve(staticDir, 'index.html')) ? staticDir : undefined,
+  profiles: new CodexProfileCatalog(),
+  installedCodexVersion,
+  startAppServers: true,
 });
 
 try {

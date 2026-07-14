@@ -9,6 +9,7 @@ export async function startSession(
     save(session: RelaySessionSnapshot): void;
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
+    activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
   },
 ): Promise<RelaySessionSnapshot> {
   const [workspace] = await Promise.all([
@@ -23,5 +24,8 @@ export async function startSession(
     now: deps.now(),
   }).snapshot;
   deps.save(session);
-  return session;
+  if (!deps.activate) return session;
+  const active = await deps.activate(session);
+  deps.save(active);
+  return active;
 }

@@ -22,6 +22,7 @@ export type AppDependencies = {
     find(id: string): RelaySessionSnapshot | null;
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
+    activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
   };
 };
 
