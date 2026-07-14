@@ -785,7 +785,7 @@ Commit: =feat: expose safe git upstream actions=
   storage, and active-turn rehydration from durable session metadata exist. The
   message cache now uses IndexedDB with a 200-item cap and safe fallback. The
   consolidated typed API/AppState and remaining IndexedDB stores remain. Failed
-  mutation problem details are now surfaced in the mobile status line, and
+  lifecycle mutation problem details are now surfaced in the mobile status line, and
   idempotency keys fall back safely when plain HTTP lacks =crypto.randomUUID()=.
 
 - Why :: Components should render state and dispatch intent, not own networking.

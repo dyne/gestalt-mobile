@@ -151,21 +151,29 @@
   }
 
   async function restoreSession(id: string) {
-    await relay.restoreSession(id);
-    await refreshSessions();
-    await openSession(id);
+    try {
+      await relay.restoreSession(id);
+      await refreshSessions();
+      await openSession(id);
+    } catch (error) {
+      status = `Could not restore session: ${errorMessage(error)}`;
+    }
   }
 
   async function releaseSession(id: string) {
-    await relay.releaseSession(id);
-    if (sessionId === id) {
-      socket?.close();
-      sessionId = null;
-      activeTurnId = null;
-      saveSelectedSession(localStorage, null);
+    try {
+      await relay.releaseSession(id);
+      if (sessionId === id) {
+        socket?.close();
+        sessionId = null;
+        activeTurnId = null;
+        saveSelectedSession(localStorage, null);
+      }
+      await refreshSessions();
+      status = 'Session released for SSH resume.';
+    } catch (error) {
+      status = `Could not release session: ${errorMessage(error)}`;
     }
-    await refreshSessions();
-    status = 'Session released for SSH resume.';
   }
 
   async function copyResumeCommand(command: string) {
@@ -192,9 +200,13 @@
 
   async function interruptTurn() {
     if (!sessionId || !activeTurnId) return;
-    await relay.interruptTurn(sessionId, activeTurnId);
-    activeTurnId = null;
-    status = 'Codex turn interrupted.';
+    try {
+      await relay.interruptTurn(sessionId, activeTurnId);
+      activeTurnId = null;
+      status = 'Codex turn interrupted.';
+    } catch (error) {
+      status = `Could not interrupt Codex: ${errorMessage(error)}`;
+    }
   }
 
   async function resyncHistory(id: string, fallbackSequence = 0) {
@@ -292,6 +304,10 @@
 
   function persistMessages(id: string): void {
     void messageCache.write(id, messages);
+  }
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : 'Unknown relay error.';
   }
 
   function handleComposerKeydown(event: KeyboardEvent): void {
