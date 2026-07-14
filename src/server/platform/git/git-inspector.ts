@@ -68,3 +68,15 @@ export async function pushUpstream(cwd: string, upstream: string): Promise<void>
     `HEAD:refs/heads/${upstream.slice(separator + 1)}`,
   ]);
 }
+
+export async function fetchUpstream(cwd: string): Promise<void> {
+  const upstream = await git(cwd, [
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    '@{upstream}',
+  ]);
+  const remote = upstream.trim().split('/')[0];
+  if (!remote) throw new Error('NO_UPSTREAM');
+  await git(cwd, ['fetch', '--prune', remote]);
+}
