@@ -4,15 +4,17 @@
 }
 
 body {
+  min-block-size: 100vh;
   min-block-size: 100dvh;
   margin: 0;
 }
 
 main {
+  min-block-size: 100vh;
   min-block-size: 100dvh;
   max-inline-size: 42rem;
   margin-inline: auto;
-  padding: 1rem 1rem calc(5rem + env(safe-area-inset-bottom));
+  padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
 nav {
@@ -30,7 +32,36 @@ button {
   min-block-size: 44px;
 }
 
+input,
+select,
+textarea {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-block-size: 44px;
+  font: inherit;
+  font-size: max(1rem, 16px);
+}
+
 :focus-visible {
   outline: 3px solid CanvasText;
   outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button,
+  input,
+  select,
+  textarea {
+    border: 1px solid CanvasText;
+  }
 }
