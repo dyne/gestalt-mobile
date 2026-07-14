@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
+  import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { createRelayClient } from './features/sessions/relay-client.js';
+  import { applyRelayEvent } from './features/sessions/session-events-client.js';
+  import { reconnectDelay } from './features/sessions/session-state.js';
 
   let tab = $state<'chat' | 'git' | 'sessions'>('chat');
   let status = $state('Loading relay…');
@@ -12,6 +15,12 @@
   let workspaceId = $state('');
   let profile = $state('');
   let message = $state('');
+  let messages = $state<ChatMessage[]>([]);
+  let cursor = $state(0);
+  let socket: WebSocket | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempt = 0;
+  let socketGeneration = 0;
   const relay = createRelayClient();
 
   onMount(async () => {
@@ -27,15 +36,24 @@
       profile = profiles[0]?.name ?? '';
       sessionId = bootstrap.sessions[0]?.id ?? null;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
+      if (sessionId) connectSession(sessionId);
     } catch {
       status = 'Relay unavailable. Check the server connection.';
     }
+  });
+
+  onDestroy(() => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    socket?.close();
   });
 
   async function startSession() {
     if (!workspaceId || !profile) return;
     const session = (await relay.startSession(workspaceId, profile)) as { id: string };
     sessionId = session.id;
+    messages = [];
+    cursor = 0;
+    connectSession(session.id);
     tab = 'chat';
     status = 'Session started.';
   }
@@ -45,6 +63,30 @@
     await relay.startTurn(sessionId, message.trim());
     message = '';
     status = 'Codex is working…';
+  }
+
+  function connectSession(id: string) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    socket?.close();
+    const generation = ++socketGeneration;
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(`${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`);
+    socket.onmessage = (message) => {
+      const envelope = JSON.parse(String(message.data));
+      if (envelope.type === 'relay.resyncRequired') {
+        status = 'Session history needs resync.';
+        return;
+      }
+      cursor = applyRelayEvent(cursor, envelope, (text) => {
+        messages = applyDelta(messages, `assistant-${id}`, text);
+      });
+      reconnectAttempt = 0;
+    };
+    socket.onclose = () => {
+      if (generation !== socketGeneration || sessionId !== id) return;
+      status = 'Connection interrupted. Reconnecting…';
+      reconnectTimer = setTimeout(() => connectSession(id), reconnectDelay(reconnectAttempt++));
+    };
   }
 </script>
 
@@ -63,6 +105,11 @@
       <h2 id="chat-title">Chat</h2>
       {#if sessionId}
         <p>Connected session: {sessionId}</p>
+        <ol aria-label="Chat messages">
+          {#each messages as chatMessage (chatMessage.id)}
+            <li><strong>{chatMessage.role}:</strong> {chatMessage.text}</li>
+          {/each}
+        </ol>
         <form onsubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <label for="message">Message</label>
           <textarea id="message" bind:value={message} rows="3" required></textarea>
