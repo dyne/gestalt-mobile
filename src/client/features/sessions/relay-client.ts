@@ -15,6 +15,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
+    listSessions: () => get('/api/sessions'),
     startSession: (workspaceId: string, profile: string) =>
       request('/api/sessions', { workspaceId, profile }),
     startTurn: (sessionId: string, text: string) =>

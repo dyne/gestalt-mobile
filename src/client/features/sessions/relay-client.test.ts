@@ -37,6 +37,16 @@ describe('relay client', () => {
     ]);
   });
 
+  it('lists durable sessions', async () => {
+    const requests: string[] = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    await client.listSessions();
+    expect(requests).toEqual(['GET /api/sessions']);
+  });
+
   it('submits an interaction decision to the original session request', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {
