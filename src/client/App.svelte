@@ -11,6 +11,7 @@
   import { createRelayClient } from './features/sessions/relay-client.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
+  import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
 
   let tab = $state<'chat' | 'git' | 'sessions'>('chat');
   let status = $state('Loading relay…');
@@ -51,7 +52,11 @@
       profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
       profile = profiles[0]?.name ?? '';
-      sessionId = bootstrap.sessions[0]?.id ?? null;
+      const remembered = readSelectedSession(localStorage);
+      sessionId = bootstrap.sessions.some((session) => session.id === remembered)
+        ? remembered
+        : (bootstrap.sessions[0]?.id ?? null);
+      if (sessionId) cursor = readCursor(localStorage, sessionId);
       sessions = bootstrap.sessions;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
       if (sessionId) connectSession(sessionId);
@@ -69,6 +74,7 @@
     if (!workspaceId || !profile) return;
     const session = (await relay.startSession(workspaceId, profile)) as { id: string };
     sessionId = session.id;
+    saveSelectedSession(localStorage, session.id);
     await refreshSessions();
     messages = [];
     cursor = 0;
@@ -83,6 +89,7 @@
 
   function openSession(id: string) {
     sessionId = id;
+    saveSelectedSession(localStorage, id);
     messages = [];
     cursor = 0;
     connectSession(id);
@@ -100,6 +107,7 @@
     if (sessionId === id) {
       socket?.close();
       sessionId = null;
+      saveSelectedSession(localStorage, null);
     }
     await refreshSessions();
     status = 'Session released for SSH resume.';
@@ -133,6 +141,7 @@
         complete: true,
       }));
     cursor = currentSequence;
+    saveCursor(localStorage, id, cursor);
     status = 'Session history resynchronized.';
   }
 
@@ -211,6 +220,7 @@
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
       });
+      saveCursor(localStorage, id, cursor);
       reconnectAttempt = 0;
     };
     socket.onclose = () => {
