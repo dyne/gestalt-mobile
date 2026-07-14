@@ -42,6 +42,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const sessions = new SqliteSessionRepository(database);
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
+  const withPendingInteractions = (
+    session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
+  ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
@@ -60,7 +63,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         (sessionId, request) => {
           const interaction = toPendingInteraction(request);
-          const session = sessions.find(sessionId);
+          const session = withPendingInteractions(sessions.find(sessionId));
           if (!interaction || !session) return false;
           interactions.add(sessionId, interaction);
           const updated = RelaySession.rehydrate(session).requestInteraction(
@@ -100,14 +103,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     bootstrap: {
       workspaces,
       profiles: options.profiles,
-      sessions,
+      sessions: {
+        list: () => sessions.list().map((session) => withPendingInteractions(session)!),
+      },
       protocolCompatible: protocol.compatible,
     },
     sessionRoutes: {
       createId: randomUUID,
       now: () => new Date().toISOString(),
       save: saveSession,
-      find: (id) => sessions.find(id),
+      find: (id) => withPendingInteractions(sessions.find(id)),
       workspaces,
       profiles: options.profiles,
       activate: runtime

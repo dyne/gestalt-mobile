@@ -20,4 +20,17 @@ export class SqlitePendingInteractionStore {
         .run(resolvedAt, sessionId, requestId).changes === 1
     );
   }
+  list(sessionId: string): PendingInteraction[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT request_id,kind,payload_json FROM pending_interactions WHERE session_id = ? AND resolved_at IS NULL ORDER BY rowid',
+        )
+        .all(sessionId) as Array<{ request_id: string; kind: PendingInteraction['kind']; payload_json: string }>
+    ).map((row) => ({
+      requestId: row.request_id,
+      kind: row.kind,
+      payload: JSON.parse(row.payload_json),
+    }));
+  }
 }

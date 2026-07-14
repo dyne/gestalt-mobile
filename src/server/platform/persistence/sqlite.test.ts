@@ -107,7 +107,9 @@ describe('SQLite relay persistence', () => {
       .run();
     const store = new SqlitePendingInteractionStore(database);
     store.add('s', { requestId: 'i', kind: 'userInput', payload: {} });
+    expect(store.list('s')).toEqual([{ requestId: 'i', kind: 'userInput', payload: {} }]);
     expect(store.resolve('s', 'i', 'later')).toBe(true);
+    expect(store.list('s')).toEqual([]);
     expect(store.resolve('s', 'i', 'again')).toBe(false);
     database.close();
   });
