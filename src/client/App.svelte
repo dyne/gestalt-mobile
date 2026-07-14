@@ -187,9 +187,14 @@
 
   async function pushGit() {
     if (!sessionId) return;
-    await relay.pushGit(sessionId);
-    pushConfirmationOpen = false;
-    await loadGitSummary();
+    gitError = null;
+    try {
+      await relay.pushGit(sessionId);
+      pushConfirmationOpen = false;
+      await loadGitSummary();
+    } catch {
+      gitError = 'Push failed. Refresh the branch status and resolve remote divergence first.';
+    }
   }
 
   async function resolveInteraction(requestId: string, decision: 'accept' | 'decline') {
