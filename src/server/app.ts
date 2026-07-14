@@ -16,6 +16,7 @@ import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
 import { registerInterruptTurn } from './features/sessions/interrupt-turn/endpoint.js';
 import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
 import { registerRestoreSession } from './features/sessions/restore-session/endpoint.js';
+import { registerReleaseSession } from './features/sessions/release-session/endpoint.js';
 import { registerRespondInteraction } from './features/sessions/respond-interaction/endpoint.js';
 import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
@@ -43,6 +44,7 @@ export type AppDependencies = {
     readHistory?(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>>;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    release?(session: RelaySessionSnapshot): RelaySessionSnapshot;
     interactionResolved?(sessionId: string, requestId: string, occurredAt: string): void;
   };
   sessionEvents?: {
@@ -85,6 +87,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         find: deps.sessionRoutes.find,
         restore: deps.sessionRoutes.restore,
         save: deps.sessionRoutes.save,
+      });
+    if (deps.sessionRoutes.release && deps.sessionRoutes.close)
+      registerReleaseSession(app, {
+        find: deps.sessionRoutes.find,
+        release: deps.sessionRoutes.release,
+        save: deps.sessionRoutes.save,
+        close: deps.sessionRoutes.close,
       });
     if (deps.sessionRoutes.close)
       registerStopSession(app, {
