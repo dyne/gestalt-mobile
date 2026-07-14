@@ -354,6 +354,8 @@
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
         persistMessages(id);
+      }, () => {
+        void resyncHistory(id);
       });
       saveCursor(localStorage, id, cursor);
     };

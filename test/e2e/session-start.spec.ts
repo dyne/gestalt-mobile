@@ -396,6 +396,53 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
   await expect.poll(() => reads).toBe(2);
 });
 
+test('resynchronizes canonical history after a replay sequence gap', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  let reads = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currentSequence: reads === 1 ? 0 : 3,
+        items:
+          reads === 1 ? [] : [{ id: 'agent-1', kind: 'agent', text: 'Recovered missing event' }],
+      }),
+    });
+  });
+  await page.routeWebSocket(
+    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: { sequence: 2, type: 'agentMessageDelta', payload: { text: 'gapped' } },
+        }),
+      );
+    },
+  );
+
+  await page.goto('/');
+  await expect(page.getByText('assistant: Recovered missing event')).toBeVisible();
+  await expect.poll(() => reads).toBe(2);
+});
+
 test('switches primary navigation with arrow keys', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({

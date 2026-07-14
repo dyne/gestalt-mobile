@@ -24,4 +24,21 @@ describe('relay session events', () => {
     );
     expect({ cursor, applied }).toEqual({ cursor: 1, applied: ['hello'] });
   });
+
+  it('does not apply a forward sequence gap and requests a canonical resync', () => {
+    const gaps: number[] = [];
+    const cursor = applyRelayEvent(
+      3,
+      {
+        type: 'relay.event',
+        event: { sequence: 5, type: 'agentMessageDelta', payload: { text: 'missing event four' } },
+      },
+      () => {
+        throw new Error('a gapped event must not be applied');
+      },
+      (sequence) => gaps.push(sequence),
+    );
+
+    expect({ cursor, gaps }).toEqual({ cursor: 3, gaps: [5] });
+  });
 });
