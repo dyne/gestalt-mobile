@@ -10,6 +10,7 @@
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
   import { createRelayClient } from './features/sessions/relay-client.js';
+  import { copyText } from './features/sessions/clipboard.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
@@ -123,8 +124,9 @@
   }
 
   async function copyResumeCommand(command: string) {
-    await navigator.clipboard.writeText(command);
-    status = 'SSH resume command copied.';
+    status = (await copyText(command))
+      ? 'SSH resume command copied.'
+      : 'Could not copy the SSH resume command.';
   }
 
   async function sendMessage() {
