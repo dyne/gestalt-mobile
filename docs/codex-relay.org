@@ -918,7 +918,11 @@ Commit: =fix: harden mobile accessibility and layout=
 - Notes :: Use fake app-server for deterministic CI. Keep real Codex contract
   testing opt-in because it requires installed/authenticated local state.
 
-** TODO [#A] Add end-to-end flows and restart/reconnection harness
+** WIP [#A] Add end-to-end flows and restart/reconnection harness
+
+- Status :: Playwright now boots the Vite client, intercepts the relay boundary,
+  starts a selected session, and sends a turn from the mobile composer. Recovery,
+  interaction, Git, and restart flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.
