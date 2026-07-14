@@ -58,20 +58,26 @@ describe('session event WebSocket', () => {
     const app = await buildApp({
       health: {
         read: async () => ({
-          status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
         }),
       },
       logger: console,
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [{ sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} }],
+      since: () => [
+        { sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} },
+      ],
       subscribe: () => () => {},
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=1`);
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=1`,
+    );
     const message = once(socket, 'message').then(([data]) => JSON.parse(String(data)));
     expect(await message).toEqual({ type: 'relay.resyncRequired', currentSequence: 4 });
     socket.close();

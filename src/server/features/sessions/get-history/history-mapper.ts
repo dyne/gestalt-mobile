@@ -29,7 +29,7 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
                 id,
                 kind: 'agent',
                 text: item.text,
-                ...(item.phase === 'commentary' || item.phase === 'final' 
+                ...(item.phase === 'commentary' || item.phase === 'final'
                   ? { phase: item.phase === 'final' ? 'final_answer' : 'commentary' }
                   : {}),
               },
@@ -43,7 +43,15 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
         return typeof item.text === 'string' ? [{ id, kind: 'plan', text: item.text }] : [];
       case 'commandExecution':
         return typeof item.command === 'string' && typeof item.status === 'string'
-          ? [{ id, kind: 'command', command: item.command, status: item.status, ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}) }]
+          ? [
+              {
+                id,
+                kind: 'command',
+                command: item.command,
+                status: item.status,
+                ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
+              },
+            ]
           : [];
       default:
         return [];

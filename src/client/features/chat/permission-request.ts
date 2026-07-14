@@ -8,7 +8,9 @@ export function toPermissionApprovalResponse(payload: unknown): {
   const profile = requested as { network?: unknown; fileSystem?: unknown };
   return {
     permissions: {
-      ...(profile.network === null || profile.network === undefined ? {} : { network: profile.network }),
+      ...(profile.network === null || profile.network === undefined
+        ? {}
+        : { network: profile.network }),
       ...(profile.fileSystem === null || profile.fileSystem === undefined
         ? {}
         : { fileSystem: profile.fileSystem }),

@@ -196,7 +196,21 @@ describe('CodexSessionRuntime', () => {
       close: () => {},
     }));
     const ready = await runtime.start(
-      { id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' },
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
       'after',
     );
     await expect(runtime.readHistory(ready)).resolves.toEqual([
@@ -209,16 +223,41 @@ describe('CodexSessionRuntime', () => {
     const exited: string[] = [];
     const runtime = new CodexSessionRuntime(
       () => ({
-        rpc: { request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {}, onNotification: () => () => {}, onServerRequest: () => () => {} },
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
         close: () => {},
-        onExit: (listener) => { onExit = listener; return () => {}; },
+        onExit: (listener) => {
+          onExit = listener;
+          return () => {};
+        },
       }),
       undefined,
       undefined,
       undefined,
       (id) => exited.push(id),
     );
-    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
     onExit?.();
     expect(exited).toEqual(['session-1']);
   });

@@ -16,17 +16,23 @@ export type WorkspaceGitSummary = {
   }>;
 };
 
-export function parseDirtyCounts(value: string): { staged: number; unstaged: number; untracked: number } {
-  return value.split('\n').filter(Boolean).reduce(
-    (counts, line) => ({
-      staged: counts.staged + (line[0] && line[0] !== ' ' && line.slice(0, 2) !== '??' ? 1 : 0),
-      unstaged:
-        counts.unstaged +
-        (line.slice(0, 2) !== '??' && line[1] && line[1] !== ' ' ? 1 : 0),
-      untracked: counts.untracked + (line.slice(0, 2) === '??' ? 1 : 0),
-    }),
-    { staged: 0, unstaged: 0, untracked: 0 },
-  );
+export function parseDirtyCounts(value: string): {
+  staged: number;
+  unstaged: number;
+  untracked: number;
+} {
+  return value
+    .split('\n')
+    .filter(Boolean)
+    .reduce(
+      (counts, line) => ({
+        staged: counts.staged + (line[0] && line[0] !== ' ' && line.slice(0, 2) !== '??' ? 1 : 0),
+        unstaged:
+          counts.unstaged + (line.slice(0, 2) !== '??' && line[1] && line[1] !== ' ' ? 1 : 0),
+        untracked: counts.untracked + (line.slice(0, 2) === '??' ? 1 : 0),
+      }),
+      { staged: 0, unstaged: 0, untracked: 0 },
+    );
 }
 
 export function parseDivergence(value: string): { ahead: number; behind: number } {

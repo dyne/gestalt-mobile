@@ -13,7 +13,9 @@ describe('POST /api/sessions/:id/release', () => {
       save: () => calls.push('save'),
       close: () => calls.push('close'),
     });
-    expect((await app.inject({ method: 'POST', url: '/api/sessions/session-1/release' })).statusCode).toBe(202);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/sessions/session-1/release' })).statusCode,
+    ).toBe(202);
     expect(calls).toEqual(['save', 'close']);
     await app.close();
   });

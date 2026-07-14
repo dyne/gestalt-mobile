@@ -8,7 +8,13 @@ describe('toChatItems', () => {
       toChatItems([
         { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
         { id: 'a', type: 'agentMessage', text: 'hi', phase: 'final' },
-        { id: 'c', type: 'commandExecution', command: 'git status', status: 'completed', exitCode: 0 },
+        {
+          id: 'c',
+          type: 'commandExecution',
+          command: 'git status',
+          status: 'completed',
+          exitCode: 0,
+        },
         { id: 'x', type: 'imageView', path: '/tmp/image' },
       ]),
     ).toEqual([

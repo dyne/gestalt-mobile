@@ -41,7 +41,9 @@ export function toUserInputResponse(answers: Array<{ id: string; answer: string 
 } {
   return {
     answers: Object.fromEntries(
-      answers.filter((answer) => answer.answer.trim()).map((answer) => [answer.id, { answers: [answer.answer] }]),
+      answers
+        .filter((answer) => answer.answer.trim())
+        .map((answer) => [answer.id, { answers: [answer.answer] }]),
     ),
   };
 }

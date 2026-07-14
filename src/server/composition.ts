@@ -66,7 +66,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const turnId = (normalized.payload as { turn?: { id?: string } }).turn?.id;
             const session = sessions.find(sessionId);
             if (session && turnId && session.activeTurnId === turnId)
-              sessions.save(RelaySession.rehydrate(session).completeTurn(turnId, occurredAt).snapshot);
+              sessions.save(
+                RelaySession.rehydrate(session).completeTurn(turnId, occurredAt).snapshot,
+              );
           }
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
@@ -101,16 +103,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       async (sessionId) => {
         const session = sessions.find(sessionId);
         if (!session || session.desiredState !== 'active' || !session.threadId) return;
-        const recovering = RelaySession.rehydrate(session)
-          .beginRecovery(new Date().toISOString())
-          .snapshot;
+        const recovering = RelaySession.rehydrate(session).beginRecovery(
+          new Date().toISOString(),
+        ).snapshot;
         saveSession(recovering);
         saveSession(await runtime.restore(recovering, new Date().toISOString()));
       },
       (sessionId) => {
         const session = sessions.find(sessionId);
         if (session)
-          saveSession(RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot);
+          saveSession(
+            RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
+          );
       },
     );
     recoverExitedSession = (sessionId) => supervisor.recover(sessionId);
@@ -154,9 +158,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
         : undefined,
       readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
-      interruptTurn: runtime ? (session, turnId) => runtime.interruptTurn(session, turnId) : undefined,
-      restore: runtime ? (session) => runtime.restore(session, new Date().toISOString()) : undefined,
-      release: (session) => RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
+      interruptTurn: runtime
+        ? (session, turnId) => runtime.interruptTurn(session, turnId)
+        : undefined,
+      restore: runtime
+        ? (session) => runtime.restore(session, new Date().toISOString())
+        : undefined,
+      release: (session) =>
+        RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
       idempotency,
       close: runtime ? (id) => runtime.stop(id) : undefined,
       replyInteraction: runtime
@@ -181,11 +190,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         if (!interaction) return false;
         if (interaction.kind === 'userInput') return isRecord(value.answers);
         if (interaction.kind === 'permissionsApproval')
-          return isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session');
-        return ['accept', 'acceptForSession', 'decline', 'cancel'].includes(value.decision as string);
+          return (
+            isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session')
+          );
+        return ['accept', 'acceptForSession', 'decline', 'cancel'].includes(
+          value.decision as string,
+        );
       },
     },
-    gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: (path) => gitFetches.refresh(path) },
+    gitSummary: {
+      inspect: inspectGit,
+      push: pushUpstream,
+      refresh: (path) => gitFetches.refresh(path),
+    },
   });
   if (runtime) {
     await mapWithConcurrency(
@@ -194,14 +211,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         .filter((session) => session.desiredState === 'active' && session.threadId !== null),
       2,
       async (session) => {
-          try {
-            saveSession(await runtime.restore(session, new Date().toISOString()));
-          } catch {
-            saveSession(
-              RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
-            );
-          }
-        },
+        try {
+          saveSession(await runtime.restore(session, new Date().toISOString()));
+        } catch {
+          saveSession(
+            RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
+          );
+        }
+      },
     );
   }
   app.addHook('onClose', async () => {

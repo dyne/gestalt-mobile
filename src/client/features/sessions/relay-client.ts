@@ -1,5 +1,9 @@
 export function createRelayClient(fetcher: typeof fetch = fetch) {
-  async function request(path: string, body: unknown, headers: Record<string, string> = {}): Promise<unknown> {
+  async function request(
+    path: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<unknown> {
     const response = await fetcher(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
@@ -21,12 +25,16 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     startTurn: (sessionId: string, text: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { text }),
     interruptTurn: (sessionId: string, turnId: string) =>
-      request(`/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/interrupt`, {}),
+      request(
+        `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/interrupt`,
+        {},
+      ),
     restoreSession: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
     releaseSession: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/release`, {}),
-    getHistory: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
+    getHistory: (sessionId: string) =>
+      get(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
     refreshGit: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`, {}),

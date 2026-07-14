@@ -77,7 +77,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerGetSession(app, deps.sessionRoutes.find);
     if (deps.sessionRoutes.list) registerListSessions(app, { list: deps.sessionRoutes.list });
     if (deps.sessionRoutes.readHistory)
-      registerGetHistory(app, { find: deps.sessionRoutes.find, read: deps.sessionRoutes.readHistory });
+      registerGetHistory(app, {
+        find: deps.sessionRoutes.find,
+        read: deps.sessionRoutes.readHistory,
+      });
     if (deps.sessionRoutes.startTurn)
       registerStartTurn(app, {
         find: deps.sessionRoutes.find,

@@ -31,11 +31,17 @@ describe('POST /api/sessions', () => {
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
       idempotency: {
-        get: (_scope, key) => results.has(key) ? { statusCode: 202, body: results.get(key)! } : null,
+        get: (_scope, key) =>
+          results.has(key) ? { statusCode: 202, body: results.get(key)! } : null,
         put: (_scope, key, _statusCode, body) => results.set(key, body),
       },
     });
-    const options = { method: 'POST' as const, url: '/api/sessions', headers: { 'idempotency-key': 'retry-1' }, payload: { workspaceId: 'w', profile: 'default' } };
+    const options = {
+      method: 'POST' as const,
+      url: '/api/sessions',
+      headers: { 'idempotency-key': 'retry-1' },
+      payload: { workspaceId: 'w', profile: 'default' },
+    };
     const first = await app.inject(options);
     const second = await app.inject(options);
     expect([first.json().id, second.json().id]).toEqual(['s-1', 's-1']);
