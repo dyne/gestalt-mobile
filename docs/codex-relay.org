@@ -813,8 +813,8 @@ Commit: =feat: add resilient client data layer=
 ** WIP [#A] Build navigation, session list, and start-session dialog
 
 - Status :: Mobile tabs, bootstrap, session-start controls, and unavailable
-  profile prevention exist. The dialog, session management controls, and
-  component split remain.
+  profile prevention exist. Primary navigation is now an isolated keyboard-tested
+  component. The dialog and remaining session-management component split remain.
 
 - Why :: Users need a complete mobile entry flow before chat rendering.
 - Change :: Replace =App.svelte= and create =src/client/components/AppHeader.svelte=,

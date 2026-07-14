@@ -25,7 +25,8 @@
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
   import { validateStartForm } from './features/sessions/start-form.js';
-  import { nextTab, type Tab } from './features/sessions/tab-state.js';
+  import type { Tab } from './features/sessions/tab-state.js';
+  import BottomNavigation from './features/sessions/BottomNavigation.svelte';
 
   let tab = $state<Tab>('chat');
   let status = $state('Loading relay…');
@@ -54,7 +55,6 @@
   let gitError = $state<string | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
-  const tabButtons: Partial<Record<Tab, HTMLButtonElement>> = {};
   const relay = createRelayClient();
   const messageCache = createMessageCache();
 
@@ -311,14 +311,6 @@
     void sendMessage();
   }
 
-  function handleTabKeydown(event: KeyboardEvent): void {
-    const direction = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : null;
-    if (direction === null) return;
-    event.preventDefault();
-    tab = nextTab(tab, direction);
-    tabButtons[tab]?.focus();
-  }
-
   function connectSession(id: string) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
@@ -524,9 +516,5 @@
     </section>
   {/if}
 
-  <nav aria-label="Primary">
-    <button bind:this={tabButtons.chat} aria-pressed={tab === 'chat'} onkeydown={handleTabKeydown} onclick={() => (tab = 'chat')}>Chat</button>
-    <button bind:this={tabButtons.git} aria-pressed={tab === 'git'} onkeydown={handleTabKeydown} onclick={() => (tab = 'git')}>Git</button>
-    <button bind:this={tabButtons.sessions} aria-pressed={tab === 'sessions'} onkeydown={handleTabKeydown} onclick={() => (tab = 'sessions')}>Sessions</button>
-  </nav>
+  <BottomNavigation activeTab={tab} onselect={(next) => (tab = next)} />
 </main>
