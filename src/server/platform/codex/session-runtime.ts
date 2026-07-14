@@ -82,6 +82,16 @@ export class CodexSessionRuntime {
     return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;
   }
 
+  async readHistory(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>> {
+    const process = this.processes.get(session.id);
+    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const result = (await process.rpc.request('thread/read', {
+      threadId: session.threadId,
+      includeTurns: true,
+    })) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } };
+    return result.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? [];
+  }
+
   async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });

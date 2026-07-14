@@ -181,6 +181,29 @@ describe('CodexSessionRuntime', () => {
     await expect(result).resolves.toEqual({ decision: 'approved' });
   });
 
+  it('reads canonical items from a bound Codex thread', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'thread/read')
+            return { thread: { turns: [{ items: [{ id: 'message-1', type: 'agentMessage' }] }] } };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const ready = await runtime.start(
+      { id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' },
+      'after',
+    );
+    await expect(runtime.readHistory(ready)).resolves.toEqual([
+      { id: 'message-1', type: 'agentMessage' },
+    ]);
+  });
+
   it('rejects an unsupported Codex server request instead of leaving it pending', async () => {
     let requestListener:
       ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
