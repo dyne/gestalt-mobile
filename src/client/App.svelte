@@ -89,6 +89,12 @@
     tab = 'chat';
   }
 
+  async function restoreSession(id: string) {
+    await relay.restoreSession(id);
+    await refreshSessions();
+    openSession(id);
+  }
+
   async function sendMessage() {
     if (!sessionId || !message.trim()) return;
     const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
@@ -299,6 +305,9 @@
             <li>
               <span>{session.id} · {session.state}</span>
               <button type="button" onclick={() => openSession(session.id)}>Open</button>
+              {#if session.state === 'stopped' || session.state === 'released' || session.state === 'attentionRequired'}
+                <button type="button" onclick={() => void restoreSession(session.id)}>Restore</button>
+              {/if}
             </li>
           {/each}
         </ul>
