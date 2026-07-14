@@ -15,7 +15,7 @@ import { SqliteSessionRepository } from './platform/persistence/sqlite-session-r
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
-import { inspectGit } from './platform/git/git-inspector.js';
+import { inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -94,7 +94,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       since: (id, after) => journal.since(id, after),
       subscribe: (id, listener) => events.subscribe(id, listener),
     },
-    gitSummary: { inspect: inspectGit },
+    gitSummary: { inspect: inspectGit, push: pushUpstream },
   });
   app.addHook('onClose', async () => {
     database.close();

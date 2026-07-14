@@ -58,3 +58,13 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
     return { available: false, branch: null, upstream: null, ahead: 0, behind: 0, commits: [] };
   }
 }
+
+export async function pushUpstream(cwd: string, upstream: string): Promise<void> {
+  const separator = upstream.indexOf('/');
+  if (separator < 1 || separator === upstream.length - 1) throw new Error('NO_UPSTREAM');
+  await git(cwd, [
+    'push',
+    upstream.slice(0, separator),
+    `HEAD:refs/heads/${upstream.slice(separator + 1)}`,
+  ]);
+}
