@@ -925,8 +925,8 @@ Commit: =test: cover relay recovery user journeys=
 
 ** WIP [#B] Add CLI session listing and operator documentation
 
-- Status :: CLI session listing, resume command formatting, and base README
-  instructions exist. The full operator and architecture documentation remains.
+- Status :: CLI session listing, HTTP/mobile copyable resume commands, and base
+  README instructions exist. The full operator and architecture documentation remains.
 
 - Why :: SSH handoff must be easy without opening the browser, and later agents
   need project-specific boundaries.
