@@ -74,7 +74,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerGetHealth(app, deps.health);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   if (deps.sessionRoutes) {
-    registerStartSession(app, deps.sessionRoutes);
+    registerStartSession(app, {
+      ...deps.sessionRoutes,
+      reportFailure: (operation, error) =>
+        deps.logger.error(`${operation} failed: ${safeErrorLabel(error)}`),
+    });
     registerGetSession(app, deps.sessionRoutes.find);
     if (deps.sessionRoutes.list) registerListSessions(app, { list: deps.sessionRoutes.list });
     if (deps.sessionRoutes.readHistory)
@@ -134,4 +138,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerRefreshGit(app, { find: deps.sessionRoutes.find, refresh: deps.gitSummary.refresh });
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
+}
+
+function safeErrorLabel(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
+  }
+  if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)) return error.message;
+  return error instanceof Error ? error.name : 'UNKNOWN_ERROR';
 }

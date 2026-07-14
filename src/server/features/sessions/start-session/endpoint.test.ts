@@ -48,4 +48,29 @@ describe('POST /api/sessions', () => {
     expect(created).toBe(1);
     await app.close();
   });
+
+  it('reports an activation failure before returning the problem response', async () => {
+    const app = fastify();
+    const failures: string[] = [];
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      activate: async () => {
+        throw new Error('CODEX_START_FAILED');
+      },
+      reportFailure: (_operation, error) =>
+        failures.push(error instanceof Error ? error.message : 'unknown'),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: 'w', profile: 'default' },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(failures).toEqual(['CODEX_START_FAILED']);
+    await app.close();
+  });
 });

@@ -1,4 +1,17 @@
 export function createRelayClient(fetcher: typeof fetch = fetch) {
+  async function failure(response: Response): Promise<Error> {
+    const body = (await response.json().catch(() => null)) as {
+      detail?: unknown;
+      title?: unknown;
+    } | null;
+    const message =
+      typeof body?.detail === 'string'
+        ? body.detail
+        : typeof body?.title === 'string'
+          ? body.title
+          : `Relay request failed (${response.status}).`;
+    return new Error(message);
+  }
   async function request(
     path: string,
     body: unknown,
@@ -9,12 +22,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error('RELAY_REQUEST_FAILED');
+    if (!response.ok) throw await failure(response);
     return response.json();
   }
   async function get(path: string): Promise<unknown> {
     const response = await fetcher(path);
-    if (!response.ok) throw new Error('RELAY_REQUEST_FAILED');
+    if (!response.ok) throw await failure(response);
     return response.json();
   }
 

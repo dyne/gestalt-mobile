@@ -9,6 +9,7 @@ export function registerStartSession(
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
+    reportFailure?(operation: string, error: unknown): void;
   },
 ): void {
   app.post('/api/sessions', async (request, reply) => {
@@ -16,7 +17,13 @@ export function registerStartSession(
     const prior = key ? deps.idempotency?.get('start-session', key) : null;
     if (prior) return reply.code(prior.statusCode).send(JSON.parse(prior.body));
     const body = request.body as { workspaceId: string; profile: string };
-    const started = await startSession(body, deps);
+    let started;
+    try {
+      started = await startSession(body, deps);
+    } catch (error) {
+      deps.reportFailure?.('start-session', error);
+      throw error;
+    }
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));
     return reply.code(202).send(started);
   });

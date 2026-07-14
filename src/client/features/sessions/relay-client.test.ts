@@ -47,6 +47,23 @@ describe('relay client', () => {
     expect(requests).toEqual(['GET /api/sessions']);
   });
 
+  it('preserves a relay problem detail for a failed mutation', async () => {
+    const client = createRelayClient(
+      async () =>
+        new Response(
+          JSON.stringify({
+            title: 'Profile unavailable',
+            detail: 'The selected profile is not logged in.',
+            code: 'PROFILE_NOT_READY',
+          }),
+          { status: 409, headers: { 'content-type': 'application/problem+json' } },
+        ),
+    );
+    await expect(client.startSession('workspace-1', 'profile')).rejects.toThrow(
+      'The selected profile is not logged in.',
+    );
+  });
+
   it('submits an interaction decision to the original session request', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {

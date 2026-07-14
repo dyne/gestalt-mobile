@@ -783,7 +783,8 @@ Commit: =feat: expose safe git upstream actions=
 
 - Status :: Relay client helpers, cursor replay, reconnect backoff, draft
   storage, and active-turn rehydration from durable session metadata exist. The
-  consolidated typed API/AppState and IndexedDB stores remain.
+  consolidated typed API/AppState and IndexedDB stores remain. Failed mutation
+  problem details are now surfaced in the mobile status line.
 
 - Why :: Components should render state and dispatch intent, not own networking.
 - Change :: Create =src/client/lib/api.ts=, =problem.ts=, =idempotency.ts=,

@@ -27,6 +27,7 @@
   let workspaceId = $state('');
   let profile = $state('');
   let startRequestKey = $state<string | null>(null);
+  let startingSession = $state(false);
   let message = $state('');
   let activeTurnId = $state<string | null>(null);
   let startingTurn = $state(false);
@@ -91,21 +92,29 @@
   });
 
   async function startSession() {
-    if (!workspaceId || !profile) return;
+    if (!workspaceId || !profile || startingSession) return;
     startRequestKey ??= crypto.randomUUID();
-    const session = (await relay.startSession(workspaceId, profile, startRequestKey)) as { id: string };
-    startRequestKey = null;
-    sessionId = session.id;
-    activeTurnId = null;
-    saveSelectedSession(localStorage, session.id);
-    await refreshSessions();
-    messages = [];
-    activities = [];
-    cursor = 0;
-    message = readDraft(localStorage, session.id);
-    connectSession(session.id);
-    tab = 'chat';
-    status = 'Session started.';
+    startingSession = true;
+    status = 'Starting session…';
+    try {
+      const session = (await relay.startSession(workspaceId, profile, startRequestKey)) as { id: string };
+      startRequestKey = null;
+      sessionId = session.id;
+      activeTurnId = null;
+      saveSelectedSession(localStorage, session.id);
+      await refreshSessions();
+      messages = [];
+      activities = [];
+      cursor = 0;
+      message = readDraft(localStorage, session.id);
+      connectSession(session.id);
+      tab = 'chat';
+      status = 'Session started.';
+    } catch (error) {
+      status = `Could not start session: ${error instanceof Error ? error.message : 'Unknown relay error.'}`;
+    } finally {
+      startingSession = false;
+    }
   }
 
   async function refreshSessions() {
@@ -461,7 +470,7 @@
         <select id="profile" bind:value={profile} required>
           {#each profiles as item (item.name)}<option value={item.name}>{item.name}</option>{/each}
         </select>
-        <button type="submit" disabled={!workspaceId || !profile}>Start session</button>
+        <button type="submit" disabled={!workspaceId || !profile || startingSession}>{startingSession ? 'Starting…' : 'Start session'}</button>
       </form>
     </section>
   {/if}
