@@ -924,8 +924,8 @@ Commit: =fix: harden mobile accessibility and layout=
   starts a selected session, sends a turn from the mobile composer, and proves
   safe Git push confirmation and persisted-session canonical-history hydration.
   It also proves visible Git refresh progress and disabled Push without an
-  upstream, plus command approval over a routed relay WebSocket. Socket replay
-  and relay restart flows remain.
+  upstream, command approval, and streamed agent text over a routed relay
+  WebSocket. Socket replay and relay restart flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.
