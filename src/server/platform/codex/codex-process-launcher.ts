@@ -5,6 +5,7 @@ export type CodexProcess = {
   child: ChildProcessWithoutNullStreams;
   rpc: JsonRpcClient;
   close(): void;
+  onExit(listener: () => void): () => void;
 };
 
 export function launchCodexAppServer(input: { profile: string; cwd: string }): CodexProcess {
@@ -14,5 +15,13 @@ export function launchCodexAppServer(input: { profile: string; cwd: string }): C
     stdio: 'pipe',
   });
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
-  return { child, rpc, close: () => child.kill('SIGTERM') };
+  return {
+    child,
+    rpc,
+    close: () => child.kill('SIGTERM'),
+    onExit: (listener) => {
+      child.once('exit', listener);
+      return () => child.off('exit', listener);
+    },
+  };
 }

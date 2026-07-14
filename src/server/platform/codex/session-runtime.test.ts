@@ -204,6 +204,25 @@ describe('CodexSessionRuntime', () => {
     ]);
   });
 
+  it('notifies the supervisor when an app-server process exits unexpectedly', async () => {
+    let onExit: (() => void) | undefined;
+    const exited: string[] = [];
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: { request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {}, onNotification: () => () => {}, onServerRequest: () => () => {} },
+        close: () => {},
+        onExit: (listener) => { onExit = listener; return () => {}; },
+      }),
+      undefined,
+      undefined,
+      undefined,
+      (id) => exited.push(id),
+    );
+    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    onExit?.();
+    expect(exited).toEqual(['session-1']);
+  });
+
   it('rejects an unsupported Codex server request instead of leaving it pending', async () => {
     let requestListener:
       ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;

@@ -14,6 +14,7 @@ export type AppServer = {
     ): () => void;
   };
   close(): void;
+  onExit?(listener: () => void): () => void;
 };
 
 export class CodexSessionRuntime {
@@ -28,14 +29,17 @@ export class CodexSessionRuntime {
       sessionId: string,
       request: { id: number; method: string; params: unknown },
     ) => boolean,
+    private readonly onProcessExit?: (sessionId: string) => void,
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
+  private readonly exitUnsubscribers = new Map<string, () => void>();
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
+      this.attachExitHandler(session.id, process);
       await process.rpc.request('initialize', {
         clientInfo: { name: 'codex-relay', version: '0.1.0' },
         capabilities: null,
@@ -54,6 +58,8 @@ export class CodexSessionRuntime {
   }
 
   stop(sessionId: string): void {
+    this.exitUnsubscribers.get(sessionId)?.();
+    this.exitUnsubscribers.delete(sessionId);
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
   }
@@ -104,6 +110,7 @@ export class CodexSessionRuntime {
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
+      this.attachExitHandler(session.id, process);
       await process.rpc.request('initialize', {
         clientInfo: { name: 'codex-relay', version: '0.1.0' },
         capabilities: null,
@@ -129,6 +136,17 @@ export class CodexSessionRuntime {
     }
     return new Promise((resolve) =>
       this.pendingRequests.set(`${sessionId}:${request.id}`, resolve),
+    );
+  }
+
+  private attachExitHandler(sessionId: string, process: AppServer): void {
+    this.exitUnsubscribers.set(
+      sessionId,
+      process.onExit?.(() => {
+        this.processes.delete(sessionId);
+        this.exitUnsubscribers.delete(sessionId);
+        this.onProcessExit?.(sessionId);
+      }) ?? (() => {}),
     );
   }
 }
