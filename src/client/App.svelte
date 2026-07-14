@@ -5,6 +5,7 @@
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { readDraft, saveDraft } from './features/chat/draft-store.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
+  import { createMessageCache } from './features/chat/message-cache.js';
   import { fetchAge } from './features/git/fetch-age.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
@@ -56,6 +57,7 @@
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
+  const messageCache = createMessageCache();
 
   onMount(async () => {
     try {
@@ -74,6 +76,7 @@
         : (bootstrap.sessions[0]?.id ?? null);
       if (sessionId) cursor = readCursor(localStorage, sessionId);
       if (sessionId) message = readDraft(localStorage, sessionId);
+      if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
@@ -105,6 +108,7 @@
       saveSelectedSession(localStorage, session.id);
       await refreshSessions();
       messages = [];
+      persistMessages(session.id);
       activities = [];
       cursor = 0;
       message = readDraft(localStorage, session.id);
@@ -125,7 +129,7 @@
   async function openSession(id: string) {
     sessionId = id;
     saveSelectedSession(localStorage, id);
-    messages = [];
+    messages = await messageCache.read(id);
     activities = [];
     cursor = 0;
     message = readDraft(localStorage, id);
@@ -196,6 +200,7 @@
         text: item.text!,
         complete: true,
       }));
+    persistMessages(id);
     activities = history.items.flatMap((item) => {
       const activity = toActivity(item);
       return activity ? [activity] : [];
@@ -274,6 +279,10 @@
     if (sessionId) saveDraft(localStorage, sessionId, value);
   }
 
+  function persistMessages(id: string): void {
+    void messageCache.write(id, messages);
+  }
+
   function handleComposerKeydown(event: KeyboardEvent): void {
     if (!submitsOnEnter(event) || activeTurnId || startingTurn || !message.trim()) return;
     event.preventDefault();
@@ -310,6 +319,7 @@
       }
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
+        persistMessages(id);
       });
       saveCursor(localStorage, id, cursor);
     };
