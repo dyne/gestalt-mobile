@@ -19,6 +19,7 @@ import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
+import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
 
@@ -173,11 +174,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: (path) => gitFetches.refresh(path) },
   });
   if (runtime) {
-    await Promise.all(
+    await mapWithConcurrency(
       sessions
         .list()
-        .filter((session) => session.desiredState === 'active' && session.threadId !== null)
-        .map(async (session) => {
+        .filter((session) => session.desiredState === 'active' && session.threadId !== null),
+      2,
+      async (session) => {
           try {
             saveSession(await runtime.restore(session, new Date().toISOString()));
           } catch {
@@ -185,7 +187,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
             );
           }
-        }),
+        },
     );
   }
   app.addHook('onClose', async () => {
