@@ -9,7 +9,7 @@ describe('GET /api/sessions', () => {
     registerListSessions(app, { list: () => [{ id: 'session-1', state: 'ready' }] as never });
     const response = await app.inject({ method: 'GET', url: '/api/sessions' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([{ id: 'session-1', state: 'ready' }]);
+    expect(response.json()).toEqual([{ id: 'session-1', state: 'ready', resumeCommand: null }]);
     await app.close();
   });
 });

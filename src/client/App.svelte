@@ -19,7 +19,7 @@
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string }>>([]);
   let sessionId = $state<string | null>(null);
-  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string }>>([]);
+  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null }>>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let message = $state('');
@@ -49,7 +49,7 @@
       const bootstrap = (await loadBootstrap()) as {
         workspaces: Array<{ id: string; name: string }>;
         profiles: Array<{ name: string }>;
-        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string }>;
+        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null }>;
       };
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
@@ -117,6 +117,11 @@
     }
     await refreshSessions();
     status = 'Session released for SSH resume.';
+  }
+
+  async function copyResumeCommand(command: string) {
+    await navigator.clipboard.writeText(command);
+    status = 'SSH resume command copied.';
   }
 
   async function sendMessage() {
@@ -355,6 +360,9 @@
               <button type="button" onclick={() => openSession(session.id)}>Open</button>
               {#if session.state === 'ready'}
                 <button type="button" onclick={() => void releaseSession(session.id)}>Release</button>
+              {/if}
+              {#if session.resumeCommand}
+                <button type="button" onclick={() => void copyResumeCommand(session.resumeCommand ?? '')}>Copy SSH command</button>
               {/if}
               {#if session.state === 'stopped' || session.state === 'released' || session.state === 'attentionRequired'}
                 <button type="button" onclick={() => void restoreSession(session.id)}>Restore</button>
