@@ -43,8 +43,8 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
   await expect(page.getByText('Connected session: session-1')).toBeVisible();
-  await page.getByLabel('Message').fill('Inspect this workspace');
-  await page.getByLabel('Message').press('Enter');
+  await page.getByRole('textbox', { name: 'Message' }).fill('Inspect this workspace');
+  await page.getByRole('textbox', { name: 'Message' }).press('Enter');
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
