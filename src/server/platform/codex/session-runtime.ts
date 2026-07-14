@@ -82,6 +82,12 @@ export class CodexSessionRuntime {
     return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;
   }
 
+  async interruptTurn(session: RelaySessionSnapshot, turnId: string): Promise<void> {
+    const process = this.processes.get(session.id);
+    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    await process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
+  }
+
   async readHistory(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>> {
     const process = this.processes.get(session.id);
     if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
