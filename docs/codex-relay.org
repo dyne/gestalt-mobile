@@ -1,0 +1,951 @@
+#+TITLE: Codex Relay Implementation Plan
+#+SUBTITLE: Deterministic execution plan for a lower-reasoning implementation agent
+#+DATE: 2026-07-14
+#+KEYWORDS: codex app-server svelte typescript fastify websocket sqlite vsa repr hexagonal ddd mobile
+#+TODO: TODO WIP | DONE
+
+This file is the execution authority for the first Codex Relay release. Read
+=docs/2026-07-14-codex-relay-design.md= and =docs/codex-app-server.txt= before
+changing code. Work through L1 and L2 headings in order. Do not invent alternate
+frameworks, persistence mechanisms, endpoints, names, or scope.
+
+- Goal :: Build one mobile-first TypeScript application that supervises Codex
+  app-server processes, restores their threads, provides reliable chat over a
+  relay WebSocket, and exposes safe Git status/fetch/push operations.
+- Architecture :: TypeScript modular monolith. Vertical slices own REPR HTTP
+  endpoints and use cases. Domain rules remain framework-free. All filesystem,
+  process, Codex, SQLite, Git, and clock access goes through ports/adapters.
+- Runtime stack :: Node.js 24+, Svelte 5, Vite 8, Fastify 5, =ws= 8, Zod 4,
+  built-in =node:sqlite=, Vitest 4, and Playwright 1.61.
+- Required workflow :: Before implementation, create branch =codex-relay= from
+  the current commit and run the existing tests. For each L2: set it to WIP,
+  write the failing test, run it and observe the intended failure, implement the
+  smallest code, run touched tests, commit with the prescribed conventional
+  commit, then set the L2 to DONE. After all L2 under an L1 are DONE, run the
+  full suite before marking the L1 DONE. Never commit this plan or other files
+  under =.gestalt=.
+- Stop condition :: If a generated Codex type or current CLI behavior conflicts
+  with this plan, stop and ask for help. Do not cast through =any=, silently
+  ignore a known protocol message, weaken a test, or replace an invariant.
+
+/Global constraints/
+
+- Serve one plain-HTTP origin. Do not add TLS, CORS, accounts, or application
+  authentication.
+- Bind to =0.0.0.0:8787= by default. Support =--host=, =--port=, =--cwd=, and
+  =--data-dir= overrides.
+- Treat only canonical immediate children of the Relay Root as workspaces.
+  Reject the root, nested paths, and symlinks resolving outside the root.
+- Discover profiles with =codex-profile status --json=. Do not manage profiles.
+- Launch one =codex-profile cli <profile> app-server --stdio= child per active
+  Relay Session. Never expose app-server directly to the browser.
+- Use REST for mutations and one relay WebSocket for server-originated events.
+- Preserve session/thread metadata in SQLite and Codex history in Codex homes.
+- Support command/file/permission approvals and =requestUserInput=.
+- Throttle successful Git fetches for 60 seconds. Never force-push and never
+  create an upstream.
+- Use native doc-comments on exported functions. Comments explain purpose and
+  invariants, not syntax.
+- Prefer platform APIs. Do not add an ORM, query builder, state library, client
+  router, CSS framework, CORS plugin, authentication package, or Markdown/HTML
+  renderer.
+- Never use =exec= or =shell: true= for child processes. Use =spawn= or
+  =execFile= with argument arrays.
+- Operational logs must not contain prompts, generated content, approval
+  answers, command output, environment values, or Git credentials.
+
+/Fixed public contracts/
+
+Use these URLs and status codes exactly:
+
+| Method | URL | Success | Slice |
+|--------+-----+---------+-------|
+| GET | /health | 200 or 503 | get-health |
+| GET | /api/bootstrap | 200 | get-bootstrap |
+| GET | /api/sessions | 200 | list-sessions |
+| POST | /api/sessions | 201 | start-session |
+| GET | /api/sessions/:sessionId | 200 | get-session |
+| POST | /api/sessions/:sessionId/stop | 200 | stop-session |
+| POST | /api/sessions/:sessionId/restore | 200 | restore-session |
+| POST | /api/sessions/:sessionId/release | 200 | release-session |
+| GET | /api/sessions/:sessionId/history | 200 | get-history |
+| POST | /api/sessions/:sessionId/turns | 202 | start-turn |
+| POST | /api/sessions/:sessionId/turns/:turnId/interrupt | 200 | interrupt-turn |
+| POST | /api/sessions/:sessionId/interactions/:requestId/approval | 200 | resolve-approval |
+| POST | /api/sessions/:sessionId/interactions/:requestId/answer | 200 | answer-user-input |
+| GET | /api/sessions/:sessionId/git | 200 | get-git-summary |
+| POST | /api/sessions/:sessionId/git/refresh | 202 | refresh-git |
+| POST | /api/sessions/:sessionId/git/push | 200 | push-upstream |
+| GET upgrade | /api/events?sessionId=<id>&after=<sequence> | 101 | session-events |
+
+All POST routes require =Idempotency-Key= except =interrupt=, whose natural key
+is =(sessionId, turnId)=. All failures use =application/problem+json= and:
+
+#+begin_src typescript
+export type ProblemDetail = {
+  type: `urn:codex-relay:error:${string}`;
+  title: string;
+  status: number;
+  detail: string;
+  code: string;
+  retryable: boolean;
+  fieldErrors?: Record<string, string[]>;
+};
+#+end_src
+
+The browser event envelope is stable and independent from generated Codex types:
+
+#+begin_src typescript
+export type SessionEvent<TType extends string = string, TPayload = unknown> = {
+  sessionId: string;
+  sequence: number;
+  type: TType;
+  occurredAt: string;
+  payload: TPayload;
+};
+#+end_src
+
+* TODO [#A] Create the buildable walking skeleton
+
+- Effort :: 1 day
+- Goal :: Establish a strict TypeScript/Svelte/Fastify project that builds,
+  starts, serves the SPA, and responds to health checks.
+- Notes :: This L1 is deliberately small. Do not create empty architecture
+  folders or speculative abstractions.
+
+** TODO [#A] Pin the minimal toolchain and project commands
+
+- Why :: Every later task needs deterministic scripts and matching browser/server
+  TypeScript settings.
+- Change :: Create =package.json=, =package-lock.json=, =tsconfig.json=,
+  =tsconfig.server.json=, =vite.config.ts=, =vitest.config.ts=,
+  =playwright.config.ts=, =svelte.config.js=, =index.html=,
+  =eslint.config.js=, =.prettierrc.json=, =.prettierignore=,
+  =scripts/dev.mjs=, =.gitignore=, and =src/client/vite-env.d.ts=. Use ESM.
+  Install only the packages shown below. =scripts/dev.mjs= must spawn
+  =npm:dev:server= and =npm:dev:client=, forward SIGINT/SIGTERM to both, and exit
+  nonzero if either child fails.
+- Tests :: Run =npm install=, =npm run format:check=, =npm run lint=,
+  =npm run check=, and =npm run build=.
+- Done when :: A clean checkout installs with =npm ci=; both TypeScript projects
+  compile; Vite emits =dist/client=; no application behavior exists yet.
+
+#+begin_src json
+{
+  "name": "codex-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "tsx watch src/server/main.ts -- --cwd ..",
+    "dev:client": "vite",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:client": "vite build",
+    "check": "tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "protocol:generate": "node scripts/generate-codex-protocol.mjs",
+    "protocol:check": "node scripts/check-codex-protocol.mjs"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.0",
+    "fastify": "^5.10.0",
+    "svelte": "^5.56.4",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@testing-library/svelte": "^5.4.2",
+    "@types/node": "^24.13.3",
+    "@types/ws": "^8.18.1",
+    "eslint": "^10.7.0",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.9.5",
+    "prettier-plugin-svelte": "^4.1.1",
+    "svelte-check": "^4.7.2",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "typescript-eslint": "^8.64.0",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  }
+}
+#+end_src
+
+Commit: =chore: initialize TypeScript Svelte toolchain=
+
+** TODO [#A] Add the health walking slice and production composition root
+
+- Why :: A complete vertical path proves the build, REPR registration, static
+  serving, and error mapper before domain complexity begins.
+- Change :: Create =src/shared/contracts/problem.ts=,
+  =src/server/features/health/get-health/request.ts=,
+  =response.ts=, =endpoint.ts=, =endpoint.test.ts=,
+  =src/server/platform/http/problem-handler.ts=, =src/server/config.ts=,
+  =src/server/app.ts=, =src/server/main.ts=, =src/client/main.ts=,
+  =src/client/App.svelte=, and =src/client/styles.css=. =buildApp= receives a
+  typed dependency object; =main.ts= alone parses CLI arguments and calls
+  =listen=. In production register =@fastify/static= at =dist/client= and use a
+  not-found handler to return =index.html= only for non-=api= GET requests.
+- Tests :: First assert =GET /health= returns the response below through
+  =buildApp().inject=. Run the test and observe import/not-found failure. Add the
+  slice, then run =npm test -- src/server/features/health/get-health/endpoint.test.ts=,
+  =npm run check=, and =npm run build=.
+- Done when :: =GET /health= returns JSON, unknown API paths remain 404 problem
+  documents, and the production build serves the SPA without CORS middleware.
+
+#+begin_src typescript
+export type HealthResponse = {
+  status: 'ok' | 'degraded';
+  version: string;
+  codex: { installedVersion: string | null; protocolVersion: string | null; compatible: boolean };
+};
+
+export type AppDependencies = {
+  health: { read(): Promise<HealthResponse> };
+  logger: Pick<Console, 'info' | 'warn' | 'error'>;
+};
+
+export async function buildApp(deps: AppDependencies): Promise<import('fastify').FastifyInstance>;
+#+end_src
+
+Commit: =feat: add health walking slice=
+
+* TODO [#A] Model Relay Sessions and durable state
+
+- Effort :: 2 days
+- Goal :: Make invalid session state unrepresentable and provide transactional
+  persistence needed by every lifecycle slice.
+- Notes :: Domain files contain no Node or framework imports. SQLite adapters may
+  use synchronous =DatabaseSync= because this is a small single-user service;
+  wrap multi-statement changes in explicit transactions.
+
+** TODO [#A] Implement value objects, aggregate transitions, and domain events
+
+- Why :: Lifecycle concurrency and recovery must be decided in one behavior-rich
+  model rather than scattered endpoint conditionals.
+- Change :: Create =src/server/features/sessions/model/value-objects.ts=,
+  =relay-session.ts=, =events.ts=, =errors.ts=, and =relay-session.test.ts=.
+  Implement factory functions returning validated strings, not wrapper classes.
+  Implement immutable =RelaySession= transitions named =bindThread=,
+  =startTurn=, =completeTurn=, =requestInteraction=, =resolveInteraction=,
+  =beginRecovery=, =restore=, =requireAttention=, =stop=, and =release=.
+- Tests :: Table-test every allowed transition and assert invalid transitions
+  throw the exact domain error code. Run the single model test first (expected
+  missing-module failure), implement, then run
+  =npm test -- src/server/features/sessions/model/relay-session.test.ts=.
+- Done when :: The tests prove canonical workspace/profile validation hooks,
+  one active turn, one resolution per interaction, desired-state semantics, and
+  no mutable state leaks.
+
+#+begin_src typescript
+export type SessionState =
+  | 'starting' | 'ready' | 'turnActive' | 'recovering'
+  | 'attentionRequired' | 'stopped' | 'released';
+export type DesiredState = 'active' | 'stopped';
+export type PendingInteraction = {
+  requestId: string;
+  kind: 'commandApproval' | 'fileApproval' | 'permissionApproval' | 'userInput';
+  payload: unknown;
+  resolvedAt: string | null;
+};
+export type RelaySessionSnapshot = {
+  id: string;
+  workspaceId: string;
+  workspacePath: string;
+  profile: string;
+  threadId: string | null;
+  state: SessionState;
+  desiredState: DesiredState;
+  activeTurnId: string | null;
+  protocolVersion: string | null;
+  failureCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+#+end_src
+
+Commit: =feat: model relay session lifecycle=
+
+** TODO [#A] Add SQLite migrations and repository adapters
+
+- Why :: Restart restoration, replay ordering, and idempotency require one
+  transactional local store.
+- Change :: Create =src/server/platform/persistence/migrations/001-initial.sql=,
+  =migrate.ts=, =sqlite.ts=, =sqlite-session-repository.ts=,
+  =sqlite-event-journal.ts=, =sqlite-idempotency-store.ts=, and colocated tests.
+  Define application ports in
+  =src/server/features/sessions/application/ports.ts=. Use the schema below.
+  Default the database to
+  =${XDG_STATE_HOME:-~/.local/state}/codex-relay/<12-char-root-sha256>/relay.sqlite=;
+  =--data-dir= overrides its parent. Set WAL mode, foreign keys, and a 5-second
+  busy timeout. Retain the newest 2,000 events per session.
+- Tests :: Create a new temporary DB for each test. Prove migration idempotence,
+  snapshot round trip, atomic next sequence, event pruning, pending interaction
+  uniqueness, and byte-for-byte idempotent response replay. Run only persistence
+  tests, then =npm test=.
+- Done when :: A process can close/reopen the database without losing sessions;
+  duplicate keys return the original status/body; no partial event/sequence
+  update is observable.
+
+#+begin_src sql
+CREATE TABLE relay_sessions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  workspace_path TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  thread_id TEXT,
+  state TEXT NOT NULL,
+  desired_state TEXT NOT NULL,
+  active_turn_id TEXT,
+  protocol_version TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  next_sequence INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE pending_interactions (
+  session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  resolved_at TEXT,
+  PRIMARY KEY (session_id, request_id)
+);
+CREATE TABLE session_events (
+  session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  occurred_at TEXT NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, sequence)
+);
+CREATE TABLE idempotency_results (
+  scope TEXT NOT NULL,
+  key TEXT NOT NULL,
+  status_code INTEGER NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (scope, key)
+);
+#+end_src
+
+#+begin_src typescript
+export interface SessionRepository {
+  get(id: string): RelaySessionSnapshot | null;
+  list(): RelaySessionSnapshot[];
+  save(session: RelaySessionSnapshot): void;
+  listDesiredActive(): RelaySessionSnapshot[];
+}
+export interface EventJournal {
+  append(sessionId: string, type: string, payload: unknown, occurredAt: string): SessionEvent;
+  after(sessionId: string, sequence: number): { events: SessionEvent[]; gapPruned: boolean };
+}
+export interface IdempotencyStore {
+  get(scope: string, key: string): { statusCode: number; body: unknown } | null;
+  put(scope: string, key: string, statusCode: number, body: unknown): void;
+}
+export interface PendingInteractionRepository {
+  get(sessionId: string, requestId: string): PendingInteraction | null;
+  add(sessionId: string, interaction: PendingInteraction): void;
+  resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
+}
+export interface SessionEventPublisher {
+  publish(event: SessionEvent): void;
+  subscribe(sessionId: string, listener: (event: SessionEvent) => void): () => void;
+}
+#+end_src
+
+Commit: =feat: persist relay sessions and event journal=
+
+* TODO [#A] Discover workspaces and profiles
+
+- Effort :: 1 day
+- Goal :: Return a server-authoritative startup catalog with no path escape.
+- Notes :: Do not cache discovery in SQLite. Re-read current filesystem/profile
+  state when bootstrap is requested and before session creation.
+
+** TODO [#A] Implement filesystem and codex-profile catalog adapters
+
+- Why :: Browser selections must be friendly IDs while server validation uses
+  canonical current state.
+- Change :: Create =src/server/features/catalog/application/ports.ts=,
+  =src/server/platform/catalog/filesystem-workspace-catalog.ts=,
+  =codex-profile-catalog.ts=, and tests. Workspace ID is
+  =base64url(sha256(realPath))=. Sort by case-insensitive display name. Include
+  readable immediate directories, including non-Git directories. Parse
+  =codex-profile status --json= with Zod and expose =state= and =status= without
+  exposing the profile home path to the browser. A nonzero process exit with
+  valid JSON is allowed because logged-out profiles produce it.
+- Tests :: Use temporary roots containing normal, nested, unreadable, inside
+  symlink, and escaping symlink directories. Use a fake =codex-profile= script
+  for valid, logged-out, malformed, and missing cases. Run catalog tests.
+- Done when :: Escapes are excluded, immediate children are stable/sorted, and
+  the default and named profile records exactly match valid JSON output.
+
+#+begin_src typescript
+export type WorkspaceOption = { id: string; name: string; isGitRepository: boolean };
+export type ProfileOption = { name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string };
+export interface WorkspaceCatalog {
+  list(): Promise<WorkspaceOption[]>;
+  resolve(workspaceId: string): Promise<{ id: string; name: string; realPath: string }>;
+}
+export interface ProfileCatalog {
+  list(): Promise<ProfileOption[]>;
+  require(name: string): Promise<ProfileOption>;
+}
+#+end_src
+
+Commit: =feat: discover relay workspaces and profiles=
+
+** TODO [#A] Add the bootstrap REPR slice
+
+- Why :: The first useful browser request needs catalog, saved sessions, and
+  server capability state in one round trip.
+- Change :: Create =src/server/features/catalog/get-bootstrap/request.ts=,
+  =response.ts=, =use-case.ts=, =endpoint.ts=, and =endpoint.test.ts=. Register
+  it in =app.ts=. The response contains =workspaces=, =profiles=, =sessions=,
+  and =capabilities={approvals:true,userInput:true,git:true,protocolCompatible}=.
+- Tests :: Through Fastify injection, assert sorting, omission of real paths,
+  saved session mapping, catalog failure as retryable 503, and exact JSON
+  schema. Run the endpoint test and then all tests.
+- Done when :: =GET /api/bootstrap= returns the full typed startup payload and
+  does not leak profile homes or arbitrary filesystem paths.
+
+Commit: =feat: add bootstrap catalog endpoint=
+
+* TODO [#A] Isolate the Codex app-server protocol
+
+- Effort :: 3 days
+- Goal :: Provide a tested, version-checked port over JSONL stdio without
+  leaking generated Codex types into use cases or UI contracts.
+- Notes :: Generated files are build inputs and may be numerous. Never hand-edit
+  them. Commit the generated output and version metadata.
+
+** TODO [#A] Generate bindings and enforce the installed Codex version
+
+- Why :: App-server is experimental and generated bindings are guaranteed only
+  for the CLI version that generated them.
+- Change :: Create =scripts/generate-codex-protocol.mjs=,
+  =scripts/check-codex-protocol.mjs=,
+  =src/server/platform/codex/generated/=, and
+  =src/server/platform/codex/protocol-version.json=. Generation runs
+  =codex app-server generate-ts --experimental --out <dir>=, formats nothing,
+  and records the exact =codex --version= stdout. Check compares installed and
+  recorded versions. Add =src/server/platform/codex/protocol-compatibility.ts=
+  and test it with injected command results. Do not auto-regenerate at runtime.
+- Tests :: Run generator, check, version unit tests, =npm run check=, and build.
+  Test missing Codex and mismatched version as degraded health with stable codes
+  =CODEX_NOT_FOUND= and =CODEX_PROTOCOL_MISMATCH=.
+- Done when :: The generated union types compile and startup health can report
+  exact installed/recorded compatibility without spawning a session.
+
+Commit: =chore: generate codex app-server bindings=
+
+** TODO [#A] Implement the JSON-RPC client and process launcher
+
+- Why :: Request correlation, server requests, incremental JSONL parsing, and
+  process failure are the riskiest I/O boundary.
+- Change :: Create =src/server/features/sessions/application/codex-port.ts=,
+  =src/server/platform/codex/jsonl-rpc-client.ts=,
+  =codex-process-launcher.ts=, =codex-app-server-adapter.ts=,
+  =test/fixtures/fake-app-server.mjs=, and contract tests. The client owns a
+  monotonically increasing request ID, one pending Promise map, a readline JSONL
+  parser, notification/server-request callbacks, and one terminal close error.
+  Launch exactly =codex-profile cli <profile> app-server --stdio= with
+  =cwd=workspacePath= and =stdio=['pipe','pipe','pipe']=. Bound stderr to the last
+  64 KiB and redact it from normal logs.
+- Tests :: Fake server must cover fragmented reads, two concurrent responses out
+  of order, notification, server request, JSON error, malformed line, EOF with
+  pending requests, and child nonzero exit. Run only adapter tests, then all
+  tests.
+- Done when :: Every request settles once, malformed protocol kills only that
+  adapter, process arguments cannot invoke a shell, and initialize sends
+  =clientInfo={name:'codex_relay',title:'Codex Relay',version:'0.1.0'}= plus
+  =capabilities.experimentalApi=true= before =initialized=.
+
+#+begin_src typescript
+export interface CodexSessionPort {
+  initialize(): Promise<{ userAgent: string }>;
+  startThread(input: { cwd: string; model?: string; approvalPolicy: string; sandbox: string }): Promise<{ threadId: string }>;
+  resumeThread(threadId: string, cwd: string): Promise<void>;
+  readThread(threadId: string): Promise<CanonicalThread>;
+  startTurn(threadId: string, text: string): Promise<{ turnId: string }>;
+  interruptTurn(threadId: string, turnId: string): Promise<void>;
+  respond(requestId: string | number, result: unknown): Promise<void>;
+  onMessage(listener: (message: CodexInboundMessage) => void): () => void;
+  close(): Promise<void>;
+}
+export interface CodexProcessLauncher {
+  launch(input: { profile: string; cwd: string }): Promise<CodexSessionPort>;
+}
+#+end_src
+
+Commit: =feat: add codex app-server stdio adapter=
+
+** TODO [#A] Normalize Codex messages into relay events
+
+- Why :: Generated protocol changes must stop at the adapter boundary.
+- Change :: Create =src/server/platform/codex/normalize-codex-message.ts=,
+  =normalized-types.ts=, =src/server/platform/runtime/codex-session-event-router.ts=,
+  and tests. Cover =thread/started=, =turn/started=,
+  =turn/completed=, =item/started=, =item/completed=,
+  =item/agentMessage/delta=, =turn/plan/updated=,
+  =item/commandExecution/requestApproval=,
+  =item/fileChange/requestApproval=, =item/permissions/requestApproval=,
+  =item/tool/requestUserInput=, =serverRequest/resolved=, =warning=, and =error=.
+  Preserve request IDs for responses. Unknown notifications become one
+  =protocol.unknown= metadata event containing only the method name; malformed
+  known messages throw =CODEX_PROTOCOL_INVALID=. The event router subscribes to
+  one runtime, normalizes each inbound message, transactionally applies relevant
+  RelaySession/PendingInteraction transitions, appends the stable relay event,
+  and publishes it through the =SessionEventPublisher= port. It is the sole place where a
+  Codex notification changes durable session state.
+- Tests :: Use real generated types as fixtures. Snapshot normalized payloads
+  but not generated raw messages. Verify no command output or prompt text enters
+  log metadata. Run normalizer tests and =npm run check=.
+- Done when :: Application code can switch exhaustively on the normalized union
+  without importing =platform/codex/generated=.
+
+Commit: =feat: normalize codex session events=
+
+* TODO [#A] Implement session lifecycle slices and supervision
+
+- Effort :: 3 days
+- Goal :: Start, inspect, stop, release, restore, and automatically recover
+  durable Relay Sessions.
+- Notes :: =SessionRuntimeRegistry= is the only in-memory map of session ID to
+  live Codex adapter. Persist state before and after side effects as specified.
+
+** TODO [#A] Add start-session and get-session slices
+
+- Why :: Starting a correctly bound process/thread is the central use case.
+- Change :: Create =src/server/platform/runtime/session-runtime-registry.ts=,
+  =src/server/features/sessions/start-session/{request,response,use-case,endpoint}.ts=,
+  matching tests, and
+  =src/server/features/sessions/get-session/{request,response,use-case,endpoint}.ts=.
+  Request fields are =workspaceId=, =profile=, optional =model=,
+  =sandbox ('readOnly'|'workspaceWrite'|'dangerFullAccess')=, and
+  =approvalPolicy ('untrusted'|'onRequest'|'never')=. Start order is: replay
+  idempotency result; resolve workspace/profile; save =starting/active=; launch;
+  initialize; attach the event router; call =thread/start=; bind thread; save
+  ready; register runtime;
+  append =session.started= and =thread.bound=; store 201 response. On failure,
+  close the process, save =attentionRequired=, and return classified problem.
+- Tests :: Fake every port. Assert operation order, duplicate idempotency, invalid
+  catalog selections, initialize failure cleanup, thread ID persistence before
+  response, and GET not found. Run both slice tests through Fastify.
+- Done when :: POST returns a stable session ID/thread ID once and duplicate
+  requests cannot create a second process or thread.
+
+Commit: =feat: start durable codex sessions=
+
+** TODO [#A] Add list, stop, release, restore, and resume-command slices
+
+- Why :: Mobile switching and safe SSH handoff require explicit ownership
+  transitions.
+- Change :: Create slices =list-sessions=, =stop-session=, =release-session=,
+  and =restore-session= under =src/server/features/sessions/=. Add
+  =src/server/features/sessions/application/resume-command.ts=. Stop persists
+  =stopped/stopped= before closing. Release persists =released/stopped= and keeps
+  thread ID. Restore persists =recovering/active=, launches/initializes, calls
+  =thread/resume=, registers runtime, then persists ready. Session responses
+  include =resumeCommand= produced as an argument-safe display string.
+- Tests :: Verify state ordering around close/launch, idempotent stop/release,
+  restore without thread conflict, missing workspace/profile attention state,
+  and exact command quoting for paths/profile names. Run touched tests.
+- Done when :: The API can safely hand a thread to SSH and later reclaim it
+  without deleting history or allowing two relay runtimes.
+
+#+begin_src typescript
+export function buildResumeCommand(s: RelaySessionSnapshot): string {
+  // Implementation must POSIX-single-quote every argument independently.
+  return joinShellDisplay([
+    'codex-profile', 'cli', s.profile, 'resume', requireThreadId(s),
+    '-C', s.workspacePath, '--include-non-interactive'
+  ]);
+}
+#+end_src
+
+Commit: =feat: manage and release relay sessions=
+
+** TODO [#A] Add startup restoration and bounded crash recovery
+
+- Why :: Desired State is useful only if active sessions return after relay or
+  child-process failure.
+- Change :: Create =src/server/platform/runtime/session-supervisor.ts= and tests.
+  =restoreDesiredSessions()= starts independently with concurrency 2. A child
+  exit starts retry delays =[500, 2000, 5000]= milliseconds using injected Clock.
+  Each attempt saves recovery state and appends an event. Success resumes the
+  thread and resets failures. Exhaustion saves =attentionRequired=. Graceful
+  relay shutdown removes exit listeners, closes children, and preserves active
+  Desired State. An explicit stop cancels pending retry timers.
+- Tests :: Use fake clock/launcher. Prove backoff schedule, concurrency cap,
+  isolation, cancellation, shutdown semantics, recovery success, and exhaustion.
+  Add an app startup test that invokes restoration after listen readiness.
+- Done when :: Restarting the relay reconstructs active runtimes and one broken
+  session neither blocks HTTP readiness nor affects another session.
+
+Commit: =feat: restore and supervise codex sessions=
+
+* TODO [#A] Deliver reliable chat and interactive requests
+
+- Effort :: 4 days
+- Goal :: Expose canonical history, serialized turns, interactions, and replayed
+  live events across flaky browser connections.
+- Notes :: REST responses acknowledge accepted mutations; streamed Codex events
+  determine final UI state. Do not queue a second turn.
+
+** TODO [#A] Add history, start-turn, and interrupt-turn slices
+
+- Why :: The browser needs canonical reconciliation plus reliable commands.
+- Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
+  History calls =thread/read(includeTurns:true)= through the port and maps only
+  user messages, agent messages, reasoning summaries, plans, command summaries,
+  file-change summaries, and tool-call summaries into shared =ChatItem= types.
+  Start-turn requires ready state and nonblank text <= 100,000 UTF-16 code units,
+  starts Codex, persists =turnActive= with turn ID, appends =turn.started=, and
+  returns 202. Interrupt requires the active matching turn and is naturally
+  idempotent.
+- Tests :: Assert canonical mapping, whitespace rejection, long-input rejection,
+  active-turn 409, start ordering, interrupt mismatch 409, and completed turn
+  transition driven by normalized event. Run slice tests.
+- Done when :: Refreshing history reconstructs useful chat and REST cannot create
+  overlapping turns.
+
+#+begin_src typescript
+export type ChatItem =
+  | { id: string; kind: 'user'; text: string }
+  | { id: string; kind: 'agent'; text: string; phase?: 'commentary' | 'final_answer' }
+  | { id: string; kind: 'reasoning'; summary: string[] }
+  | { id: string; kind: 'plan'; text: string }
+  | { id: string; kind: 'command'; command: string; status: string; exitCode?: number }
+  | { id: string; kind: 'fileChange'; paths: string[]; status: string }
+  | { id: string; kind: 'tool'; name: string; status: string };
+#+end_src
+
+Commit: =feat: add canonical chat turns=
+
+** TODO [#A] Add approval and user-input interaction slices
+
+- Why :: Full mobile control requires answering every supported Codex server
+  request once and with the generated response shape.
+- Change :: Create =resolve-approval= and =answer-user-input= slices and tests.
+  The normalized event handler first persists Pending Interaction and appends
+  =interaction.requested=. Approval Request accepts the generated decision enum
+  values exposed by that specific request type; define a relay-safe union after
+  inspecting generated types, never guess strings. User input accepts a record
+  keyed by Codex question ID with =answers: string[]= entries. Resolution uses a
+  SQLite transaction/uniqueness check before =CodexSessionPort.respond=; on send
+  failure leave the interaction pending/retryable. On success save resolution
+  and append =interaction.resolved=.
+- Tests :: Use one fixture per command, file, permission, and user-input request.
+  Assert first response, duplicate 409, invalid decision 400, wrong session 404,
+  send failure retry, and redacted logs. Run interaction tests.
+- Done when :: Each supported server request can be rendered and resolved once
+  without leaking generated protocol types into endpoint responses.
+
+Commit: =feat: handle codex approvals and questions=
+
+** TODO [#A] Add sequenced WebSocket replay and resynchronization
+
+- Why :: WebSocket delivery alone loses events during mobile network changes.
+- Change :: Create =src/server/platform/events/session-event-service.ts=,
+  =src/server/features/sessions/session-events/endpoint.ts= and tests. Attach a
+  =ws.WebSocketServer({noServer:true})= to Fastify's underlying server. Validate
+  the exact path/query before upgrading. On connection, query journal after
+  =after=. If pruned, send ={type:'relay.resyncRequired', currentSequence}= and
+  do not replay partial history. Otherwise send ordered replay then subscribe
+  live. Use a per-socket 1 MiB bufferedAmount cutoff: close slow clients with
+  code 1013. Send ping every 25 seconds and terminate after one missed pong.
+  Browser reconnect uses exponential delays 0.5, 1, 2, 5, then 10 seconds with
+  <=20% jitter and resets after 30 seconds stable.
+- Tests :: Use real WebSocket clients against a random port. Verify replay order,
+  exact no-gap live handoff, pruned resync, invalid session/query rejection, ping
+  cleanup, slow-client close, and two observers receiving the same sequence.
+- Done when :: A client reconnecting with its last cursor receives every retained
+  event exactly once or an explicit canonical-resync instruction.
+
+Commit: =feat: replay sequenced session events=
+
+* TODO [#B] Add safe Git inspection, refresh, and push
+
+- Effort :: 2 days
+- Goal :: Provide accurate, throttled Git information and narrowly constrained
+  push behavior for the active session workspace.
+- Notes :: Build repositories in temporary directories and bare remotes. Never
+  use the developer's real repositories in tests.
+
+** TODO [#A] Implement the Git CLI adapter and fetch coordinator
+
+- Why :: Parsing and safety belong behind one tested port, not endpoints.
+- Change :: Create =src/server/features/git/application/ports.ts=,
+  =src/server/platform/git/git-cli-adapter.ts=,
+  =git-fetch-coordinator.ts=, and tests. Use =execFile('git', args, {cwd})= with
+  15-second read and 120-second network timeouts. Determine repository, branch,
+  upstream remote, and upstream merge ref separately. Compute divergence with
+  =git rev-list --left-right --count HEAD...@{upstream}=. Parse porcelain v1 and
+  NUL/record-delimited =git log -20=. Cache successful summary reads in memory;
+  coalesce fetch Promises per canonical path; fetch only when last success is
+  older than 60 seconds using =git fetch --prune <remote>=.
+- Tests :: Temporary repos cover non-repo, detached HEAD, clean/dirty, Unicode
+  subjects/authors, no upstream, ahead/behind, stale/fresh fetch, coalescing,
+  timeout, and failed fetch retaining previous data.
+- Done when :: The adapter returns one deterministic =GitSummary= and never
+  interpolates repository data into a shell command.
+
+#+begin_src typescript
+export type GitSummary = {
+  available: boolean;
+  branch: string | null;
+  upstream: { remote: string; branch: string } | null;
+  ahead: number;
+  behind: number;
+  dirty: { staged: number; unstaged: number; untracked: number };
+  commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
+  fetchedAt: string | null;
+  refreshing: boolean;
+  refreshError: string | null;
+};
+#+end_src
+
+Commit: =feat: inspect and refresh git repositories=
+
+** TODO [#A] Add Git REPR slices and constrained upstream push
+
+- Why :: Push is externally mutating and must revalidate every precondition at
+  execution time.
+- Change :: Create =get-git-summary=, =refresh-git=, and =push-upstream= slices
+  with Request/Response/UseCase/Endpoint/test files. GET returns cached summary
+  immediately and schedules stale refresh. Refresh returns 202 and coalesces.
+  Push re-resolves session/workspace, branch/upstream/ahead; reject non-repo,
+  detached, missing upstream, or ahead=0. Execute
+  =git push <remote> HEAD:<refs/heads/upstream-branch>= with no force option,
+  then refresh summary. Do not retry push automatically.
+- Tests :: Endpoint tests cover status mapping and idempotency. Adapter integration
+  tests prove a successful bare-remote push, rejected non-fast-forward, missing
+  credentials, no upstream disabled state, and exact absence of force args.
+- Done when :: Only an ahead branch with a configured upstream can mutate the
+  remote, and failures are visible without merge/rebase/upstream creation.
+
+Commit: =feat: expose safe git upstream actions=
+
+* TODO [#B] Build the client state and session mobile shell
+
+- Effort :: 3 days
+- Goal :: Create a resilient Svelte 5 application shell that bootstraps, caches
+  state, reconnects, and manages Relay Sessions.
+- Notes :: Use runes in focused =.svelte.ts= state classes. Use =$state.raw= for
+  large immutable event/item arrays and replace arrays rather than mutating them.
+  Use =$effect= only for browser side effects with cleanup.
+
+** TODO [#A] Implement typed API, IndexedDB cache, and relay connection state
+
+- Why :: Components should render state and dispatch intent, not own networking.
+- Change :: Create =src/client/lib/api.ts=, =problem.ts=, =idempotency.ts=,
+  =indexed-db.ts=, =relay-connection.svelte.ts=, =app-state.svelte.ts=, and tests.
+  =ApiClient= implements every fixed REST route and throws typed =ApiProblem=.
+  IndexedDB database =codex-relay= version 1 has stores =settings=, =drafts=,
+  =cursors=, and =messages=; retain 200 messages per session. Connection state is
+  =offline|connecting|replaying|live|resyncing=. It reconnects with the cursor,
+  applies events by sequence, ignores exact duplicates, detects forward gaps,
+  runs history resync, and persists the cursor only after applying an event.
+- Tests :: In jsdom, fake fetch/WebSocket/IndexedDB boundary. Prove generated
+  idempotency keys remain stable for one retry, drafts survive reload, duplicate
+  events do not duplicate items, gap triggers resync, and cleanup closes socket.
+- Done when :: Components can consume one =AppState= API and no component calls
+  fetch, WebSocket, or IndexedDB directly.
+
+Commit: =feat: add resilient client data layer=
+
+** TODO [#A] Build navigation, session list, and start-session dialog
+
+- Why :: Users need a complete mobile entry flow before chat rendering.
+- Change :: Replace =App.svelte= and create =src/client/components/AppHeader.svelte=,
+  =BottomNavigation.svelte=, =ConnectionBanner.svelte=,
+  =src/client/features/sessions/SessionsView.svelte=,
+  =SessionCard.svelte=, and =StartSessionDialog.svelte=. Use a native =<dialog>=
+  opened with =showModal()=. The form has visible labels for workspace, profile,
+  optional model text (blank means profile default), sandbox, and approval
+  policy; validate on blur/submit, clear errors on
+  input, and focus an error summary. Default tab is Chat, but show Sessions when
+  no active session exists. Session cards expose restore/stop/release/copy-resume
+  actions with unambiguous names.
+- Tests :: Component tests cover initial bootstrap, empty state, dialog focus
+  return/Escape, validation, logged-out profile warning, duplicate-submit guard,
+  tab semantics/keyboard behavior, and clipboard fallback.
+- Done when :: A 390x844 viewport can start and switch sessions using touch or
+  keyboard without inaccessible custom controls.
+
+Commit: =feat: build mobile session shell=
+
+* TODO [#B] Build Chat and Git mobile views
+
+- Effort :: 4 days
+- Goal :: Finish the primary streamed-chat and supporting Git experiences with
+  accessible mobile interaction.
+- Notes :: Render agent text with =white-space: pre-wrap= and escape it as Svelte
+  text. Do not use ={@html}= or add a Markdown renderer in V1.
+
+** TODO [#A] Render streamed chat, composer, approvals, and questions
+
+- Why :: Chat is the primary product surface and must remain usable while events
+  stream or connectivity changes.
+- Change :: Create =src/client/features/chat/ChatView.svelte=,
+  =MessageList.svelte=, =ChatItem.svelte=, =ActivityItem.svelte=,
+  =InteractionCard.svelte=, and =Composer.svelte=. Render keyed items by stable
+  item ID. Collapsible activities use =<details>=. Composer is a labeled textarea
+  bound to the persisted draft; Enter sends, Shift+Enter inserts newline, and an
+  explicit button remains available. Disable send unless session is ready and
+  text is nonblank. Clear draft only after 202. Show Interrupt only for active
+  turn. Interaction forms submit once and keep recoverable errors inline.
+- Tests :: Cover delta accumulation, completed-item replacement, ordering,
+  commentary/final labels, command/file/tool summaries, draft preservation,
+  keyboard send, failed send, interrupt, each interaction type, and already
+  resolved 409 reconciliation.
+- Done when :: A full turn can be started, observed, interrupted, and answered
+  from mobile without losing draft or focus during streaming.
+
+Commit: =feat: build interactive codex chat=
+
+** TODO [#A] Render Git status, history, refresh, and push
+
+- Why :: The supporting tab must communicate stale/background state and safe
+  push preconditions clearly.
+- Change :: Create =src/client/features/git/GitView.svelte=,
+  =GitStatusCard.svelte=, =CommitList.svelte=, and =PushButton.svelte=. Load on
+  tab activation; display cached age immediately; show nonblocking refresh state
+  and last error. Show branch/upstream, ahead/behind, dirty counts, and 20 commits
+  with absolute =datetime= and human relative text. Keep missing-upstream Push
+  focusable with =aria-disabled=true= and explanatory text. Push confirmation
+  names remote/branch and never suggests force.
+- Tests :: Cover non-repo, detached/no-upstream, stale refresh, failed fetch,
+  enabled push only when ahead, confirmation cancel/success/failure, and no
+  color-only status communication.
+- Done when :: The Git tab exactly represents API state and cannot invoke Push
+  when server preconditions are visibly false.
+
+Commit: =feat: build mobile git workspace view=
+
+** TODO [#A] Finish mobile layout and accessibility verification
+
+- Why :: Safe areas, software keyboards, focus, and announcements are functional
+  requirements, not polish.
+- Change :: Refine =src/client/styles.css= and components. Use semantic
+  =header/nav/main=, one H1, sequential headings, 44px minimum targets, visible
+  =:focus-visible=, forced-colors support, =prefers-reduced-motion=, horizontal
+  overflow only inside code/command blocks, =100dvh= with =100vh= fallback, and
+  =env(safe-area-inset-*)=. Use one polite live region for completed agent
+  messages/meaningful connection changes; never announce token deltas. Use an
+  assertive alert only for action-blocking failure. Keep page zoom enabled.
+- Tests :: Add Playwright accessibility assertions for tab order, dialog focus,
+  labels, disabled-state discoverability, live-region behavior, 320px no body
+  overflow, 390x844 composer visibility, and reduced motion. Run
+  =npx @sveltejs/mcp svelte-autofixer <every .svelte file> --svelte-version 5=,
+  fix every reported issue, then =npm run check= and component tests.
+- Done when :: Svelte check has zero warnings, autofixer has no actionable issue,
+  and the mobile keyboard/safe-area layout retains navigation and composer access.
+
+Commit: =fix: harden mobile accessibility and layout=
+
+* TODO [#A] Prove restart, reconnection, and operational handoff
+
+- Effort :: 3 days
+- Goal :: Verify the complete system against its success criteria and leave a
+  low-ambiguity operational interface for future agents/users.
+- Notes :: Use fake app-server for deterministic CI. Keep real Codex contract
+  testing opt-in because it requires installed/authenticated local state.
+
+** TODO [#A] Add end-to-end flows and restart/reconnection harness
+
+- Why :: Unit boundaries cannot prove child supervision, server restart,
+  WebSocket replay, IndexedDB draft recovery, and UI behavior together.
+- Change :: Create =test/e2e/fixtures/relay.ts=,
+  =test/e2e/session-chat.spec.ts=, =reconnection.spec.ts=,
+  =restart-restore.spec.ts=, =git.spec.ts=, and extend the fake app-server with
+  deterministic scenarios selected by environment variable. Launch relay on a
+  random port/data directory/root. Add test-only network disconnect controls but
+  no production-only backdoor.
+- Tests :: Cover all nine design success criteria: bootstrap; session start;
+  streamed chat; approvals/questions; browser drop/replay; pruned full resync;
+  relay restart/thread resume; copyable SSH command; throttled Git fetch and safe
+  push; mobile keyboard/focus semantics. Run =npm run test:e2e= twice to expose
+  leaked processes/ports.
+- Done when :: Both consecutive E2E runs pass, every child is reaped, and no test
+  depends on the developer's real Codex homes or Git repositories.
+
+Commit: =test: cover relay recovery user journeys=
+
+** TODO [#B] Add CLI session listing and operator documentation
+
+- Why :: SSH handoff must be easy without opening the browser, and later agents
+  need project-specific boundaries.
+- Change :: Extend =src/server/main.ts= with subcommand =sessions= and create
+  =src/server/cli/list-sessions.ts=. It resolves the same root-hashed DB and
+  prints columns SESSION, STATE, PROFILE, WORKSPACE, THREAD plus the exact resume
+  command beneath each record. Add =README.md= covering install/build/start,
+  =--cwd=, data location, VPN/no-auth trust boundary, profiles, restore behavior,
+  SSH release/resume, protocol regeneration, and Git limitations. Add
+  =AGENTS.md= summarizing VSA/REPR/Hex/DDD boundaries, commands, generated-file
+  rule, redaction rule, and the per-slice test/commit workflow.
+- Tests :: Snapshot CLI output for zero/one/multiple sessions and space/quote
+  paths. Run CLI tests, =npm run check=, and build. Manually run
+  =node dist/server/main.js sessions --cwd <fixture-root>=.
+- Done when :: A terminal user can identify and resume every saved thread without
+  reading SQLite, and future agents know the architectural rules.
+
+Commit: =docs: add operation and ssh handoff guide=
+
+** TODO [#A] Run final protocol and release verification
+
+- Why :: Completion claims require fresh evidence from the exact final tree.
+- Change :: Do not change code unless a verification command fails. If a fix is
+  required, return to the owning L2, set it WIP, add a regression test, fix, and
+  make a conventional commit there. Do not create a “misc fixes” commit.
+- Tests :: Run in order: =npm ci=, =npm run protocol:check=,
+  =npm run format:check=, =npm run lint=, =npm run check=, =npm test=,
+  =npm run build=, =npm run test:e2e=, =git status --short=, and
+  =git log --oneline --decorate main..HEAD=. Optionally run the installed-CLI
+  contract suite with =CODEX_RELAY_LIVE_CODEX=1 npm test -- live-codex=.
+- Done when :: Required commands exit zero, working tree is clean, all L1/L2
+  headings are DONE,
+  and the reviewer summary lists commits, test evidence, known V1 exclusions,
+  and the optional live-contract result separately.
+
+** TODO [#A] Complete the architecture and redaction audit
+
+- Why :: Passing tests does not by itself prove inward dependencies, safe process
+  execution, redacted logging, or V1 scope restraint.
+- Change :: Do not change files during the audit. If any check fails, reopen the
+  owning L2, add a regression test or static rule, fix it, and commit there.
+- Tests :: Inspect imports, process construction, Git arguments, log fields,
+  WebSocket replay paths, and built output against the ten checks below.
+- Done when :: All ten checks pass with file/line evidence recorded in the final
+  reviewer summary; no audit-only commit is created.
+
+1. Confirm every changed source file belongs to one vertical slice, a real
+   shared domain concept, or platform infrastructure.
+2. Confirm every HTTP slice has Request, Endpoint, Response, use-case logic, one
+   public registration function, and an entry-point test.
+3. Confirm domain/application imports never point to Fastify, Svelte, SQLite,
+   child-process, filesystem, or Git adapters.
+4. Confirm browser contracts never import generated Codex types.
+5. Confirm no child process uses a shell and no Git command contains force,
+   upstream creation, merge, rebase, or commit behavior.
+6. Confirm logs cannot include prompts, agent text, answers, output, environment,
+   or credentials.
+7. Confirm reconnect either replays a contiguous sequence or explicitly resyncs
+   canonical history.
+8. Confirm relay restart restores Desired State but does not promise continuation
+   of a generation interrupted by process death.
+9. Confirm missing upstream leaves Push unavailable and understandable.
+10. Confirm final reviewer summary is brief and evidence-based.
