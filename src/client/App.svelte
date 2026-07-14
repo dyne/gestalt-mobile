@@ -39,6 +39,7 @@
     dirty: { staged: number; unstaged: number; untracked: number };
     commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
   } | null>(null);
+  let pushConfirmationOpen = $state(false);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
@@ -165,6 +166,7 @@
   async function pushGit() {
     if (!sessionId) return;
     await relay.pushGit(sessionId);
+    pushConfirmationOpen = false;
     await loadGitSummary();
   }
 
@@ -317,7 +319,14 @@
             <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
             <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
             <button type="button" onclick={() => void refreshGit()}>Fetch</button>
-            <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => void pushGit()}>Push</button>
+            <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => (pushConfirmationOpen = true)}>Push</button>
+            {#if pushConfirmationOpen}
+              <section aria-label="Confirm push">
+                <p>Push HEAD to {gitSummary.upstream}?</p>
+                <button type="button" onclick={() => void pushGit()}>Confirm push</button>
+                <button type="button" onclick={() => (pushConfirmationOpen = false)}>Cancel</button>
+              </section>
+            {/if}
             {#if gitSummary.commits.length}
               <h3>Recent commits</h3>
               <ol aria-label="Recent commits">
