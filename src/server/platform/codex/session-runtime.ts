@@ -38,4 +38,19 @@ export class CodexSessionRuntime {
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
   }
+
+  async startTurn(
+    session: RelaySessionSnapshot,
+    text: string,
+    now: string,
+  ): Promise<RelaySessionSnapshot> {
+    const process = this.processes.get(session.id);
+    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const result = (await process.rpc.request('turn/start', {
+      threadId: session.threadId,
+      input: [{ type: 'text', text, text_elements: [] }],
+    })) as { turn?: { id?: string } };
+    if (!result.turn?.id) throw new Error('CODEX_TURN_ID_MISSING');
+    return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;
+  }
 }

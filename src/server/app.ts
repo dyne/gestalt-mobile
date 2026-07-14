@@ -7,6 +7,7 @@ import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
+import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
@@ -25,6 +26,7 @@ export type AppDependencies = {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
     activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
   };
   sessionEvents?: {
     exists(id: string): boolean;
@@ -41,6 +43,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.sessionRoutes) {
     registerStartSession(app, deps.sessionRoutes);
     registerGetSession(app, deps.sessionRoutes.find);
+    if (deps.sessionRoutes.startTurn)
+      registerStartTurn(app, {
+        find: deps.sessionRoutes.find,
+        start: deps.sessionRoutes.startTurn,
+        save: deps.sessionRoutes.save,
+      });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
   registerProblemHandler(app, Boolean(deps.staticDir));
