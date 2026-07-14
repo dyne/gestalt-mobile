@@ -48,6 +48,35 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
+test('shows a start-session failure and permits a retry', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ detail: 'Codex app-server is unavailable.' }),
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByRole('button', { name: 'Start session' }).click();
+
+  await expect(page.getByRole('status')).toContainText(
+    'Could not start session: Codex app-server is unavailable.',
+  );
+  await expect(page.getByRole('button', { name: 'Start session' })).toBeEnabled();
+});
+
 test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   const session = {
     id: 'session-1',
