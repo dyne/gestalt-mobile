@@ -77,8 +77,9 @@ Use these URLs and status codes exactly:
 | POST | /api/sessions/:sessionId/git/push | 202 | push-upstream |
 | GET upgrade | /api/sessions/:sessionId/events?after=<sequence> | 101 | session-events |
 
-Idempotency-Key support remains TODO; =interrupt= has the natural key
-=(sessionId, turnId)=. All failures use =application/problem+json= and:
+Session creation supports =Idempotency-Key= replay; additional mutation-route
+coverage remains TODO. =interrupt= has the natural key =(sessionId, turnId)=.
+All failures use =application/problem+json= and:
 
 #+begin_src typescript
 export type ProblemDetail = {
