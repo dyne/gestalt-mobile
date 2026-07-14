@@ -14,6 +14,7 @@ export type WorkspaceGitSummary = {
     author: string;
     authoredAt: string;
   }>;
+  fetchedAt: string | null;
 };
 
 export function parseDirtyCounts(value: string): {
@@ -74,7 +75,7 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
           authoredAt: authoredAt!,
         };
       });
-    return { available: true, branch, upstream, ...divergence, dirty, commits };
+    return { available: true, branch, upstream, ...divergence, dirty, commits, fetchedAt: null };
   } catch {
     return {
       available: false,
@@ -84,6 +85,7 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
       behind: 0,
       dirty: { staged: 0, unstaged: 0, untracked: 0 },
       commits: [],
+      fetchedAt: null,
     };
   }
 }

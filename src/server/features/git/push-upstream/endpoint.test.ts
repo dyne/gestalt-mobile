@@ -17,6 +17,7 @@ describe('POST /api/sessions/:id/git/push', () => {
         behind: 0,
         dirty: { staged: 0, unstaged: 0, untracked: 0 },
         commits: [],
+        fetchedAt: null,
       }),
       push: async () => {
         pushed = true;

@@ -14,6 +14,7 @@ describe('GitFetchCoordinator', () => {
     );
 
     await coordinator.refresh('/workspace');
+    expect(coordinator.lastSuccessfulAt('/workspace')).toBe(1_000);
     now = 2_000;
     await coordinator.refresh('/workspace');
     now = 61_000;

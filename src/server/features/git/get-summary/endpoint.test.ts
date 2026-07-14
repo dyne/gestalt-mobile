@@ -16,6 +16,7 @@ describe('GET /api/sessions/:id/git', () => {
         behind: 0,
         dirty: { staged: 0, unstaged: 0, untracked: 0 },
         commits: [],
+        fetchedAt: null,
       }),
     });
     const response = await app.inject({ method: 'GET', url: '/api/sessions/session-1/git' });

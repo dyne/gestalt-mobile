@@ -4,6 +4,7 @@
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { readDraft, saveDraft } from './features/chat/draft-store.js';
+  import { fetchAge } from './features/git/fetch-age.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
@@ -43,6 +44,7 @@
     behind: number;
     dirty: { staged: number; unstaged: number; untracked: number };
     commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
+    fetchedAt: string | null;
   } | null>(null);
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
@@ -375,6 +377,7 @@
           {#if gitSummary.available}
             <p>Branch: {gitSummary.branch ?? 'detached'} · upstream: {gitSummary.upstream ?? 'none'}</p>
             <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
+            <p><time datetime={gitSummary.fetchedAt ?? undefined}>{fetchAge(gitSummary.fetchedAt)}</time></p>
             <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
             <button type="button" disabled={gitRefreshing} onclick={() => void refreshGit()}>{gitRefreshing ? 'Fetching…' : 'Fetch'}</button>
             {#if gitError}<p role="alert">{gitError}</p>{/if}

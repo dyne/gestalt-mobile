@@ -200,7 +200,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     },
     gitSummary: {
-      inspect: inspectGit,
+      inspect: async (path) => {
+        const summary = await inspectGit(path);
+        const fetchedAt = gitFetches.lastSuccessfulAt(path);
+        return { ...summary, fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null };
+      },
       push: pushUpstream,
       refresh: (path) => gitFetches.refresh(path),
     },

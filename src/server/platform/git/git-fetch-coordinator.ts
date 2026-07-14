@@ -10,6 +10,10 @@ export class GitFetchCoordinator {
     private readonly throttleMs = 60_000,
   ) {}
 
+  lastSuccessfulAt(workspacePath: string): number | null {
+    return this.lastSuccessfulFetch.get(resolve(workspacePath)) ?? null;
+  }
+
   refresh(workspacePath: string): Promise<void> {
     const key = resolve(workspacePath);
     const active = this.inFlight.get(key);
