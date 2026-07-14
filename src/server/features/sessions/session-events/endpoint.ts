@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 
 import { replayOrResync } from '../../../platform/events/replay.js';
 import { isSlowClient } from '../../../platform/events/slow-client.js';
+import { installWebSocketHeartbeat } from '../../../platform/events/websocket-heartbeat.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
 
 export function registerSessionEvents(
@@ -36,7 +37,11 @@ export function registerSessionEvents(
       }
       replay.events.forEach(send);
       const unsubscribe = deps.subscribe(sessionId, send);
-      connection.on('close', unsubscribe);
+      const removeHeartbeat = installWebSocketHeartbeat(connection);
+      connection.on('close', () => {
+        removeHeartbeat();
+        unsubscribe();
+      });
     });
   });
   app.addHook('onClose', async () => server.close());
