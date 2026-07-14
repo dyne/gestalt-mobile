@@ -443,6 +443,59 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
   await expect.poll(() => reads).toBe(2);
 });
 
+test('reconnects a dropped browser socket and replays from its saved cursor', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'turnActive',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: 'turn-1',
+  };
+  let connections = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) => {
+      connections += 1;
+      if (connections === 1) {
+        socket.send(
+          JSON.stringify({
+            type: 'relay.event',
+            event: { sequence: 1, type: 'agentMessageDelta', payload: { text: 'before drop ' } },
+          }),
+        );
+        socket.close();
+      } else {
+        socket.send(
+          JSON.stringify({
+            type: 'relay.event',
+            event: { sequence: 2, type: 'agentMessageDelta', payload: { text: 'after replay' } },
+          }),
+        );
+      }
+    },
+  );
+
+  await page.goto('/');
+  await expect(page.getByText('assistant: before drop after replay')).toBeVisible();
+  await expect.poll(() => connections).toBe(2);
+});
+
 test('switches primary navigation with arrow keys', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
