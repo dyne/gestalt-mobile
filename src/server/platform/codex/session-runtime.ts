@@ -27,7 +27,7 @@ export class CodexSessionRuntime {
     private readonly onServerRequest?: (
       sessionId: string,
       request: { id: number; method: string; params: unknown },
-    ) => void,
+    ) => boolean,
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
 
@@ -108,7 +108,9 @@ export class CodexSessionRuntime {
     sessionId: string,
     request: { id: number; method: string; params: unknown },
   ): Promise<unknown> {
-    this.onServerRequest?.(sessionId, request);
+    if (!this.onServerRequest?.(sessionId, request)) {
+      return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
+    }
     return new Promise((resolve) =>
       this.pendingRequests.set(`${sessionId}:${request.id}`, resolve),
     );

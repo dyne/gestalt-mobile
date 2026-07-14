@@ -143,7 +143,10 @@ describe('CodexSessionRuntime', () => {
       }),
       undefined,
       undefined,
-      (sessionId, request) => pending.push({ sessionId, request }),
+      (sessionId, request) => {
+        pending.push({ sessionId, request });
+        return true;
+      },
     );
     await runtime.start(
       {
@@ -176,5 +179,49 @@ describe('CodexSessionRuntime', () => {
     ]);
     runtime.resolveServerRequest('session-1', '7', { decision: 'approved' });
     await expect(result).resolves.toEqual({ decision: 'approved' });
+  });
+
+  it('rejects an unsupported Codex server request instead of leaving it pending', async () => {
+    let requestListener:
+      ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => () => {},
+          onServerRequest: (listener) => {
+            requestListener = listener;
+            return () => {};
+          },
+        },
+        close: () => {},
+      }),
+      undefined,
+      undefined,
+      () => false,
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+
+    await expect(
+      requestListener?.({ id: 8, method: 'unsupported/request', params: {} }),
+    ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
   });
 });

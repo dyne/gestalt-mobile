@@ -59,7 +59,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         (sessionId, request) => {
           const interaction = toPendingInteraction(request);
           const session = sessions.find(sessionId);
-          if (!interaction || !session) return;
+          if (!interaction || !session) return false;
           interactions.add(sessionId, interaction);
           const updated = RelaySession.rehydrate(session).requestInteraction(
             interaction,
@@ -69,6 +69,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           events.publish(
             journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
           );
+          return true;
         },
       )
     : null;
