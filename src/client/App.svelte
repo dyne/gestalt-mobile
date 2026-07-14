@@ -19,11 +19,12 @@
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
+  import { validateStartForm } from './features/sessions/start-form.js';
 
   let tab = $state<'chat' | 'git' | 'sessions'>('chat');
   let status = $state('Loading relay…');
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
-  let profiles = $state<Array<{ name: string }>>([]);
+  let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
   let sessionId = $state<string | null>(null);
   let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>>([]);
   let workspaceId = $state('');
@@ -63,13 +64,13 @@
     try {
       const bootstrap = (await loadBootstrap()) as {
         workspaces: Array<{ id: string; name: string }>;
-        profiles: Array<{ name: string }>;
+        profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
         sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>;
       };
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
-      profile = profiles[0]?.name ?? '';
+      profile = profiles.find((item) => item.state === 'ok')?.name ?? profiles[0]?.name ?? '';
       const remembered = readSelectedSession(localStorage);
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
@@ -97,6 +98,16 @@
 
   async function startSession() {
     if (!workspaceId || !profile || startingSession) return;
+    const selectedProfile = profiles.find((item) => item.name === profile);
+    const errors = validateStartForm({
+      workspaceId,
+      profile,
+      profileState: selectedProfile?.state,
+    });
+    if (errors.profile) {
+      status = errors.profile;
+      return;
+    }
     startRequestKey ??= createIdempotencyKey();
     startingSession = true;
     status = 'Starting session…';
@@ -479,9 +490,11 @@
         </select>
         <label for="profile">Profile</label>
         <select id="profile" bind:value={profile} required>
-          {#each profiles as item (item.name)}<option value={item.name}>{item.name}</option>{/each}
+          {#each profiles as item (item.name)}
+            <option value={item.name} disabled={item.state !== 'ok'}>{item.name}{item.state !== 'ok' ? ` — ${item.status}` : ''}</option>
+          {/each}
         </select>
-        <button type="submit" disabled={!workspaceId || !profile || startingSession}>{startingSession ? 'Starting…' : 'Start session'}</button>
+        <button type="submit" disabled={!workspaceId || !profile || startingSession || profiles.find((item) => item.name === profile)?.state !== 'ok'}>{startingSession ? 'Starting…' : 'Start session'}</button>
       </form>
     </section>
   {/if}
