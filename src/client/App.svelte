@@ -14,6 +14,7 @@
   } from './features/chat/user-input-request.js';
   import { createRelayClient } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
+  import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
@@ -93,7 +94,7 @@
 
   async function startSession() {
     if (!workspaceId || !profile || startingSession) return;
-    startRequestKey ??= crypto.randomUUID();
+    startRequestKey ??= createIdempotencyKey();
     startingSession = true;
     status = 'Starting session…';
     try {
