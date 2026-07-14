@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 
@@ -20,11 +23,15 @@ export class CodexProfileCatalog implements ProfileCatalog {
   constructor(
     private readonly command: () => Promise<string> = async () =>
       (await execute('codex-profile', ['status', '--json'])).stdout,
+    private readonly defaultHomeExists: () => boolean = () => existsSync(join(homedir(), '.codex')),
   ) {}
   async list(): Promise<ProfileOption[]> {
-    return statusSchema
+    const profiles = statusSchema
       .parse(JSON.parse(await this.command()))
       .profiles.map(({ name, state, status }) => ({ name, state, status }));
+    return profiles.length || !this.defaultHomeExists()
+      ? profiles
+      : [{ name: 'default', state: 'ok', status: 'Using ~/.codex' }];
   }
   async require(name: string): Promise<ProfileOption> {
     const profile = (await this.list()).find((item) => item.name === name);

@@ -13,8 +13,9 @@ npm start -- --cwd <relay-root>
 ```
 
 `--cwd` is the relay root. Its immediate child directories are selectable
-workspaces. Profiles come from `codex-profile status --json`; the default Codex
-home is used when no managed profile is present.
+workspaces. Profiles come from `codex-profile status --json`; if it reports no
+managed profiles but `~/.codex` exists, the selectable `default` profile launches
+`codex app-server --stdio` directly.
 
 The relay keeps SQLite state under the supplied data directory, or under the
 root-hashed XDG state directory when `--data-dir` is omitted. Active durable

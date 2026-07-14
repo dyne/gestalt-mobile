@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { JsonRpcClient } from './json-rpc-client.js';
+import { profileAppServerCommand } from '../catalog/profile-command.js';
 
 export type CodexProcess = {
   child: ChildProcessWithoutNullStreams;
@@ -9,7 +10,8 @@ export type CodexProcess = {
 };
 
 export function launchCodexAppServer(input: { profile: string; cwd: string }): CodexProcess {
-  const child = spawn('codex-profile', ['cli', input.profile, 'app-server', '--stdio'], {
+  const launch = profileAppServerCommand(input.profile);
+  const child = spawn(launch.command, launch.args, {
     cwd: input.cwd,
     shell: false,
     stdio: 'pipe',

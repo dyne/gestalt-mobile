@@ -12,4 +12,14 @@ describe('CodexProfileCatalog', () => {
       { name: 'default', state: 'ok', status: 'ready' },
     ]);
   });
+
+  it('offers the direct default home when no managed profile exists', async () => {
+    const catalog = new CodexProfileCatalog(
+      async () => JSON.stringify({ profiles: [] }),
+      () => true,
+    );
+    await expect(catalog.list()).resolves.toEqual([
+      { name: 'default', state: 'ok', status: 'Using ~/.codex' },
+    ]);
+  });
 });
