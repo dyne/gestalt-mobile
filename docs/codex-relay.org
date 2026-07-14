@@ -922,8 +922,8 @@ Commit: =fix: harden mobile accessibility and layout=
 
 - Status :: Playwright now boots the Vite client, intercepts the relay boundary,
   starts a selected session, sends a turn from the mobile composer, and proves
-  safe Git push confirmation. Recovery, interaction, Git refresh, and restart
-  flows remain.
+  safe Git push confirmation and persisted-session canonical-history hydration.
+  Interaction, Git refresh, socket replay, and relay restart flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.

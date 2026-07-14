@@ -102,3 +102,42 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   await page.getByRole('button', { name: 'Confirm push' }).click();
   await expect.poll(() => pushed).toBe(true);
 });
+
+test('hydrates canonical history for a persisted session', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currentSequence: 7,
+        items: [
+          { id: 'user-1', kind: 'user', text: 'Check the branch' },
+          { id: 'agent-1', kind: 'agent', text: 'The branch is clean.' },
+          { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
+        ],
+      }),
+    }),
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByText('user: Check the branch')).toBeVisible();
+  await expect(page.getByText('assistant: The branch is clean.')).toBeVisible();
+  await expect(page.getByText('Command · completed')).toBeVisible();
+});
