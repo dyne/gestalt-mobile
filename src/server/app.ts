@@ -35,6 +35,7 @@ export type AppDependencies = {
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     close?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
+    interactionResolved?(sessionId: string, requestId: string, occurredAt: string): void;
   };
   sessionEvents?: {
     exists(id: string): boolean;
@@ -76,6 +77,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         resolve: (sessionId, requestId, resolvedAt) =>
           deps.interactions!.resolve(sessionId, requestId, resolvedAt),
         reply: deps.sessionRoutes.replyInteraction,
+        resolved: deps.sessionRoutes.interactionResolved,
         now: deps.sessionRoutes.now,
       });
   }

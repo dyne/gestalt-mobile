@@ -120,6 +120,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       replyInteraction: runtime
         ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)
         : undefined,
+      interactionResolved: (sessionId, requestId, occurredAt) => {
+        events.publish(
+          journal.append(sessionId, 'interaction.resolved', { requestId }, occurredAt),
+        );
+      },
     },
     sessionEvents: {
       exists: (id) => sessions.find(id) !== null,
