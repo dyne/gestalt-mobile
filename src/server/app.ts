@@ -3,6 +3,7 @@ import fastify, { type FastifyInstance } from 'fastify';
 
 import { registerGetHealth, type HealthReader } from './features/health/get-health/endpoint.js';
 import { registerGetBootstrap } from './features/catalog/get-bootstrap/endpoint.js';
+import { registerGetGitSummary } from './features/git/get-summary/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
@@ -33,6 +34,9 @@ export type AppDependencies = {
     since(id: string, after: number): SessionEvent[];
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   };
+  gitSummary?: {
+    inspect(path: string): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
+  };
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -51,6 +55,8 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
+  if (deps.gitSummary && deps.sessionRoutes)
+    registerGetGitSummary(app, { find: deps.sessionRoutes.find, inspect: deps.gitSummary.inspect });
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }
