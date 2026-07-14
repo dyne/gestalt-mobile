@@ -4,6 +4,7 @@
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { readDraft, saveDraft } from './features/chat/draft-store.js';
+  import { submitsOnEnter } from './features/chat/keyboard.js';
   import { fetchAge } from './features/git/fetch-age.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
@@ -28,6 +29,7 @@
   let startRequestKey = $state<string | null>(null);
   let message = $state('');
   let activeTurnId = $state<string | null>(null);
+  let startingTurn = $state(false);
   let messages = $state<ChatMessage[]>([]);
   let activities = $state<HistoryActivity[]>([]);
   let cursor = $state(0);
@@ -144,12 +146,19 @@
   }
 
   async function sendMessage() {
-    if (!sessionId || !message.trim()) return;
-    const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
-    activeTurnId = turn.activeTurnId ?? null;
-    message = '';
-    saveDraft(localStorage, sessionId, '');
-    status = 'Codex is working…';
+    if (!sessionId || !message.trim() || activeTurnId || startingTurn) return;
+    startingTurn = true;
+    try {
+      const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
+      activeTurnId = turn.activeTurnId ?? null;
+      message = '';
+      saveDraft(localStorage, sessionId, '');
+      status = 'Codex is working…';
+    } catch {
+      status = 'Message was not sent. Your draft is preserved.';
+    } finally {
+      startingTurn = false;
+    }
   }
 
   async function interruptTurn() {
@@ -249,6 +258,12 @@
   function updateDraft(value: string) {
     message = value;
     if (sessionId) saveDraft(localStorage, sessionId, value);
+  }
+
+  function handleComposerKeydown(event: KeyboardEvent): void {
+    if (!submitsOnEnter(event) || activeTurnId || startingTurn || !message.trim()) return;
+    event.preventDefault();
+    void sendMessage();
   }
 
   function connectSession(id: string) {
@@ -360,8 +375,8 @@
         {/if}
         <form onsubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <label for="message">Message</label>
-          <textarea id="message" value={message} oninput={(event) => updateDraft(event.currentTarget.value)} rows="3" required></textarea>
-          <button type="submit">Send</button>
+          <textarea id="message" value={message} oninput={(event) => updateDraft(event.currentTarget.value)} onkeydown={handleComposerKeydown} rows="3" required></textarea>
+          <button type="submit" disabled={Boolean(activeTurnId) || startingTurn || !message.trim()}>Send</button>
           {#if activeTurnId}<button type="button" onclick={() => void interruptTurn()}>Interrupt</button>{/if}
         </form>
       {:else}
