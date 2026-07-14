@@ -11,6 +11,8 @@ import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/applic
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
+import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
+import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
@@ -30,6 +32,7 @@ export type AppDependencies = {
     profiles: Pick<ProfileCatalog, 'require'>;
     activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
+    close?(id: string): void;
   };
   sessionEvents?: {
     exists(id: string): boolean;
@@ -56,6 +59,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         find: deps.sessionRoutes.find,
         start: deps.sessionRoutes.startTurn,
         save: deps.sessionRoutes.save,
+      });
+    if (deps.sessionRoutes.close)
+      registerStopSession(app, {
+        find: deps.sessionRoutes.find,
+        stop: (session) => stopSession(session, deps.sessionRoutes!.now()),
+        save: deps.sessionRoutes.save,
+        close: deps.sessionRoutes.close,
       });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);

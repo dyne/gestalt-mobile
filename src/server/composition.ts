@@ -92,6 +92,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       startTurn: runtime
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
         : undefined,
+      close: runtime ? (id) => runtime.stop(id) : undefined,
     },
     sessionEvents: {
       exists: (id) => sessions.find(id) !== null,
