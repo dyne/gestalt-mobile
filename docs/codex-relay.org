@@ -973,6 +973,10 @@ Commit: =docs: add operation and ssh handoff guide=
 
 ** TODO [#A] Run final protocol and release verification
 
+- Status :: The current tree passes =format:check=, =lint=, =check=, =test=,
+  =build=, =protocol:check=, and =test:e2e=. This remains open until every L1/L2
+  heading is complete and the final post-audit run is recorded.
+
 - Why :: Completion claims require fresh evidence from the exact final tree.
 - Change :: Do not change code unless a verification command fails. If a fix is
   required, return to the owning L2, set it WIP, add a regression test, fix, and
