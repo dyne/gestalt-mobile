@@ -21,4 +21,21 @@ describe('POST /api/sessions/:id/turns', () => {
     expect(response.json()).toMatchObject({ id: 'session-1', activeTurnId: 'turn-1' });
     await app.close();
   });
+
+  it('rejects a turn larger than the relay input limit', async () => {
+    const app = fastify();
+    registerStartTurn(app, {
+      find: () => ({ id: 'session-1', state: 'ready', threadId: 'thread-1' }) as never,
+      start: async () => ({}) as never,
+      save: () => {},
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/turns',
+      payload: { text: 'x'.repeat(100_001) },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ code: 'TURN_INPUT_TOO_LONG' });
+    await app.close();
+  });
 });

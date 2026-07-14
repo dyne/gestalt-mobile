@@ -14,6 +14,7 @@ export function registerStartTurn(
     const session = deps.find((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     const text = (request.body as { text?: string }).text?.trim() ?? '';
+    if (text.length > 100_000) return reply.code(400).send({ code: 'TURN_INPUT_TOO_LONG' });
     if (!text || session.state !== 'ready')
       return reply.code(409).send({ code: 'SESSION_NOT_READY' });
     const started = await deps.start(session, text);
