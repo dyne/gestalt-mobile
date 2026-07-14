@@ -24,7 +24,7 @@
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string }>>([]);
   let sessionId = $state<string | null>(null);
-  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null; activeTurnId?: string | null }>>([]);
+  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let startRequestKey = $state<string | null>(null);
@@ -62,7 +62,7 @@
       const bootstrap = (await loadBootstrap()) as {
         workspaces: Array<{ id: string; name: string }>;
         profiles: Array<{ name: string }>;
-        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null; activeTurnId?: string | null }>;
+        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>;
       };
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
@@ -445,7 +445,7 @@
         <ul aria-label="Saved sessions">
           {#each sessions as session (session.id)}
             <li>
-              <span>{session.id} · {session.state}</span>
+              <span>{session.threadId ? `Thread ${session.threadId}` : `Relay session ${session.id}`} · {session.state}</span>
               <button type="button" onclick={() => openSession(session.id)}>Open</button>
               {#if session.state === 'ready'}
                 <button type="button" onclick={() => void releaseSession(session.id)}>Release</button>
