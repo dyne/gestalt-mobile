@@ -73,4 +73,27 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
     ]);
     await app.close();
   });
+
+  it('rejects a non-object interaction response before replying to Codex', async () => {
+    const app = fastify();
+    let replied = false;
+    registerRespondInteraction(app, {
+      exists: () => true,
+      resolve: () => true,
+      reply: () => {
+        replied = true;
+        return true;
+      },
+      now: () => 'now',
+    });
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/interactions/request-1',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify('invalid'),
+    });
+    expect(result.statusCode).toBe(400);
+    expect(replied).toBe(false);
+    await app.close();
+  });
 });
