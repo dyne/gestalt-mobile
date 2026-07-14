@@ -90,7 +90,7 @@
     await loadGitSummary();
   }
 
-  async function resolveInteraction(requestId: string, decision: 'approved' | 'denied') {
+  async function resolveInteraction(requestId: string, decision: 'accept' | 'decline') {
     if (!sessionId) return;
     await relay.respondInteraction(sessionId, requestId, { decision });
     interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
@@ -156,8 +156,8 @@
             {#each interactions as interaction (interaction.requestId)}
               <article>
                 <p>{interaction.kind}</p>
-                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'approved')}>Approve</button>
-                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'denied')}>Deny</button>
+                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'accept')}>Approve</button>
+                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'decline')}>Deny</button>
               </article>
             {/each}
           </section>
