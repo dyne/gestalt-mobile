@@ -36,4 +36,16 @@ describe('relay client', () => {
       'POST /api/sessions/session-1/git/refresh',
     ]);
   });
+
+  it('submits an interaction decision to the original session request', async () => {
+    const requests: string[] = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push(`${init?.method} ${String(url)} ${String(init?.body)}`);
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    });
+    await client.respondInteraction('session-1', 'request-1', { decision: 'approved' });
+    expect(requests).toEqual([
+      'POST /api/sessions/session-1/interactions/request-1 {"decision":"approved"}',
+    ]);
+  });
 });

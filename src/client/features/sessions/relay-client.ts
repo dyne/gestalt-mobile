@@ -24,5 +24,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request(`/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`, {}),
     pushGit: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/git/push`, {}),
+    respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
+      request(
+        `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,
+        value,
+      ),
   };
 }
