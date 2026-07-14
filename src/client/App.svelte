@@ -3,6 +3,7 @@
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
+  import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
     readUserInputQuestions,
     toUserInputResponse,
@@ -113,6 +114,17 @@
     interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
   }
 
+  async function resolvePermissions(interaction: { requestId: string; payload: unknown }) {
+    if (!sessionId) return;
+    const response = toPermissionApprovalResponse(interaction.payload);
+    if (!response) {
+      status = 'Codex sent an invalid permission request.';
+      return;
+    }
+    await relay.respondInteraction(sessionId, interaction.requestId, response);
+    interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+  }
+
   function setUserInputAnswer(questionId: string, answer: string) {
     userInputAnswers[questionId] = answer;
   }
@@ -195,7 +207,8 @@
                     <button type="submit" disabled={!questions.length}>Send answers</button>
                   </form>
                 {:else if interaction.kind === 'permissionsApproval'}
-                  <p>Permission-profile requests need a richer response and remain pending for now.</p>
+                  <p>Grant the requested permissions for this turn only.</p>
+                  <button type="button" onclick={() => void resolvePermissions(interaction)}>Approve</button>
                 {:else}
                   <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'accept')}>Approve</button>
                   <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'decline')}>Deny</button>
