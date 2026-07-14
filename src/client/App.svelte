@@ -37,6 +37,7 @@
     ahead: number;
     behind: number;
     dirty: { staged: number; unstaged: number; untracked: number };
+    commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
   } | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
@@ -317,6 +318,14 @@
             <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
             <button type="button" onclick={() => void refreshGit()}>Fetch</button>
             <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => void pushGit()}>Push</button>
+            {#if gitSummary.commits.length}
+              <h3>Recent commits</h3>
+              <ol aria-label="Recent commits">
+                {#each gitSummary.commits as commit (commit.hash)}
+                  <li><code>{commit.shortHash}</code> {commit.subject} — {commit.author}</li>
+                {/each}
+              </ol>
+            {/if}
           {:else}
             <p>This workspace is not a Git repository.</p>
           {/if}
