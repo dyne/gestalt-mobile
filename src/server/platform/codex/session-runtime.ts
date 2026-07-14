@@ -9,6 +9,9 @@ export type AppServer = {
     onNotification(
       listener: (notification: { method: string; params: unknown }) => void,
     ): () => void;
+    onServerRequest(
+      listener: (request: { id: number; method: string; params: unknown }) => Promise<unknown>,
+    ): () => void;
   };
   close(): void;
 };
@@ -21,12 +24,18 @@ export class CodexSessionRuntime {
       sessionId: string,
       notification: { method: string; params: unknown },
     ) => void,
+    private readonly onServerRequest?: (
+      sessionId: string,
+      request: { id: number; method: string; params: unknown },
+    ) => void,
   ) {}
+  private readonly pendingRequests = new Map<string, (result: unknown) => void>();
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
+      process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
       await process.rpc.request('initialize', {
         clientInfo: { name: 'codex-relay', version: '0.1.0' },
         capabilities: null,
@@ -49,6 +58,15 @@ export class CodexSessionRuntime {
     this.processes.delete(sessionId);
   }
 
+  resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
+    const key = `${sessionId}:${requestId}`;
+    const resolve = this.pendingRequests.get(key);
+    if (!resolve) return false;
+    this.pendingRequests.delete(key);
+    resolve(result);
+    return true;
+  }
+
   async startTurn(
     session: RelaySessionSnapshot,
     text: string,
@@ -69,6 +87,7 @@ export class CodexSessionRuntime {
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
+      process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
       await process.rpc.request('initialize', {
         clientInfo: { name: 'codex-relay', version: '0.1.0' },
         capabilities: null,
@@ -83,5 +102,15 @@ export class CodexSessionRuntime {
       process.close();
       throw error;
     }
+  }
+
+  private holdServerRequest(
+    sessionId: string,
+    request: { id: number; method: string; params: unknown },
+  ): Promise<unknown> {
+    this.onServerRequest?.(sessionId, request);
+    return new Promise((resolve) =>
+      this.pendingRequests.set(`${sessionId}:${request.id}`, resolve),
+    );
   }
 }

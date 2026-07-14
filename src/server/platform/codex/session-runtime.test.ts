@@ -12,6 +12,7 @@ describe('CodexSessionRuntime', () => {
           return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
         },
         onNotification: () => () => {},
+        onServerRequest: () => () => {},
       },
       close: () => {},
     }));
@@ -49,6 +50,7 @@ describe('CodexSessionRuntime', () => {
             notify = listener;
             return () => {};
           },
+          onServerRequest: () => () => {},
         },
         close: () => {},
       }),
@@ -91,6 +93,7 @@ describe('CodexSessionRuntime', () => {
           return {};
         },
         onNotification: () => () => {},
+        onServerRequest: () => () => {},
       },
       close: () => {},
     }));
@@ -119,5 +122,59 @@ describe('CodexSessionRuntime', () => {
       threadId: 'thread-1',
       updatedAt: 'after',
     });
+  });
+
+  it('keeps a Codex approval request pending until the relay resolves it', async () => {
+    let requestListener:
+      ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    const pending: unknown[] = [];
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => () => {},
+          onServerRequest: (listener) => {
+            requestListener = listener;
+            return () => {};
+          },
+        },
+        close: () => {},
+      }),
+      undefined,
+      undefined,
+      (sessionId, request) => pending.push({ sessionId, request }),
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    const result = requestListener?.({
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: {},
+    });
+    expect(pending).toEqual([
+      {
+        sessionId: 'session-1',
+        request: { id: 7, method: 'item/commandExecution/requestApproval', params: {} },
+      },
+    ]);
+    runtime.resolveServerRequest('session-1', '7', { decision: 'approved' });
+    await expect(result).resolves.toEqual({ decision: 'approved' });
   });
 });

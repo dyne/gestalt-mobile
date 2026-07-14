@@ -13,10 +13,12 @@ import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
+import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
 import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
+import { toPendingInteraction } from './platform/codex/server-request.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -38,18 +40,37 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   migrate(database);
   const sessions = new SqliteSessionRepository(database);
   const journal = new SqliteEventJournal(database);
+  const interactions = new SqlitePendingInteractionStore(database);
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const runtime = options.startAppServers
-    ? new CodexSessionRuntime(launchCodexAppServer, undefined, (sessionId, notification) => {
-        const occurredAt = new Date().toISOString();
-        const normalized = normalizeCodexNotification(sessionId, 0, occurredAt, notification);
-        if (!normalized) return;
-        events.publish(
-          journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
-        );
-      })
+    ? new CodexSessionRuntime(
+        launchCodexAppServer,
+        undefined,
+        (sessionId, notification) => {
+          const occurredAt = new Date().toISOString();
+          const normalized = normalizeCodexNotification(sessionId, 0, occurredAt, notification);
+          if (!normalized) return;
+          events.publish(
+            journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
+          );
+        },
+        (sessionId, request) => {
+          const interaction = toPendingInteraction(request);
+          const session = sessions.find(sessionId);
+          if (!interaction || !session) return;
+          interactions.add(sessionId, interaction);
+          const updated = RelaySession.rehydrate(session).requestInteraction(
+            interaction,
+            new Date().toISOString(),
+          ).snapshot;
+          sessions.save(updated);
+          events.publish(
+            journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
+          );
+        },
+      )
     : null;
   const saveSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
@@ -93,12 +114,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
         : undefined,
       close: runtime ? (id) => runtime.stop(id) : undefined,
+      replyInteraction: runtime
+        ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)
+        : undefined,
     },
     sessionEvents: {
       exists: (id) => sessions.find(id) !== null,
       since: (id, after) => journal.since(id, after),
       subscribe: (id, listener) => events.subscribe(id, listener),
     },
+    interactions,
     gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: fetchUpstream },
   });
   if (runtime) {

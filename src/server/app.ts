@@ -12,6 +12,7 @@ import { registerGetSession } from './features/sessions/get-session/endpoint.js'
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
 import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
+import { registerRespondInteraction } from './features/sessions/respond-interaction/endpoint.js';
 import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
@@ -33,12 +34,14 @@ export type AppDependencies = {
     activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     close?(id: string): void;
+    replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
   };
   sessionEvents?: {
     exists(id: string): boolean;
     since(id: string, after: number): SessionEvent[];
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   };
+  interactions?: { resolve(sessionId: string, requestId: string, resolvedAt: string): boolean };
   gitSummary?: {
     inspect(path: string): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
     push(path: string, upstream: string): Promise<void>;
@@ -66,6 +69,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         stop: (session) => stopSession(session, deps.sessionRoutes!.now()),
         save: deps.sessionRoutes.save,
         close: deps.sessionRoutes.close,
+      });
+    if (deps.sessionRoutes.replyInteraction && deps.interactions)
+      registerRespondInteraction(app, {
+        exists: (id) => deps.sessionRoutes!.find(id) !== null,
+        resolve: (sessionId, requestId, resolvedAt) =>
+          deps.interactions!.resolve(sessionId, requestId, resolvedAt),
+        reply: deps.sessionRoutes.replyInteraction,
+        now: deps.sessionRoutes.now,
       });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
