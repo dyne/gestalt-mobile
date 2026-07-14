@@ -220,7 +220,7 @@ export async function buildApp(deps: AppDependencies): Promise<import('fastify')
 
 Commit: =feat: add health walking slice=
 
-* TODO [#A] Model Relay Sessions and durable state
+* WIP [#A] Model Relay Sessions and durable state
 
 - Effort :: 2 days
 - Goal :: Make invalid session state unrepresentable and provide transactional
@@ -229,7 +229,7 @@ Commit: =feat: add health walking slice=
   use synchronous =DatabaseSync= because this is a small single-user service;
   wrap multi-statement changes in explicit transactions.
 
-** TODO [#A] Implement value objects, aggregate transitions, and domain events
+** DONE [#A] Implement value objects, aggregate transitions, and domain events
 
 - Why :: Lifecycle concurrency and recovery must be decided in one behavior-rich
   model rather than scattered endpoint conditionals.
