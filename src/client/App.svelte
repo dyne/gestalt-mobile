@@ -95,6 +95,16 @@
     openSession(id);
   }
 
+  async function releaseSession(id: string) {
+    await relay.releaseSession(id);
+    if (sessionId === id) {
+      socket?.close();
+      sessionId = null;
+    }
+    await refreshSessions();
+    status = 'Session released for SSH resume.';
+  }
+
   async function sendMessage() {
     if (!sessionId || !message.trim()) return;
     const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
@@ -305,6 +315,9 @@
             <li>
               <span>{session.id} · {session.state}</span>
               <button type="button" onclick={() => openSession(session.id)}>Open</button>
+              {#if session.state === 'ready'}
+                <button type="button" onclick={() => void releaseSession(session.id)}>Release</button>
+              {/if}
               {#if session.state === 'stopped' || session.state === 'released' || session.state === 'attentionRequired'}
                 <button type="button" onclick={() => void restoreSession(session.id)}>Restore</button>
               {/if}

@@ -24,6 +24,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request(`/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/interrupt`, {}),
     restoreSession: (sessionId: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
+    releaseSession: (sessionId: string) =>
+      request(`/api/sessions/${encodeURIComponent(sessionId)}/release`, {}),
     getHistory: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) => get(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
     refreshGit: (sessionId: string) =>
