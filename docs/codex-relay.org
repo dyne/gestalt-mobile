@@ -555,7 +555,8 @@ Commit: =feat: start durable codex sessions=
 ** WIP [#A] Add list, stop, release, restore, and resume-command slices
 
 - Status :: List, stop, release, restore, persisted state, and SSH resume
-  formatting exist. Ownership-conflict and idempotency coverage remain.
+  formatting exist. Restore now refuses an already ready relay-owned thread, so
+  it cannot create a second app-server owner. Broader idempotency coverage remains.
 
 - Why :: Mobile switching and safe SSH handoff require explicit ownership
   transitions.

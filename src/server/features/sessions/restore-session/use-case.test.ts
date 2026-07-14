@@ -5,4 +5,13 @@ describe('canRestore', () => {
     expect(canRestore({ threadId: null, state: 'ready' } as never)).toBe(false);
     expect(canRestore({ threadId: 't', state: 'turnActive' } as never)).toBe(false);
   });
+
+  it('rejects an already relay-owned ready session', () => {
+    expect(canRestore({ threadId: 't', state: 'ready' } as never)).toBe(false);
+  });
+
+  it('allows an inactive persisted session to be reclaimed', () => {
+    expect(canRestore({ threadId: 't', state: 'released' } as never)).toBe(true);
+    expect(canRestore({ threadId: 't', state: 'stopped' } as never)).toBe(true);
+  });
 });
