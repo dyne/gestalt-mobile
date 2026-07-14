@@ -993,9 +993,10 @@ Commit: =docs: add operation and ssh handoff guide=
 
 ** TODO [#A] Complete the architecture and redaction audit
 
-- Status :: Static audit currently finds no unsafe shell execution, unsafe HTML
-  rendering, or domain/application platform imports outside endpoint adapters.
-  The final line-by-line evidence pass remains.
+- Status :: Static audit finds no shell-enabled child processes, unsafe HTML
+  rendering, domain/application platform imports outside endpoint adapters, or
+  force-push arguments. One process-launch site remains in the expected Codex
+  adapter. The final line-by-line evidence pass remains.
 
 - Why :: Passing tests does not by itself prove inward dependencies, safe process
   execution, redacted logging, or V1 scope restraint.
