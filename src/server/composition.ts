@@ -16,6 +16,7 @@ import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.
 import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
+import { RelaySession } from './features/sessions/model/relay-session.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -50,6 +51,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         );
       })
     : null;
+  const saveSession = (
+    session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
+  ) => {
+    sessions.save(session);
+    events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
+  };
   const app = await buildApp({
     health: {
       async read() {
@@ -75,10 +82,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     sessionRoutes: {
       createId: randomUUID,
       now: () => new Date().toISOString(),
-      save: (session) => {
-        sessions.save(session);
-        events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
-      },
+      save: saveSession,
       find: (id) => sessions.find(id),
       workspaces,
       profiles: options.profiles,
@@ -96,6 +100,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: fetchUpstream },
   });
+  if (runtime) {
+    await Promise.all(
+      sessions
+        .list()
+        .filter((session) => session.desiredState === 'active' && session.threadId !== null)
+        .map(async (session) => {
+          try {
+            saveSession(await runtime.restore(session, new Date().toISOString()));
+          } catch {
+            saveSession(
+              RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
+            );
+          }
+        }),
+    );
+  }
   app.addHook('onClose', async () => {
     database.close();
   });

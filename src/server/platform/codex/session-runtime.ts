@@ -63,4 +63,25 @@ export class CodexSessionRuntime {
     if (!result.turn?.id) throw new Error('CODEX_TURN_ID_MISSING');
     return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;
   }
+
+  async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
+    try {
+      process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
+      await process.rpc.request('initialize', {
+        clientInfo: { name: 'codex-relay', version: '0.1.0' },
+        capabilities: null,
+      });
+      await process.rpc.request('thread/resume', {
+        threadId: session.threadId,
+        cwd: session.workspacePath,
+      });
+      this.processes.set(session.id, process);
+      return RelaySession.rehydrate(session).restore(now).snapshot;
+    } catch (error) {
+      process.close();
+      throw error;
+    }
+  }
 }
