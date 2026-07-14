@@ -492,7 +492,7 @@ export interface CodexProcessLauncher {
 
 Commit: =feat: add codex app-server stdio adapter=
 
-** TODO [#A] Normalize Codex messages into relay events
+** WIP [#A] Normalize Codex messages into relay events
 
 - Why :: Generated protocol changes must stop at the adapter boundary.
 - Change :: Create =src/server/platform/codex/normalize-codex-message.ts=,
