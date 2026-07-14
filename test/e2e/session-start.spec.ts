@@ -47,3 +47,58 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await page.getByLabel('Message').press('Enter');
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
+
+test('shows Git state and confirms a safe upstream push', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  const summary = {
+    available: true,
+    branch: 'main',
+    upstream: 'origin/main',
+    ahead: 2,
+    behind: 0,
+    dirty: { staged: 1, unstaged: 0, untracked: 0 },
+    commits: [],
+    fetchedAt: '2026-07-14T10:00:00.000Z',
+  };
+  let pushed = false;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/git', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(summary) }),
+  );
+  await page.route('**/api/sessions/session-1/git/push', async (route) => {
+    pushed = true;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByRole('button', { name: 'Load status' }).click();
+
+  await expect(page.getByText('Branch: main · upstream: origin/main')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Push' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Push' }).click();
+  await expect(page.getByText('Push HEAD to origin/main?')).toBeVisible();
+  await page.getByRole('button', { name: 'Confirm push' }).click();
+  await expect.poll(() => pushed).toBe(true);
+});

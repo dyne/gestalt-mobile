@@ -921,8 +921,9 @@ Commit: =fix: harden mobile accessibility and layout=
 ** WIP [#A] Add end-to-end flows and restart/reconnection harness
 
 - Status :: Playwright now boots the Vite client, intercepts the relay boundary,
-  starts a selected session, and sends a turn from the mobile composer. Recovery,
-  interaction, Git, and restart flows remain.
+  starts a selected session, sends a turn from the mobile composer, and proves
+  safe Git push confirmation. Recovery, interaction, Git refresh, and restart
+  flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.
