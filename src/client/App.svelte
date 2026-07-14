@@ -20,6 +20,7 @@
   let workspaceId = $state('');
   let profile = $state('');
   let message = $state('');
+  let activeTurnId = $state<string | null>(null);
   let messages = $state<ChatMessage[]>([]);
   let cursor = $state(0);
   let socket: WebSocket | null = null;
@@ -74,9 +75,17 @@
 
   async function sendMessage() {
     if (!sessionId || !message.trim()) return;
-    await relay.startTurn(sessionId, message.trim());
+    const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
+    activeTurnId = turn.activeTurnId ?? null;
     message = '';
     status = 'Codex is working…';
+  }
+
+  async function interruptTurn() {
+    if (!sessionId || !activeTurnId) return;
+    await relay.interruptTurn(sessionId, activeTurnId);
+    activeTurnId = null;
+    status = 'Codex turn interrupted.';
   }
 
   async function resyncHistory(id: string) {
@@ -162,6 +171,7 @@
         if (!interactions.some((item) => item.requestId === interaction.requestId))
           interactions = [...interactions, interaction];
       }
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'turn.completed') activeTurnId = null;
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
         const { requestId } = envelope.event.payload as { requestId: string };
         interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
@@ -237,6 +247,7 @@
           <label for="message">Message</label>
           <textarea id="message" bind:value={message} rows="3" required></textarea>
           <button type="submit">Send</button>
+          {#if activeTurnId}<button type="button" onclick={() => void interruptTurn()}>Interrupt</button>{/if}
         </form>
       {:else}
         <p>Start a session from the Sessions tab to chat with Codex.</p>
