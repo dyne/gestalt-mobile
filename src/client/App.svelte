@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
+  import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { readDraft, saveDraft } from './features/chat/draft-store.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
@@ -27,6 +28,7 @@
   let message = $state('');
   let activeTurnId = $state<string | null>(null);
   let messages = $state<ChatMessage[]>([]);
+  let activities = $state<HistoryActivity[]>([]);
   let cursor = $state(0);
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -89,6 +91,7 @@
     saveSelectedSession(localStorage, session.id);
     await refreshSessions();
     messages = [];
+    activities = [];
     cursor = 0;
     message = readDraft(localStorage, session.id);
     connectSession(session.id);
@@ -104,6 +107,7 @@
     sessionId = id;
     saveSelectedSession(localStorage, id);
     messages = [];
+    activities = [];
     cursor = 0;
     message = readDraft(localStorage, id);
     connectSession(id);
@@ -151,7 +155,7 @@
 
   async function resyncHistory(id: string, currentSequence: number) {
     const history = (await relay.getHistory(id)) as {
-      items: Array<{ id: string; kind: string; text?: string }>;
+      items: Array<Record<string, unknown> & { id: string; kind: string; text?: string }>;
     };
     messages = history.items
       .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
@@ -161,6 +165,10 @@
         text: item.text!,
         complete: true,
       }));
+    activities = history.items.flatMap((item) => {
+      const activity = toActivity(item);
+      return activity ? [activity] : [];
+    });
     cursor = currentSequence;
     saveCursor(localStorage, id, cursor);
     status = 'Session history resynchronized.';
@@ -297,6 +305,17 @@
             <li><strong>{chatMessage.role}:</strong> {chatMessage.text}</li>
           {/each}
         </ol>
+        {#if activities.length}
+          <section aria-labelledby="activities-title">
+            <h3 id="activities-title">Activity</h3>
+            {#each activities as activity (activity.id)}
+              <details>
+                <summary>{activity.label}</summary>
+                <pre>{activity.detail}</pre>
+              </details>
+            {/each}
+          </section>
+        {/if}
         {#if interactions.length}
           <section aria-labelledby="interactions-title">
             <h3 id="interactions-title">Codex needs your decision</h3>

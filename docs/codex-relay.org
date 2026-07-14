@@ -618,8 +618,9 @@ Commit: =feat: restore and supervise codex sessions=
 ** WIP [#A] Add history, start-turn, and interrupt-turn slices
 
 - Status :: Start-turn validation/runtime wiring, streamed updates, canonical
-  =thread/read= history, and interrupt exist. Structured activity coverage and
-  end-to-end recovery coverage remain.
+  =thread/read= history, interrupt, and compact client rendering of canonical
+  reasoning/plan/command/file/tool activities exist. End-to-end recovery
+  coverage remains.
 
 - Why :: The browser needs canonical reconciliation plus reliable commands.
 - Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
@@ -832,8 +833,10 @@ Commit: =feat: build mobile session shell=
 
 ** WIP [#A] Render streamed chat, composer, approvals, and questions
 
-- Status :: Streaming message accumulation, composer, and all current interaction
-  renderers exist. Structured activity/history rendering and interruption remain.
+- Status :: Streaming message accumulation, composer, current interaction
+  renderers, and compact canonical-history activity summaries exist.
+  Completed-item replacement, live activity projection, and interruption UI
+  remain.
 
 - Why :: Chat is the primary product surface and must remain usable while events
   stream or connectivity changes.
