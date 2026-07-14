@@ -367,14 +367,14 @@ export interface SessionEventPublisher {
 
 Commit: =feat: persist relay sessions and event journal=
 
-* TODO [#A] Discover workspaces and profiles
+* WIP [#A] Discover workspaces and profiles
 
 - Effort :: 1 day
 - Goal :: Return a server-authoritative startup catalog with no path escape.
 - Notes :: Do not cache discovery in SQLite. Re-read current filesystem/profile
   state when bootstrap is requested and before session creation.
 
-** TODO [#A] Implement filesystem and codex-profile catalog adapters
+** DONE [#A] Implement filesystem and codex-profile catalog adapters
 
 - Why :: Browser selections must be friendly IDs while server validation uses
   canonical current state.
