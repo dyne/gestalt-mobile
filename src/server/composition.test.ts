@@ -5,6 +5,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { composeRelayApp } from './composition.js';
 
+function fakeAppServer(calls: string[]) {
+  return {
+    rpc: {
+      request: async (method: string) => {
+        calls.push(method);
+        if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+        return {};
+      },
+      onNotification: () => () => {},
+      onServerRequest: () => () => {},
+    },
+    close: () => {},
+    onExit: () => () => {},
+  };
+}
+
 const temporaryPaths: string[] = [];
 
 afterEach(async () => {
@@ -43,5 +59,47 @@ describe('production composition', () => {
       workspacePath: join(root, 'workspace'),
     });
     await app.close();
+  });
+
+  it('restores active persisted threads when the relay restarts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const profiles = {
+      list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' }],
+      require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' }),
+    };
+    const firstCalls: string[] = [];
+    const first = await composeRelayApp({
+      root,
+      dataDir,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => fakeAppServer(firstCalls),
+    });
+    const workspace = (await first.inject('/api/bootstrap')).json().workspaces[0];
+    const created = await first.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspace.id, profile: 'default' },
+    });
+    expect(created.statusCode).toBe(202);
+    await first.close();
+
+    const secondCalls: string[] = [];
+    const second = await composeRelayApp({
+      root,
+      dataDir,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => fakeAppServer(secondCalls),
+    });
+    const restored = await second.inject(`/api/sessions/${created.json().id}`);
+    expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'ready' });
+    expect(secondCalls).toEqual(['initialize', 'thread/resume']);
+    await second.close();
   });
 });

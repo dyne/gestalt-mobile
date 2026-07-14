@@ -7,7 +7,7 @@ import type { ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
-import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
+import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
@@ -33,6 +33,7 @@ export type ComposeRelayAppOptions = {
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   startAppServers?: boolean;
+  launchAppServer?: (input: { profile: string; cwd: string }) => AppServer;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -56,7 +57,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let recoverExitedSession: (sessionId: string) => void = () => {};
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
-        launchCodexAppServer,
+        options.launchAppServer ?? launchCodexAppServer,
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
