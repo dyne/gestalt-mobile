@@ -9,7 +9,8 @@
     "skipLibCheck": true,
     "allowJs": false,
     "checkJs": false,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["svelte"]
   },
   "include": [
     "src/client/**/*.ts",

@@ -1,0 +1,20 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  min-block-size: 100dvh;
+  margin: 0;
+}
+
+main {
+  max-inline-size: 42rem;
+  margin-inline: auto;
+  padding: 1rem;
+}
+
+:focus-visible {
+  outline: 3px solid CanvasText;
+  outline-offset: 3px;
+}

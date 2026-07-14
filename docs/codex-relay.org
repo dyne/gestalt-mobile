@@ -105,7 +105,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
 };
 #+end_src
 
-* WIP [#A] Create the buildable walking skeleton
+* DONE [#A] Create the buildable walking skeleton
 
 - Effort :: 1 day
 - Goal :: Establish a strict TypeScript/Svelte/Fastify project that builds,
@@ -183,7 +183,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
 
 Commit: =chore: initialize TypeScript Svelte toolchain=
 
-** TODO [#A] Add the health walking slice and production composition root
+** DONE [#A] Add the health walking slice and production composition root
 
 - Why :: A complete vertical path proves the build, REPR registration, static
   serving, and error mapper before domain complexity begins.
