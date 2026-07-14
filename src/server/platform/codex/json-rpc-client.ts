@@ -10,6 +10,9 @@ export class JsonRpcClient {
   private readonly notifications = new Set<
     (notification: { method: string; params: unknown }) => void
   >();
+  private readonly serverRequests = new Set<
+    (request: { id: number; method: string; params: unknown }) => Promise<unknown> | unknown
+  >();
   constructor(
     input: Readable,
     private readonly output: Writable,
@@ -27,6 +30,16 @@ export class JsonRpcClient {
     this.notifications.add(listener);
     return () => this.notifications.delete(listener);
   }
+  onServerRequest(
+    listener: (request: {
+      id: number;
+      method: string;
+      params: unknown;
+    }) => Promise<unknown> | unknown,
+  ): () => void {
+    this.serverRequests.add(listener);
+    return () => this.serverRequests.delete(listener);
+  }
   private receive(line: string): void {
     try {
       const message = JSON.parse(line) as {
@@ -40,6 +53,28 @@ export class JsonRpcClient {
         if (message.method)
           this.notifications.forEach((listener) =>
             listener({ method: message.method!, params: message.params }),
+          );
+        return;
+      }
+      if (message.method) {
+        const listener = this.serverRequests.values().next().value as
+          | ((request: {
+              id: number;
+              method: string;
+              params: unknown;
+            }) => Promise<unknown> | unknown)
+          | undefined;
+        if (!listener) return;
+        void Promise.resolve(
+          listener({ id: message.id, method: message.method, params: message.params }),
+        )
+          .then((result) =>
+            this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`),
+          )
+          .catch((error: unknown) =>
+            this.output.write(
+              `${JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { message: error instanceof Error ? error.message : 'REQUEST_FAILED' } })}\n`,
+            ),
           );
         return;
       }

@@ -28,4 +28,20 @@ describe('JsonRpcClient', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(received).toEqual([{ method: 'item/agentMessage/delta', params: { delta: 'hi' } }]);
   });
+
+  it('routes a server request and writes its JSON-RPC response', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    client.onServerRequest(async (request) => ({
+      approved: request.method === 'item/commandExecution/requestApproval',
+    }));
+    const written = new Promise<string>((resolve) =>
+      output.once('data', (line) => resolve(line.toString())),
+    );
+    input.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 41, method: 'item/commandExecution/requestApproval', params: {} })}\n`,
+    );
+    await expect(written).resolves.toContain('"id":41');
+  });
 });
