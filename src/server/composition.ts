@@ -8,6 +8,7 @@ import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-worksp
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
+import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
@@ -38,7 +39,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
-  const runtime = options.startAppServers ? new CodexSessionRuntime(launchCodexAppServer) : null;
+  const runtime = options.startAppServers
+    ? new CodexSessionRuntime(launchCodexAppServer, undefined, (sessionId, notification) => {
+        const occurredAt = new Date().toISOString();
+        const normalized = normalizeCodexNotification(sessionId, 0, occurredAt, notification);
+        if (!normalized) return;
+        events.publish(
+          journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
+        );
+      })
+    : null;
   const app = await buildApp({
     health: {
       async read() {

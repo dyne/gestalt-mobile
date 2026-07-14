@@ -7,6 +7,9 @@ export class JsonRpcClient {
     number,
     { resolve(value: unknown): void; reject(reason: unknown): void }
   >();
+  private readonly notifications = new Set<
+    (notification: { method: string; params: unknown }) => void
+  >();
   constructor(
     input: Readable,
     private readonly output: Writable,
@@ -18,10 +21,28 @@ export class JsonRpcClient {
     this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
   }
+  onNotification(
+    listener: (notification: { method: string; params: unknown }) => void,
+  ): () => void {
+    this.notifications.add(listener);
+    return () => this.notifications.delete(listener);
+  }
   private receive(line: string): void {
     try {
-      const message = JSON.parse(line) as { id?: number; result?: unknown; error?: unknown };
-      if (message.id === undefined) return;
+      const message = JSON.parse(line) as {
+        id?: number;
+        method?: string;
+        params?: unknown;
+        result?: unknown;
+        error?: unknown;
+      };
+      if (message.id === undefined) {
+        if (message.method)
+          this.notifications.forEach((listener) =>
+            listener({ method: message.method!, params: message.params }),
+          );
+        return;
+      }
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);

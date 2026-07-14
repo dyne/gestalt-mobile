@@ -4,7 +4,12 @@ import {
 } from '../../features/sessions/model/relay-session.js';
 
 export type AppServer = {
-  rpc: { request(method: string, params: unknown): Promise<unknown> };
+  rpc: {
+    request(method: string, params: unknown): Promise<unknown>;
+    onNotification(
+      listener: (notification: { method: string; params: unknown }) => void,
+    ): () => void;
+  };
   close(): void;
 };
 
@@ -12,11 +17,16 @@ export class CodexSessionRuntime {
   constructor(
     private readonly launch: (input: { profile: string; cwd: string }) => AppServer,
     private readonly processes = new Map<string, AppServer>(),
+    private readonly onNotification?: (
+      sessionId: string,
+      notification: { method: string; params: unknown },
+    ) => void,
   ) {}
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
     try {
+      process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       await process.rpc.request('initialize', {
         clientInfo: { name: 'codex-relay', version: '0.1.0' },
         capabilities: null,
