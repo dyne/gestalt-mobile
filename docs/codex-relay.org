@@ -105,7 +105,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
 };
 #+end_src
 
-* TODO [#A] Create the buildable walking skeleton
+* WIP [#A] Create the buildable walking skeleton
 
 - Effort :: 1 day
 - Goal :: Establish a strict TypeScript/Svelte/Fastify project that builds,
@@ -113,7 +113,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
 - Notes :: This L1 is deliberately small. Do not create empty architecture
   folders or speculative abstractions.
 
-** TODO [#A] Pin the minimal toolchain and project commands
+** DONE [#A] Pin the minimal toolchain and project commands
 
 - Why :: Every later task needs deterministic scripts and matching browser/server
   TypeScript settings.
