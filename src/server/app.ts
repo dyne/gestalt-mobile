@@ -52,7 +52,10 @@ export type AppDependencies = {
     since(id: string, after: number): SessionEvent[];
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   };
-  interactions?: { resolve(sessionId: string, requestId: string, resolvedAt: string): boolean };
+  interactions?: {
+    resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
+    validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
+  };
   gitSummary?: {
     inspect(path: string): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
     push(path: string, upstream: string): Promise<void>;
@@ -107,6 +110,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         exists: (id) => deps.sessionRoutes!.find(id) !== null,
         resolve: (sessionId, requestId, resolvedAt) =>
           deps.interactions!.resolve(sessionId, requestId, resolvedAt),
+        validate: deps.interactions.validate,
         reply: deps.sessionRoutes.replyInteraction,
         resolved: deps.sessionRoutes.interactionResolved,
         now: deps.sessionRoutes.now,

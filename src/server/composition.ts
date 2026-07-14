@@ -170,7 +170,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       since: (id, after) => journal.since(id, after),
       subscribe: (id, listener) => events.subscribe(id, listener),
     },
-    interactions,
+    interactions: {
+      resolve: (sessionId, requestId, resolvedAt) =>
+        interactions.resolve(sessionId, requestId, resolvedAt),
+      validate: (sessionId, requestId, value) => {
+        const interaction = interactions.find(sessionId, requestId);
+        if (!interaction) return false;
+        if (interaction.kind === 'userInput') return isRecord(value.answers);
+        if (interaction.kind === 'permissionsApproval')
+          return isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session');
+        return ['accept', 'acceptForSession', 'decline', 'cancel'].includes(value.decision as string);
+      },
+    },
     gitSummary: { inspect: inspectGit, push: pushUpstream, refresh: (path) => gitFetches.refresh(path) },
   });
   if (runtime) {
@@ -194,4 +205,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     database.close();
   });
   return app;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

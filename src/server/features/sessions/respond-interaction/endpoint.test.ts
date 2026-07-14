@@ -96,4 +96,23 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
     expect(replied).toBe(false);
     await app.close();
   });
+
+  it('rejects a response that does not match the pending interaction kind', async () => {
+    const app = fastify();
+    registerRespondInteraction(app, {
+      exists: () => true,
+      validate: () => false,
+      resolve: () => true,
+      reply: () => true,
+      now: () => 'now',
+    });
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/interactions/request-1',
+      payload: { decision: 'approved' },
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.json()).toEqual({ code: 'INTERACTION_RESPONSE_INVALID' });
+    await app.close();
+  });
 });

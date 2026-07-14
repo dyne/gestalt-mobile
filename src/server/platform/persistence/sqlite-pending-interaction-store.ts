@@ -33,4 +33,9 @@ export class SqlitePendingInteractionStore {
       payload: JSON.parse(row.payload_json),
     }));
   }
+  find(sessionId: string, requestId: string): PendingInteraction | null {
+    return (
+      this.list(sessionId).find((interaction) => interaction.requestId === requestId) ?? null
+    );
+  }
 }
