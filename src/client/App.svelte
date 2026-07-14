@@ -17,6 +17,7 @@
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string }>>([]);
   let sessionId = $state<string | null>(null);
+  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string }>>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let message = $state('');
@@ -44,13 +45,14 @@
       const bootstrap = (await loadBootstrap()) as {
         workspaces: Array<{ id: string; name: string }>;
         profiles: Array<{ name: string }>;
-        sessions: Array<{ id: string }>;
+        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string }>;
       };
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
       profile = profiles[0]?.name ?? '';
       sessionId = bootstrap.sessions[0]?.id ?? null;
+      sessions = bootstrap.sessions;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
       if (sessionId) connectSession(sessionId);
     } catch {
@@ -67,11 +69,24 @@
     if (!workspaceId || !profile) return;
     const session = (await relay.startSession(workspaceId, profile)) as { id: string };
     sessionId = session.id;
+    await refreshSessions();
     messages = [];
     cursor = 0;
     connectSession(session.id);
     tab = 'chat';
     status = 'Session started.';
+  }
+
+  async function refreshSessions() {
+    sessions = (await relay.listSessions()) as typeof sessions;
+  }
+
+  function openSession(id: string) {
+    sessionId = id;
+    messages = [];
+    cursor = 0;
+    connectSession(id);
+    tab = 'chat';
   }
 
   async function sendMessage() {
@@ -277,6 +292,19 @@
   {:else}
     <section aria-labelledby="sessions-title">
       <h2 id="sessions-title">Sessions</h2>
+      <button type="button" onclick={() => void refreshSessions()}>Refresh sessions</button>
+      {#if sessions.length}
+        <ul aria-label="Saved sessions">
+          {#each sessions as session (session.id)}
+            <li>
+              <span>{session.id} · {session.state}</span>
+              <button type="button" onclick={() => openSession(session.id)}>Open</button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p>No saved sessions yet.</p>
+      {/if}
       <form onsubmit={(event) => { event.preventDefault(); void startSession(); }}>
         <label for="workspace">Workspace</label>
         <select id="workspace" bind:value={workspaceId} required>
