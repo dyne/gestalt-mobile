@@ -423,7 +423,7 @@ Commit: =feat: discover relay workspaces and profiles=
 
 Commit: =feat: add bootstrap catalog endpoint=
 
-* TODO [#A] Isolate the Codex app-server protocol
+* WIP [#A] Isolate the Codex app-server protocol
 
 - Effort :: 3 days
 - Goal :: Provide a tested, version-checked port over JSONL stdio without
@@ -431,7 +431,7 @@ Commit: =feat: add bootstrap catalog endpoint=
 - Notes :: Generated files are build inputs and may be numerous. Never hand-edit
   them. Commit the generated output and version metadata.
 
-** TODO [#A] Generate bindings and enforce the installed Codex version
+** DONE [#A] Generate bindings and enforce the installed Codex version
 
 - Why :: App-server is experimental and generated bindings are guaranteed only
   for the CLI version that generated them.
