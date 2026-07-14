@@ -1,8 +1,8 @@
 export function createRelayClient(fetcher: typeof fetch = fetch) {
-  async function request(path: string, body: unknown): Promise<unknown> {
+  async function request(path: string, body: unknown, headers: Record<string, string> = {}): Promise<unknown> {
     const response = await fetcher(path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error('RELAY_REQUEST_FAILED');
@@ -16,8 +16,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
 
   return {
     listSessions: () => get('/api/sessions'),
-    startSession: (workspaceId: string, profile: string) =>
-      request('/api/sessions', { workspaceId, profile }),
+    startSession: (workspaceId: string, profile: string, key?: string) =>
+      request('/api/sessions', { workspaceId, profile }, key ? { 'idempotency-key': key } : {}),
     startTurn: (sessionId: string, text: string) =>
       request(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { text }),
     interruptTurn: (sessionId: string, turnId: string) =>

@@ -22,6 +22,7 @@
   let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; resumeCommand?: string | null }>>([]);
   let workspaceId = $state('');
   let profile = $state('');
+  let startRequestKey = $state<string | null>(null);
   let message = $state('');
   let activeTurnId = $state<string | null>(null);
   let messages = $state<ChatMessage[]>([]);
@@ -76,7 +77,9 @@
 
   async function startSession() {
     if (!workspaceId || !profile) return;
-    const session = (await relay.startSession(workspaceId, profile)) as { id: string };
+    startRequestKey ??= crypto.randomUUID();
+    const session = (await relay.startSession(workspaceId, profile, startRequestKey)) as { id: string };
+    startRequestKey = null;
     sessionId = session.id;
     saveSelectedSession(localStorage, session.id);
     await refreshSessions();
