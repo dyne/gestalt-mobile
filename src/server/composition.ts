@@ -11,7 +11,9 @@ import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
+import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { relayStatePath } from './platform/persistence/state-path.js';
+import { SessionEventBus } from './platform/events/session-event-bus.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -32,6 +34,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const database = openRelayDatabase(databasePath);
   migrate(database);
   const sessions = new SqliteSessionRepository(database);
+  const journal = new SqliteEventJournal(database);
+  const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const runtime = options.startAppServers ? new CodexSessionRuntime(launchCodexAppServer) : null;
@@ -60,13 +64,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     sessionRoutes: {
       createId: randomUUID,
       now: () => new Date().toISOString(),
-      save: (session) => sessions.save(session),
+      save: (session) => {
+        sessions.save(session);
+        events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
+      },
       find: (id) => sessions.find(id),
       workspaces,
       profiles: options.profiles,
       activate: runtime
         ? async (session) => runtime.start(session, new Date().toISOString())
         : undefined,
+    },
+    sessionEvents: {
+      exists: (id) => sessions.find(id) !== null,
+      since: (id, after) => journal.since(id, after),
+      subscribe: (id, listener) => events.subscribe(id, listener),
     },
   });
   app.addHook('onClose', async () => {

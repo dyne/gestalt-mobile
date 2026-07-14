@@ -7,7 +7,9 @@ import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
+import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
+import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 
 export type AppDependencies = {
@@ -24,6 +26,11 @@ export type AppDependencies = {
     profiles: Pick<ProfileCatalog, 'require'>;
     activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
   };
+  sessionEvents?: {
+    exists(id: string): boolean;
+    since(id: string, after: number): SessionEvent[];
+    subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
+  };
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -35,6 +42,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerStartSession(app, deps.sessionRoutes);
     registerGetSession(app, deps.sessionRoutes.find);
   }
+  if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }
