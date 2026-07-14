@@ -13,7 +13,9 @@ export type MessageCache = {
   write(sessionId: string, messages: ChatMessage[]): Promise<void>;
 };
 
-export function createMessageCache(database: IDBFactory | undefined = globalThis.indexedDB): MessageCache {
+export function createMessageCache(
+  database: IDBFactory | undefined = globalThis.indexedDB,
+): MessageCache {
   if (!database) return { read: async () => [], write: async () => {} };
   const open = new Promise<IDBDatabase>((resolve, reject) => {
     const request = database.open(databaseName, 1);
@@ -33,7 +35,9 @@ export function createMessageCache(database: IDBFactory | undefined = globalThis
     async write(sessionId, messages) {
       try {
         const db = await open;
-        await transaction(db, 'readwrite', (store) => store.put(retainRecentMessages(messages), sessionId));
+        await transaction(db, 'readwrite', (store) =>
+          store.put(retainRecentMessages(messages), sessionId),
+        );
       } catch {
         // Cache failure must never block the live relay experience.
       }

@@ -145,9 +145,13 @@
     cursor = 0;
     message = readDraft(localStorage, id);
     activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
-    await resyncHistory(id);
-    connectSession(id);
-    tab = 'chat';
+    try {
+      await resyncHistory(id);
+      connectSession(id);
+      tab = 'chat';
+    } catch (error) {
+      status = `Could not open session: ${errorMessage(error)}`;
+    }
   }
 
   async function restoreSession(id: string) {

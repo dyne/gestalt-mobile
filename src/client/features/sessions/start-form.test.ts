@@ -9,6 +9,10 @@ describe('validateStartForm', () => {
 
   it('rejects a profile that is not ready to start Codex', () =>
     expect(
-      validateStartForm({ workspaceId: 'workspace', profile: 'offline', profileState: 'not_logged_in' }),
+      validateStartForm({
+        workspaceId: 'workspace',
+        profile: 'offline',
+        profileState: 'not_logged_in',
+      }),
     ).toEqual({ profile: 'Sign in to this profile before starting Codex.' }));
 });

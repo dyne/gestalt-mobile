@@ -5,7 +5,10 @@ import { createMessageCache, retainRecentMessages } from './message-cache.js';
 describe('message cache', () => {
   it('keeps the most recent 200 chat messages', () => {
     const messages = Array.from({ length: 201 }, (_, index) => ({
-      id: String(index), role: 'assistant' as const, text: String(index), complete: true,
+      id: String(index),
+      role: 'assistant' as const,
+      text: String(index),
+      complete: true,
     }));
     expect(retainRecentMessages(messages)).toHaveLength(200);
     expect(retainRecentMessages(messages)[0]?.id).toBe('1');
