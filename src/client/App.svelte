@@ -58,11 +58,7 @@
 
   onMount(async () => {
     try {
-      const bootstrap = (await loadBootstrap()) as {
-        workspaces: Array<{ id: string; name: string }>;
-        profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
-        sessions: Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>;
-      };
+      const bootstrap = await loadBootstrap();
       workspaces = bootstrap.workspaces;
       profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
