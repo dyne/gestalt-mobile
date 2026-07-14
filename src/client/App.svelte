@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
+  import { readDraft, saveDraft } from './features/chat/draft-store.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
@@ -57,6 +58,7 @@
         ? remembered
         : (bootstrap.sessions[0]?.id ?? null);
       if (sessionId) cursor = readCursor(localStorage, sessionId);
+      if (sessionId) message = readDraft(localStorage, sessionId);
       sessions = bootstrap.sessions;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
       if (sessionId) connectSession(sessionId);
@@ -78,6 +80,7 @@
     await refreshSessions();
     messages = [];
     cursor = 0;
+    message = readDraft(localStorage, session.id);
     connectSession(session.id);
     tab = 'chat';
     status = 'Session started.';
@@ -92,6 +95,7 @@
     saveSelectedSession(localStorage, id);
     messages = [];
     cursor = 0;
+    message = readDraft(localStorage, id);
     connectSession(id);
     tab = 'chat';
   }
@@ -118,6 +122,7 @@
     const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
     activeTurnId = turn.activeTurnId ?? null;
     message = '';
+    saveDraft(localStorage, sessionId, '');
     status = 'Codex is working…';
   }
 
@@ -193,6 +198,11 @@
 
   function setUserInputAnswer(questionId: string, answer: string) {
     userInputAnswers[questionId] = answer;
+  }
+
+  function updateDraft(value: string) {
+    message = value;
+    if (sessionId) saveDraft(localStorage, sessionId, value);
   }
 
   function connectSession(id: string) {
@@ -287,7 +297,7 @@
         {/if}
         <form onsubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
           <label for="message">Message</label>
-          <textarea id="message" bind:value={message} rows="3" required></textarea>
+          <textarea id="message" value={message} oninput={(event) => updateDraft(event.currentTarget.value)} rows="3" required></textarea>
           <button type="submit">Send</button>
           {#if activeTurnId}<button type="button" onclick={() => void interruptTurn()}>Interrupt</button>{/if}
         </form>
