@@ -3,6 +3,10 @@
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { applyDelta, type ChatMessage } from './features/chat/message-store.js';
+  import {
+    readUserInputQuestions,
+    toUserInputResponse,
+  } from './features/chat/user-input-request.js';
   import { createRelayClient } from './features/sessions/relay-client.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
@@ -29,6 +33,7 @@
     behind: number;
   } | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
+  let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
 
   onMount(async () => {
@@ -96,6 +101,22 @@
     interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
   }
 
+  async function resolveUserInput(interaction: { requestId: string; payload: unknown }) {
+    if (!sessionId) return;
+    const response = toUserInputResponse(
+      readUserInputQuestions(interaction.payload).map((question) => ({
+        id: question.id,
+        answer: userInputAnswers[question.id] ?? '',
+      })),
+    );
+    await relay.respondInteraction(sessionId, interaction.requestId, response);
+    interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+  }
+
+  function setUserInputAnswer(questionId: string, answer: string) {
+    userInputAnswers[questionId] = answer;
+  }
+
   function connectSession(id: string) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     socket?.close();
@@ -156,8 +177,29 @@
             {#each interactions as interaction (interaction.requestId)}
               <article>
                 <p>{interaction.kind}</p>
-                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'accept')}>Approve</button>
-                <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'decline')}>Deny</button>
+                {#if interaction.kind === 'userInput'}
+                  {@const questions = readUserInputQuestions(interaction.payload)}
+                  <form onsubmit={(event) => { event.preventDefault(); void resolveUserInput(interaction); }}>
+                    {#each questions as question (question.id)}
+                      <label for={`${interaction.requestId}-${question.id}`}>{question.header}: {question.question}</label>
+                      <input
+                        id={`${interaction.requestId}-${question.id}`}
+                        type={question.isSecret ? 'password' : 'text'}
+                        value={userInputAnswers[question.id] ?? ''}
+                        oninput={(event) => setUserInputAnswer(question.id, event.currentTarget.value)}
+                      />
+                      {#each question.options as option (option.label)}
+                        <button type="button" onclick={() => setUserInputAnswer(question.id, option.label)}>{option.label}</button>
+                      {/each}
+                    {/each}
+                    <button type="submit" disabled={!questions.length}>Send answers</button>
+                  </form>
+                {:else if interaction.kind === 'permissionsApproval'}
+                  <p>Permission-profile requests need a richer response and remain pending for now.</p>
+                {:else}
+                  <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'accept')}>Approve</button>
+                  <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'decline')}>Deny</button>
+                {/if}
               </article>
             {/each}
           </section>
