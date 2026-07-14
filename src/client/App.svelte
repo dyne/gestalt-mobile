@@ -30,6 +30,7 @@
   let cursor = $state(0);
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let socketGeneration = 0;
   let gitSummary = $state<{
@@ -73,6 +74,7 @@
 
   onDestroy(() => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
     socket?.close();
   });
 
@@ -220,10 +222,16 @@
 
   function connectSession(id: string) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
     socket?.close();
     const generation = ++socketGeneration;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socket = new WebSocket(`${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`);
+    socket.onopen = () => {
+      stableConnectionTimer = setTimeout(() => {
+        reconnectAttempt = 0;
+      }, 30_000);
+    };
     socket.onmessage = (message) => {
       const envelope = JSON.parse(String(message.data));
       if (envelope.type === 'relay.resyncRequired') {
@@ -235,7 +243,7 @@
         if (!interactions.some((item) => item.requestId === interaction.requestId))
           interactions = [...interactions, interaction];
       }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'turn.completed') activeTurnId = null;
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') activeTurnId = null;
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
         const { requestId } = envelope.event.payload as { requestId: string };
         interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
@@ -244,10 +252,10 @@
         messages = applyDelta(messages, `assistant-${id}`, text);
       });
       saveCursor(localStorage, id, cursor);
-      reconnectAttempt = 0;
     };
     socket.onclose = () => {
       if (generation !== socketGeneration || sessionId !== id) return;
+      if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
       status = 'Connection interrupted. Reconnecting…';
       reconnectTimer = setTimeout(() => connectSession(id), reconnectDelay(reconnectAttempt++));
     };
