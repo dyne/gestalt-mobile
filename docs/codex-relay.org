@@ -856,8 +856,9 @@ Commit: =feat: build interactive codex chat=
 
 ** WIP [#A] Render Git status, history, refresh, and push
 
-- Status :: Mobile Git status, fetch, and guarded push controls exist. Commit
-  history, cached-age/error presentation, and push confirmation remain.
+- Status :: Mobile Git status, dirty counts, commit history/timestamps, fetch
+  progress/errors, and guarded confirmed push controls exist. Cached-age data
+  and component-level coverage remain.
 
 - Why :: The supporting tab must communicate stale/background state and safe
   push preconditions clearly.
