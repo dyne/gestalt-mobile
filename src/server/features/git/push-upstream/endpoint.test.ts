@@ -15,6 +15,7 @@ describe('POST /api/sessions/:id/git/push', () => {
         upstream: 'origin/main',
         ahead: 1,
         behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
         commits: [],
       }),
       push: async () => {

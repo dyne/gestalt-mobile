@@ -6,6 +6,7 @@ export type WorkspaceGitSummary = {
   upstream: string | null;
   ahead: number;
   behind: number;
+  dirty: { staged: number; unstaged: number; untracked: number };
   commits: Array<{
     hash: string;
     shortHash: string;
@@ -14,6 +15,19 @@ export type WorkspaceGitSummary = {
     authoredAt: string;
   }>;
 };
+
+export function parseDirtyCounts(value: string): { staged: number; unstaged: number; untracked: number } {
+  return value.split('\n').filter(Boolean).reduce(
+    (counts, line) => ({
+      staged: counts.staged + (line[0] && line[0] !== ' ' && line.slice(0, 2) !== '??' ? 1 : 0),
+      unstaged:
+        counts.unstaged +
+        (line.slice(0, 2) !== '??' && line[1] && line[1] !== ' ' ? 1 : 0),
+      untracked: counts.untracked + (line.slice(0, 2) === '??' ? 1 : 0),
+    }),
+    { staged: 0, unstaged: 0, untracked: 0 },
+  );
+}
 
 export function parseDivergence(value: string): { ahead: number; behind: number } {
   const [ahead, behind] = value.trim().split(/\s+/).map(Number);
@@ -39,6 +53,7 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
           await git(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']),
         )
       : { ahead: 0, behind: 0 };
+    const dirty = parseDirtyCounts(await git(cwd, ['status', '--porcelain=v1']));
     const commits = (await git(cwd, ['log', '-20', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI']))
       .trim()
       .split('\n')
@@ -53,9 +68,17 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
           authoredAt: authoredAt!,
         };
       });
-    return { available: true, branch, upstream, ...divergence, commits };
+    return { available: true, branch, upstream, ...divergence, dirty, commits };
   } catch {
-    return { available: false, branch: null, upstream: null, ahead: 0, behind: 0, commits: [] };
+    return {
+      available: false,
+      branch: null,
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      dirty: { staged: 0, unstaged: 0, untracked: 0 },
+      commits: [],
+    };
   }
 }
 

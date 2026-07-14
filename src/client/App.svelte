@@ -33,6 +33,7 @@
     upstream: string | null;
     ahead: number;
     behind: number;
+    dirty: { staged: number; unstaged: number; untracked: number };
   } | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
@@ -262,6 +263,7 @@
           {#if gitSummary.available}
             <p>Branch: {gitSummary.branch ?? 'detached'} · upstream: {gitSummary.upstream ?? 'none'}</p>
             <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
+            <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
             <button type="button" onclick={() => void refreshGit()}>Fetch</button>
             <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => void pushGit()}>Push</button>
           {:else}

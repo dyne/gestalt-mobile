@@ -14,6 +14,7 @@ describe('GET /api/sessions/:id/git', () => {
         upstream: 'origin/main',
         ahead: 1,
         behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
         commits: [],
       }),
     });
