@@ -617,8 +617,9 @@ Commit: =feat: restore and supervise codex sessions=
 
 ** WIP [#A] Add history, start-turn, and interrupt-turn slices
 
-- Status :: Start-turn validation/runtime wiring, streamed updates, and canonical
-  =thread/read= history exist. Interrupt and its end-to-end coverage remain.
+- Status :: Start-turn validation/runtime wiring, streamed updates, canonical
+  =thread/read= history, and interrupt exist. Structured activity coverage and
+  end-to-end recovery coverage remain.
 
 - Why :: The browser needs canonical reconciliation plus reliable commands.
 - Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
@@ -675,8 +676,9 @@ Commit: =feat: handle codex approvals and questions=
 
 ** WIP [#A] Add sequenced WebSocket replay and resynchronization
 
-- Status :: Sequenced replay, gap detection, slow-client cutoff, client retry,
-  heartbeat liveness, and canonical history resync exist. Full handoff tests remain.
+- Status :: Sequenced replay, gap detection, slow-client cutoff, stable client
+  retry, heartbeat liveness, and canonical history resync exist. Full handoff
+  tests remain.
 
 - Why :: WebSocket delivery alone loses events during mobile network changes.
 - Change :: Create =src/server/platform/events/session-event-service.ts=,
