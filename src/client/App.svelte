@@ -43,6 +43,8 @@
     commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
   } | null>(null);
   let pushConfirmationOpen = $state(false);
+  let gitRefreshing = $state(false);
+  let gitError = $state<string | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
@@ -171,8 +173,16 @@
 
   async function refreshGit() {
     if (!sessionId) return;
-    await relay.refreshGit(sessionId);
-    await loadGitSummary();
+    gitRefreshing = true;
+    gitError = null;
+    try {
+      await relay.refreshGit(sessionId);
+      await loadGitSummary();
+    } catch {
+      gitError = 'Fetch failed. Check the upstream and try again.';
+    } finally {
+      gitRefreshing = false;
+    }
   }
 
   async function pushGit() {
@@ -336,7 +346,8 @@
             <p>Branch: {gitSummary.branch ?? 'detached'} · upstream: {gitSummary.upstream ?? 'none'}</p>
             <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
             <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
-            <button type="button" onclick={() => void refreshGit()}>Fetch</button>
+            <button type="button" disabled={gitRefreshing} onclick={() => void refreshGit()}>{gitRefreshing ? 'Fetching…' : 'Fetch'}</button>
+            {#if gitError}<p role="alert">{gitError}</p>{/if}
             <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => (pushConfirmationOpen = true)}>Push</button>
             {#if pushConfirmationOpen}
               <section aria-label="Confirm push">
