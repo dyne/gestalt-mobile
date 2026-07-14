@@ -784,7 +784,8 @@ Commit: =feat: expose safe git upstream actions=
 - Status :: Relay client helpers, cursor replay, reconnect backoff, draft
   storage, and active-turn rehydration from durable session metadata exist. The
   message cache now uses IndexedDB with a 200-item cap and safe fallback. The
-  consolidated typed API/AppState and remaining IndexedDB stores remain. Failed
+  relay client now owns typed route contracts; consolidated AppState and remaining
+  IndexedDB stores remain. Failed
   lifecycle mutation problem details are now surfaced in the mobile status line, and
   idempotency keys fall back safely when plain HTTP lacks =crypto.randomUUID()=.
 

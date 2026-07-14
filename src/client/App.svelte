@@ -13,7 +13,12 @@
     readUserInputQuestions,
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
-  import { createRelayClient } from './features/sessions/relay-client.js';
+  import {
+    createRelayClient,
+    type RelayGitSummary,
+    type RelayHistory,
+    type RelaySession,
+  } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
@@ -26,7 +31,7 @@
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
   let sessionId = $state<string | null>(null);
-  let sessions = $state<Array<{ id: string; state: string; workspaceId?: string; profile?: string; threadId?: string | null; resumeCommand?: string | null; activeTurnId?: string | null }>>([]);
+  let sessions = $state<RelaySession[]>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let startRequestKey = $state<string | null>(null);
@@ -42,16 +47,7 @@
   let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let socketGeneration = 0;
-  let gitSummary = $state<{
-    available: boolean;
-    branch: string | null;
-    upstream: string | null;
-    ahead: number;
-    behind: number;
-    dirty: { staged: number; unstaged: number; untracked: number };
-    commits: Array<{ hash: string; shortHash: string; subject: string; author: string; authoredAt: string }>;
-    fetchedAt: string | null;
-  } | null>(null);
+  let gitSummary = $state<RelayGitSummary | null>(null);
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
   let gitError = $state<string | null>(null);
@@ -112,7 +108,7 @@
     startingSession = true;
     status = 'Starting session…';
     try {
-      const session = (await relay.startSession(workspaceId, profile, startRequestKey)) as { id: string };
+      const session = await relay.startSession(workspaceId, profile, startRequestKey);
       startRequestKey = null;
       sessionId = session.id;
       activeTurnId = null;
@@ -134,7 +130,7 @@
   }
 
   async function refreshSessions() {
-    sessions = (await relay.listSessions()) as typeof sessions;
+    sessions = await relay.listSessions();
   }
 
   async function openSession(id: string) {
@@ -190,7 +186,7 @@
     if (!sessionId || !message.trim() || activeTurnId || startingTurn) return;
     startingTurn = true;
     try {
-      const turn = (await relay.startTurn(sessionId, message.trim())) as { activeTurnId?: string };
+      const turn = await relay.startTurn(sessionId, message.trim());
       activeTurnId = turn.activeTurnId ?? null;
       message = '';
       saveDraft(localStorage, sessionId, '');
@@ -214,10 +210,7 @@
   }
 
   async function resyncHistory(id: string, fallbackSequence = 0) {
-    const history = (await relay.getHistory(id)) as {
-      items: Array<Record<string, unknown> & { id: string; kind: string; text?: string }>;
-      currentSequence?: number;
-    };
+    const history: RelayHistory = await relay.getHistory(id);
     if (sessionId !== id) return;
     messages = history.items
       .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
@@ -239,7 +232,7 @@
 
   async function loadGitSummary() {
     if (!sessionId) return;
-    gitSummary = (await relay.getGitSummary(sessionId)) as typeof gitSummary;
+    gitSummary = await relay.getGitSummary(sessionId);
   }
 
   async function refreshGit() {
