@@ -220,7 +220,7 @@ export async function buildApp(deps: AppDependencies): Promise<import('fastify')
 
 Commit: =feat: add health walking slice=
 
-* WIP [#A] Model Relay Sessions and durable state
+* DONE [#A] Model Relay Sessions and durable state
 
 - Effort :: 2 days
 - Goal :: Make invalid session state unrepresentable and provide transactional
@@ -276,7 +276,7 @@ export type RelaySessionSnapshot = {
 
 Commit: =feat: model relay session lifecycle=
 
-** TODO [#A] Add SQLite migrations and repository adapters
+** DONE [#A] Add SQLite migrations and repository adapters
 
 - Why :: Restart restoration, replay ordering, and idempotency require one
   transactional local store.
