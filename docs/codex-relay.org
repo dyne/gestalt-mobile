@@ -528,6 +528,9 @@ Commit: =feat: normalize codex session events=
 
 ** WIP [#A] Add start-session and get-session slices
 
+- Status :: Implemented and covered by route tests; idempotent start responses
+  and the full request option set remain to be completed.
+
 - Why :: Starting a correctly bound process/thread is the central use case.
 - Change :: Create =src/server/platform/runtime/session-runtime-registry.ts=,
   =src/server/features/sessions/start-session/{request,response,use-case,endpoint}.ts=,
@@ -549,7 +552,10 @@ Commit: =feat: normalize codex session events=
 
 Commit: =feat: start durable codex sessions=
 
-** TODO [#A] Add list, stop, release, restore, and resume-command slices
+** WIP [#A] Add list, stop, release, restore, and resume-command slices
+
+- Status :: Stop, release, persisted state, and SSH resume formatting exist.
+  List and restore routes plus ownership-conflict coverage remain.
 
 - Why :: Mobile switching and safe SSH handoff require explicit ownership
   transitions.
@@ -578,7 +584,10 @@ export function buildResumeCommand(s: RelaySessionSnapshot): string {
 
 Commit: =feat: manage and release relay sessions=
 
-** TODO [#A] Add startup restoration and bounded crash recovery
+** WIP [#A] Add startup restoration and bounded crash recovery
+
+- Status :: Active persisted threads are restored at startup and failed restores
+  require attention. Crash-exit supervision, backoff, and concurrency controls remain.
 
 - Why :: Desired State is useful only if active sessions return after relay or
   child-process failure.
@@ -597,7 +606,7 @@ Commit: =feat: manage and release relay sessions=
 
 Commit: =feat: restore and supervise codex sessions=
 
-* TODO [#A] Deliver reliable chat and interactive requests
+* WIP [#A] Deliver reliable chat and interactive requests
 
 - Effort :: 4 days
 - Goal :: Expose canonical history, serialized turns, interactions, and replayed
@@ -605,7 +614,10 @@ Commit: =feat: restore and supervise codex sessions=
 - Notes :: REST responses acknowledge accepted mutations; streamed Codex events
   determine final UI state. Do not queue a second turn.
 
-** TODO [#A] Add history, start-turn, and interrupt-turn slices
+** WIP [#A] Add history, start-turn, and interrupt-turn slices
+
+- Status :: Start-turn validation/runtime wiring and streamed updates exist.
+  Canonical =thread/read= history and interrupt remain.
 
 - Why :: The browser needs canonical reconciliation plus reliable commands.
 - Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
@@ -635,7 +647,11 @@ export type ChatItem =
 
 Commit: =feat: add canonical chat turns=
 
-** TODO [#A] Add approval and user-input interaction slices
+** WIP [#A] Add approval and user-input interaction slices
+
+- Status :: Command/file approvals, permission requests, user input, durable
+  pending interactions, and resolution events exist. Endpoint validation by
+  generated response shape and all recovery cases remain.
 
 - Why :: Full mobile control requires answering every supported Codex server
   request once and with the generated response shape.
@@ -656,7 +672,10 @@ Commit: =feat: add canonical chat turns=
 
 Commit: =feat: handle codex approvals and questions=
 
-** TODO [#A] Add sequenced WebSocket replay and resynchronization
+** WIP [#A] Add sequenced WebSocket replay and resynchronization
+
+- Status :: Sequenced replay, gap detection, slow-client cutoff, client retry,
+  and heartbeat liveness exist. Canonical history resync and full handoff tests remain.
 
 - Why :: WebSocket delivery alone loses events during mobile network changes.
 - Change :: Create =src/server/platform/events/session-event-service.ts=,
@@ -677,7 +696,7 @@ Commit: =feat: handle codex approvals and questions=
 
 Commit: =feat: replay sequenced session events=
 
-* TODO [#B] Add safe Git inspection, refresh, and push
+* WIP [#B] Add safe Git inspection, refresh, and push
 
 - Effort :: 2 days
 - Goal :: Provide accurate, throttled Git information and narrowly constrained
@@ -685,7 +704,10 @@ Commit: =feat: replay sequenced session events=
 - Notes :: Build repositories in temporary directories and bare remotes. Never
   use the developer's real repositories in tests.
 
-** TODO [#A] Implement the Git CLI adapter and fetch coordinator
+** WIP [#A] Implement the Git CLI adapter and fetch coordinator
+
+- Status :: Shell-free inspection and a per-workspace 60-second coalescing fetch
+  coordinator exist. Full summary fields, cached reads, and temporary-repo coverage remain.
 
 - Why :: Parsing and safety belong behind one tested port, not endpoints.
 - Change :: Create =src/server/features/git/application/ports.ts=,
@@ -720,7 +742,10 @@ export type GitSummary = {
 
 Commit: =feat: inspect and refresh git repositories=
 
-** TODO [#A] Add Git REPR slices and constrained upstream push
+** WIP [#A] Add Git REPR slices and constrained upstream push
+
+- Status :: Summary, refresh, and safe push routes are implemented. Their full
+  REPR split, idempotency, and integration coverage remain.
 
 - Why :: Push is externally mutating and must revalidate every precondition at
   execution time.
@@ -739,7 +764,7 @@ Commit: =feat: inspect and refresh git repositories=
 
 Commit: =feat: expose safe git upstream actions=
 
-* TODO [#B] Build the client state and session mobile shell
+* WIP [#B] Build the client state and session mobile shell
 
 - Effort :: 3 days
 - Goal :: Create a resilient Svelte 5 application shell that bootstraps, caches
@@ -748,7 +773,10 @@ Commit: =feat: expose safe git upstream actions=
   large immutable event/item arrays and replace arrays rather than mutating them.
   Use =$effect= only for browser side effects with cleanup.
 
-** TODO [#A] Implement typed API, IndexedDB cache, and relay connection state
+** WIP [#A] Implement typed API, IndexedDB cache, and relay connection state
+
+- Status :: Relay client helpers, cursor replay, reconnect backoff, and draft
+  storage exist. The consolidated typed API/AppState and IndexedDB stores remain.
 
 - Why :: Components should render state and dispatch intent, not own networking.
 - Change :: Create =src/client/lib/api.ts=, =problem.ts=, =idempotency.ts=,
@@ -767,7 +795,10 @@ Commit: =feat: expose safe git upstream actions=
 
 Commit: =feat: add resilient client data layer=
 
-** TODO [#A] Build navigation, session list, and start-session dialog
+** WIP [#A] Build navigation, session list, and start-session dialog
+
+- Status :: Mobile tabs, bootstrap, and session start controls exist. The dialog,
+  session management controls, and component split remain.
 
 - Why :: Users need a complete mobile entry flow before chat rendering.
 - Change :: Replace =App.svelte= and create =src/client/components/AppHeader.svelte=,
@@ -788,7 +819,7 @@ Commit: =feat: add resilient client data layer=
 
 Commit: =feat: build mobile session shell=
 
-* TODO [#B] Build Chat and Git mobile views
+* WIP [#B] Build Chat and Git mobile views
 
 - Effort :: 4 days
 - Goal :: Finish the primary streamed-chat and supporting Git experiences with
@@ -796,7 +827,10 @@ Commit: =feat: build mobile session shell=
 - Notes :: Render agent text with =white-space: pre-wrap= and escape it as Svelte
   text. Do not use ={@html}= or add a Markdown renderer in V1.
 
-** TODO [#A] Render streamed chat, composer, approvals, and questions
+** WIP [#A] Render streamed chat, composer, approvals, and questions
+
+- Status :: Streaming message accumulation, composer, and all current interaction
+  renderers exist. Structured activity/history rendering and interruption remain.
 
 - Why :: Chat is the primary product surface and must remain usable while events
   stream or connectivity changes.
@@ -817,7 +851,10 @@ Commit: =feat: build mobile session shell=
 
 Commit: =feat: build interactive codex chat=
 
-** TODO [#A] Render Git status, history, refresh, and push
+** WIP [#A] Render Git status, history, refresh, and push
+
+- Status :: Mobile Git status, fetch, and guarded push controls exist. Commit
+  history, cached-age/error presentation, and push confirmation remain.
 
 - Why :: The supporting tab must communicate stale/background state and safe
   push preconditions clearly.
@@ -857,7 +894,7 @@ Commit: =feat: build mobile git workspace view=
 
 Commit: =fix: harden mobile accessibility and layout=
 
-* TODO [#A] Prove restart, reconnection, and operational handoff
+* WIP [#A] Prove restart, reconnection, and operational handoff
 
 - Effort :: 3 days
 - Goal :: Verify the complete system against its success criteria and leave a
@@ -885,7 +922,10 @@ Commit: =fix: harden mobile accessibility and layout=
 
 Commit: =test: cover relay recovery user journeys=
 
-** TODO [#B] Add CLI session listing and operator documentation
+** WIP [#B] Add CLI session listing and operator documentation
+
+- Status :: CLI session listing, resume command formatting, and base README
+  instructions exist. The full operator and architecture documentation remains.
 
 - Why :: SSH handoff must be easy without opening the browser, and later agents
   need project-specific boundaries.
