@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:server": "tsx watch src/server/main.ts -- --cwd ..",
+    "start": "node dist/server/server/main.js",
     "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.server.json",
