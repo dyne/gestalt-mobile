@@ -586,8 +586,9 @@ Commit: =feat: manage and release relay sessions=
 
 ** WIP [#A] Add startup restoration and bounded crash recovery
 
-- Status :: Active persisted threads are restored at startup and failed restores
-  require attention. Crash-exit supervision, backoff, and concurrency controls remain.
+- Status :: Active persisted threads restore at startup; child exits now use
+  bounded backoff and ultimately require attention. Restoration concurrency and
+  broader exit-lifecycle coverage remain.
 
 - Why :: Desired State is useful only if active sessions return after relay or
   child-process failure.
