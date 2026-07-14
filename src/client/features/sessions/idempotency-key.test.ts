@@ -8,6 +8,12 @@ describe('idempotency key', () => {
   });
 
   it('falls back when randomUUID is unavailable on plain HTTP', () => {
-    expect(createIdempotencyKey({}, () => 1234, () => 0.5)).toBe('k-ya-zik0zk');
+    expect(
+      createIdempotencyKey(
+        {},
+        () => 1234,
+        () => 0.5,
+      ),
+    ).toBe('k-ya-zik0zk');
   });
 });

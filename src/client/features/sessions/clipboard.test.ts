@@ -9,4 +9,14 @@ describe('copyText', () => {
         },
       }),
     ).resolves.toBe(false));
+
+  it('uses the legacy copy path when Clipboard API is unavailable', async () =>
+    expect(copyText('x', undefined, () => true)).resolves.toBe(true));
+
+  it('contains a legacy copy failure', async () =>
+    expect(
+      copyText('x', undefined, () => {
+        throw new Error('blocked');
+      }),
+    ).resolves.toBe(false));
 });
