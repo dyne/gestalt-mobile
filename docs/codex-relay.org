@@ -367,7 +367,7 @@ export interface SessionEventPublisher {
 
 Commit: =feat: persist relay sessions and event journal=
 
-* WIP [#A] Discover workspaces and profiles
+* DONE [#A] Discover workspaces and profiles
 
 - Effort :: 1 day
 - Goal :: Return a server-authoritative startup catalog with no path escape.
@@ -407,7 +407,7 @@ export interface ProfileCatalog {
 
 Commit: =feat: discover relay workspaces and profiles=
 
-** WIP [#A] Add the bootstrap REPR slice
+** DONE [#A] Add the bootstrap REPR slice
 
 - Why :: The first useful browser request needs catalog, saved sessions, and
   server capability state in one round trip.
