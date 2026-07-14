@@ -45,6 +45,10 @@ export type AppDependencies = {
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
     release?(session: RelaySessionSnapshot): RelaySessionSnapshot;
+    idempotency?: {
+      get(scope: string, key: string): { statusCode: number; body: string } | null;
+      put(scope: string, key: string, statusCode: number, body: string): void;
+    };
     interactionResolved?(sessionId: string, requestId: string, occurredAt: string): void;
   };
   sessionEvents?: {

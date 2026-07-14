@@ -14,6 +14,7 @@ import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
+import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
 import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
@@ -44,6 +45,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const sessions = new SqliteSessionRepository(database);
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
+  const idempotency = new SqliteIdempotencyStore(database);
   const withPendingInteractions = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
@@ -155,6 +157,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       interruptTurn: runtime ? (session, turnId) => runtime.interruptTurn(session, turnId) : undefined,
       restore: runtime ? (session) => runtime.restore(session, new Date().toISOString()) : undefined,
       release: (session) => RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
+      idempotency,
       close: runtime ? (id) => runtime.stop(id) : undefined,
       replyInteraction: runtime
         ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)

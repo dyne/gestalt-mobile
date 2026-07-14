@@ -19,4 +19,27 @@ describe('POST /api/sessions', () => {
     expect(response.statusCode).toBe(202);
     await app.close();
   });
+
+  it('replays a successful start for the same idempotency key', async () => {
+    const app = fastify();
+    const results = new Map<string, string>();
+    let created = 0;
+    registerStartSession(app, {
+      createId: () => `s-${++created}`,
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      idempotency: {
+        get: (_scope, key) => results.has(key) ? { statusCode: 202, body: results.get(key)! } : null,
+        put: (_scope, key, _statusCode, body) => results.set(key, body),
+      },
+    });
+    const options = { method: 'POST' as const, url: '/api/sessions', headers: { 'idempotency-key': 'retry-1' }, payload: { workspaceId: 'w', profile: 'default' } };
+    const first = await app.inject(options);
+    const second = await app.inject(options);
+    expect([first.json().id, second.json().id]).toEqual(['s-1', 's-1']);
+    expect(created).toBe(1);
+    await app.close();
+  });
 });
