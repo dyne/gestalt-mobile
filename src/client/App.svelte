@@ -349,7 +349,10 @@
               <h3>Recent commits</h3>
               <ol aria-label="Recent commits">
                 {#each gitSummary.commits as commit (commit.hash)}
-                  <li><code>{commit.shortHash}</code> {commit.subject} — {commit.author}</li>
+                  <li>
+                    <code>{commit.shortHash}</code> {commit.subject} — {commit.author}
+                    <time datetime={commit.authoredAt}> {commit.authoredAt}</time>
+                  </li>
                 {/each}
               </ol>
             {/if}
