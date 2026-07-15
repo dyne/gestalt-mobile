@@ -23,6 +23,7 @@
     type RelayHistory,
     type RecentSession,
     type RelaySession,
+    type StartSessionSettings,
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
@@ -43,6 +44,9 @@
   let recentSessions = $state<RecentSession[]>([]);
   let workspaceId = $state('');
   let profile = $state('');
+  let model = $state('');
+  let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
+  let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
   let startingSession = $state(false);
   let message = $state('');
@@ -115,7 +119,16 @@
     startingSession = true;
     status = 'Starting session…';
     try {
-      const session = await relay.startSession(workspaceId, profile, startRequestKey);
+      const session = await relay.startSession(
+        workspaceId,
+        profile,
+        {
+          model: model.trim() || undefined,
+          sandbox: sandbox || undefined,
+          approvalPolicy,
+        },
+        startRequestKey,
+      );
       startRequestKey = null;
       sessionId = session.id;
       activeTurnId = null;
@@ -433,9 +446,15 @@
       {profiles}
       {workspaceId}
       {profile}
+      {model}
+      {sandbox}
+      {approvalPolicy}
       {startingSession}
       onworkspacechange={(value) => (workspaceId = value)}
       onprofilechange={(value) => (profile = value)}
+      onmodelchange={(value) => (model = value)}
+      onsandboxchange={(value) => (sandbox = value)}
+      onapprovalpolicychange={(value) => (approvalPolicy = value)}
       onrefresh={() => void refreshSessionLists()}
       onopen={openSession}
       onrelease={(id) => void releaseSession(id)}

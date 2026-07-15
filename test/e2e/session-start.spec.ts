@@ -23,6 +23,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
         profile: 'work',
+        approvalPolicy: 'on-request',
       });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
       return;
@@ -92,6 +93,45 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByText('/projects/from-ssh')).toBeVisible();
   await expect(page.getByText('recent-thread-id')).toBeVisible();
   await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);
+});
+
+test('starts a session with directly exposed Codex settings', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([]) });
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({
+      workspaceId: 'workspace-1',
+      profile: 'work',
+      model: 'gpt-5.4',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'session-1', state: 'ready' }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByLabel('Model').fill('gpt-5.4');
+  await page.getByLabel('Sandbox').selectOption('workspace-write');
+  await page.getByLabel('Approval policy').selectOption('never');
+  await page.getByRole('button', { name: 'Start session' }).click();
+  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
 });
 
 test('shows a start-session failure and permits a retry', async ({ page }) => {

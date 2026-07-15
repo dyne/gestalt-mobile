@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
+import { parseStartSessionRequest } from './request.js';
 import { startSession } from './use-case.js';
 
 export function registerStartSession(
@@ -16,7 +17,16 @@ export function registerStartSession(
     const key = idempotencyKey(request.headers);
     const prior = key ? deps.idempotency?.get('start-session', key) : null;
     if (prior) return reply.code(prior.statusCode).send(JSON.parse(prior.body));
-    const body = request.body as { workspaceId: string; profile: string };
+    const body = parseStartSessionRequest(request.body);
+    if (!body)
+      return reply.code(400).type('application/problem+json').send({
+        type: 'urn:codex-relay:error:invalid-start-session-request',
+        title: 'Invalid start session request',
+        status: 400,
+        detail: 'Workspace, profile, and Codex session settings must be valid.',
+        code: 'INVALID_START_SESSION_REQUEST',
+        retryable: false,
+      });
     let started;
     try {
       started = await startSession(body, deps);

@@ -160,7 +160,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       workspaces,
       profiles: options.profiles,
       activate: runtime
-        ? async (session) => runtime.start(session, new Date().toISOString())
+        ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
         : undefined,
       startTurn: runtime
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())

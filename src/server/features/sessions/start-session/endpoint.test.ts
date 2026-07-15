@@ -20,6 +20,32 @@ describe('POST /api/sessions', () => {
     await app.close();
   });
 
+  it('rejects settings outside the generated Codex schema values', async () => {
+    const app = fastify();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        workspaceId: 'w',
+        profile: 'default',
+        sandbox: 'workspaceWrite',
+        approvalPolicy: 'never',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'INVALID_START_SESSION_REQUEST' });
+    await app.close();
+  });
+
   it('replays a successful start for the same idempotency key', async () => {
     const app = fastify();
     const results = new Map<string, string>();

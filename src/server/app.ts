@@ -27,6 +27,7 @@ import { registerSessionEvents } from './features/sessions/session-events/endpoi
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
+import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -42,7 +43,10 @@ export type AppDependencies = {
     list?(): RelaySessionSnapshot[];
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
-    activate?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    activate?(
+      session: RelaySessionSnapshot,
+      settings: StartSessionSettings,
+    ): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     close?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;

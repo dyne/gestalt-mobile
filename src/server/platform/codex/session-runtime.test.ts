@@ -38,6 +38,51 @@ describe('CodexSessionRuntime', () => {
     expect(session).toMatchObject({ state: 'ready', threadId: 'thread-1', updatedAt: 'after' });
   });
 
+  it('passes requested Codex settings through to thread start', async () => {
+    let threadStartParams: unknown;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'thread/start') {
+            threadStartParams = params;
+            return { thread: { id: 'thread-1' } };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+      { model: 'gpt-5.4', sandbox: 'workspace-write', approvalPolicy: 'never' },
+    );
+
+    expect(threadStartParams).toEqual({
+      cwd: '/workspace',
+      model: 'gpt-5.4',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+  });
+
   it('forwards app-server notifications with their relay session identity', async () => {
     let notify: ((value: { method: string; params: unknown }) => void) | undefined;
     const received: unknown[] = [];

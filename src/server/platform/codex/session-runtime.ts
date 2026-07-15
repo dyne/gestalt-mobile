@@ -2,6 +2,7 @@ import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
+import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 
 export type AppServer = {
   rpc: {
@@ -34,7 +35,11 @@ export class CodexSessionRuntime {
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
   private readonly exitUnsubscribers = new Map<string, () => void>();
 
-  async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+  async start(
+    session: RelaySessionSnapshot,
+    now: string,
+    settings: StartSessionSettings = {},
+  ): Promise<RelaySessionSnapshot> {
     const process = this.launch({ profile: session.profile, cwd: session.workspacePath });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
@@ -46,7 +51,9 @@ export class CodexSessionRuntime {
       });
       const result = (await process.rpc.request('thread/start', {
         cwd: session.workspacePath,
-        approvalPolicy: 'on-request',
+        approvalPolicy: settings.approvalPolicy ?? 'on-request',
+        ...(settings.model ? { model: settings.model } : {}),
+        ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
       })) as { thread?: { id?: string } };
       if (!result.thread?.id) throw new Error('CODEX_THREAD_ID_MISSING');
       this.processes.set(session.id, process);

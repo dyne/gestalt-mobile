@@ -8,6 +8,11 @@ export type RelaySession = {
   activeTurnId?: string | null;
 };
 export type RecentSession = { id: string; cwd: string; recencyAt: number | null };
+export type StartSessionSettings = {
+  model?: string;
+  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  approvalPolicy?: 'untrusted' | 'on-request' | 'never';
+};
 
 export type RelayHistoryItem = Record<string, unknown> & {
   id: string;
@@ -68,10 +73,15 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   return {
     listSessions: () => get<RelaySession[]>('/api/sessions'),
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
-    startSession: (workspaceId: string, profile: string, key?: string) =>
+    startSession: (
+      workspaceId: string,
+      profile: string,
+      settings: StartSessionSettings = {},
+      key?: string,
+    ) =>
       request<RelaySession>(
         '/api/sessions',
-        { workspaceId, profile },
+        { workspaceId, profile, ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
     startTurn: (sessionId: string, text: string) =>
