@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { ChatMessage } from './message-store.js';
+  import { groupMessages } from './message-groups.js';
   import { renderCommentary } from './rendering.js';
 
   let { messages }: { messages: ChatMessage[] } = $props();
-
+  let groups = $derived(groupMessages(messages));
 </script>
 
 {#snippet content(text: string)}
@@ -17,18 +18,26 @@
 {/snippet}
 
 <ol aria-label="Chat messages">
-  {#each messages as message (message.id)}
+  {#each groups as group (group.id)}
     <li>
-      {#if message.role === 'user'}
-        <strong>user:</strong> {message.text}
-      {:else if message.phase === 'commentary'}
+      {#if group.kind === 'user'}
+        <strong>user:</strong> {group.text}
+      {:else if group.answer}
+        <section class="answer-turn">
+          <strong>answer</strong>
+          {@render content(group.answer)}
+          {#if group.commentary}
+            <details>
+              <summary>commentary</summary>
+              {@render content(group.commentary)}
+            </details>
+          {/if}
+        </section>
+      {:else if group.commentary}
         <details>
           <summary>commentary</summary>
-          {@render content(message.text)}
+          {@render content(group.commentary)}
         </details>
-      {:else}
-        <strong>answer</strong>
-        {@render content(message.text)}
       {/if}
     </li>
   {/each}

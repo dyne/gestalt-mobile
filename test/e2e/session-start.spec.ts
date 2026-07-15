@@ -335,7 +335,14 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
         currentSequence: 7,
         items: [
           { id: 'user-1', kind: 'user', text: 'Check the branch' },
-          { id: 'agent-1', kind: 'agent', text: 'The branch is clean.' },
+          {
+            id: 'commentary-1',
+            kind: 'agent',
+            phase: 'commentary',
+            text: 'I am inspecting the branch.',
+          },
+          { id: 'commentary-2', kind: 'agent', phase: 'commentary', text: 'The branch is clean.' },
+          { id: 'answer-1', kind: 'agent', phase: 'final_answer', text: 'No changes are needed.' },
           { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
         ],
       }),
@@ -345,7 +352,13 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByText('user: Check the branch')).toBeVisible();
-  await expect(page.getByText('assistant: The branch is clean.')).toBeVisible();
+  await expect(page.getByText('answer')).toBeVisible();
+  await expect(page.getByText('No changes are needed.')).toBeVisible();
+  const commentary = page.locator('.answer-turn');
+  await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
+  await commentary.getByText('commentary').click();
+  await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
+  await expect(commentary.getByText('The branch is clean.')).toBeVisible();
   await expect(page.getByText('Command · completed')).toBeVisible();
 });
 
