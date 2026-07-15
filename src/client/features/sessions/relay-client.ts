@@ -6,6 +6,7 @@ export type RelaySession = {
   threadId?: string | null;
   resumeCommand?: string | null;
   activeTurnId?: string | null;
+  pendingInteractions?: Array<{ requestId: string; kind: string; payload: unknown }>;
 };
 export type RecentSession = { id: string; cwd: string; recencyAt: number | null };
 export type StartSessionSettings = {

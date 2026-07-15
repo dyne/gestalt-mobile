@@ -134,6 +134,37 @@ test('starts a session with directly exposed Codex settings', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
 });
 
+test('rehydrates a durable pending interaction after a browser reload', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [
+          {
+            id: 'session-1',
+            state: 'ready',
+            workspaceId: 'workspace-1',
+            profile: 'work',
+            pendingInteractions: [
+              { requestId: 'approval-1', kind: 'commandApproval', payload: {} },
+            ],
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByRole('heading', { name: 'Codex needs your decision' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve' })).toBeVisible();
+});
+
 test('shows a start-session failure and permits a retry', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({

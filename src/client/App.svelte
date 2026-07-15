@@ -85,6 +85,7 @@
       if (sessionId) message = await sessionCache.readDraft(sessionId);
       if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
+      interactions = sessions.find((session) => session.id === sessionId)?.pendingInteractions ?? [];
       void refreshRecentSessions();
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
@@ -177,6 +178,7 @@
     cursor = 0;
     message = await sessionCache.readDraft(id);
     activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
+    interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
     try {
       await resyncHistory(id);
       connectSession(id);
