@@ -24,6 +24,7 @@ import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
+import { isValidInteractionResponse } from './features/sessions/interaction/response-validator.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -197,14 +198,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       validate: (sessionId, requestId, value) => {
         const interaction = interactions.find(sessionId, requestId);
         if (!interaction) return false;
-        if (interaction.kind === 'userInput') return isRecord(value.answers);
-        if (interaction.kind === 'permissionsApproval')
-          return (
-            isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session')
-          );
-        return ['accept', 'acceptForSession', 'decline', 'cancel'].includes(
-          value.decision as string,
-        );
+        return isValidInteractionResponse(interaction.kind, value);
       },
     },
     gitSummary: {
@@ -241,8 +235,4 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     database.close();
   });
   return app;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
