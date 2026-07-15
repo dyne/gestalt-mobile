@@ -40,10 +40,30 @@ function safeActivity(item: unknown): { id: string; label: string; detail: strin
   if (value.type === 'plan' && typeof value.text === 'string')
     return { id: value.id, label: 'Plan', detail: value.text };
   if (value.type === 'reasoning' && Array.isArray(value.summary))
-    return { id: value.id, label: 'Reasoning summary', detail: value.summary.filter((part): part is string => typeof part === 'string').join('\n') };
+    return {
+      id: value.id,
+      label: 'Reasoning summary',
+      detail: value.summary.filter((part): part is string => typeof part === 'string').join('\n'),
+    };
   if (value.type === 'fileChange' && Array.isArray(value.changes))
-    return { id: value.id, label: `File change${status}`, detail: value.changes.map((change) => (change && typeof change === 'object' && typeof (change as Record<string, unknown>).path === 'string' ? (change as Record<string, string>).path : '')).filter(Boolean).join('\n') };
-  if ((value.type === 'mcpToolCall' || value.type === 'dynamicToolCall') && typeof value.tool === 'string')
+    return {
+      id: value.id,
+      label: `File change${status}`,
+      detail: value.changes
+        .map((change) =>
+          change &&
+          typeof change === 'object' &&
+          typeof (change as Record<string, unknown>).path === 'string'
+            ? (change as Record<string, string>).path
+            : '',
+        )
+        .filter(Boolean)
+        .join('\n'),
+    };
+  if (
+    (value.type === 'mcpToolCall' || value.type === 'dynamicToolCall') &&
+    typeof value.tool === 'string'
+  )
     return { id: value.id, label: `Tool${status}`, detail: value.tool };
   return null;
 }
