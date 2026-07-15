@@ -786,10 +786,10 @@ Commit: =feat: expose safe git upstream actions=
 ** WIP [#A] Implement typed API, IndexedDB cache, and relay connection state
 
 - Status :: Relay client helpers, cursor replay, reconnect backoff, draft
-  storage, and active-turn rehydration from durable session metadata exist. The
-  message cache now uses IndexedDB with a 200-item cap and safe fallback. The
-  relay client now owns typed route contracts; consolidated AppState and remaining
-  IndexedDB stores remain. Failed
+  storage, and active-turn rehydration from durable session metadata exist. A
+  shared IndexedDB cache now owns settings, drafts, cursors, and 200 capped
+  messages with safe fallbacks. The relay client now owns typed route contracts;
+  consolidated AppState remains. Failed
   lifecycle mutation problem details are now surfaced in the mobile status line, and
   idempotency keys fall back safely when plain HTTP lacks =crypto.randomUUID()=.
 

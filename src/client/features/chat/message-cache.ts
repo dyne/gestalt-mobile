@@ -1,6 +1,6 @@
 import type { ChatMessage } from './message-store.js';
+import { openClientDatabase, readStore, writeStore } from '../client-database.js';
 
-const databaseName = 'codex-relay';
 const storeName = 'messages';
 const messageLimit = 200;
 
@@ -17,17 +17,12 @@ export function createMessageCache(
   database: IDBFactory | undefined = globalThis.indexedDB,
 ): MessageCache {
   if (!database) return { read: async () => [], write: async () => {} };
-  const open = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = database.open(databaseName, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(storeName);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+  const open = openClientDatabase(database);
   return {
     async read(sessionId) {
       try {
         const db = await open;
-        return await transaction<ChatMessage[]>(db, 'readonly', (store) => store.get(sessionId));
+        return (await readStore<ChatMessage[]>(db, storeName, sessionId)) ?? [];
       } catch {
         return [];
       }
@@ -35,24 +30,10 @@ export function createMessageCache(
     async write(sessionId, messages) {
       try {
         const db = await open;
-        await transaction(db, 'readwrite', (store) =>
-          store.put(retainRecentMessages(messages), sessionId),
-        );
+        await writeStore(db, storeName, sessionId, retainRecentMessages(messages));
       } catch {
         // Cache failure must never block the live relay experience.
       }
     },
   };
-}
-
-function transaction<T>(
-  db: IDBDatabase,
-  mode: IDBTransactionMode,
-  operation: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const request = operation(db.transaction(storeName, mode).objectStore(storeName));
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
 }

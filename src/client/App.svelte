@@ -3,7 +3,6 @@
 
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
-  import { readDraft, saveDraft } from './features/chat/draft-store.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
   import { fetchAge } from './features/git/fetch-age.js';
@@ -23,7 +22,7 @@
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
-  import { readCursor, readSelectedSession, saveCursor, saveSelectedSession } from './features/sessions/session-memory.js';
+  import { createSessionCache } from './features/sessions/session-cache.js';
   import { validateStartForm } from './features/sessions/start-form.js';
   import type { Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
@@ -57,6 +56,7 @@
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
   const messageCache = createMessageCache();
+  const sessionCache = createSessionCache();
 
   onMount(async () => {
     try {
@@ -65,12 +65,12 @@
       profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
       profile = profiles.find((item) => item.state === 'ok')?.name ?? profiles[0]?.name ?? '';
-      const remembered = readSelectedSession(localStorage);
+      const remembered = await sessionCache.readSelectedSession();
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
         : (bootstrap.sessions[0]?.id ?? null);
-      if (sessionId) cursor = readCursor(localStorage, sessionId);
-      if (sessionId) message = readDraft(localStorage, sessionId);
+      if (sessionId) cursor = await sessionCache.readCursor(sessionId);
+      if (sessionId) message = await sessionCache.readDraft(sessionId);
       if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
@@ -110,13 +110,13 @@
       startRequestKey = null;
       sessionId = session.id;
       activeTurnId = null;
-      saveSelectedSession(localStorage, session.id);
+      void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();
       messages = [];
       persistMessages(session.id);
       activities = [];
       cursor = 0;
-      message = readDraft(localStorage, session.id);
+      message = await sessionCache.readDraft(session.id);
       connectSession(session.id);
       tab = 'chat';
       status = 'Session started.';
@@ -133,11 +133,11 @@
 
   async function openSession(id: string) {
     sessionId = id;
-    saveSelectedSession(localStorage, id);
+    void sessionCache.saveSelectedSession(id);
     messages = await messageCache.read(id);
     activities = [];
     cursor = 0;
-    message = readDraft(localStorage, id);
+    message = await sessionCache.readDraft(id);
     activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
     try {
       await resyncHistory(id);
@@ -165,7 +165,7 @@
         socket?.close();
         sessionId = null;
         activeTurnId = null;
-        saveSelectedSession(localStorage, null);
+        void sessionCache.saveSelectedSession(null);
       }
       await refreshSessions();
       status = 'Session released for SSH resume.';
@@ -187,7 +187,7 @@
       const turn = await relay.startTurn(sessionId, message.trim());
       activeTurnId = turn.activeTurnId ?? null;
       message = '';
-      saveDraft(localStorage, sessionId, '');
+      void sessionCache.saveDraft(sessionId, '');
       status = 'Codex is working…';
     } catch {
       status = 'Message was not sent. Your draft is preserved.';
@@ -224,7 +224,7 @@
       return activity ? [activity] : [];
     });
     cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
-    saveCursor(localStorage, id, cursor);
+    void sessionCache.saveCursor(id, cursor);
     status = 'Session history resynchronized.';
   }
 
@@ -294,7 +294,7 @@
 
   function updateDraft(value: string) {
     message = value;
-    if (sessionId) saveDraft(localStorage, sessionId, value);
+    if (sessionId) void sessionCache.saveDraft(sessionId, value);
   }
 
   function persistMessages(id: string): void {
@@ -351,7 +351,7 @@
       }, () => {
         void resyncHistory(id);
       });
-      saveCursor(localStorage, id, cursor);
+      void sessionCache.saveCursor(id, cursor);
     };
     socket.onclose = () => {
       if (generation !== socketGeneration || sessionId !== id) return;
