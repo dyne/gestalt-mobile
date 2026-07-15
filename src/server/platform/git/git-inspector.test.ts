@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { inspectGit, parseDivergence, parseDirtyCounts } from './git-inspector.js';
+import { inspectGit, parseDivergence, parseDirtyCounts, pushUpstream } from './git-inspector.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -94,6 +94,13 @@ describe('git inspector', () => {
     await git(local, 'add', '.');
     await git(local, 'commit', '-m', 'Initial');
     await git(local, 'push', '-u', 'origin', 'HEAD');
+    await writeFile(join(local, 'pushed.txt'), 'pushed\n');
+    await git(local, 'add', '.');
+    await git(local, 'commit', '-m', 'Pushed commit');
+    const beforePush = await inspectGit(local);
+    expect(beforePush).toMatchObject({ ahead: 1, behind: 0, upstream: expect.any(String) });
+    await pushUpstream(local, beforePush.upstream!);
+    await expect(inspectGit(local)).resolves.toMatchObject({ ahead: 0, behind: 0 });
     await git(root, 'clone', remote, peer);
     await configureAuthor(peer);
     await writeFile(join(peer, 'peer.txt'), 'peer\n');
@@ -105,12 +112,14 @@ describe('git inspector', () => {
     await git(local, 'add', '.');
     await git(local, 'commit', '-m', 'Local commit');
 
-    await expect(inspectGit(local)).resolves.toMatchObject({
+    const divergent = await inspectGit(local);
+    expect(divergent).toMatchObject({
       available: true,
       upstream: expect.stringMatching(/^origin\//),
       ahead: 1,
       behind: 1,
     });
+    await expect(pushUpstream(local, divergent.upstream!)).rejects.toThrow();
 
     await git(local, 'checkout', '--detach');
     await expect(inspectGit(local)).resolves.toMatchObject({
