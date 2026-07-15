@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { RecentSession, RelaySession } from './relay-client.js';
+  import { formatRelativeTime } from './relative-time.js';
 
   type Workspace = { id: string; name: string };
   type Profile = { name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string };
@@ -85,6 +86,11 @@
       <ul aria-label="Last sessions">
         {#each recentSessions as session (session.id)}
           <li>
+            {#if session.recencyAt !== null}
+              <time datetime={new Date(session.recencyAt * 1000).toISOString()}>{formatRelativeTime(session.recencyAt * 1000)}</time>
+            {:else}
+              <div>{formatRelativeTime(null)}</div>
+            {/if}
             <div>{session.cwd}</div>
             <code>{session.id}</code>
           </li>

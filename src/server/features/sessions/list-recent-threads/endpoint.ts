@@ -8,6 +8,6 @@ export function registerListRecentThreads(
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
-    return threads.map(({ id, cwd }) => ({ id, cwd }));
+    return threads.map(({ id, cwd, recencyAt }) => ({ id, cwd, recencyAt }));
   });
 }

@@ -25,8 +25,8 @@ describe('GET /api/sessions/recent-threads', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
-      { id: 'thread-new', cwd: '/projects/new' },
-      { id: 'thread-old', cwd: '/projects/old' },
+      { id: 'thread-new', cwd: '/projects/new', recencyAt: 200 },
+      { id: 'thread-old', cwd: '/projects/old', recencyAt: 100 },
     ]);
     await app.close();
   });

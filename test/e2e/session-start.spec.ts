@@ -49,6 +49,9 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 });
 
 test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
+  await page.addInitScript(() => {
+    Date.now = () => Date.UTC(2026, 6, 15, 12, 0, 0);
+  });
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -71,8 +74,8 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify([
-        { id: 'recent-thread-id', cwd: '/projects/from-ssh' },
-        { id: 'relay-thread-id', cwd: '/projects/relay' },
+        { id: 'recent-thread-id', cwd: '/projects/from-ssh', recencyAt: 1784109600 },
+        { id: 'relay-thread-id', cwd: '/projects/relay', recencyAt: 1784102400 },
       ]),
     }),
   );
@@ -85,6 +88,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
 
   await expect(page.getByText('Session relay-thread-id · ready')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Last sessions' })).toBeVisible();
+  await expect(page.getByText('2 hours ago')).toBeVisible();
   await expect(page.getByText('/projects/from-ssh')).toBeVisible();
   await expect(page.getByText('recent-thread-id')).toBeVisible();
   await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);

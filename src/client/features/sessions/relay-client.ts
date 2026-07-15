@@ -7,7 +7,7 @@ export type RelaySession = {
   resumeCommand?: string | null;
   activeTurnId?: string | null;
 };
-export type RecentSession = { id: string; cwd: string };
+export type RecentSession = { id: string; cwd: string; recencyAt: number | null };
 
 export type RelayHistoryItem = Record<string, unknown> & {
   id: string;
