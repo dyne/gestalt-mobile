@@ -840,7 +840,9 @@ Commit: =feat: add resilient client data layer=
   are isolated keyboard-tested components. The dialog and remaining
   session-management component split remain. The Sessions tab also lists the
   most recent CLI and app-server sessions from every ready profile, including
-  their relative activity time, cwd, and thread UUID.
+  their relative activity time, cwd, and thread UUID. Managed relay sessions
+  use the same relative-time/thread-ID/workspace-path presentation without
+  exposing internal relay IDs.
 
 - Why :: Users need a complete mobile entry flow before chat rendering.
 - Change :: Replace =App.svelte= and create =src/client/components/AppHeader.svelte=,
