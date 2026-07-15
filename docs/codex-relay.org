@@ -629,7 +629,10 @@ Commit: =feat: restore and supervise codex sessions=
   =thread/read= history, interrupt, and compact client rendering of canonical
   reasoning/plan/command/file/tool activities exist. Session recovery updates
   now clear stale active turns in the browser, restoring the composer after a
-  relay restart.
+  relay restart. Visible Chat also reconciles the stored thread every two
+  seconds and on focus/reconnect, so terminal-originated prompts and answers
+  appear in relay; =thread/read= active-turn state disables the web composer
+  while the terminal owns a turn.
 
 - Why :: The browser needs canonical reconciliation plus reliable commands.
 - Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
