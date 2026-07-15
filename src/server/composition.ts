@@ -20,6 +20,7 @@ import { relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
+import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
@@ -61,6 +62,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
+  const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
@@ -203,12 +205,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     gitSummary: {
       inspect: async (path) => {
-        const summary = await inspectGit(path);
+        const summary = await gitSummaries.inspect(path);
         const fetchedAt = gitFetches.lastSuccessfulAt(path);
         return { ...summary, fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null };
       },
-      push: pushUpstream,
-      refresh: (path) => gitFetches.refresh(path),
+      push: async (path, upstream) => {
+        await pushUpstream(path, upstream);
+        gitSummaries.invalidate(path);
+      },
+      refresh: async (path) => {
+        await gitFetches.refresh(path);
+        gitSummaries.invalidate(path);
+      },
     },
   });
   const restoreActiveSessions = async () => {
