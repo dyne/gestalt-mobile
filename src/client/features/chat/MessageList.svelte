@@ -38,4 +38,14 @@
   li {
     white-space: pre-wrap;
   }
+
+  pre,
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  pre {
+    white-space: pre;
+    overflow-x: auto;
+  }
 </style>
