@@ -64,6 +64,8 @@
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
   let gitError = $state<string | null>(null);
+  let refreshRequestKey = $state<string | null>(null);
+  let pushRequestKey = $state<string | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
@@ -275,11 +277,13 @@
 
   async function refreshGit() {
     if (!sessionId) return;
+    refreshRequestKey ??= createIdempotencyKey();
     gitRefreshing = true;
     gitError = null;
     try {
-      await relay.refreshGit(sessionId);
+      await relay.refreshGit(sessionId, refreshRequestKey);
       await loadGitSummary();
+      refreshRequestKey = null;
     } catch {
       gitError = 'Fetch failed. Check the upstream and try again.';
     } finally {
@@ -289,11 +293,13 @@
 
   async function pushGit() {
     if (!sessionId) return;
+    pushRequestKey ??= createIdempotencyKey();
     gitError = null;
     try {
-      await relay.pushGit(sessionId);
+      await relay.pushGit(sessionId, pushRequestKey);
       pushConfirmationOpen = false;
       await loadGitSummary();
+      pushRequestKey = null;
     } catch {
       gitError = 'Push failed. Refresh the branch status and resolve remote divergence first.';
     }

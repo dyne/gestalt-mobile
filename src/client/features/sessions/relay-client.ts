@@ -102,10 +102,18 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) =>
       get<RelayGitSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
-    refreshGit: (sessionId: string) =>
-      request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`, {}),
-    pushGit: (sessionId: string) =>
-      request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/git/push`, {}),
+    refreshGit: (sessionId: string, key?: string) =>
+      request<void>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`,
+        {},
+        key ? { 'idempotency-key': key } : {},
+      ),
+    pushGit: (sessionId: string, key?: string) =>
+      request<void>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/git/push`,
+        {},
+        key ? { 'idempotency-key': key } : {},
+      ),
     respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,

@@ -37,6 +37,22 @@ describe('relay client', () => {
     ]);
   });
 
+  it('passes stable idempotency keys to Git mutations', async () => {
+    const headers: Array<HeadersInit | undefined> = [];
+    const client = createRelayClient(async (_url, init) => {
+      headers.push(init?.headers);
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    });
+
+    await client.refreshGit('session-1', 'refresh-key');
+    await client.pushGit('session-1', 'push-key');
+
+    expect(headers).toEqual([
+      { 'content-type': 'application/json', 'idempotency-key': 'refresh-key' },
+      { 'content-type': 'application/json', 'idempotency-key': 'push-key' },
+    ]);
+  });
+
   it('lists durable sessions', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {
