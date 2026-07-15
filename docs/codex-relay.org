@@ -877,7 +877,8 @@ Commit: =feat: build mobile session shell=
   drafts, interruption UI, and streamed-item completion replacement exist. Live
   activity projection remains. Empty reasoning summaries are omitted, while
   completed summaries survive both the structured app-server form and canonical
-  history reload.
+  history reload. The header now states whether Codex is working or ready for
+  the next instruction from the active-turn state.
 
 - Why :: Chat is the primary product surface and must remain usable while events
   stream or connectivity changes.
