@@ -70,7 +70,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
-          const normalized = normalizeCodexNotification(sessionId, 0, occurredAt, notification);
+          const normalized = normalizeCodexNotification(
+            sessionId,
+            0,
+            occurredAt,
+            notification,
+            sessions.find(sessionId)?.workspacePath,
+          );
           if (!normalized) return;
           if (normalized.type === 'turnCompleted') {
             const turnId = (normalized.payload as { turn?: { id?: string } }).turn?.id;

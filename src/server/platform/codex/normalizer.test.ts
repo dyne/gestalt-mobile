@@ -70,4 +70,29 @@ describe('normalizeCodexNotification', () => {
       }),
     ).toBeNull();
   });
+
+  it('keeps file changes with workspace-relative paths', () => {
+    expect(
+      normalizeCodexNotification(
+        's',
+        5,
+        '2026-01-01T00:00:00.000Z',
+        {
+          method: 'item/completed',
+          params: {
+            item: {
+              id: 'change-1',
+              type: 'fileChange',
+              status: 'completed',
+              changes: [{ path: '/workspace/src/app.ts' }],
+            },
+          },
+        },
+        '/workspace',
+      ),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: { id: 'change-1', label: 'fileChange · completed', detail: 'src/app.ts' },
+    });
+  });
 });

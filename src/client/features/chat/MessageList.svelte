@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatMessage } from './message-store.js';
+  import { renderCommentary } from './rendering.js';
 
   let { messages }: { messages: ChatMessage[] } = $props();
 </script>
@@ -11,11 +12,17 @@
         <strong>user:</strong> {message.text}
       {:else if message.phase === 'commentary'}
         <details>
-          <summary>Codex commentary</summary>
-          <div>{message.text}</div>
+          <summary>commentary</summary>
+          {#each renderCommentary(message.text) as block, blockIndex (blockIndex)}
+            {#if block.kind === 'code'}
+              <pre><code>{block.text}</code></pre>
+            {:else}
+              <div>{#each block.parts as part, partIndex (partIndex)}{#if part.kind === 'link'}<a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>{:else}{part.text}{/if}{/each}</div>
+            {/if}
+          {/each}
         </details>
       {:else}
-        <strong>Codex answer</strong>
+        <strong>answer</strong>
         <div>{message.text}</div>
       {/if}
     </li>
