@@ -103,6 +103,10 @@
     white-space: pre-wrap;
   }
 
+  li + li {
+    margin-block-start: 1rem;
+  }
+
   .entry-heading {
     display: flex;
     justify-content: space-between;
@@ -116,7 +120,7 @@
   }
 
   .entry-content {
-    margin: 0.25rem 0 0 1rem;
+    margin: 0.125rem 0 0 1rem;
   }
 
   pre,
