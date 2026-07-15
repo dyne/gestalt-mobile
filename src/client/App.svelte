@@ -351,6 +351,11 @@
         const { requestId } = envelope.event.payload as { requestId: string };
         interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
       }
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'activity.updated') {
+        const activity = envelope.event.payload as HistoryActivity;
+        if (typeof activity.id === 'string' && typeof activity.label === 'string' && typeof activity.detail === 'string')
+          activities = [...activities.filter((item) => item.id !== activity.id), activity];
+      }
       cursor = applyRelayEvent(cursor, envelope, (text) => {
         messages = applyDelta(messages, `assistant-${id}`, text);
         persistMessages(id);
