@@ -4,6 +4,25 @@ import { describe, expect, it } from 'vitest';
 import { registerPushUpstream } from './endpoint.js';
 
 describe('POST /api/sessions/:id/git/push', () => {
+  it('returns not found without inspecting Git for an unknown session', async () => {
+    const app = fastify();
+    let inspected = false;
+    registerPushUpstream(app, {
+      find: () => null,
+      inspect: async () => {
+        inspected = true;
+        throw new Error('should not inspect');
+      },
+      push: async () => undefined,
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/api/sessions/missing/git/push' });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ code: 'SESSION_NOT_FOUND' });
+    expect(inspected).toBe(false);
+    await app.close();
+  });
+
   it('pushes only a branch that is ahead of its upstream', async () => {
     const app = fastify();
     let pushed = false;

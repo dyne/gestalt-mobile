@@ -4,6 +4,23 @@ import { describe, expect, it } from 'vitest';
 import { registerRefreshGit } from './endpoint.js';
 
 describe('POST /api/sessions/:id/git/refresh', () => {
+  it('returns not found without refreshing an unknown session', async () => {
+    const app = fastify();
+    let refreshed = false;
+    registerRefreshGit(app, {
+      find: () => null,
+      refresh: async () => {
+        refreshed = true;
+      },
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/api/sessions/missing/git/refresh' });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ code: 'SESSION_NOT_FOUND' });
+    expect(refreshed).toBe(false);
+    await app.close();
+  });
+
   it('returns accepted when the workspace fetch is scheduled', async () => {
     const app = fastify();
     let fetched = false;
