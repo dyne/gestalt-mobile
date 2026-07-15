@@ -455,7 +455,7 @@
     <section aria-labelledby="chat-title">
       <h2 id="chat-title">Chat</h2>
       {#if sessionId}
-        <p>Connected session: {sessionId}</p>
+        <p>Connected Codex session: {sessions.find((session) => session.id === sessionId)?.threadId ?? 'starting…'}</p>
         <MessageList {messages} />
         <ActivityList {activities} />
         <InteractionList {interactions} answers={userInputAnswers} onanswer={setUserInputAnswer} onuserinput={(interaction) => void resolveUserInput(interaction)} onpermission={(interaction) => void resolvePermissions(interaction)} ondecision={(id, decision) => void resolveInteraction(id, decision)} />
