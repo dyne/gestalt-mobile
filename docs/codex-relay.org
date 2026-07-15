@@ -518,7 +518,7 @@ Commit: =feat: add codex app-server stdio adapter=
 
 Commit: =feat: normalize codex session events=
 
-* WIP [#A] Implement session lifecycle slices and supervision
+* DONE [#A] Implement session lifecycle slices and supervision
 
 - Effort :: 3 days
 - Goal :: Start, inspect, stop, release, restore, and automatically recover
@@ -589,12 +589,14 @@ export function buildResumeCommand(s: RelaySessionSnapshot): string {
 
 Commit: =feat: manage and release relay sessions=
 
-** WIP [#A] Add startup restoration and bounded crash recovery
+** DONE [#A] Add startup restoration and bounded crash recovery
 
 - Status :: Active persisted threads restore at startup; child exits now use
   bounded backoff and ultimately require attention. Graceful relay shutdown now
   explicitly reaps every relay-owned app-server child before SQLite closes.
-  Restoration concurrency and broader exit-lifecycle coverage remain.
+  Restoration starts only after HTTP listen readiness, is capped at two
+  concurrent sessions, and has deterministic coverage for success, exhaustion,
+  isolation, cancellation, graceful shutdown, and real HTTP restart.
 
 - Why :: Desired State is useful only if active sessions return after relay or
   child-process failure.
