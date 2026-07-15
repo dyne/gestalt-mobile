@@ -876,7 +876,8 @@ Commit: =feat: build interactive codex chat=
 
 - Status :: Mobile Git status, dirty counts, commit history/timestamps, fetch
   progress/errors, fetch age, and guarded confirmed push controls exist.
-  Component-level coverage remains.
+  The Git view is now isolated from the application shell; component-level
+  coverage remains.
 
 - Why :: The supporting tab must communicate stale/background state and safe
   push preconditions clearly.

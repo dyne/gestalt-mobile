@@ -6,7 +6,7 @@
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
-  import { fetchAge } from './features/git/fetch-age.js';
+  import GitView from './features/git/GitView.svelte';
   import { applyDelta, completeMessage, type ChatMessage } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
@@ -437,45 +437,18 @@
       {/if}
     </section>
   {:else if tab === 'git'}
-    <section aria-labelledby="git-title">
-      <h2 id="git-title">Git</h2>
-      {#if sessionId}
-        <button type="button" onclick={() => void loadGitSummary()}>Load status</button>
-        {#if gitSummary}
-          {#if gitSummary.available}
-            <p>Branch: {gitSummary.branch ?? 'detached'} · upstream: {gitSummary.upstream ?? 'none'}</p>
-            <p>Ahead {gitSummary.ahead}; behind {gitSummary.behind}.</p>
-            <p><time datetime={gitSummary.fetchedAt ?? undefined}>{fetchAge(gitSummary.fetchedAt)}</time></p>
-            <p>Changes: {gitSummary.dirty.staged} staged, {gitSummary.dirty.unstaged} unstaged, {gitSummary.dirty.untracked} untracked.</p>
-            <button type="button" disabled={gitRefreshing} onclick={() => void refreshGit()}>{gitRefreshing ? 'Fetching…' : 'Fetch'}</button>
-            {#if gitError}<p role="alert">{gitError}</p>{/if}
-            <button type="button" disabled={!gitSummary.upstream || gitSummary.ahead < 1 || gitSummary.behind > 0} onclick={() => (pushConfirmationOpen = true)}>Push</button>
-            {#if pushConfirmationOpen}
-              <section aria-label="Confirm push">
-                <p>Push HEAD to {gitSummary.upstream}?</p>
-                <button type="button" onclick={() => void pushGit()}>Confirm push</button>
-                <button type="button" onclick={() => (pushConfirmationOpen = false)}>Cancel</button>
-              </section>
-            {/if}
-            {#if gitSummary.commits.length}
-              <h3>Recent commits</h3>
-              <ol aria-label="Recent commits">
-                {#each gitSummary.commits as commit (commit.hash)}
-                  <li>
-                    <code>{commit.shortHash}</code> {commit.subject} — {commit.author}
-                    <time datetime={commit.authoredAt}> {commit.authoredAt}</time>
-                  </li>
-                {/each}
-              </ol>
-            {/if}
-          {:else}
-            <p>This workspace is not a Git repository.</p>
-          {/if}
-        {/if}
-      {:else}
-        <p>Select a session to view its workspace status.</p>
-      {/if}
-    </section>
+    <GitView
+      {sessionId}
+      summary={gitSummary}
+      refreshing={gitRefreshing}
+      error={gitError}
+      confirmingPush={pushConfirmationOpen}
+      onload={() => void loadGitSummary()}
+      onrefresh={() => void refreshGit()}
+      onopenpushconfirmation={() => (pushConfirmationOpen = true)}
+      onpush={() => void pushGit()}
+      oncancelpush={() => (pushConfirmationOpen = false)}
+    />
   {:else}
     <SessionsView
       {sessions}
