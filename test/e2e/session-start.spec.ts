@@ -113,6 +113,26 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
   );
 });
 
+test('keeps the session controls within a 320px viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await expect(page.getByRole('button', { name: 'Start session' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   const session = {
     id: 'session-1',
