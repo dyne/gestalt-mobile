@@ -775,8 +775,9 @@ Commit: =feat: inspect and refresh git repositories=
   re-inspects uncached Git state at execution time, and both mutating routes
   persist idempotent retry responses. The Git adapter has bare-remote success
   and non-fast-forward rejection coverage, while route tests cover successful,
-  idempotent, and missing-session mappings; full REPR splitting and route-level
-  bare-remote integration coverage remain.
+  idempotent, and missing-session mappings. The mobile client now retains an
+  idempotency key across failed refresh and push retries; full REPR splitting
+  and route-level bare-remote integration coverage remain.
 
 - Why :: Push is externally mutating and must revalidate every precondition at
   execution time.
