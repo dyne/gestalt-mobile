@@ -23,7 +23,7 @@ describe('FilesystemWorkspaceCatalog', () => {
 
     const workspaces = await new FilesystemWorkspaceCatalog(root).list();
 
-    expect(workspaces.map((workspace) => workspace.name)).toEqual(['Alpha', 'beta']);
+    expect(workspaces.map((workspace) => workspace.name)).toEqual(['/', 'Alpha', 'beta']);
     expect(workspaces.every((workspace) => !workspace.name.includes('escape'))).toBe(true);
   });
 });

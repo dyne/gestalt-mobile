@@ -25,6 +25,14 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
   > {
     const root = await this.root;
     const children = await readdir(root, { withFileTypes: true });
+    const rootEntry = {
+      id: createHash('sha256').update(root).digest('base64url'),
+      name: '/',
+      path: root,
+      git: await stat(join(root, '.git'))
+        .then(() => true)
+        .catch(() => false),
+    };
     const output = await Promise.all(
       children.map(async (child) => {
         if (!child.isDirectory() && !child.isSymbolicLink()) return null;
@@ -46,7 +54,7 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
         }
       }),
     );
-    return output
+    return [rootEntry, ...output]
       .filter((value): value is NonNullable<typeof value> => value !== null)
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }
