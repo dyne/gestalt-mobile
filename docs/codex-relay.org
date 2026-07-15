@@ -615,7 +615,7 @@ Commit: =feat: manage and release relay sessions=
 
 Commit: =feat: restore and supervise codex sessions=
 
-* WIP [#A] Deliver reliable chat and interactive requests
+* DONE [#A] Deliver reliable chat and interactive requests
 
 - Effort :: 4 days
 - Goal :: Expose canonical history, serialized turns, interactions, and replayed
@@ -623,12 +623,13 @@ Commit: =feat: restore and supervise codex sessions=
 - Notes :: REST responses acknowledge accepted mutations; streamed Codex events
   determine final UI state. Do not queue a second turn.
 
-** WIP [#A] Add history, start-turn, and interrupt-turn slices
+** DONE [#A] Add history, start-turn, and interrupt-turn slices
 
 - Status :: Start-turn validation/runtime wiring, streamed updates, canonical
   =thread/read= history, interrupt, and compact client rendering of canonical
-  reasoning/plan/command/file/tool activities exist. End-to-end recovery
-  coverage remains.
+  reasoning/plan/command/file/tool activities exist. Session recovery updates
+  now clear stale active turns in the browser, restoring the composer after a
+  relay restart.
 
 - Why :: The browser needs canonical reconciliation plus reliable commands.
 - Change :: Create =get-history=, =start-turn=, and =interrupt-turn= slices.
