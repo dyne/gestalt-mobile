@@ -6,8 +6,12 @@ export type HistoryActivity = {
 
 export function toActivity(item: Record<string, unknown>): HistoryActivity | null {
   if (typeof item.id !== 'string') return null;
-  if (item.kind === 'reasoning' && Array.isArray(item.summary))
-    return { id: item.id, label: 'Reasoning summary', detail: item.summary.join('\n') };
+  if (item.kind === 'reasoning' && Array.isArray(item.summary)) {
+    const detail = item.summary
+      .filter((part): part is string => typeof part === 'string')
+      .join('\n');
+    return detail ? { id: item.id, label: 'Reasoning summary', detail } : null;
+  }
   if (item.kind === 'plan' && typeof item.text === 'string')
     return { id: item.id, label: 'Plan', detail: item.text };
   if (item.kind === 'command' && typeof item.command === 'string')

@@ -9,6 +9,11 @@ describe('toChatItems', () => {
         { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
         { id: 'a', type: 'agentMessage', text: 'hi', phase: 'final' },
         {
+          id: 'r',
+          type: 'reasoning',
+          summary: [{ type: 'summary_text', text: 'I checked the workspace.' }],
+        },
+        {
           id: 'c',
           type: 'commandExecution',
           command: 'git status',
@@ -20,6 +25,7 @@ describe('toChatItems', () => {
     ).toEqual([
       { id: 'u', kind: 'user', text: 'hello' },
       { id: 'a', kind: 'agent', text: 'hi', phase: 'final_answer' },
+      { id: 'r', kind: 'reasoning', summary: ['I checked the workspace.'] },
       { id: 'c', kind: 'command', command: 'git status', status: 'completed', exitCode: 0 },
     ]);
   });

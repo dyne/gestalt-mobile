@@ -36,4 +36,38 @@ describe('normalizeCodexNotification', () => {
       payload: { id: 'item-1', label: 'Command · completed', detail: 'git status' },
     });
   });
+
+  it('maps structured reasoning summary parts from a completed item', () => {
+    expect(
+      normalizeCodexNotification('s', 3, '2026-01-01T00:00:00.000Z', {
+        method: 'item/completed',
+        params: {
+          item: {
+            id: 'reasoning-1',
+            type: 'reasoning',
+            summary: [
+              { type: 'summary_text', text: 'Checked the workspace.' },
+              { type: 'summary_text', text: 'Implemented the change.' },
+            ],
+          },
+        },
+      }),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: {
+        id: 'reasoning-1',
+        label: 'Reasoning summary',
+        detail: 'Checked the workspace.\nImplemented the change.',
+      },
+    });
+  });
+
+  it('omits a completed reasoning item without readable summary text', () => {
+    expect(
+      normalizeCodexNotification('s', 4, '2026-01-01T00:00:00.000Z', {
+        method: 'item/completed',
+        params: { item: { id: 'reasoning-1', type: 'reasoning', summary: [] } },
+      }),
+    ).toBeNull();
+  });
 });

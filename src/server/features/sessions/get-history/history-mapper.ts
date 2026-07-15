@@ -36,9 +36,9 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
             ]
           : [];
       case 'reasoning':
-        return Array.isArray(item.summary) && item.summary.every((part) => typeof part === 'string')
-          ? [{ id, kind: 'reasoning', summary: item.summary }]
-          : [];
+        if (!Array.isArray(item.summary)) return [];
+        const summary = reasoningSummary(item.summary);
+        return summary.length ? [{ id, kind: 'reasoning', summary }] : [];
       case 'plan':
         return typeof item.text === 'string' ? [{ id, kind: 'plan', text: item.text }] : [];
       case 'commandExecution':
@@ -61,4 +61,13 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function reasoningSummary(parts: unknown[]): string[] {
+  return parts.flatMap((part) => {
+    if (typeof part === 'string') return part ? [part] : [];
+    if (isRecord(part) && part.type === 'summary_text' && typeof part.text === 'string')
+      return part.text ? [part.text] : [];
+    return [];
+  });
 }

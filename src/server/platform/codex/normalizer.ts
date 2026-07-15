@@ -39,12 +39,10 @@ function safeActivity(item: unknown): { id: string; label: string; detail: strin
     return { id: value.id, label: `Command${status}`, detail: value.command };
   if (value.type === 'plan' && typeof value.text === 'string')
     return { id: value.id, label: 'Plan', detail: value.text };
-  if (value.type === 'reasoning' && Array.isArray(value.summary))
-    return {
-      id: value.id,
-      label: 'Reasoning summary',
-      detail: value.summary.filter((part): part is string => typeof part === 'string').join('\n'),
-    };
+  if (value.type === 'reasoning' && Array.isArray(value.summary)) {
+    const detail = reasoningSummary(value.summary).join('\n');
+    return detail ? { id: value.id, label: 'Reasoning summary', detail } : null;
+  }
   if (value.type === 'fileChange' && Array.isArray(value.changes))
     return {
       id: value.id,
@@ -66,4 +64,18 @@ function safeActivity(item: unknown): { id: string; label: string; detail: strin
   )
     return { id: value.id, label: `Tool${status}`, detail: value.tool };
   return null;
+}
+
+function reasoningSummary(parts: unknown[]): string[] {
+  return parts.flatMap((part) => {
+    if (typeof part === 'string') return part ? [part] : [];
+    if (
+      part &&
+      typeof part === 'object' &&
+      (part as Record<string, unknown>).type === 'summary_text' &&
+      typeof (part as Record<string, unknown>).text === 'string'
+    )
+      return [(part as Record<string, string>).text];
+    return [];
+  });
 }
