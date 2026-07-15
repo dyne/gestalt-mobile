@@ -875,7 +875,9 @@ Commit: =feat: build mobile session shell=
   renderers, and compact canonical-history activity summaries exist.
   Enter/Shift+Enter composition, single-flight send protection, preserved failed
   drafts, interruption UI, and streamed-item completion replacement exist. Live
-  activity projection remains.
+  activity projection remains. Empty reasoning summaries are omitted, while
+  completed summaries survive both the structured app-server form and canonical
+  history reload.
 
 - Why :: Chat is the primary product surface and must remain usable while events
   stream or connectivity changes.
