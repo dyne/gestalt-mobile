@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { appendUserMessage, applyDelta, completeMessage } from './message-store.js';
 describe('applyDelta', () => {
   it('accumulates a streamed assistant message', () => {
-    expect(applyDelta(applyDelta([], 'm', 'hello'), 'm', ' world')[0]?.text).toBe('hello world');
+    expect(applyDelta(applyDelta([], 'm', 'hello'), 'm', ' world')[0]).toEqual({
+      id: 'm',
+      role: 'assistant',
+      phase: 'commentary',
+      text: 'hello world',
+      complete: false,
+    });
   });
 });
 

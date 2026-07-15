@@ -561,7 +561,10 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
 
   await page.goto('/');
   await expect(page.getByText('assistant: Working on it.\nStill working.')).toBeVisible();
-  await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS('white-space', 'pre-wrap');
+  await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS(
+    'white-space',
+    'pre-wrap',
+  );
 });
 
 test('projects a live activity update from the relay socket', async ({ page }) => {

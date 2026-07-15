@@ -6,7 +6,19 @@
 
 <ol aria-label="Chat messages">
   {#each messages as message (message.id)}
-    <li><strong>{message.role}:</strong> {message.text}</li>
+    <li>
+      {#if message.role === 'user'}
+        <strong>user:</strong> {message.text}
+      {:else if message.phase === 'commentary'}
+        <details>
+          <summary>Codex commentary</summary>
+          <div>{message.text}</div>
+        </details>
+      {:else}
+        <strong>Codex answer</strong>
+        <div>{message.text}</div>
+      {/if}
+    </li>
   {/each}
 </ol>
 

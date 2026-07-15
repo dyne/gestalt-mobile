@@ -1,6 +1,7 @@
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
+  phase?: 'commentary' | 'final_answer';
   text: string;
   complete: boolean;
 };
@@ -19,7 +20,7 @@ export function applyDelta(messages: ChatMessage[], id: string, text: string): C
     ? messages.map((message) =>
         message.id === id ? { ...message, text: message.text + text } : message,
       )
-    : [...messages, { id, role: 'assistant', text, complete: false }];
+    : [...messages, { id, role: 'assistant', phase: 'commentary', text, complete: false }];
 }
 
 export function completeMessage(messages: ChatMessage[], id: string): ChatMessage[] {

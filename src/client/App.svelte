@@ -270,6 +270,9 @@
         id: item.id,
         role: item.kind === 'user' ? 'user' : 'assistant',
         text: item.text!,
+        ...(item.phase === 'commentary' || item.phase === 'final_answer'
+          ? { phase: item.phase }
+          : {}),
         complete: true,
       }));
     persistMessages(id);
@@ -399,6 +402,7 @@
         status = turnReadiness(activeTurnId);
         messages = completeMessage(messages, `assistant-${id}`);
         persistMessages(id);
+        void resyncHistory(id).catch(() => undefined);
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'session.updated') {
         const updated = envelope.event.payload;
