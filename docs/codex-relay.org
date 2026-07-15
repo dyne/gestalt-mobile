@@ -727,9 +727,12 @@ Commit: =feat: replay sequenced session events=
 
 ** WIP [#A] Implement the Git CLI adapter and fetch coordinator
 
-- Status :: Shell-free inspection and a per-workspace 60-second coalescing fetch
-  coordinator exist. Successful fetch timestamps are exposed to the mobile view;
-  cached reads and temporary-repo coverage remain.
+- Status :: Shell-free inspection, cached reads, and a per-workspace 60-second
+  coalescing fetch coordinator exist. Successful fetch timestamps are exposed to
+  the mobile view. Temporary repositories now cover non-repositories, clean and
+  dirty state, Unicode metadata, missing upstreams, detached HEAD, and real
+  ahead/behind divergence; adapter timeout and failed-fetch-retention coverage
+  remain.
 
 - Why :: Parsing and safety belong behind one tested port, not endpoints.
 - Change :: Create =src/server/features/git/application/ports.ts=,
