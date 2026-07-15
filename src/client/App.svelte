@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import AppHeader from './components/AppHeader.svelte';
+  import Composer from './features/chat/Composer.svelte';
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
@@ -426,12 +427,7 @@
             {/each}
           </section>
         {/if}
-        <form onsubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
-          <label for="message">Message</label>
-          <textarea id="message" value={message} oninput={(event) => updateDraft(event.currentTarget.value)} onkeydown={handleComposerKeydown} rows="3" required></textarea>
-          <button type="submit" disabled={Boolean(activeTurnId) || startingTurn || !message.trim()}>Send</button>
-          {#if activeTurnId}<button type="button" onclick={() => void interruptTurn()}>Interrupt</button>{/if}
-        </form>
+        <Composer {message} activeTurnId={activeTurnId} starting={startingTurn} onchange={updateDraft} onsend={() => void sendMessage()} oninterrupt={() => void interruptTurn()} />
       {:else}
         <p>Start a session from the Sessions tab to chat with Codex.</p>
       {/if}
