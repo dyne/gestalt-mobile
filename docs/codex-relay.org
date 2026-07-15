@@ -725,7 +725,7 @@ Commit: =feat: replay sequenced session events=
 - Notes :: Build repositories in temporary directories and bare remotes. Never
   use the developer's real repositories in tests.
 
-** WIP [#A] Implement the Git CLI adapter and fetch coordinator
+** DONE [#A] Implement the Git CLI adapter and fetch coordinator
 
 - Status :: Shell-free inspection, cached reads, and a per-workspace 60-second
   coalescing fetch coordinator exist. Successful fetch timestamps are exposed to
@@ -733,8 +733,8 @@ Commit: =feat: replay sequenced session events=
   dirty state, Unicode metadata, missing upstreams, detached HEAD, and real
   ahead/behind divergence. The adapter bounds read commands to 15 seconds and
   network fetches to 120 seconds. A temporary bare remote proves a constrained
-  ahead-only push succeeds and a non-fast-forward push is rejected;
-  failed-fetch-retention coverage remains.
+  ahead-only push succeeds and a non-fast-forward push is rejected; failed
+  fetches preserve the previous successful-fetch timestamp.
 
 - Why :: Parsing and safety belong behind one tested port, not endpoints.
 - Change :: Create =src/server/features/git/application/ports.ts=,
