@@ -26,7 +26,7 @@ export function renderCommentary(text: string): CommentaryBlock[] {
 
 function linkParts(text: string): CommentaryPart[] {
   const parts: CommentaryPart[] = [];
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`/g;
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|codex:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const before = text.slice(cursor, match.index);

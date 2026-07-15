@@ -44,6 +44,31 @@ describe('renderCommentary', () => {
     ]);
   });
 
+  it('recognizes Codex deep links in Markdown links', () => {
+    expect(
+      renderCommentary(
+        '[View org-plan](codex://plugins/org-plan?marketplacePath=%2Ftmp%2Fmarketplace.json) · [Share org-plan](codex://plugins/org-plan?marketplacePath=%2Ftmp%2Fmarketplace.json&mode=share)',
+      ),
+    ).toEqual([
+      {
+        kind: 'text',
+        parts: [
+          {
+            kind: 'link',
+            text: 'View org-plan',
+            href: 'codex://plugins/org-plan?marketplacePath=%2Ftmp%2Fmarketplace.json',
+          },
+          { kind: 'text', text: ' · ' },
+          {
+            kind: 'link',
+            text: 'Share org-plan',
+            href: 'codex://plugins/org-plan?marketplacePath=%2Ftmp%2Fmarketplace.json&mode=share',
+          },
+        ],
+      },
+    ]);
+  });
+
   it('recognizes language-tagged fences and inline code', () => {
     expect(renderCommentary('Use `git status`.\n```bash\ngit status\n```')).toEqual([
       {
