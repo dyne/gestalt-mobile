@@ -658,14 +658,14 @@ export type ChatItem =
 
 Commit: =feat: add canonical chat turns=
 
-** WIP [#A] Add approval and user-input interaction slices
+** DONE [#A] Add approval and user-input interaction slices
 
 - Status :: Command/file approvals, permission requests, user input, durable
   pending interactions, and resolution events exist. Endpoint validation by
   generated response shape now rejects invalid user-input answer arrays and
   unsupported approval variants before replying to Codex; a rejected Codex
-  delivery leaves the interaction pending for retry. Full recovery-case
-  coverage remains.
+  delivery leaves the interaction pending for retry. Pending interactions
+  rehydrate from durable session state after a browser reload.
 
 - Why :: Full mobile control requires answering every supported Codex server
   request once and with the generated response shape.
