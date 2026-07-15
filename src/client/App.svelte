@@ -24,6 +24,7 @@
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { reconnectDelay } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
+  import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
   import type { Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
@@ -476,44 +477,22 @@
       {/if}
     </section>
   {:else}
-    <section aria-labelledby="sessions-title">
-      <h2 id="sessions-title">Sessions</h2>
-      <button type="button" onclick={() => void refreshSessions()}>Refresh sessions</button>
-      {#if sessions.length}
-        <ul aria-label="Saved sessions">
-          {#each sessions as session (session.id)}
-            <li>
-              <span>{session.threadId ? `Thread ${session.threadId}` : `Relay session ${session.id}`} · {session.state}</span>
-              <button type="button" onclick={() => openSession(session.id)}>Open</button>
-              {#if session.state === 'ready'}
-                <button type="button" onclick={() => void releaseSession(session.id)}>Release</button>
-              {/if}
-              {#if session.resumeCommand}
-                <button type="button" onclick={() => void copyResumeCommand(session.resumeCommand ?? '')}>Copy SSH command</button>
-              {/if}
-              {#if session.state === 'stopped' || session.state === 'released' || session.state === 'attentionRequired'}
-                <button type="button" onclick={() => void restoreSession(session.id)}>Restore</button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p>No saved sessions yet.</p>
-      {/if}
-      <form onsubmit={(event) => { event.preventDefault(); void startSession(); }}>
-        <label for="workspace">Workspace</label>
-        <select id="workspace" bind:value={workspaceId} required>
-          {#each workspaces as workspace (workspace.id)}<option value={workspace.id}>{workspace.name}</option>{/each}
-        </select>
-        <label for="profile">Profile</label>
-        <select id="profile" bind:value={profile} required>
-          {#each profiles as item (item.name)}
-            <option value={item.name} disabled={item.state !== 'ok'}>{item.name}{item.state !== 'ok' ? ` — ${item.status}` : ''}</option>
-          {/each}
-        </select>
-        <button type="submit" disabled={!workspaceId || !profile || startingSession || profiles.find((item) => item.name === profile)?.state !== 'ok'}>{startingSession ? 'Starting…' : 'Start session'}</button>
-      </form>
-    </section>
+    <SessionsView
+      {sessions}
+      {workspaces}
+      {profiles}
+      {workspaceId}
+      {profile}
+      {startingSession}
+      onworkspacechange={(value) => (workspaceId = value)}
+      onprofilechange={(value) => (profile = value)}
+      onrefresh={() => void refreshSessions()}
+      onopen={openSession}
+      onrelease={(id) => void releaseSession(id)}
+      oncopyresume={(command) => void copyResumeCommand(command)}
+      onrestore={(id) => void restoreSession(id)}
+      onstart={() => void startSession()}
+    />
   {/if}
 
   <BottomNavigation activeTab={tab} onselect={(next) => (tab = next)} />
