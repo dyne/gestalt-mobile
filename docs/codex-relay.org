@@ -769,8 +769,10 @@ Commit: =feat: inspect and refresh git repositories=
 
 ** WIP [#A] Add Git REPR slices and constrained upstream push
 
-- Status :: Summary, refresh, and safe push routes are implemented. Their full
-  REPR split, idempotency, and integration coverage remain.
+- Status :: Summary, refresh, and safe push routes are implemented. Push
+  re-inspects uncached Git state at execution time, and both mutating routes
+  persist idempotent retry responses. Full REPR splitting and bare-remote route
+  integration coverage remain.
 
 - Why :: Push is externally mutating and must revalidate every precondition at
   execution time.
