@@ -28,7 +28,7 @@
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
-  import { reconnectDelay } from './features/sessions/session-state.js';
+  import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
@@ -90,7 +90,7 @@
       interactions = sessions.find((session) => session.id === sessionId)?.pendingInteractions ?? [];
       void refreshRecentSessions();
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
-      status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
+      status = sessionId ? turnReadiness(activeTurnId) : 'Choose a workspace and start a session.';
       if (sessionId) {
         await resyncHistory(sessionId);
         connectSession(sessionId);
@@ -230,7 +230,7 @@
       activeTurnId = turn.activeTurnId ?? null;
       message = '';
       void sessionCache.saveDraft(sessionId, '');
-      status = 'Codex is working…';
+      status = turnReadiness(activeTurnId);
     } catch {
       status = 'Message was not sent. Your draft is preserved.';
     } finally {
@@ -267,7 +267,7 @@
     });
     cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
     void sessionCache.saveCursor(id, cursor);
-    status = 'Session history resynchronized.';
+    status = turnReadiness(activeTurnId);
   }
 
   async function loadGitSummary() {
@@ -366,7 +366,7 @@
     socket = new WebSocket(`${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`);
     socket.onopen = () => {
       if (generation !== socketGeneration || sessionId !== id) return;
-      status = 'Session connected.';
+      status = turnReadiness(activeTurnId);
       stableConnectionTimer = setTimeout(() => {
         reconnectAttempt = 0;
       }, 30_000);
@@ -384,6 +384,7 @@
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') {
         activeTurnId = null;
+        status = turnReadiness(activeTurnId);
         messages = completeMessage(messages, `assistant-${id}`);
         persistMessages(id);
       }
@@ -395,7 +396,9 @@
           (updated as { id?: unknown }).id === id
         ) {
           const session = updated as RelaySession;
+          const previousTurnId = activeTurnId;
           activeTurnId = typeof session.activeTurnId === 'string' ? session.activeTurnId : null;
+          if (previousTurnId && !activeTurnId) status = turnReadiness(activeTurnId);
           sessions = sessions.map((item) => (item.id === id ? { ...item, ...session } : item));
         }
       }
