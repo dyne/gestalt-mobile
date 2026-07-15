@@ -3,6 +3,7 @@
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
+  import InteractionList from './features/chat/InteractionList.svelte';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
@@ -381,40 +382,7 @@
         <p>Connected session: {sessionId}</p>
         <MessageList {messages} />
         <ActivityList {activities} />
-        {#if interactions.length}
-          <section aria-labelledby="interactions-title">
-            <h3 id="interactions-title">Codex needs your decision</h3>
-            {#each interactions as interaction (interaction.requestId)}
-              <article>
-                <p>{interaction.kind}</p>
-                {#if interaction.kind === 'userInput'}
-                  {@const questions = readUserInputQuestions(interaction.payload)}
-                  <form onsubmit={(event) => { event.preventDefault(); void resolveUserInput(interaction); }}>
-                    {#each questions as question (question.id)}
-                      <label for={`${interaction.requestId}-${question.id}`}>{question.header}: {question.question}</label>
-                      <input
-                        id={`${interaction.requestId}-${question.id}`}
-                        type={question.isSecret ? 'password' : 'text'}
-                        value={userInputAnswers[question.id] ?? ''}
-                        oninput={(event) => setUserInputAnswer(question.id, event.currentTarget.value)}
-                      />
-                      {#each question.options as option (option.label)}
-                        <button type="button" onclick={() => setUserInputAnswer(question.id, option.label)}>{option.label}</button>
-                      {/each}
-                    {/each}
-                    <button type="submit" disabled={!questions.length}>Send answers</button>
-                  </form>
-                {:else if interaction.kind === 'permissionsApproval'}
-                  <p>Grant the requested permissions for this turn only.</p>
-                  <button type="button" onclick={() => void resolvePermissions(interaction)}>Approve</button>
-                {:else}
-                  <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'accept')}>Approve</button>
-                  <button type="button" onclick={() => void resolveInteraction(interaction.requestId, 'decline')}>Deny</button>
-                {/if}
-              </article>
-            {/each}
-          </section>
-        {/if}
+        <InteractionList {interactions} answers={userInputAnswers} onanswer={setUserInputAnswer} onuserinput={(interaction) => void resolveUserInput(interaction)} onpermission={(interaction) => void resolvePermissions(interaction)} ondecision={(id, decision) => void resolveInteraction(id, decision)} />
         <Composer {message} activeTurnId={activeTurnId} starting={startingTurn} onchange={updateDraft} onsend={() => void sendMessage()} oninterrupt={() => void interruptTurn()} />
       {:else}
         <p>Start a session from the Sessions tab to chat with Codex.</p>
