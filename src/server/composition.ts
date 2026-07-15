@@ -209,6 +209,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const fetchedAt = gitFetches.lastSuccessfulAt(path);
         return { ...summary, fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null };
       },
+      inspectForPush: inspectGit,
       push: async (path, upstream) => {
         await pushUpstream(path, upstream);
         gitSummaries.invalidate(path);
