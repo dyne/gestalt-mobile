@@ -554,11 +554,13 @@ Commit: =feat: normalize codex session events=
 
 Commit: =feat: start durable codex sessions=
 
-** WIP [#A] Add list, stop, release, restore, and resume-command slices
+** DONE [#A] Add list, stop, release, restore, and resume-command slices
 
 - Status :: List, stop, release, restore, persisted state, and SSH resume
   formatting exist. Restore now refuses an already ready relay-owned thread, so
-  it cannot create a second app-server owner. Broader idempotency coverage remains.
+  it cannot create a second app-server owner. Stop, release, and restore now
+  replay a keyed idempotent response without repeating the close or restore
+  side effect.
 
 - Why :: Mobile switching and safe SSH handoff require explicit ownership
   transitions.
