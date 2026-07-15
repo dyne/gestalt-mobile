@@ -54,4 +54,22 @@ describe('GitFetchCoordinator', () => {
 
     expect(calls).toBe(2);
   });
+
+  it('retains the last successful fetch timestamp when a later fetch fails', async () => {
+    let now = 1_000;
+    let shouldFail = false;
+    const coordinator = new GitFetchCoordinator(
+      async () => {
+        if (shouldFail) throw new Error('fetch failed');
+      },
+      () => now,
+    );
+
+    await coordinator.refresh('/workspace');
+    now = 61_000;
+    shouldFail = true;
+    await expect(coordinator.refresh('/workspace')).rejects.toThrow('fetch failed');
+
+    expect(coordinator.lastSuccessfulAt('/workspace')).toBe(1_000);
+  });
 });
