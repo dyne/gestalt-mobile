@@ -22,6 +22,7 @@ export type RelayHistoryItem = Record<string, unknown> & {
   id: string;
   kind: string;
   text?: string;
+  occurredAt?: number;
 };
 export type RelayHistory = {
   items: RelayHistoryItem[];

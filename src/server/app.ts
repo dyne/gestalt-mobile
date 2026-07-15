@@ -51,7 +51,7 @@ export type AppDependencies = {
     close?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
     readHistory?(session: RelaySessionSnapshot): Promise<{
-      items: Array<Record<string, unknown>>;
+      turns: import('./features/sessions/get-history/history-mapper.js').HistoryTurn[];
       activeTurnId: string | null;
     }>;
     currentSequence?(sessionId: string): number;

@@ -1,8 +1,14 @@
 import type { ChatMessage } from './message-store.js';
 
 export type MessageGroup =
-  | { id: string; kind: 'user'; text: string }
-  | { id: string; kind: 'assistant'; commentary: string | null; answer: string | null };
+  | { id: string; kind: 'user'; text: string; occurredAt?: number }
+  | {
+      id: string;
+      kind: 'assistant';
+      commentary: string | null;
+      answer: string | null;
+      occurredAt?: number;
+    };
 
 export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = [];
@@ -15,6 +21,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       kind: 'assistant',
       commentary: commentary.map((message) => message.text).join('\n\n'),
       answer: null,
+      ...(commentary.at(-1)?.occurredAt ? { occurredAt: commentary.at(-1)!.occurredAt } : {}),
     });
     commentary = [];
   };
@@ -22,7 +29,12 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
   for (const message of messages) {
     if (message.role === 'user') {
       addCommentary();
-      groups.push({ id: message.id, kind: 'user', text: message.text });
+      groups.push({
+        id: message.id,
+        kind: 'user',
+        text: message.text,
+        ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
+      });
       continue;
     }
     if (message.phase === 'commentary') {
@@ -34,6 +46,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       kind: 'assistant',
       commentary: commentary.length ? commentary.map((item) => item.text).join('\n\n') : null,
       answer: message.text,
+      ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
     });
     commentary = [];
   }

@@ -47,7 +47,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByText('Connected Codex session: codex-thread-1')).toBeVisible();
   await page.getByRole('textbox', { name: 'Message' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Message' }).press('Enter');
-  await expect(page.getByText('user: Inspect this workspace')).toBeVisible();
+  await expect(page.getByText('Inspect this workspace')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
@@ -357,7 +357,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
 
   await page.goto('/');
 
-  await expect(page.getByText('user: Check the branch')).toBeVisible();
+  await expect(page.getByText('Check the branch')).toBeVisible();
   await expect(page.getByText('answer')).toBeVisible();
   await expect(page.getByText('No changes are needed.')).toBeVisible();
   await expect(page.getByRole('table')).toBeVisible();
@@ -417,8 +417,8 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
 
   await page.goto('/');
 
-  await expect(page.getByText('user: Initial message')).toBeVisible();
-  await expect(page.getByText('user: Message from terminal')).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByText('Initial message')).toBeVisible();
+  await expect(page.getByText('Message from terminal')).toBeVisible({ timeout: 3_000 });
   await expect(page.getByText('Terminal answer')).toBeVisible();
 });
 

@@ -246,6 +246,7 @@
         messages,
         `user-${turn.activeTurnId ?? Date.now().toString()}`,
         prompt,
+        Date.now(),
       );
       persistMessages(sessionId);
       message = '';
@@ -278,6 +279,7 @@
         id: item.id,
         role: item.kind === 'user' ? 'user' : 'assistant',
         text: item.text!,
+        ...(typeof item.occurredAt === 'number' ? { occurredAt: item.occurredAt } : {}),
         ...(item.phase === 'commentary' || item.phase === 'final_answer'
           ? { phase: item.phase }
           : {}),
@@ -459,7 +461,7 @@
           activities = [...activities.filter((item) => item.id !== activity.id), activity];
       }
       cursor = applyRelayEvent(cursor, envelope, (text) => {
-        messages = applyDelta(messages, `assistant-${id}`, text);
+        messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
         persistMessages(id);
       }, () => {
         void resyncHistory(id);

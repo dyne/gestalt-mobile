@@ -274,6 +274,8 @@ describe('CodexSessionRuntime', () => {
                   {
                     id: 'terminal-turn-1',
                     status: 'inProgress',
+                    startedAt: 1_784_102_400,
+                    completedAt: null,
                     items: [{ id: 'message-1', type: 'agentMessage' }],
                   },
                 ],
@@ -305,7 +307,13 @@ describe('CodexSessionRuntime', () => {
       'after',
     );
     await expect(runtime.readHistory(ready)).resolves.toEqual({
-      items: [{ id: 'message-1', type: 'agentMessage' }],
+      turns: [
+        {
+          items: [{ id: 'message-1', type: 'agentMessage' }],
+          startedAt: 1_784_102_400,
+          completedAt: null,
+        },
+      ],
       activeTurnId: 'terminal-turn-1',
     });
   });

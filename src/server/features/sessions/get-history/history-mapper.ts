@@ -1,14 +1,32 @@
 export type ChatItem =
-  | { id: string; kind: 'user'; text: string }
-  | { id: string; kind: 'agent'; text: string; phase?: 'commentary' | 'final_answer' }
+  | { id: string; kind: 'user'; text: string; occurredAt?: number }
+  | {
+      id: string;
+      kind: 'agent';
+      text: string;
+      phase?: 'commentary' | 'final_answer';
+      occurredAt?: number;
+    }
   | { id: string; kind: 'reasoning'; summary: string[] }
   | { id: string; kind: 'plan'; text: string }
   | { id: string; kind: 'command'; command: string; status: string; exitCode?: number }
   | { id: string; kind: 'fileChange'; paths: string[]; status: string }
   | { id: string; kind: 'tool'; name: string; status: string };
 
-export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
-  return items.flatMap<ChatItem>((item) => {
+export type HistoryTurn = {
+  items: Array<Record<string, unknown>>;
+  startedAt: number | null;
+  completedAt: number | null;
+};
+
+export function toChatItems(turns: HistoryTurn[]): ChatItem[] {
+  return turns.flatMap((turn) =>
+    turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn))),
+  );
+}
+
+function toChatItem(item: Record<string, unknown>, timestamp: number | undefined): ChatItem[] {
+  return [item].flatMap<ChatItem>((item) => {
     const id = typeof item.id === 'string' ? item.id : null;
     if (!id) return [];
     switch (item.type) {
@@ -20,7 +38,9 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
               .map((part) => part.text)
               .join('\n')
           : '';
-        return text ? [{ id, kind: 'user', text }] : [];
+        return text
+          ? [{ id, kind: 'user', text, ...(timestamp ? { occurredAt: timestamp } : {}) }]
+          : [];
       }
       case 'agentMessage':
         return typeof item.text === 'string'
@@ -32,6 +52,7 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
                 ...(item.phase === 'commentary' || item.phase === 'final_answer'
                   ? { phase: item.phase }
                   : {}),
+                ...(timestamp ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -57,6 +78,14 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
         return [];
     }
   });
+}
+
+function occurredAt(item: Record<string, unknown>, turn: HistoryTurn): number | undefined {
+  const seconds =
+    item.type === 'agentMessage' && item.phase === 'final_answer'
+      ? (turn.completedAt ?? turn.startedAt)
+      : turn.startedAt;
+  return typeof seconds === 'number' ? seconds * 1_000 : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

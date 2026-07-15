@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ChatMessage } from './message-store.js';
   import { groupMessages } from './message-groups.js';
+  import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
 
   let { messages }: { messages: ChatMessage[] } = $props();
@@ -51,14 +52,35 @@
 {/snippet}
 
 <ol aria-label="Chat messages">
-  {#each groups as group (group.id)}
+  {#each groups as group, index (group.id)}
     <li>
       {#if group.kind === 'user'}
-        <strong>user:</strong> {group.text}
+        <div class="entry-heading">
+          <strong>prompt</strong>
+          {#if group.occurredAt}
+            <time datetime={new Date(group.occurredAt).toISOString()}>
+              {formatMessageTime(group.occurredAt)}
+              {#if formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+                · {formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+              {/if}
+            </time>
+          {/if}
+        </div>
+        <div class="entry-content">{@render content(group.text)}</div>
       {:else if group.answer}
         <section class="answer-turn">
-          <strong>answer</strong>
-          {@render content(group.answer)}
+          <div class="entry-heading">
+            <strong>answer</strong>
+            {#if group.occurredAt}
+              <time datetime={new Date(group.occurredAt).toISOString()}>
+                {formatMessageTime(group.occurredAt)}
+                {#if formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+                  · {formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+                {/if}
+              </time>
+            {/if}
+          </div>
+          <div class="entry-content">{@render content(group.answer)}</div>
           {#if group.commentary}
             <details>
               <summary>commentary</summary>
@@ -79,6 +101,22 @@
 <style>
   li {
     white-space: pre-wrap;
+  }
+
+  .entry-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  time {
+    color: #666;
+    font-size: 0.875em;
+    white-space: nowrap;
+  }
+
+  .entry-content {
+    margin: 0.25rem 0 0 1rem;
   }
 
   pre,

@@ -3,6 +3,7 @@ import {
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
 import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
+import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
 
 export type AppServer = {
   rpc: {
@@ -107,7 +108,7 @@ export class CodexSessionRuntime {
   }
 
   async readHistory(session: RelaySessionSnapshot): Promise<{
-    items: Array<Record<string, unknown>>;
+    turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
     const process = this.processes.get(session.id);
@@ -120,16 +121,22 @@ export class CodexSessionRuntime {
         turns?: Array<{
           id?: unknown;
           status?: unknown;
+          startedAt?: unknown;
+          completedAt?: unknown;
           items?: Array<Record<string, unknown>>;
         }>;
       };
     };
-    const turns = result.thread?.turns ?? [];
-    const activeTurn = turns.find(
+    const rawTurns = result.thread?.turns ?? [];
+    const activeTurn = rawTurns.find(
       (turn) => turn.status === 'inProgress' && typeof turn.id === 'string',
     );
     return {
-      items: turns.flatMap((turn) => turn.items ?? []),
+      turns: rawTurns.map((turn) => ({
+        items: turn.items ?? [],
+        startedAt: typeof turn.startedAt === 'number' ? turn.startedAt : null,
+        completedAt: typeof turn.completedAt === 'number' ? turn.completedAt : null,
+      })),
       activeTurnId: typeof activeTurn?.id === 'string' ? activeTurn.id : null,
     };
   }
