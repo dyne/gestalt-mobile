@@ -3,6 +3,7 @@
 
   import AppHeader from './components/AppHeader.svelte';
   import Composer from './features/chat/Composer.svelte';
+  import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
@@ -377,11 +378,7 @@
       <h2 id="chat-title">Chat</h2>
       {#if sessionId}
         <p>Connected session: {sessionId}</p>
-        <ol aria-label="Chat messages">
-          {#each messages as chatMessage (chatMessage.id)}
-            <li><strong>{chatMessage.role}:</strong> {chatMessage.text}</li>
-          {/each}
-        </ol>
+        <MessageList {messages} />
         {#if activities.length}
           <section aria-labelledby="activities-title">
             <h3 id="activities-title">Activity</h3>
