@@ -48,6 +48,48 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
+test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [
+          {
+            id: 'relay-session-1',
+            state: 'ready',
+            threadId: 'relay-thread-id',
+            workspaceId: 'workspace-1',
+            profile: 'work',
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { id: 'recent-thread-id', cwd: '/projects/from-ssh' },
+        { id: 'relay-thread-id', cwd: '/projects/relay' },
+      ]),
+    }),
+  );
+  await page.route('**/api/sessions/relay-session-1/history', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+
+  await expect(page.getByText('Session relay-thread-id · ready')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Last sessions' })).toBeVisible();
+  await expect(page.getByText('/projects/from-ssh')).toBeVisible();
+  await expect(page.getByText('recent-thread-id')).toBeVisible();
+  await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);
+});
+
 test('shows a start-session failure and permits a retry', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({

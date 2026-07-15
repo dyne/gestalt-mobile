@@ -7,6 +7,7 @@ export type RelaySession = {
   resumeCommand?: string | null;
   activeTurnId?: string | null;
 };
+export type RecentSession = { id: string; cwd: string };
 
 export type RelayHistoryItem = Record<string, unknown> & {
   id: string;
@@ -66,6 +67,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
 
   return {
     listSessions: () => get<RelaySession[]>('/api/sessions'),
+    listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
     startSession: (workspaceId: string, profile: string, key?: string) =>
       request<RelaySession>(
         '/api/sessions',

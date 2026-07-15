@@ -7,6 +7,7 @@ import type { ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
+import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
@@ -52,6 +53,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
+  const recentThreads = createRecentThreadLister({
+    root,
+    profiles: options.profiles,
+    launch: options.launchAppServer ?? launchCodexAppServer,
+  });
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   let recoverExitedSession: (sessionId: string) => void = () => {};
@@ -136,6 +142,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     logger: console,
     staticDir: options.staticDir,
+    recentThreads,
     bootstrap: {
       workspaces,
       profiles: options.profiles,

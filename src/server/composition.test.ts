@@ -46,16 +46,19 @@ describe('production composition', () => {
     });
 
     const bootstrap = await app.inject({ method: 'GET', url: '/api/bootstrap' });
-    const workspace = bootstrap.json().workspaces[0];
+    const workspace = bootstrap
+      .json()
+      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+    expect(workspace).toBeDefined();
     const created = await app.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: workspace.id, profile: 'default' },
+      payload: { workspaceId: workspace!.id, profile: 'default' },
     });
     expect(created.statusCode).toBe(202);
     const restored = await app.inject({ method: 'GET', url: `/api/sessions/${created.json().id}` });
     expect(restored.json()).toMatchObject({
-      workspaceId: workspace.id,
+      workspaceId: workspace!.id,
       workspacePath: join(root, 'workspace'),
     });
     await app.close();
@@ -79,11 +82,14 @@ describe('production composition', () => {
       startAppServers: true,
       launchAppServer: () => fakeAppServer(firstCalls),
     });
-    const workspace = (await first.inject('/api/bootstrap')).json().workspaces[0];
+    const workspace = (await first.inject('/api/bootstrap'))
+      .json()
+      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+    expect(workspace).toBeDefined();
     const created = await first.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: workspace.id, profile: 'default' },
+      payload: { workspaceId: workspace!.id, profile: 'default' },
     });
     expect(created.statusCode).toBe(202);
     await first.close();

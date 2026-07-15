@@ -21,6 +21,7 @@
     createRelayClient,
     type RelayGitSummary,
     type RelayHistory,
+    type RecentSession,
     type RelaySession,
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
@@ -39,6 +40,7 @@
   let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
+  let recentSessions = $state<RecentSession[]>([]);
   let workspaceId = $state('');
   let profile = $state('');
   let startRequestKey = $state<string | null>(null);
@@ -79,6 +81,7 @@
       if (sessionId) message = await sessionCache.readDraft(sessionId);
       if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
+      void refreshRecentSessions();
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? 'Session ready' : 'Choose a workspace and start a session.';
       if (sessionId) {
@@ -135,6 +138,22 @@
 
   async function refreshSessions() {
     sessions = await relay.listSessions();
+  }
+
+  async function refreshRecentSessions() {
+    try {
+      recentSessions = await relay.listRecentSessions();
+    } catch {
+      recentSessions = [];
+    }
+  }
+
+  async function refreshSessionLists() {
+    try {
+      await Promise.all([refreshSessions(), refreshRecentSessions()]);
+    } catch (error) {
+      status = `Could not refresh sessions: ${errorMessage(error)}`;
+    }
   }
 
   async function openSession(id: string) {
@@ -409,6 +428,7 @@
   {:else}
     <SessionsView
       {sessions}
+      {recentSessions}
       {workspaces}
       {profiles}
       {workspaceId}
@@ -416,7 +436,7 @@
       {startingSession}
       onworkspacechange={(value) => (workspaceId = value)}
       onprofilechange={(value) => (profile = value)}
-      onrefresh={() => void refreshSessions()}
+      onrefresh={() => void refreshSessionLists()}
       onopen={openSession}
       onrelease={(id) => void releaseSession(id)}
       oncopyresume={(command) => void copyResumeCommand(command)}

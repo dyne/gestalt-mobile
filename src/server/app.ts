@@ -10,6 +10,10 @@ import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerListSessions } from './features/sessions/list-sessions/endpoint.js';
+import {
+  registerListRecentThreads,
+  type RecentThread,
+} from './features/sessions/list-recent-threads/endpoint.js';
 import { registerGetHistory } from './features/sessions/get-history/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
@@ -29,6 +33,7 @@ export type AppDependencies = {
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
   bootstrap?: BootstrapDependencies;
+  recentThreads?: { list(): Promise<RecentThread[]> };
   sessionRoutes?: {
     createId(): string;
     now(): string;
@@ -73,6 +78,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
   registerGetHealth(app, deps.health);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
+  if (deps.recentThreads) registerListRecentThreads(app, deps.recentThreads);
   if (deps.sessionRoutes) {
     registerStartSession(app, {
       ...deps.sessionRoutes,

@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { RelaySession } from './relay-client.js';
+  import type { RecentSession, RelaySession } from './relay-client.js';
 
   type Workspace = { id: string; name: string };
   type Profile = { name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string };
   type Props = {
     sessions: RelaySession[];
+    recentSessions: RecentSession[];
     workspaces: Workspace[];
     profiles: Profile[];
     workspaceId: string;
@@ -22,6 +23,7 @@
 
   let {
     sessions,
+    recentSessions,
     workspaces,
     profiles,
     workspaceId,
@@ -47,7 +49,7 @@
     <ul aria-label="Saved sessions">
       {#each sessions as session (session.id)}
         <li>
-          <span>{session.threadId ? `Thread ${session.threadId}` : `Relay session ${session.id}`} · {session.state}</span>
+          <span>{session.threadId ? `Session ${session.threadId}` : `Relay session ${session.id}`} · {session.state}</span>
           <button type="button" onclick={() => onopen(session.id)}>Open</button>
           {#if session.state === 'ready'}
             <button type="button" onclick={() => onrelease(session.id)}>Release</button>
@@ -77,4 +79,19 @@
     </select>
     <button type="submit" disabled={!workspaceId || !profile || startingSession || !selectedProfileReady()}>{startingSession ? 'Starting…' : 'Start session'}</button>
   </form>
+  <section aria-labelledby="last-sessions-title">
+    <h3 id="last-sessions-title">Last sessions</h3>
+    {#if recentSessions.length}
+      <ul aria-label="Last sessions">
+        {#each recentSessions as session (session.id)}
+          <li>
+            <div>{session.cwd}</div>
+            <code>{session.id}</code>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <p>No recent Codex sessions found.</p>
+    {/if}
+  </section>
 </section>
