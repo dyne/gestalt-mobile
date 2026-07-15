@@ -43,4 +43,18 @@ describe('renderCommentary', () => {
       },
     ]);
   });
+
+  it('recognizes language-tagged fences and inline code', () => {
+    expect(renderCommentary('Use `git status`.\n```bash\ngit status\n```')).toEqual([
+      {
+        kind: 'text',
+        parts: [
+          { kind: 'text', text: 'Use ' },
+          { kind: 'code', text: 'git status' },
+          { kind: 'text', text: '.\n' },
+        ],
+      },
+      { kind: 'code', text: 'git status\n' },
+    ]);
+  });
 });

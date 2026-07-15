@@ -3,7 +3,9 @@ export function renderPlainText(text: string): string {
 }
 
 export type CommentaryPart =
-  { kind: 'text'; text: string } | { kind: 'link'; text: string; href: string };
+  | { kind: 'text'; text: string }
+  | { kind: 'link'; text: string; href: string }
+  | { kind: 'code'; text: string };
 export type CommentaryBlock =
   { kind: 'text'; parts: CommentaryPart[] } | { kind: 'code'; text: string };
 
@@ -24,12 +26,16 @@ export function renderCommentary(text: string): CommentaryBlock[] {
 
 function linkParts(text: string): CommentaryPart[] {
   const parts: CommentaryPart[] = [];
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g;
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const before = text.slice(cursor, match.index);
     if (before) parts.push({ kind: 'text', text: before });
-    parts.push({ kind: 'link', text: match[1] ?? '', href: match[2] ?? '' });
+    parts.push(
+      match[3]
+        ? { kind: 'code', text: match[3] }
+        : { kind: 'link', text: match[1] ?? '', href: match[2] ?? '' },
+    );
     cursor = (match.index ?? 0) + match[0].length;
   }
   const after = text.slice(cursor);

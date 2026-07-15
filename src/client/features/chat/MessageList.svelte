@@ -3,7 +3,18 @@
   import { renderCommentary } from './rendering.js';
 
   let { messages }: { messages: ChatMessage[] } = $props();
+
 </script>
+
+{#snippet content(text: string)}
+  {#each renderCommentary(text) as block, blockIndex (blockIndex)}
+    {#if block.kind === 'code'}
+      <pre><code>{block.text}</code></pre>
+    {:else}
+      <div>{#each block.parts as part, partIndex (partIndex)}{#if part.kind === 'link'}<a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>{:else if part.kind === 'code'}<code>{part.text}</code>{:else}{part.text}{/if}{/each}</div>
+    {/if}
+  {/each}
+{/snippet}
 
 <ol aria-label="Chat messages">
   {#each messages as message (message.id)}
@@ -13,17 +24,11 @@
       {:else if message.phase === 'commentary'}
         <details>
           <summary>commentary</summary>
-          {#each renderCommentary(message.text) as block, blockIndex (blockIndex)}
-            {#if block.kind === 'code'}
-              <pre><code>{block.text}</code></pre>
-            {:else}
-              <div>{#each block.parts as part, partIndex (partIndex)}{#if part.kind === 'link'}<a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>{:else}{part.text}{/if}{/each}</div>
-            {/if}
-          {/each}
+          {@render content(message.text)}
         </details>
       {:else}
         <strong>answer</strong>
-        <div>{message.text}</div>
+        {@render content(message.text)}
       {/if}
     </li>
   {/each}
