@@ -9,3 +9,9 @@
     <li><strong>{message.role}:</strong> {message.text}</li>
   {/each}
 </ol>
+
+<style>
+  li {
+    white-space: pre-wrap;
+  }
+</style>

@@ -46,6 +46,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByText('Connected session: session-1')).toBeVisible();
   await page.getByRole('textbox', { name: 'Message' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Message' }).press('Enter');
+  await expect(page.getByText('user: Inspect this workspace')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
@@ -65,7 +66,9 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
             state: 'ready',
             threadId: 'relay-thread-id',
             workspaceId: 'workspace-1',
+            workspacePath: '/projects/relay',
             profile: 'work',
+            updatedAt: '2026-07-15T10:00:00.000Z',
           },
         ],
       }),
@@ -87,11 +90,12 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
 
-  await expect(page.getByText('Session relay-thread-id · ready')).toBeVisible();
+  await expect(page.getByLabel('Saved sessions').getByText('relay-thread-id')).toBeVisible();
+  await expect(page.getByLabel('Saved sessions').getByText('/projects/relay')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Last sessions' })).toBeVisible();
-  await expect(page.getByText('2 hours ago')).toBeVisible();
-  await expect(page.getByText('/projects/from-ssh')).toBeVisible();
-  await expect(page.getByText('recent-thread-id')).toBeVisible();
+  await expect(page.getByLabel('Last sessions').getByText('2 hours ago')).toBeVisible();
+  await expect(page.getByLabel('Last sessions').getByText('/projects/from-ssh')).toBeVisible();
+  await expect(page.getByLabel('Last sessions').getByText('recent-thread-id')).toBeVisible();
   await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);
 });
 
@@ -545,14 +549,19 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
       socket.send(
         JSON.stringify({
           type: 'relay.event',
-          event: { sequence: 1, type: 'agentMessageDelta', payload: { text: 'Working on it.' } },
+          event: {
+            sequence: 1,
+            type: 'agentMessageDelta',
+            payload: { text: 'Working on it.\nStill working.' },
+          },
         }),
       );
     },
   );
 
   await page.goto('/');
-  await expect(page.getByText('assistant: Working on it.')).toBeVisible();
+  await expect(page.getByText('assistant: Working on it.\nStill working.')).toBeVisible();
+  await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS('white-space', 'pre-wrap');
 });
 
 test('projects a live activity update from the relay socket', async ({ page }) => {
@@ -737,7 +746,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   await page.goto('/');
   await expect(page.getByText('assistant: before drop after replay')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
-  await expect(page.getByRole('status')).toHaveText('Session connected.');
+  await expect(page.getByRole('status')).toHaveText('Codex is working…');
 });
 
 test('resynchronizes and reconnects after a relay restart closes its socket', async ({ page }) => {
@@ -794,7 +803,7 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
   await expect(page.getByText('assistant: Restored after restart')).toBeVisible();
   await expect(page.getByText('assistant: live again')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
-  await expect(page.getByRole('status')).toHaveText('Session connected.');
+  await expect(page.getByRole('status')).toHaveText('Ready for your next instruction.');
 });
 
 test('clears an interrupted active turn when relay recovery updates the session', async ({

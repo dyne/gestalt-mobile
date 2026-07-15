@@ -11,7 +11,12 @@
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
   import GitView from './features/git/GitView.svelte';
-  import { applyDelta, completeMessage, type ChatMessage } from './features/chat/message-store.js';
+  import {
+    appendUserMessage,
+    applyDelta,
+    completeMessage,
+    type ChatMessage,
+  } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
     readUserInputQuestions,
@@ -224,10 +229,17 @@
 
   async function sendMessage() {
     if (!sessionId || !message.trim() || activeTurnId || startingTurn) return;
+    const prompt = message.trim();
     startingTurn = true;
     try {
-      const turn = await relay.startTurn(sessionId, message.trim());
+      const turn = await relay.startTurn(sessionId, prompt);
       activeTurnId = turn.activeTurnId ?? null;
+      messages = appendUserMessage(
+        messages,
+        `user-${turn.activeTurnId ?? Date.now().toString()}`,
+        prompt,
+      );
+      persistMessages(sessionId);
       message = '';
       void sessionCache.saveDraft(sessionId, '');
       status = turnReadiness(activeTurnId);
