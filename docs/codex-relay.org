@@ -938,9 +938,9 @@ Commit: =fix: harden mobile accessibility and layout=
   It also proves visible Git refresh progress and disabled Push without an
   upstream, command approval, and streamed agent text over a routed relay
   WebSocket, plus canonical resync after a pruned cursor or forward replay gap
-  and browser socket-drop replay. Browser-level relay restart flows remain;
-  composition-level persisted-thread restoration now has a deterministic fake
-  app-server harness.
+  and browser socket-drop replay. A deterministic fake app-server harness now
+  starts a real HTTP relay, restarts it against the same data directory, and
+  verifies persisted-thread resume. Browser-controlled restart flows remain.
 
 - Why :: Unit boundaries cannot prove child supervision, server restart,
   WebSocket replay, IndexedDB draft recovery, and UI behavior together.
