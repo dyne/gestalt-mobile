@@ -506,8 +506,12 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   );
 
   await page.goto('/');
-  await page.getByRole('button', { name: 'Chat', pressed: true }).press('ArrowRight');
+  const chat = page.getByRole('button', { name: 'Chat', pressed: true });
+  await chat.press('ArrowRight');
   await expect(page.getByRole('heading', { name: 'Git' })).toBeVisible();
-  await page.getByRole('button', { name: 'Git', pressed: true }).press('ArrowLeft');
+  const git = page.getByRole('button', { name: 'Git', pressed: true });
+  await expect(git).toBeFocused();
+  await git.press('ArrowLeft');
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeFocused();
 });

@@ -898,8 +898,8 @@ Commit: =feat: build mobile git workspace view=
 
 - Status :: Safe-area padding, 44px controls, zoom-safe form text, visible
   focus, reduced motion, and forced-colors styling are implemented. Playwright
-  verifies keyboard primary-navigation switching, the 390x844 composer, and no
-  horizontal overflow. Focus verification and live-region refinement remain.
+  verifies keyboard primary-navigation switching with focus transfer, the
+  390x844 composer, and no horizontal overflow. Live-region refinement remains.
 
 - Why :: Safe areas, software keyboards, focus, and announcements are functional
   requirements, not polish.
