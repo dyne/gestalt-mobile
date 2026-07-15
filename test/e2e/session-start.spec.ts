@@ -494,6 +494,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   await page.goto('/');
   await expect(page.getByText('assistant: before drop after replay')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
+  await expect(page.getByRole('status')).toHaveText('Session connected.');
 });
 
 test('switches primary navigation with arrow keys', async ({ page }) => {

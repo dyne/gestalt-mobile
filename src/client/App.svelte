@@ -319,6 +319,8 @@
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     socket = new WebSocket(`${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`);
     socket.onopen = () => {
+      if (generation !== socketGeneration || sessionId !== id) return;
+      status = 'Session connected.';
       stableConnectionTimer = setTimeout(() => {
         reconnectAttempt = 0;
       }, 30_000);

@@ -682,8 +682,9 @@ Commit: =feat: handle codex approvals and questions=
   retry, heartbeat liveness, and canonical history resync exist. The browser
   rejects forward sequence gaps and reloads canonical history before proceeding.
   History now returns its durable cursor so initial browser hydration can replay
-  only later events. Browser socket-drop/replay coverage exists; full relay
-  restart handoff tests remain.
+  only later events. Browser socket-drop/replay coverage confirms that the
+  status returns to connected after recovery; full relay restart handoff tests
+  remain.
 
 - Why :: WebSocket delivery alone loses events during mobile network changes.
 - Change :: Create =src/server/platform/events/session-event-service.ts=,
