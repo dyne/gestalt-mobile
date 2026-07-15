@@ -740,6 +740,63 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   await expect(page.getByRole('status')).toHaveText('Session connected.');
 });
 
+test('resynchronizes and reconnects after a relay restart closes its socket', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  let reads = 0;
+  let connections = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currentSequence: reads === 1 ? 0 : 4,
+        items:
+          reads === 1 ? [] : [{ id: 'restored', kind: 'agent', text: 'Restored after restart' }],
+      }),
+    });
+  });
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) => {
+      connections += 1;
+      if (connections === 1) {
+        socket.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence: 4 }));
+        socket.close();
+      } else {
+        socket.send(
+          JSON.stringify({
+            type: 'relay.event',
+            event: { sequence: 5, type: 'agentMessageDelta', payload: { text: 'live again' } },
+          }),
+        );
+      }
+    },
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByText('assistant: Restored after restart')).toBeVisible();
+  await expect(page.getByText('assistant: live again')).toBeVisible();
+  await expect.poll(() => connections).toBe(2);
+  await expect(page.getByRole('status')).toHaveText('Session connected.');
+});
+
 test('switches primary navigation with arrow keys', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
