@@ -1,4 +1,4 @@
-import { git } from './command.js';
+import { GIT_FETCH_TIMEOUT_MS, git } from './command.js';
 
 export type WorkspaceGitSummary = {
   available: boolean;
@@ -109,5 +109,5 @@ export async function fetchUpstream(cwd: string): Promise<void> {
   ]);
   const remote = upstream.trim().split('/')[0];
   if (!remote) throw new Error('NO_UPSTREAM');
-  await git(cwd, ['fetch', '--prune', remote]);
+  await git(cwd, ['fetch', '--prune', remote], GIT_FETCH_TIMEOUT_MS);
 }
