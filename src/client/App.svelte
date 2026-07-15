@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
 
+  import AppHeader from './components/AppHeader.svelte';
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
@@ -367,10 +368,7 @@
 </svelte:head>
 
 <main>
-  <header>
-    <h1>Codex Relay</h1>
-    <p role="status">{status}</p>
-  </header>
+  <AppHeader {status} />
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
