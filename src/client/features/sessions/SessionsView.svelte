@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { RecentSession, RelaySession, StartSessionSettings } from './relay-client.js';
   import { formatRelativeTime } from './relative-time.js';
+  import { managedSessionDetails } from './session-list.js';
 
   type Workspace = { id: string; name: string };
   type Profile = { name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string };
@@ -59,10 +60,18 @@
   <h2 id="sessions-title">Sessions</h2>
   <button type="button" onclick={onrefresh}>Refresh sessions</button>
   {#if sessions.length}
-    <ul aria-label="Saved sessions">
-      {#each sessions as session (session.id)}
-        <li>
-          <span>{session.threadId ? `Session ${session.threadId}` : `Relay session ${session.id}`} · {session.state}</span>
+      <ul aria-label="Saved sessions">
+        {#each sessions as session (session.id)}
+          {@const details = managedSessionDetails(session)}
+          <li>
+          {#if details.updatedAt !== null}
+            <time datetime={new Date(details.updatedAt).toISOString()}>{formatRelativeTime(details.updatedAt)}</time>
+          {:else}
+            <div>{formatRelativeTime(null)}</div>
+          {/if}
+          <code>{details.threadId ?? 'Thread pending'}</code>
+          <div>{details.workspacePath}</div>
+          <span>{session.state}</span>
           <button type="button" onclick={() => onopen(session.id)}>Open</button>
           {#if session.state === 'ready'}
             <button type="button" onclick={() => onrelease(session.id)}>Release</button>

@@ -2,11 +2,14 @@ export type RelaySession = {
   id: string;
   state: string;
   workspaceId?: string;
+  workspacePath?: string;
   profile?: string;
   threadId?: string | null;
   resumeCommand?: string | null;
   activeTurnId?: string | null;
   pendingInteractions?: Array<{ requestId: string; kind: string; payload: unknown }>;
+  createdAt?: string;
+  updatedAt?: string;
 };
 export type RecentSession = { id: string; cwd: string; recencyAt: number | null };
 export type StartSessionSettings = {
