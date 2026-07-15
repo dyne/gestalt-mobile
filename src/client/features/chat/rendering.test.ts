@@ -82,4 +82,40 @@ describe('renderCommentary', () => {
       { kind: 'code', text: 'git status\n' },
     ]);
   });
+
+  it('recognizes Markdown tables and preserves inline code in their cells', () => {
+    expect(
+      renderCommentary(
+        'Installation | What it receives | Update mechanism\n|---|---|---|\n| `npx skills add` | Only `my-skill/` | `npx skills update my-skill` |\n| `codex plugin add` | Whole `my-plugin/` bundle | Marketplace upgrade and plugin reinstall |',
+      ),
+    ).toEqual([
+      {
+        kind: 'table',
+        headers: [
+          [{ kind: 'text', text: 'Installation' }],
+          [{ kind: 'text', text: 'What it receives' }],
+          [{ kind: 'text', text: 'Update mechanism' }],
+        ],
+        rows: [
+          [
+            [{ kind: 'code', text: 'npx skills add' }],
+            [
+              { kind: 'text', text: 'Only ' },
+              { kind: 'code', text: 'my-skill/' },
+            ],
+            [{ kind: 'code', text: 'npx skills update my-skill' }],
+          ],
+          [
+            [{ kind: 'code', text: 'codex plugin add' }],
+            [
+              { kind: 'text', text: 'Whole ' },
+              { kind: 'code', text: 'my-plugin/' },
+              { kind: 'text', text: ' bundle' },
+            ],
+            [{ kind: 'text', text: 'Marketplace upgrade and plugin reinstall' }],
+          ],
+        ],
+      },
+    ]);
+  });
 });

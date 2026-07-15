@@ -342,7 +342,12 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
             text: 'I am inspecting the branch.',
           },
           { id: 'commentary-2', kind: 'agent', phase: 'commentary', text: 'The branch is clean.' },
-          { id: 'answer-1', kind: 'agent', phase: 'final_answer', text: 'No changes are needed.' },
+          {
+            id: 'answer-1',
+            kind: 'agent',
+            phase: 'final_answer',
+            text: 'No changes are needed.\n\nInstallation | What it receives\n|---|---|\n| `npx skills add` | Only `my-skill/` |',
+          },
           { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
         ],
       }),
@@ -354,6 +359,9 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByText('user: Check the branch')).toBeVisible();
   await expect(page.getByText('answer')).toBeVisible();
   await expect(page.getByText('No changes are needed.')).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Installation' })).toBeVisible();
+  await expect(page.getByText('npx skills add')).toBeVisible();
   const commentary = page.locator('.answer-turn');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
   await commentary.getByText('commentary').click();
