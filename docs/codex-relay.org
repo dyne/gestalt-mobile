@@ -816,7 +816,9 @@ Commit: =feat: add resilient client data layer=
 - Status :: Mobile tabs, bootstrap, session-start controls, and unavailable
   profile prevention exist. Primary navigation and the session list/start controls
   are isolated keyboard-tested components. The dialog and remaining
-  session-management component split remain.
+  session-management component split remain. The Sessions tab also lists the
+  most recent CLI and app-server sessions from every ready profile, including
+  their relative activity time, cwd, and thread UUID.
 
 - Why :: Users need a complete mobile entry flow before chat rendering.
 - Change :: Replace =App.svelte= and create =src/client/components/AppHeader.svelte=,
@@ -1008,12 +1010,17 @@ Commit: =docs: add operation and ssh handoff guide=
   and the reviewer summary lists commits, test evidence, known V1 exclusions,
   and the optional live-contract result separately.
 
-** TODO [#A] Complete the architecture and redaction audit
+** WIP [#A] Complete the architecture and redaction audit
 
 - Status :: Static audit finds no shell-enabled child processes, unsafe HTML
   rendering, domain/application platform imports outside endpoint adapters, or
   force-push arguments. One process-launch site remains in the expected Codex
-  adapter. The final line-by-line evidence pass remains.
+  adapter. On 2026-07-15, the preliminary evidence pass also found zero unsafe
+  HTML sites, zero browser imports of generated Codex types, zero forbidden
+  domain/application IO imports, zero =shell: true= sites, and zero force or
+  upstream-mutating Git arguments. Logging is limited to the listener address,
+  classified route failures, and startup failure labels. The final line-by-line
+  evidence pass remains and must run again after every other L2 is DONE.
 
 - Why :: Passing tests does not by itself prove inward dependencies, safe process
   execution, redacted logging, or V1 scope restraint.
