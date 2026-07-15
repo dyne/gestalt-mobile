@@ -113,6 +113,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         find: deps.sessionRoutes.find,
         restore: deps.sessionRoutes.restore,
         save: deps.sessionRoutes.save,
+        idempotency: deps.sessionRoutes.idempotency,
       });
     if (deps.sessionRoutes.release && deps.sessionRoutes.close)
       registerReleaseSession(app, {
@@ -120,6 +121,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         release: deps.sessionRoutes.release,
         save: deps.sessionRoutes.save,
         close: deps.sessionRoutes.close,
+        idempotency: deps.sessionRoutes.idempotency,
       });
     if (deps.sessionRoutes.close)
       registerStopSession(app, {
@@ -127,6 +129,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         stop: (session) => stopSession(session, deps.sessionRoutes!.now()),
         save: deps.sessionRoutes.save,
         close: deps.sessionRoutes.close,
+        idempotency: deps.sessionRoutes.idempotency,
       });
     if (deps.sessionRoutes.replyInteraction && deps.interactions)
       registerRespondInteraction(app, {
