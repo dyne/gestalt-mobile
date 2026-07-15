@@ -774,8 +774,9 @@ Commit: =feat: inspect and refresh git repositories=
 - Status :: Summary, refresh, and safe push routes are implemented. Push
   re-inspects uncached Git state at execution time, and both mutating routes
   persist idempotent retry responses. The Git adapter has bare-remote success
-  and non-fast-forward rejection coverage; full REPR splitting and route-level
-  integration coverage remain.
+  and non-fast-forward rejection coverage, while route tests cover successful,
+  idempotent, and missing-session mappings; full REPR splitting and route-level
+  bare-remote integration coverage remain.
 
 - Why :: Push is externally mutating and must revalidate every precondition at
   execution time.
