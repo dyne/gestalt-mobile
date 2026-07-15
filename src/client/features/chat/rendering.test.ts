@@ -24,4 +24,23 @@ describe('renderCommentary', () => {
       { kind: 'code', text: 'const x = 1;\n' },
     ]);
   });
+
+  it('recognizes absolute filesystem paths in Markdown links', () => {
+    expect(
+      renderCommentary(
+        '[org plan](/home/jrml/devel/dyne/agent-plugins/plugins/org-plan/skills/org-plan/SKILL.md)',
+      ),
+    ).toEqual([
+      {
+        kind: 'text',
+        parts: [
+          {
+            kind: 'link',
+            text: 'org plan',
+            href: '/home/jrml/devel/dyne/agent-plugins/plugins/org-plan/skills/org-plan/SKILL.md',
+          },
+        ],
+      },
+    ]);
+  });
 });
