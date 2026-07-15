@@ -526,10 +526,12 @@ Commit: =feat: normalize codex session events=
 - Notes :: =SessionRuntimeRegistry= is the only in-memory map of session ID to
   live Codex adapter. Persist state before and after side effects as specified.
 
-** WIP [#A] Add start-session and get-session slices
+** DONE [#A] Add start-session and get-session slices
 
-- Status :: Implemented and covered by route tests; idempotent start responses
-  and the full request option set remain to be completed.
+- Status :: Implemented and covered by route tests. Idempotent start responses
+  and the full request option set are complete: model, generated-schema
+  kebab-case sandbox values, and approval policy are validated at the endpoint,
+  exposed in the mobile form, and forwarded unchanged to =thread/start=.
 
 - Why :: Starting a correctly bound process/thread is the central use case.
 - Change :: Create =src/server/platform/runtime/session-runtime-registry.ts=,
