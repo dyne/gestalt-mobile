@@ -100,11 +100,12 @@
 
 <style>
   li {
+    margin-block-end: 0;
     white-space: pre-wrap;
   }
 
   li + li {
-    margin-block-start: 1rem;
+    margin-block-start: 1.5rem;
   }
 
   .entry-heading {
@@ -120,7 +121,8 @@
   }
 
   .entry-content {
-    margin: 0.125rem 0 0 1rem;
+    margin-block: 0.125rem 0;
+    margin-inline-start: 1rem;
   }
 
   pre,
