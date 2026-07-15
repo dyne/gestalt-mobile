@@ -315,6 +315,69 @@ test('renders and resolves a relay approval request', async ({ page }) => {
   await expect.poll(() => response).toEqual({ decision: 'accept' });
 });
 
+test('answers a relay user-input request', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: 'turn-1',
+  };
+  let response: unknown;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/interactions/request-1', async (route) => {
+    response = route.request().postDataJSON();
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) =>
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: {
+            sequence: 1,
+            type: 'interaction.requested',
+            payload: {
+              requestId: 'request-1',
+              kind: 'userInput',
+              payload: {
+                questions: [
+                  {
+                    id: 'question-1',
+                    header: 'Mode',
+                    question: 'Choose a mode',
+                    options: [{ label: 'Safe', description: 'Safe mode' }],
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Safe' }).click();
+  await page.getByRole('button', { name: 'Send answers' }).click();
+  await expect.poll(() => response).toEqual({ answers: { 'question-1': { answers: ['Safe'] } } });
+});
+
 test('projects a live agent delta from the relay socket', async ({ page }) => {
   const session = {
     id: 'session-1',
