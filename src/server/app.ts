@@ -153,9 +153,14 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       find: deps.sessionRoutes.find,
       inspect: deps.gitSummary.inspectForPush ?? deps.gitSummary.inspect,
       push: deps.gitSummary.push,
+      idempotency: deps.sessionRoutes.idempotency,
     });
   if (deps.gitSummary && deps.sessionRoutes)
-    registerRefreshGit(app, { find: deps.sessionRoutes.find, refresh: deps.gitSummary.refresh });
+    registerRefreshGit(app, {
+      find: deps.sessionRoutes.find,
+      refresh: deps.gitSummary.refresh,
+      idempotency: deps.sessionRoutes.idempotency,
+    });
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }
