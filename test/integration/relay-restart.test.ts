@@ -58,6 +58,8 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
     startAppServers: true,
     launchAppServer: () => fakeAppServer(restoredCalls),
   });
+  await second.listen({ host: '127.0.0.1', port: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
   expect((await second.inject(`/api/sessions/${created.id}`)).json()).toMatchObject({
     threadId: 'thread-1',
     state: 'ready',

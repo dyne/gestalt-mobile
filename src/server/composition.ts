@@ -217,7 +217,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       refresh: (path) => gitFetches.refresh(path),
     },
   });
-  if (runtime) {
+  const restoreActiveSessions = async () => {
+    if (!runtime) return;
     await mapWithConcurrency(
       sessions
         .list()
@@ -233,7 +234,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         }
       },
     );
-  }
+  };
+  if (runtime) app.addHook('onListen', () => void restoreActiveSessions());
   app.addHook('onClose', async () => {
     runtime?.stopAll();
     database.close();
