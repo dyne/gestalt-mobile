@@ -63,6 +63,8 @@
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
+  let historyRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let historyRefreshInFlight = false;
   let reconnectAttempt = 0;
   let socketGeneration = 0;
   let gitSummary = $state<RelayGitSummary | null>(null);
@@ -78,6 +80,9 @@
   const sessionCache = createSessionCache();
 
   onMount(async () => {
+    historyRefreshTimer = setInterval(reconcileVisibleHistory, 2_000);
+    document.addEventListener('visibilitychange', reconcileVisibleHistory);
+    window.addEventListener('focus', reconcileVisibleHistory);
     try {
       const bootstrap = await loadBootstrap();
       workspaces = bootstrap.workspaces;
@@ -108,6 +113,9 @@
   onDestroy(() => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
+    if (historyRefreshTimer) clearInterval(historyRefreshTimer);
+    document.removeEventListener('visibilitychange', reconcileVisibleHistory);
+    window.removeEventListener('focus', reconcileVisibleHistory);
     socket?.close();
   });
 
@@ -280,9 +288,31 @@
       const activity = toActivity(item);
       return activity ? [activity] : [];
     });
+    if ('activeTurnId' in history) {
+      activeTurnId = history.activeTurnId ?? null;
+      sessions = sessions.map((session) =>
+        session.id === id ? { ...session, activeTurnId } : session,
+      );
+    }
     cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
     void sessionCache.saveCursor(id, cursor);
     status = turnReadiness(activeTurnId);
+  }
+
+  function reconcileVisibleHistory(): void {
+    if (tab !== 'chat' || !sessionId || document.visibilityState !== 'visible' || historyRefreshInFlight)
+      return;
+    historyRefreshInFlight = true;
+    void resyncHistory(sessionId)
+      .catch(() => undefined)
+      .finally(() => {
+        historyRefreshInFlight = false;
+      });
+  }
+
+  function selectTab(next: Tab): void {
+    tab = next;
+    if (next === 'chat') reconcileVisibleHistory();
   }
 
   async function loadGitSummary() {
@@ -382,6 +412,7 @@
     socket.onopen = () => {
       if (generation !== socketGeneration || sessionId !== id) return;
       status = turnReadiness(activeTurnId);
+      reconcileVisibleHistory();
       stableConnectionTimer = setTimeout(() => {
         reconnectAttempt = 0;
       }, 30_000);
@@ -503,5 +534,5 @@
     />
   {/if}
 
-  <BottomNavigation activeTab={tab} onselect={(next) => (tab = next)} />
+  <BottomNavigation activeTab={tab} onselect={selectTab} />
 </main>

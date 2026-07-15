@@ -333,6 +333,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
       contentType: 'application/json',
       body: JSON.stringify({
         currentSequence: 7,
+        activeTurnId: 'terminal-turn-1',
         items: [
           { id: 'user-1', kind: 'user', text: 'Check the branch' },
           {
@@ -362,12 +363,63 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByRole('table')).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Installation' })).toBeVisible();
   await expect(page.getByText('npx skills add')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
   const commentary = page.locator('.answer-turn');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
   await commentary.getByText('commentary').click();
   await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
   await expect(commentary.getByText('The branch is clean.')).toBeVisible();
   await expect(page.getByText('Command · completed')).toBeVisible();
+});
+
+test('reconciles terminal-originated history while Chat is visible', async ({ page }) => {
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  let reads = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        currentSequence: reads,
+        activeTurnId: null,
+        items:
+          reads === 1
+            ? [{ id: 'user-1', kind: 'user', text: 'Initial message' }]
+            : [
+                { id: 'user-1', kind: 'user', text: 'Initial message' },
+                { id: 'user-2', kind: 'user', text: 'Message from terminal' },
+                {
+                  id: 'answer-2',
+                  kind: 'agent',
+                  phase: 'final_answer',
+                  text: 'Terminal answer',
+                },
+              ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+
+  await expect(page.getByText('user: Initial message')).toBeVisible();
+  await expect(page.getByText('user: Message from terminal')).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByText('Terminal answer')).toBeVisible();
 });
 
 test('shows Git fetch progress and disables push without an upstream', async ({ page }) => {

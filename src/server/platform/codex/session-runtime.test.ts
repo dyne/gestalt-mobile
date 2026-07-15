@@ -268,7 +268,17 @@ describe('CodexSessionRuntime', () => {
         request: async (method) => {
           if (method === 'thread/start') return { thread: { id: 'thread-1' } };
           if (method === 'thread/read')
-            return { thread: { turns: [{ items: [{ id: 'message-1', type: 'agentMessage' }] }] } };
+            return {
+              thread: {
+                turns: [
+                  {
+                    id: 'terminal-turn-1',
+                    status: 'inProgress',
+                    items: [{ id: 'message-1', type: 'agentMessage' }],
+                  },
+                ],
+              },
+            };
           return {};
         },
         onNotification: () => () => {},
@@ -294,9 +304,10 @@ describe('CodexSessionRuntime', () => {
       },
       'after',
     );
-    await expect(runtime.readHistory(ready)).resolves.toEqual([
-      { id: 'message-1', type: 'agentMessage' },
-    ]);
+    await expect(runtime.readHistory(ready)).resolves.toEqual({
+      items: [{ id: 'message-1', type: 'agentMessage' }],
+      activeTurnId: 'terminal-turn-1',
+    });
   });
 
   it('notifies the supervisor when an app-server process exits unexpectedly', async () => {

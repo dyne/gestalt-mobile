@@ -23,7 +23,11 @@ export type RelayHistoryItem = Record<string, unknown> & {
   kind: string;
   text?: string;
 };
-export type RelayHistory = { items: RelayHistoryItem[]; currentSequence?: number };
+export type RelayHistory = {
+  items: RelayHistoryItem[];
+  activeTurnId?: string | null;
+  currentSequence?: number;
+};
 export type RelayGitSummary = {
   available: boolean;
   branch: string | null;

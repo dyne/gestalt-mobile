@@ -8,13 +8,17 @@ describe('GET /api/sessions/:id/history', () => {
     const app = fastify();
     registerGetHistory(app, {
       find: () => ({ id: 's' }) as never,
-      read: async () => [{ id: 'a', type: 'agentMessage', text: 'hello', phase: 'final_answer' }],
+      read: async () => ({
+        items: [{ id: 'a', type: 'agentMessage', text: 'hello', phase: 'final_answer' }],
+        activeTurnId: 'terminal-turn-1',
+      }),
       currentSequence: () => 42,
     });
     const response = await app.inject({ method: 'GET', url: '/api/sessions/s/history' });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       items: [{ id: 'a', kind: 'agent', text: 'hello', phase: 'final_answer' }],
+      activeTurnId: 'terminal-turn-1',
       currentSequence: 42,
     });
     await app.close();

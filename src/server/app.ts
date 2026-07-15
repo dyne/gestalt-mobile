@@ -50,7 +50,10 @@ export type AppDependencies = {
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     close?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
-    readHistory?(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>>;
+    readHistory?(session: RelaySessionSnapshot): Promise<{
+      items: Array<Record<string, unknown>>;
+      activeTurnId: string | null;
+    }>;
     currentSequence?(sessionId: string): number;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;

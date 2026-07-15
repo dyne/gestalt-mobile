@@ -106,14 +106,32 @@ export class CodexSessionRuntime {
     await process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
   }
 
-  async readHistory(session: RelaySessionSnapshot): Promise<Array<Record<string, unknown>>> {
+  async readHistory(session: RelaySessionSnapshot): Promise<{
+    items: Array<Record<string, unknown>>;
+    activeTurnId: string | null;
+  }> {
     const process = this.processes.get(session.id);
     if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const result = (await process.rpc.request('thread/read', {
       threadId: session.threadId,
       includeTurns: true,
-    })) as { thread?: { turns?: Array<{ items?: Array<Record<string, unknown>> }> } };
-    return result.thread?.turns?.flatMap((turn) => turn.items ?? []) ?? [];
+    })) as {
+      thread?: {
+        turns?: Array<{
+          id?: unknown;
+          status?: unknown;
+          items?: Array<Record<string, unknown>>;
+        }>;
+      };
+    };
+    const turns = result.thread?.turns ?? [];
+    const activeTurn = turns.find(
+      (turn) => turn.status === 'inProgress' && typeof turn.id === 'string',
+    );
+    return {
+      items: turns.flatMap((turn) => turn.items ?? []),
+      activeTurnId: typeof activeTurn?.id === 'string' ? activeTurn.id : null,
+    };
   }
 
   async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
