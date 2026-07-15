@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import AppHeader from './components/AppHeader.svelte';
+  import ActivityList from './features/chat/ActivityList.svelte';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap } from './features/catalog/bootstrap-client.js';
@@ -379,17 +380,7 @@
       {#if sessionId}
         <p>Connected session: {sessionId}</p>
         <MessageList {messages} />
-        {#if activities.length}
-          <section aria-labelledby="activities-title">
-            <h3 id="activities-title">Activity</h3>
-            {#each activities as activity (activity.id)}
-              <details>
-                <summary>{activity.label}</summary>
-                <pre>{activity.detail}</pre>
-              </details>
-            {/each}
-          </section>
-        {/if}
+        <ActivityList {activities} />
         {#if interactions.length}
           <section aria-labelledby="interactions-title">
             <h3 id="interactions-title">Codex needs your decision</h3>
