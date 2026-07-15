@@ -686,15 +686,16 @@ Commit: =feat: add canonical chat turns=
 
 Commit: =feat: handle codex approvals and questions=
 
-** WIP [#A] Add sequenced WebSocket replay and resynchronization
+** DONE [#A] Add sequenced WebSocket replay and resynchronization
 
 - Status :: Sequenced replay, gap detection, slow-client cutoff, stable client
   retry, heartbeat liveness, and canonical history resync exist. The browser
   rejects forward sequence gaps and reloads canonical history before proceeding.
   History now returns its durable cursor so initial browser hydration can replay
   only later events. Browser socket-drop/replay coverage confirms that the
-  status returns to connected after recovery; full relay restart handoff tests
-  remain.
+  status returns to connected after recovery. Browser relay-restart coverage
+  now proves server-issued resync, socket closure, canonical history recovery,
+  reconnect, replay, and return to connected state.
 
 - Why :: WebSocket delivery alone loses events during mobile network changes.
 - Change :: Create =src/server/platform/events/session-event-service.ts=,
