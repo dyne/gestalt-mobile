@@ -731,8 +731,8 @@ Commit: =feat: replay sequenced session events=
   coalescing fetch coordinator exist. Successful fetch timestamps are exposed to
   the mobile view. Temporary repositories now cover non-repositories, clean and
   dirty state, Unicode metadata, missing upstreams, detached HEAD, and real
-  ahead/behind divergence; adapter timeout and failed-fetch-retention coverage
-  remain.
+  ahead/behind divergence. The adapter bounds read commands to 15 seconds and
+  network fetches to 120 seconds; failed-fetch-retention coverage remains.
 
 - Why :: Parsing and safety belong behind one tested port, not endpoints.
 - Change :: Create =src/server/features/git/application/ports.ts=,
