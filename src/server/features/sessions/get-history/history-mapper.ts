@@ -29,8 +29,8 @@ export function toChatItems(items: Array<Record<string, unknown>>): ChatItem[] {
                 id,
                 kind: 'agent',
                 text: item.text,
-                ...(item.phase === 'commentary' || item.phase === 'final'
-                  ? { phase: item.phase === 'final' ? 'final_answer' : 'commentary' }
+                ...(item.phase === 'commentary' || item.phase === 'final_answer'
+                  ? { phase: item.phase }
                   : {}),
               },
             ]

@@ -7,7 +7,7 @@ describe('toChatItems', () => {
     expect(
       toChatItems([
         { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
-        { id: 'a', type: 'agentMessage', text: 'hi', phase: 'final' },
+        { id: 'a', type: 'agentMessage', text: 'hi', phase: 'final_answer' },
         {
           id: 'r',
           type: 'reasoning',

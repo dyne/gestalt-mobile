@@ -8,7 +8,7 @@ describe('GET /api/sessions/:id/history', () => {
     const app = fastify();
     registerGetHistory(app, {
       find: () => ({ id: 's' }) as never,
-      read: async () => [{ id: 'a', type: 'agentMessage', text: 'hello', phase: 'final' }],
+      read: async () => [{ id: 'a', type: 'agentMessage', text: 'hello', phase: 'final_answer' }],
       currentSequence: () => 42,
     });
     const response = await app.inject({ method: 'GET', url: '/api/sessions/s/history' });
