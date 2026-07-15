@@ -108,4 +108,46 @@ describe('production composition', () => {
     expect(secondCalls).toEqual(['initialize', 'thread/resume']);
     await second.close();
   });
+
+  it('closes an active Codex child during graceful relay shutdown', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    let closed = 0;
+    const app = await composeRelayApp({
+      root,
+      dataDir,
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
+        require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+      },
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => ({
+        rpc: {
+          request: async (method: string) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {
+          closed += 1;
+        },
+        onExit: () => () => {},
+      }),
+    });
+    const workspace = (await app.inject('/api/bootstrap'))
+      .json()
+      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+    await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspace.id, profile: 'default' },
+    });
+
+    await app.close();
+
+    expect(closed).toBe(1);
+  });
 });

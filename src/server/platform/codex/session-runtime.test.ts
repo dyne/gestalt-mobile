@@ -83,6 +83,42 @@ describe('CodexSessionRuntime', () => {
     });
   });
 
+  it('closes every active app-server when the relay shuts down', async () => {
+    let closed = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {
+        closed += 1;
+      },
+    }));
+    const session = (id: string) => ({
+      id,
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: null,
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    });
+
+    await runtime.start(session('session-1'), 'after');
+    await runtime.start(session('session-2'), 'after');
+    runtime.stopAll();
+
+    expect(closed).toBe(2);
+  });
+
   it('forwards app-server notifications with their relay session identity', async () => {
     let notify: ((value: { method: string; params: unknown }) => void) | undefined;
     const received: unknown[] = [];

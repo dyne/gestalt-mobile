@@ -71,6 +71,11 @@ export class CodexSessionRuntime {
     this.processes.delete(sessionId);
   }
 
+  /** Releases all relay-owned app-server children during graceful shutdown. */
+  stopAll(): void {
+    for (const sessionId of [...this.processes.keys()]) this.stop(sessionId);
+  }
+
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
     const key = `${sessionId}:${requestId}`;
     const resolve = this.pendingRequests.get(key);

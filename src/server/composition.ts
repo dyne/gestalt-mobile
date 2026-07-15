@@ -235,6 +235,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
   }
   app.addHook('onClose', async () => {
+    runtime?.stopAll();
     database.close();
   });
   return app;
