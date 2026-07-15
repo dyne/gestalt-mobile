@@ -381,6 +381,18 @@
         messages = completeMessage(messages, `assistant-${id}`);
         persistMessages(id);
       }
+      if (envelope.type === 'relay.event' && envelope.event?.type === 'session.updated') {
+        const updated = envelope.event.payload;
+        if (
+          typeof updated === 'object' &&
+          updated !== null &&
+          (updated as { id?: unknown }).id === id
+        ) {
+          const session = updated as RelaySession;
+          activeTurnId = typeof session.activeTurnId === 'string' ? session.activeTurnId : null;
+          sessions = sessions.map((item) => (item.id === id ? { ...item, ...session } : item));
+        }
+      }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
         const { requestId } = envelope.event.payload as { requestId: string };
         interactions = interactions.filter((interaction) => interaction.requestId !== requestId);

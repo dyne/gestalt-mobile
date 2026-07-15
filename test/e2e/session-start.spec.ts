@@ -797,6 +797,55 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
   await expect(page.getByRole('status')).toHaveText('Session connected.');
 });
 
+test('clears an interrupted active turn when relay recovery updates the session', async ({
+  page,
+}) => {
+  const session = {
+    id: 'session-1',
+    state: 'turnActive',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: 'turn-1',
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.routeWebSocket(
+    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: {
+            sequence: 1,
+            type: 'session.updated',
+            payload: { ...session, state: 'ready', activeTurnId: null },
+          },
+        }),
+      );
+    },
+  );
+
+  await page.goto('/');
+
+  await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+  await page.getByRole('textbox', { name: 'Message' }).fill('Continue after recovery');
+  await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
+});
+
 test('switches primary navigation with arrow keys', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
