@@ -49,6 +49,9 @@ export class SqliteSessionRepository {
       this.db.prepare('SELECT * FROM relay_sessions ORDER BY updated_at DESC').all() as Row[]
     ).map(map);
   }
+  remove(id: string): void {
+    this.db.prepare('DELETE FROM relay_sessions WHERE id = ?').run(id);
+  }
 }
 function map(row: Row): RelaySessionSnapshot {
   return {

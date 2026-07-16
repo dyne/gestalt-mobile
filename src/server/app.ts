@@ -21,6 +21,7 @@ import { registerInterruptTurn } from './features/sessions/interrupt-turn/endpoi
 import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
 import { registerRestoreSession } from './features/sessions/restore-session/endpoint.js';
 import { registerReleaseSession } from './features/sessions/release-session/endpoint.js';
+import { registerForgetSession } from './features/sessions/forget-session/endpoint.js';
 import { registerRespondInteraction } from './features/sessions/respond-interaction/endpoint.js';
 import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
@@ -49,6 +50,7 @@ export type AppDependencies = {
     ): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     close?(id: string): void;
+    remove?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
     readHistory?(session: RelaySessionSnapshot): Promise<{
       turns: import('./features/sessions/get-history/history-mapper.js').HistoryTurn[];
@@ -128,6 +130,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         save: deps.sessionRoutes.save,
         close: deps.sessionRoutes.close,
         idempotency: deps.sessionRoutes.idempotency,
+      });
+    if (deps.sessionRoutes.remove && deps.sessionRoutes.close)
+      registerForgetSession(app, {
+        find: deps.sessionRoutes.find,
+        close: deps.sessionRoutes.close,
+        remove: deps.sessionRoutes.remove,
       });
     if (deps.sessionRoutes.close)
       registerStopSession(app, {

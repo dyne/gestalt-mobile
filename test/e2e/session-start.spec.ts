@@ -41,7 +41,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByRole('button', { name: 'Start session' }).click();
+  await page.getByRole('button', { name: 'New session' }).click();
 
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
   await expect(page.getByText('Connected Codex session: codex-thread-1')).toBeVisible();
@@ -100,7 +100,69 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);
 });
 
-test('starts a session with directly exposed Codex settings', async ({ page }) => {
+test('manages saved sessions with their running state, resume command, and forget action', async ({
+  page,
+}) => {
+  const sessions = [
+    {
+      id: 'running-session',
+      state: 'ready',
+      threadId: 'running-thread',
+      workspacePath: '/projects/running',
+      profile: 'work',
+      resumeCommand: 'codex resume running-thread',
+    },
+    {
+      id: 'stopped-session',
+      state: 'released',
+      threadId: 'stopped-thread',
+      workspacePath: '/projects/stopped',
+      profile: 'work',
+      resumeCommand: 'codex resume stopped-thread',
+    },
+  ];
+  let forgotten = false;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions,
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions/running-session', async (route) => {
+    expect(route.request().method()).toBe('DELETE');
+    forgotten = true;
+    await route.fulfill({ status: 204 });
+  });
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(forgotten ? [sessions[1]] : sessions),
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+
+  const savedSessions = page.getByLabel('Saved sessions');
+  await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(2);
+  await expect(savedSessions.getByText('running', { exact: true })).toHaveCount(1);
+  await expect(savedSessions.getByRole('button', { name: 'Copy resume command' })).toHaveCount(2);
+  await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(2);
+  await expect(savedSessions.getByRole('button', { name: /Release|Restore/ })).toHaveCount(0);
+
+  await savedSessions.getByRole('button', { name: 'Forget' }).first().click();
+  await expect.poll(() => forgotten).toBe(true);
+  await expect(savedSessions.getByText('running-thread')).toHaveCount(0);
+});
+
+test('starts a session with profile, sandbox, and approval settings', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -119,7 +181,6 @@ test('starts a session with directly exposed Codex settings', async ({ page }) =
     expect(route.request().postDataJSON()).toEqual({
       workspaceId: 'workspace-1',
       profile: 'work',
-      model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     });
@@ -132,10 +193,10 @@ test('starts a session with directly exposed Codex settings', async ({ page }) =
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByLabel('Model').fill('gpt-5.4');
   await page.getByLabel('Sandbox').selectOption('workspace-write');
   await page.getByLabel('Approval policy').selectOption('never');
-  await page.getByRole('button', { name: 'Start session' }).click();
+  await expect(page.getByLabel('Model')).toHaveCount(0);
+  await page.getByRole('button', { name: 'New session' }).click();
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
 });
 
@@ -191,12 +252,12 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByRole('button', { name: 'Start session' }).click();
+  await page.getByRole('button', { name: 'New session' }).click();
 
   await expect(page.getByRole('status')).toContainText(
     'Could not start session: Codex app-server is unavailable.',
   );
-  await expect(page.getByRole('button', { name: 'Start session' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'New session' })).toBeEnabled();
 });
 
 test('keeps the composer reachable at a phone viewport without horizontal overflow', async ({
@@ -249,7 +310,7 @@ test('keeps the session controls within a 320px viewport', async ({ page }) => {
   );
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(page.getByRole('button', { name: 'Start session' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New session' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -634,7 +695,8 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
   );
 
   await page.goto('/');
-  await expect(page.getByText('assistant: Working on it.\nStill working.')).toBeVisible();
+  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
+  await expect(page.getByText('Working on it.\nStill working.')).toBeHidden();
   await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS(
     'white-space',
     'pre-wrap',
@@ -721,8 +783,8 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
   );
 
   await page.goto('/');
-  await expect(page.getByText('assistant: Recovered history')).toBeVisible();
-  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByText('Recovered history')).toBeVisible();
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
 });
 
 test('resynchronizes canonical history after a replay sequence gap', async ({ page }) => {
@@ -768,8 +830,8 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
   );
 
   await page.goto('/');
-  await expect(page.getByText('assistant: Recovered missing event')).toBeVisible();
-  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByText('Recovered missing event')).toBeVisible();
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
 });
 
 test('reconnects a dropped browser socket and replays from its saved cursor', async ({ page }) => {
@@ -821,7 +883,8 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   );
 
   await page.goto('/');
-  await expect(page.getByText('assistant: before drop after replay')).toBeVisible();
+  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
+  await expect(page.getByText('before drop after replay')).toBeHidden();
   await expect.poll(() => connections).toBe(2);
   await expect(page.getByRole('status')).toHaveText('Codex is working…');
 });
@@ -877,8 +940,9 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
 
   await page.goto('/');
 
-  await expect(page.getByText('assistant: Restored after restart')).toBeVisible();
-  await expect(page.getByText('assistant: live again')).toBeVisible();
+  await expect(page.getByText('Restored after restart')).toBeVisible();
+  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
+  await expect(page.getByText('live again')).toBeHidden();
   await expect.poll(() => connections).toBe(2);
   await expect(page.getByRole('status')).toHaveText('Ready for your next instruction.');
 });

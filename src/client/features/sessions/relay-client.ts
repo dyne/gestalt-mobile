@@ -106,6 +106,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
     releaseSession: (sessionId: string) =>
       request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/release`, {}),
+    forgetSession: (sessionId: string) =>
+      fetcher(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).then(
+        async (response) => {
+          if (!response.ok) throw await failure(response);
+        },
+      ),
     getHistory: (sessionId: string) =>
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) =>

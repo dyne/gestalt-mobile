@@ -49,7 +49,6 @@
   let recentSessions = $state<RecentSession[]>([]);
   let workspaceId = $state('');
   let profile = $state('');
-  let model = $state('');
   let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
@@ -139,7 +138,6 @@
         workspaceId,
         profile,
         {
-          model: model.trim() || undefined,
           sandbox: sandbox || undefined,
           approvalPolicy,
         },
@@ -186,6 +184,11 @@
   }
 
   async function openSession(id: string) {
+    const existing = sessions.find((session) => session.id === id);
+    if (existing && existing.state !== 'ready' && existing.state !== 'turnActive') {
+      await relay.restoreSession(id);
+      await refreshSessions();
+    }
     sessionId = id;
     void sessionCache.saveSelectedSession(id);
     messages = await messageCache.read(id);
@@ -203,29 +206,18 @@
     }
   }
 
-  async function restoreSession(id: string) {
+  async function forgetSession(id: string) {
     try {
-      await relay.restoreSession(id);
-      await refreshSessions();
-      await openSession(id);
-    } catch (error) {
-      status = `Could not restore session: ${errorMessage(error)}`;
-    }
-  }
-
-  async function releaseSession(id: string) {
-    try {
-      await relay.releaseSession(id);
+      await relay.forgetSession(id);
       if (sessionId === id) {
         socket?.close();
         sessionId = null;
         activeTurnId = null;
         void sessionCache.saveSelectedSession(null);
       }
-      await refreshSessions();
-      status = 'Session released for SSH resume.';
+      await refreshSessionLists();
     } catch (error) {
-      status = `Could not release session: ${errorMessage(error)}`;
+      status = `Could not forget session: ${errorMessage(error)}`;
     }
   }
 
@@ -273,7 +265,7 @@
   async function resyncHistory(id: string, fallbackSequence = 0) {
     const history: RelayHistory = await relay.getHistory(id);
     if (sessionId !== id) return;
-    messages = history.items
+    const canonicalMessages: ChatMessage[] = history.items
       .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
       .map((item) => ({
         id: item.id,
@@ -285,11 +277,19 @@
           : {}),
         complete: true,
       }));
+    const unfinishedMessages = messages.filter((message) => !message.complete);
+    messages = [...canonicalMessages, ...unfinishedMessages];
     persistMessages(id);
-    activities = history.items.flatMap((item) => {
+    const canonicalActivities = history.items.flatMap((item) => {
       const activity = toActivity(item);
       return activity ? [activity] : [];
     });
+    activities = [
+      ...canonicalActivities,
+      ...activities.filter(
+        (activity) => !canonicalActivities.some((canonical) => canonical.id === activity.id),
+      ),
+    ];
     if ('activeTurnId' in history) {
       activeTurnId = history.activeTurnId ?? null;
       sessions = sessions.map((session) =>
@@ -315,6 +315,7 @@
   function selectTab(next: Tab): void {
     tab = next;
     if (next === 'chat') reconcileVisibleHistory();
+    if (next === 'sessions') void refreshSessionLists();
   }
 
   async function loadGitSummary() {
@@ -518,20 +519,16 @@
       {profiles}
       {workspaceId}
       {profile}
-      {model}
       {sandbox}
       {approvalPolicy}
       {startingSession}
       onworkspacechange={(value) => (workspaceId = value)}
       onprofilechange={(value) => (profile = value)}
-      onmodelchange={(value) => (model = value)}
       onsandboxchange={(value) => (sandbox = value)}
       onapprovalpolicychange={(value) => (approvalPolicy = value)}
-      onrefresh={() => void refreshSessionLists()}
       onopen={openSession}
-      onrelease={(id) => void releaseSession(id)}
+      onforget={(id) => void forgetSession(id)}
       oncopyresume={(command) => void copyResumeCommand(command)}
-      onrestore={(id) => void restoreSession(id)}
       onstart={() => void startSession()}
     />
   {/if}

@@ -184,6 +184,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         : undefined,
       release: (session) =>
         RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
+      remove: (id) => sessions.remove(id),
       idempotency,
       close: runtime ? (id) => runtime.stop(id) : undefined,
       replyInteraction: runtime
