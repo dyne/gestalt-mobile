@@ -840,8 +840,14 @@ Commit: =feat: add resilient client data layer=
 
 - Status :: Mobile tabs, bootstrap, session-start controls, and unavailable
   profile prevention exist. Primary navigation and the session list/start controls
-  are isolated keyboard-tested components. The dialog and remaining
-  session-management component split remain. The Sessions tab also lists the
+  are isolated keyboard-tested components. The Sessions tab refreshes whenever
+  it is opened and uses a single =Open= action: opening a stopped relay record
+  restores it first, while a running record opens directly. Running sessions are
+  marked as such; all records provide a copyable resume command and =Forget=,
+  which closes any relay runtime and removes only the relay-managed record, not
+  the Codex thread. The new-session form omits model (profiles own that choice)
+  and pairs workspace/profile and sandbox/approval policy into two-column rows.
+  The dialog and remaining session-management component split remain. The Sessions tab also lists the
   most recent CLI and app-server sessions from every ready profile, including
   their relative activity time, cwd, and thread UUID. Managed relay sessions
   use the same relative-time/thread-ID/workspace-path presentation without
@@ -853,11 +859,10 @@ Commit: =feat: add resilient client data layer=
   =src/client/features/sessions/SessionsView.svelte=,
   =SessionCard.svelte=, and =StartSessionDialog.svelte=. Use a native =<dialog>=
   opened with =showModal()=. The form has visible labels for workspace, profile,
-  optional model text (blank means profile default), sandbox, and approval
-  policy; validate on blur/submit, clear errors on
+  sandbox, and approval policy; profile selects the model. Validate on blur/submit, clear errors on
   input, and focus an error summary. Default tab is Chat, but show Sessions when
-  no active session exists. Session cards expose restore/stop/release/copy-resume
-  actions with unambiguous names.
+  no active session exists. Session cards expose open, running state,
+  copy-resume, and forget actions with unambiguous names.
 - Tests :: Component tests cover initial bootstrap, empty state, dialog focus
   return/Escape, validation, logged-out profile warning, duplicate-submit guard,
   tab semantics/keyboard behavior, and clipboard fallback.
