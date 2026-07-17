@@ -13,23 +13,23 @@
 </script>
 
 <header class="app-header">
-  <div class="brand-bar">
+  <a class="brand" href="/" aria-label="Gestalt Mobile">
+    <img class="brand-icon light-asset" src="/branding/p_glogo_grey.svg" alt="" />
+    <img class="brand-icon dark-asset" src="/branding/p_glogo_white.svg" alt="" />
+    <img class="brand-logotype light-asset" src="/branding/t_glogo_grey.svg" alt="" />
+    <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
+  </a>
+  <div class="header-actions">
+    <p role="status">{status}</p>
     <button
       class="menu-trigger"
       type="button"
       popovertarget="configuration-panel"
       aria-label="Open configuration"
     >
-      <span aria-hidden="true">☰</span>
+      <span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span>
     </button>
-    <a class="brand" href="/" aria-label="Gestalt Mobile">
-      <img class="brand-icon light-asset" src="/branding/p_glogo_grey.svg" alt="" />
-      <img class="brand-icon dark-asset" src="/branding/p_glogo_white.svg" alt="" />
-      <img class="brand-logotype light-asset" src="/branding/t_glogo_grey.svg" alt="" />
-      <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
-    </a>
   </div>
-  <p role="status">{status}</p>
 </header>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">

@@ -41,14 +41,15 @@ main {
   text-align: end;
 }
 
-.brand-bar,
-.brand {
+.brand,
+.header-actions {
   display: flex;
   align-items: center;
 }
 
-.brand-bar {
+.header-actions {
   gap: 0.75rem;
+  margin-inline-start: auto;
 }
 
 .brand {
@@ -58,10 +59,23 @@ main {
 .menu-trigger {
   display: grid;
   place-items: center;
-  inline-size: 2.75rem;
+  min-block-size: 2rem;
+  inline-size: 2rem;
   padding: 0;
-  font-size: 1.4rem;
-  line-height: 1;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.menu-lines {
+  display: grid;
+  gap: 0.2rem;
+  inline-size: 1rem;
+}
+
+.menu-lines span {
+  block-size: 1px;
+  background: currentColor;
 }
 
 .brand-icon {
@@ -98,7 +112,7 @@ main {
 
 .configuration-panel {
   position: fixed;
-  inset: 4.5rem auto auto 1rem;
+  inset: 4.5rem 1rem auto auto;
   min-inline-size: min(18rem, calc(100vw - 2rem));
   padding: 1rem;
   color: CanvasText;

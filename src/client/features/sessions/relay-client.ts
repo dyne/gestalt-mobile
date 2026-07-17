@@ -82,11 +82,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   return {
     listSessions: () => get<RelaySession[]>('/api/sessions'),
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
-    startSession: (
-      workspaceId: string,
-      settings: StartSessionSettings = {},
-      key?: string,
-    ) =>
+    startSession: (workspaceId: string, settings: StartSessionSettings = {}, key?: string) =>
       request<RelaySession>(
         '/api/sessions',
         { workspaceId, profile: 'default', ...settings },

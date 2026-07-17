@@ -9,7 +9,8 @@ type GestaltProfileAvailability = {
 };
 
 const localAvailability: GestaltProfileAvailability = {
-  codexProfileAvailable: () => !spawnSync('codex-profile', ['--version'], { stdio: 'ignore' }).error,
+  codexProfileAvailable: () =>
+    !spawnSync('codex-profile', ['--version'], { stdio: 'ignore' }).error,
   gestaltHomeExists: () => existsSync(join(homedir(), '.codex-gestalt')),
 };
 
