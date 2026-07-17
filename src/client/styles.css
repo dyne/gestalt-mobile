@@ -41,15 +41,9 @@ main {
   text-align: end;
 }
 
-.brand,
-.header-actions {
+.brand {
   display: flex;
   align-items: center;
-}
-
-.header-actions {
-  gap: 0.75rem;
-  margin-inline-start: auto;
 }
 
 .brand {
@@ -60,7 +54,9 @@ main {
   display: grid;
   place-items: center;
   min-block-size: 2rem;
-  inline-size: 2rem;
+  flex: 0 0 auto;
+  inline-size: 2.5rem;
+  margin-inline-start: auto;
   padding: 0;
   color: inherit;
   background: transparent;
@@ -69,13 +65,28 @@ main {
 
 .menu-lines {
   display: grid;
-  gap: 0.2rem;
-  inline-size: 1rem;
+  gap: 0.25rem;
+  inline-size: 1.25rem;
 }
 
 .menu-lines span {
+  display: block;
   block-size: 1px;
   background: currentColor;
+  box-sizing: border-box;
+}
+
+.menu-lines span:first-child,
+.menu-lines span:nth-child(2),
+.menu-lines span:last-child {
+  block-size: 2px;
+}
+
+@media (max-width: 28rem) {
+  .app-header [role='status'] {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
 }
 
 .brand-icon {
