@@ -1014,3 +1014,21 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeFocused();
 });
+
+test('shows Gestalt branding and changes appearance from configuration', async ({ page }) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [] }),
+    }),
+  );
+
+  await page.goto('/');
+  await expect(page).toHaveTitle('Gestalt Mobile');
+  await expect(page.getByRole('link', { name: 'Gestalt Mobile' })).toBeVisible();
+  await expect(page.locator('.app-footer')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await page.getByLabel('Appearance').selectOption('dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});

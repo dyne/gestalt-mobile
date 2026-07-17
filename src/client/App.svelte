@@ -42,6 +42,8 @@
 
   let tab = $state<Tab>('chat');
   let status = $state('Loading relay…');
+  type ThemePreference = 'system' | 'light' | 'dark';
+  let theme = $state<ThemePreference>('system');
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
   let sessionId = $state<string | null>(null);
@@ -79,6 +81,9 @@
   const sessionCache = createSessionCache();
 
   onMount(async () => {
+    const savedTheme = localStorage.getItem('gestalt-mobile.theme');
+    if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system')
+      setTheme(savedTheme);
     historyRefreshTimer = setInterval(reconcileVisibleHistory, 2_000);
     document.addEventListener('visibilitychange', reconcileVisibleHistory);
     window.addEventListener('focus', reconcileVisibleHistory);
@@ -108,6 +113,13 @@
       status = 'Relay unavailable. Check the server connection.';
     }
   });
+
+  function setTheme(value: ThemePreference): void {
+    theme = value;
+    if (value === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.dataset.theme = value;
+    localStorage.setItem('gestalt-mobile.theme', value);
+  }
 
   onDestroy(() => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -479,11 +491,11 @@
 </script>
 
 <svelte:head>
-  <title>Codex Relay</title>
+  <title>Gestalt Mobile</title>
 </svelte:head>
 
 <main>
-  <AppHeader {status} />
+  <AppHeader {status} {theme} onthemechange={setTheme} />
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
@@ -534,4 +546,9 @@
   {/if}
 
   <BottomNavigation activeTab={tab} onselect={selectTab} />
+
+  <footer class="app-footer" aria-label="Dyne">
+    <img class="light-asset" src="/branding/dyne-logotype-black.svg" alt="" />
+    <img class="dark-asset" src="/branding/dyne-logotype-white.svg" alt="" />
+  </footer>
 </main>

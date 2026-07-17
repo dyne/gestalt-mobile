@@ -3,6 +3,14 @@
   font-family: system-ui, sans-serif;
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 body {
   min-block-size: 100vh;
   min-block-size: 100dvh;
@@ -15,6 +23,111 @@ main {
   max-inline-size: 42rem;
   margin-inline: auto;
   padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.app-header [role='status'] {
+  min-inline-size: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.brand-bar,
+.brand {
+  display: flex;
+  align-items: center;
+}
+
+.brand-bar {
+  gap: 0.75rem;
+}
+
+.brand {
+  gap: 0.4rem;
+}
+
+.menu-trigger {
+  display: grid;
+  place-items: center;
+  inline-size: 2.75rem;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.brand-icon {
+  inline-size: 2rem;
+  block-size: 2rem;
+}
+
+.brand-logotype {
+  inline-size: 6.25rem;
+  block-size: auto;
+}
+
+.dark-asset {
+  display: none;
+}
+
+:root[data-theme='dark'] .light-asset {
+  display: none;
+}
+
+:root[data-theme='dark'] .dark-asset {
+  display: initial;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .light-asset {
+    display: none;
+  }
+
+  :root:not([data-theme]) .dark-asset {
+    display: initial;
+  }
+}
+
+.configuration-panel {
+  position: fixed;
+  inset: 4.5rem auto auto 1rem;
+  min-inline-size: min(18rem, calc(100vw - 2rem));
+  padding: 1rem;
+  color: CanvasText;
+  background: Canvas;
+  border: 1px solid CanvasText;
+  border-radius: 0.5rem;
+  box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, CanvasText 25%, transparent);
+}
+
+.configuration-panel h2 {
+  margin-block: 0 0.75rem;
+  font-size: 1rem;
+}
+
+.configuration-panel label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.app-footer {
+  position: fixed;
+  inset-inline-end: 1rem;
+  inset-block-end: calc(4.75rem + env(safe-area-inset-bottom));
+}
+
+.app-footer img {
+  display: block;
+  inline-size: 4.5rem;
+  block-size: auto;
 }
 
 nav {
