@@ -1,8 +1,33 @@
 {
   "name": "gestalt-mobile",
   "version": "0.1.0",
-  "private": true,
+  "description": "Mobile-first web relay for durable Codex development sessions",
+  "keywords": [
+    "codex",
+    "gestalt",
+    "mobile",
+    "development"
+  ],
+  "homepage": "https://github.com/dyne/gestalt-mobile#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyne/gestalt-mobile.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dyne/gestalt-mobile/issues"
+  },
+  "author": "Dyne.org foundation",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
+  "bin": {
+    "gestalt-mobile": "dist/server/server/main.js"
+  },
+  "files": [
+    "dist/server",
+    "dist/client",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=24.0.0"
   },
@@ -12,8 +37,9 @@
     "start": "node dist/server/server/main.js",
     "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
-    "build:server": "tsc -p tsconfig.server.json",
+    "build:server": "node scripts/build-server.mjs",
     "build:client": "vite build",
+    "prepack": "npm run build && npm run protocol:check",
     "check": "tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -27,7 +53,6 @@
   "dependencies": {
     "@fastify/static": "^10.1.0",
     "fastify": "^5.10.0",
-    "svelte": "^5.56.4",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
@@ -41,6 +66,7 @@
     "jsdom": "^29.1.1",
     "prettier": "^3.9.5",
     "prettier-plugin-svelte": "^4.1.1",
+    "svelte": "^5.56.4",
     "svelte-check": "^4.7.2",
     "tsx": "^4.23.1",
     "typescript": "^6.0.3",
