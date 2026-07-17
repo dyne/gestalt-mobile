@@ -42,9 +42,26 @@ describe('GitHub verification workflow', () => {
     }
   });
 
-  it('grants read-only contents and never references publication credentials', () => {
+  it('keeps verification read-only and scopes publication credentials to npm publish', () => {
     expect(workflow).toMatch(/permissions:\n\s+contents: read/);
-    expect(workflow).not.toContain('NPM_TOKEN');
-    expect(workflow).not.toContain('NODE_AUTH_TOKEN');
+    expect(workflow.match(/NPM_TOKEN/g)).toHaveLength(1);
+    expect(workflow.match(/NODE_AUTH_TOKEN/g)).toHaveLength(1);
+    expect(workflow).toMatch(
+      /Publish npm package[\s\S]*npm publish --access public --provenance[\s\S]*NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/,
+    );
+  });
+
+  it('releases only verified canonical main with pinned semver and explicit tags', () => {
+    expect(workflow).toContain('needs: [verify, package-smoke]');
+    expect(workflow).toContain("github.repository == 'dyne/gestalt-mobile'");
+    expect(workflow).toContain(
+      'ietf-tools/semver-action@c90370b2958652d71c06a3484129a4d423a6d8a8 # v1.11.0',
+    );
+    expect(workflow).toContain('noNewCommitBehavior: silent');
+    expect(workflow).toContain('noVersionBumpBehavior: silent');
+    expect(workflow).toContain('git push origin "refs/tags/v$VERSION"');
+    expect(workflow).not.toContain('git push --tags');
+    expect(workflow).toContain("require('./package.json').name");
+    expect(workflow).toContain('node scripts/check-package-contents.mjs');
   });
 });

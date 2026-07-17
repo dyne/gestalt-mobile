@@ -5,12 +5,13 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { createServer } from 'node:net';
 
 const root = process.cwd();
+const expectedVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
 const temporaryRoot = await mkdtemp(join(tmpdir(), 'gestalt-mobile-package-'));
 let server;
 
@@ -52,7 +53,10 @@ try {
     true,
     environment,
   );
-  assert(version.stdout.trim() === '0.1.0', 'packed --version did not print 0.1.0');
+  assert(
+    version.stdout.trim() === expectedVersion,
+    `packed --version did not print ${expectedVersion}`,
+  );
 
   const port = await unusedPort();
   server = spawn(
