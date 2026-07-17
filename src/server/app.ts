@@ -6,6 +6,8 @@ import { registerGetBootstrap } from './features/catalog/get-bootstrap/endpoint.
 import { registerGetGitSummary } from './features/git/get-summary/endpoint.js';
 import { registerPushUpstream } from './features/git/push-upstream/endpoint.js';
 import { registerRefreshGit } from './features/git/refresh/endpoint.js';
+import { registerPullRebase } from './features/git/pull-rebase/endpoint.js';
+import { registerCheckoutBranch } from './features/git/checkout-branch/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
@@ -14,6 +16,7 @@ import {
   registerListRecentThreads,
   type RecentThread,
 } from './features/sessions/list-recent-threads/endpoint.js';
+import { registerPromoteRecentThread } from './features/sessions/promote-recent-thread/endpoint.js';
 import { registerGetHistory } from './features/sessions/get-history/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
@@ -59,6 +62,7 @@ export type AppDependencies = {
     currentSequence?(sessionId: string): number;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    promoteRecent?(thread: RecentThread): Promise<RelaySessionSnapshot>;
     release?(session: RelaySessionSnapshot): RelaySessionSnapshot;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
@@ -82,6 +86,8 @@ export type AppDependencies = {
     ): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
     push(path: string, upstream: string): Promise<void>;
     refresh(path: string): Promise<void>;
+    pull?(path: string): Promise<void>;
+    checkout?(path: string, branch: string): Promise<void>;
   };
 };
 
@@ -122,6 +128,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         restore: deps.sessionRoutes.restore,
         save: deps.sessionRoutes.save,
         idempotency: deps.sessionRoutes.idempotency,
+      });
+    if (deps.recentThreads && deps.sessionRoutes.promoteRecent)
+      registerPromoteRecentThread(app, {
+        list: () => deps.recentThreads!.list(),
+        promote: deps.sessionRoutes.promoteRecent,
       });
     if (deps.sessionRoutes.release && deps.sessionRoutes.close)
       registerReleaseSession(app, {
@@ -172,6 +183,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       refresh: deps.gitSummary.refresh,
       idempotency: deps.sessionRoutes.idempotency,
     });
+  if (deps.gitSummary?.pull && deps.gitSummary.checkout && deps.sessionRoutes) {
+    registerPullRebase(app, { find: deps.sessionRoutes.find, pull: deps.gitSummary.pull });
+    registerCheckoutBranch(app, {
+      find: deps.sessionRoutes.find,
+      checkout: deps.gitSummary.checkout,
+    });
+  }
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }

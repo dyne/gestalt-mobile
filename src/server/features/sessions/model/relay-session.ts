@@ -64,6 +64,31 @@ export class RelaySession {
     });
   }
 
+  static fromExistingThread(input: {
+    id: string;
+    workspaceId: string;
+    workspacePath: string;
+    profile: string;
+    threadId: string;
+    now: string;
+  }): RelaySession {
+    return new RelaySession({
+      id: sessionId(input.id),
+      workspaceId: workspaceId(input.workspaceId),
+      workspacePath: workspacePath(input.workspacePath),
+      profile: profileName(input.profile),
+      threadId: threadId(input.threadId),
+      state: 'stopped',
+      desiredState: 'stopped',
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
+  }
+
   static rehydrate(snapshot: RelaySessionSnapshot): RelaySession {
     return new RelaySession(copy(snapshot));
   }

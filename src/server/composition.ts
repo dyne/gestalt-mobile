@@ -19,7 +19,7 @@ import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pen
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
 import { legacyRelayStatePath, relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
-import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
+import { checkoutBranch, fetchUpstream, inspectGit, pullRebase, pushUpstream } from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
 import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
@@ -27,6 +27,7 @@ import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
 import { isValidInteractionResponse } from './features/sessions/interaction/response-validator.js';
+import { promoteRecentThread } from './features/sessions/promote-recent-thread/use-case.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -186,6 +187,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       restore: runtime
         ? (session) => runtime.restore(session, new Date().toISOString())
         : undefined,
+      promoteRecent: runtime
+        ? (thread) =>
+            promoteRecentThread(thread, {
+              createId: randomUUID,
+              now: () => new Date().toISOString(),
+              list: () => sessions.list(),
+              save: saveSession,
+              restore: (session) => runtime.restore(session, new Date().toISOString()),
+            })
+        : undefined,
       release: (session) =>
         RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
       remove: (id) => sessions.remove(id),
@@ -227,6 +238,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       refresh: async (path) => {
         await gitFetches.refresh(path);
+        gitSummaries.invalidate(path);
+      },
+      pull: async (path) => {
+        await pullRebase(path);
+        gitSummaries.invalidate(path);
+      },
+      checkout: async (path, branch) => {
+        await checkoutBranch(path, branch);
         gitSummaries.invalidate(path);
       },
     },

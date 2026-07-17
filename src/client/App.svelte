@@ -69,6 +69,7 @@
   let gitSummary = $state<RelayGitSummary | null>(null);
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
+  let gitCheckingOut = $state(false);
   let gitError = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
@@ -203,12 +204,23 @@
     message = await sessionCache.readDraft(id);
     activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
     interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
+    tab = 'chat';
     try {
       await resyncHistory(id);
       connectSession(id);
-      tab = 'chat';
     } catch (error) {
       status = `Could not open session: ${errorMessage(error)}`;
+    }
+  }
+
+  async function openRecentSession(recent: RecentSession) {
+    status = 'Opening recent session…';
+    try {
+      const session = await relay.openRecentSession(recent.id, recent.cwd);
+      await refreshSessionLists();
+      await openSession(session.id);
+    } catch (error) {
+      status = `Could not open recent session: ${errorMessage(error)}`;
     }
   }
 
@@ -321,6 +333,7 @@
   function selectTab(next: Tab): void {
     tab = next;
     if (next === 'chat') reconcileVisibleHistory();
+    if (next === 'git') void loadGitSummary();
     if (next === 'sessions') void refreshSessionLists();
   }
 
@@ -329,19 +342,33 @@
     gitSummary = await relay.getGitSummary(sessionId);
   }
 
-  async function refreshGit() {
+  async function pullGit() {
     if (!sessionId) return;
     refreshRequestKey ??= createIdempotencyKey();
     gitRefreshing = true;
     gitError = null;
     try {
-      await relay.refreshGit(sessionId, refreshRequestKey);
+      await relay.pullGit(sessionId, refreshRequestKey);
       await loadGitSummary();
       refreshRequestKey = null;
-    } catch {
-      gitError = 'Fetch failed. Check the upstream and try again.';
+    } catch (error) {
+      gitError = error instanceof Error ? error.message : 'Git pull --rebase failed.';
     } finally {
       gitRefreshing = false;
+    }
+  }
+
+  async function checkoutGitBranch(branch: string) {
+    if (!sessionId || branch === gitSummary?.branch) return;
+    gitCheckingOut = true;
+    gitError = null;
+    try {
+      await relay.checkoutGitBranch(sessionId, branch);
+      await loadGitSummary();
+    } catch (error) {
+      gitError = error instanceof Error ? error.message : 'Git checkout failed.';
+    } finally {
+      gitCheckingOut = false;
     }
   }
 
@@ -493,7 +520,7 @@
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
-      <h2 id="chat-title">Chat</h2>
+      <h2 id="chat-title" class="visually-hidden">Chat</h2>
       {#if sessionId}
         <p>Connected Codex session: {sessions.find((session) => session.id === sessionId)?.threadId ?? 'starting…'}</p>
         <MessageList {messages} />
@@ -509,10 +536,11 @@
       {sessionId}
       summary={gitSummary}
       refreshing={gitRefreshing}
+      checkingOut={gitCheckingOut}
       error={gitError}
       confirmingPush={pushConfirmationOpen}
-      onload={() => void loadGitSummary()}
-      onrefresh={() => void refreshGit()}
+      onpull={() => void pullGit()}
+      oncheckout={(branch) => void checkoutGitBranch(branch)}
       onopenpushconfirmation={() => (pushConfirmationOpen = true)}
       onpush={() => void pushGit()}
       oncancelpush={() => (pushConfirmationOpen = false)}
@@ -530,6 +558,7 @@
       onsandboxchange={(value) => (sandbox = value)}
       onapprovalpolicychange={(value) => (approvalPolicy = value)}
       onopen={openSession}
+      onopenrecent={(session) => void openRecentSession(session)}
       onforget={(id) => void forgetSession(id)}
       oncopyresume={(command) => void copyResumeCommand(command)}
       onstart={() => void startSession()}

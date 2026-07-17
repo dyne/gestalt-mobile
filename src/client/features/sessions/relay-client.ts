@@ -32,6 +32,7 @@ export type RelayHistory = {
 export type RelayGitSummary = {
   available: boolean;
   branch: string | null;
+  branches?: string[];
   upstream: string | null;
   ahead: number;
   behind: number;
@@ -82,6 +83,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   return {
     listSessions: () => get<RelaySession[]>('/api/sessions'),
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
+    openRecentSession: (threadId: string, cwd: string) =>
+      request<RelaySession>('/api/sessions/recent-threads/open', { threadId, cwd }),
     startSession: (workspaceId: string, settings: StartSessionSettings = {}, key?: string) =>
       request<RelaySession>(
         '/api/sessions',
@@ -111,12 +114,14 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) =>
       get<RelayGitSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
-    refreshGit: (sessionId: string, key?: string) =>
+    pullGit: (sessionId: string, key?: string) =>
       request<void>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/git/refresh`,
+        `/api/sessions/${encodeURIComponent(sessionId)}/git/pull`,
         {},
         key ? { 'idempotency-key': key } : {},
       ),
+    checkoutGitBranch: (sessionId: string, branch: string) =>
+      request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/git/checkout`, { branch }),
     pushGit: (sessionId: string, key?: string) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/git/push`,

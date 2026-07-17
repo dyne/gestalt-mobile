@@ -50,4 +50,23 @@ describe('RelaySession', () => {
       new DomainError('SESSION_NOT_READY'),
     );
   });
+
+  it('imports an existing Codex thread as a resumable stopped session', () => {
+    expect(
+      RelaySession.fromExistingThread({
+        id: 'session-2',
+        workspaceId: '/work/imported',
+        workspacePath: '/work/imported',
+        profile: 'default',
+        threadId: 'thread-2',
+        now: createdAt,
+      }).snapshot,
+    ).toMatchObject({
+      id: 'session-2',
+      threadId: 'thread-2',
+      workspacePath: '/work/imported',
+      state: 'stopped',
+      desiredState: 'stopped',
+    });
+  });
 });

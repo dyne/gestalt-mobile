@@ -16,6 +16,7 @@
     onsandboxchange: (value: StartSessionSettings['sandbox'] | '') => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
     onopen: (id: string) => void;
+    onopenrecent: (session: RecentSession) => void;
     onforget: (id: string) => void;
     oncopyresume: (command: string) => void;
     onstart: () => void;
@@ -33,6 +34,7 @@
     onsandboxchange,
     onapprovalpolicychange,
     onopen,
+    onopenrecent,
     onforget,
     oncopyresume,
     onstart,
@@ -41,31 +43,34 @@
 </script>
 
 <section aria-labelledby="sessions-title">
-  <h2 id="sessions-title">Sessions</h2>
+  <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
   {#if sessions.length}
-    <ul aria-label="Saved sessions">
+    <ul class="session-list" aria-label="Saved sessions">
       {#each sessions as session (session.id)}
         {@const details = managedSessionDetails(session)}
-        <li>
-          {#if details.updatedAt !== null}
-            <time datetime={new Date(details.updatedAt).toISOString()}>
-              {formatRelativeTime(details.updatedAt)}
-            </time>
-          {:else}
-            <div>{formatRelativeTime(null)}</div>
-          {/if}
-          <code>{details.threadId ?? 'Thread pending'}</code>
-          <div>{details.workspacePath}</div>
-          {#if session.state === 'ready' || session.state === 'turnActive'}
-            <span>running</span>
-          {/if}
-          <button type="button" onclick={() => onopen(session.id)}>Open</button>
-          {#if session.resumeCommand}
-            <button type="button" onclick={() => oncopyresume(session.resumeCommand ?? '')}>
-              Copy resume command
-            </button>
-          {/if}
-          <button type="button" onclick={() => onforget(session.id)}>Forget</button>
+        <li class="managed-session">
+          <div class="session-details">
+            {#if details.updatedAt !== null}
+              <time datetime={new Date(details.updatedAt).toISOString()}>
+                {formatRelativeTime(details.updatedAt)}
+              </time>
+            {:else}
+              <div>{formatRelativeTime(null)}</div>
+            {/if}
+            <div class="workspace-path">{details.workspacePath}</div>
+            {#if session.state === 'ready' || session.state === 'turnActive'}
+              <span>running</span>
+            {/if}
+          </div>
+          <div class="session-actions">
+            <button type="button" onclick={() => onopen(session.id)}>Open</button>
+            {#if session.resumeCommand}
+              <button type="button" onclick={() => oncopyresume(session.resumeCommand ?? '')}>
+                Copy
+              </button>
+            {/if}
+            <button type="button" onclick={() => onforget(session.id)}>Forget</button>
+          </div>
         </li>
       {/each}
     </ul>
@@ -100,19 +105,21 @@
       {startingSession ? 'Starting…' : 'New session'}
     </button>
   </form>
-  <section aria-labelledby="last-sessions-title">
-    <h3 id="last-sessions-title">Last sessions</h3>
+  <section aria-labelledby="recent-sessions-title">
+    <h3 id="recent-sessions-title">Recent sessions</h3>
     {#if recentSessions.length}
-      <ul aria-label="Last sessions">
+      <ul class="session-list recent-session-list" aria-label="Recent sessions">
         {#each recentSessions as session (session.id)}
-          <li>
-            {#if session.recencyAt !== null}
-              <time datetime={new Date(session.recencyAt * 1000).toISOString()}>{formatRelativeTime(session.recencyAt * 1000)}</time>
-            {:else}
-              <div>{formatRelativeTime(null)}</div>
-            {/if}
-            <div>{session.cwd}</div>
-            <code>{session.id}</code>
+          <li class="recent-session">
+            <div class="session-details">
+              {#if session.recencyAt !== null}
+                <time datetime={new Date(session.recencyAt * 1000).toISOString()}>{formatRelativeTime(session.recencyAt * 1000)}</time>
+              {:else}
+                <div>{formatRelativeTime(null)}</div>
+              {/if}
+              <div class="workspace-path">{session.cwd}</div>
+            </div>
+            <button type="button" onclick={() => onopenrecent(session)}>Open</button>
           </li>
         {/each}
       </ul>
@@ -123,6 +130,40 @@
 </section>
 
 <style>
+  .session-list {
+    display: grid;
+    gap: 1rem;
+    margin-block: 0 1.5rem;
+    padding-inline: 0;
+    list-style: none;
+  }
+
+  .managed-session {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .session-details {
+    min-inline-size: 0;
+  }
+
+  .workspace-path {
+    overflow-wrap: anywhere;
+  }
+
+  .session-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .recent-session {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: start;
+  }
+
   .form-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

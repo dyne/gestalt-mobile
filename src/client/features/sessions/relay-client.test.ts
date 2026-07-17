@@ -23,17 +23,17 @@ describe('relay client', () => {
     ]);
   });
 
-  it('reads and refreshes the selected session Git summary', async () => {
+  it('reads and pulls the selected session Git summary', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {
       requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
       return new Response(JSON.stringify({ available: true }), { status: 200 });
     });
     await client.getGitSummary('session-1');
-    await client.refreshGit('session-1');
+    await client.pullGit('session-1');
     expect(requests).toEqual([
       'GET /api/sessions/session-1/git',
-      'POST /api/sessions/session-1/git/refresh',
+      'POST /api/sessions/session-1/git/pull',
     ]);
   });
 
@@ -44,11 +44,11 @@ describe('relay client', () => {
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
 
-    await client.refreshGit('session-1', 'refresh-key');
+    await client.pullGit('session-1', 'pull-key');
     await client.pushGit('session-1', 'push-key');
 
     expect(headers).toEqual([
-      { 'content-type': 'application/json', 'idempotency-key': 'refresh-key' },
+      { 'content-type': 'application/json', 'idempotency-key': 'pull-key' },
       { 'content-type': 'application/json', 'idempotency-key': 'push-key' },
     ]);
   });
@@ -61,6 +61,23 @@ describe('relay client', () => {
     });
     await client.listSessions();
     expect(requests).toEqual(['GET /api/sessions']);
+  });
+
+  it('promotes a recent Codex thread into a managed session', async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push({ url: String(url), body: init?.body as string | undefined });
+      return new Response(JSON.stringify({ id: 'session-1' }), { status: 202 });
+    });
+
+    await client.openRecentSession('thread-1', '/work/project');
+
+    expect(requests).toEqual([
+      {
+        url: '/api/sessions/recent-threads/open',
+        body: JSON.stringify({ threadId: 'thread-1', cwd: '/work/project' }),
+      },
+    ]);
   });
 
   it('preserves a relay problem detail for a failed mutation', async () => {

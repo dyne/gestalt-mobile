@@ -6,7 +6,13 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { inspectGit, parseDivergence, parseDirtyCounts, pushUpstream } from './git-inspector.js';
+import {
+  checkoutBranch,
+  inspectGit,
+  parseDivergence,
+  parseDirtyCounts,
+  pushUpstream,
+} from './git-inspector.js';
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -129,5 +135,24 @@ describe('git inspector', () => {
       ahead: 0,
       behind: 0,
     });
+  });
+
+  it('lists and checks out local branches only', async () => {
+    const workspace = await createTemporaryDirectory();
+    await git(workspace, 'init');
+    await configureAuthor(workspace);
+    await writeFile(join(workspace, 'README.md'), 'initial\n');
+    await git(workspace, 'add', '.');
+    await git(workspace, 'commit', '-m', 'Initial');
+    await git(workspace, 'branch', 'topic');
+
+    await expect(inspectGit(workspace)).resolves.toMatchObject({
+      branches: expect.arrayContaining(['topic']),
+    });
+    await checkoutBranch(workspace, 'topic');
+    await expect(inspectGit(workspace)).resolves.toMatchObject({ branch: 'topic' });
+    await expect(checkoutBranch(workspace, 'origin/topic')).rejects.toThrow(
+      'LOCAL_BRANCH_NOT_FOUND',
+    );
   });
 });

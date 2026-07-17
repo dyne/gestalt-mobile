@@ -43,7 +43,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page.getByRole('button', { name: 'New session' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByText('Connected Codex session: codex-thread-1')).toBeVisible();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
@@ -52,6 +52,22 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 });
 
 test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
+  const managedSession = {
+    id: 'relay-session-1',
+    state: 'ready',
+    threadId: 'relay-thread-id',
+    workspaceId: 'workspace-1',
+    workspacePath: '/projects/relay',
+    profile: 'work',
+    updatedAt: '2026-07-15T10:00:00.000Z',
+  };
+  const promotedSession = {
+    ...managedSession,
+    id: 'promoted-session-1',
+    threadId: 'recent-thread-id',
+    workspacePath: '/projects/from-ssh',
+  };
+  let recentOpened = false;
   await page.addInitScript(() => {
     Date.now = () => Date.UTC(2026, 6, 15, 12, 0, 0);
   });
@@ -61,17 +77,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
       body: JSON.stringify({
         workspaces: [{ id: 'workspace-1', name: 'project' }],
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [
-          {
-            id: 'relay-session-1',
-            state: 'ready',
-            threadId: 'relay-thread-id',
-            workspaceId: 'workspace-1',
-            workspacePath: '/projects/relay',
-            profile: 'work',
-            updatedAt: '2026-07-15T10:00:00.000Z',
-          },
-        ],
+        sessions: [managedSession],
       }),
     }),
   );
@@ -87,17 +93,52 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await page.route('**/api/sessions/relay-session-1/history', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
   );
+  await page.route('**/api/sessions/promoted-session-1/history', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+  );
+  await page.route('**/api/sessions/recent-threads/open', async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      threadId: 'recent-thread-id',
+      cwd: '/projects/from-ssh',
+    });
+    recentOpened = true;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify(promotedSession),
+    });
+  });
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(recentOpened ? [promotedSession, managedSession] : [managedSession]),
+    }),
+  );
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
 
-  await expect(page.getByLabel('Saved sessions').getByText('relay-thread-id')).toBeVisible();
   await expect(page.getByLabel('Saved sessions').getByText('/projects/relay')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Last sessions' })).toBeVisible();
-  await expect(page.getByLabel('Last sessions').getByText('2 hours ago')).toBeVisible();
-  await expect(page.getByLabel('Last sessions').getByText('/projects/from-ssh')).toBeVisible();
-  await expect(page.getByLabel('Last sessions').getByText('recent-thread-id')).toBeVisible();
-  await expect(page.getByText('Thread relay-thread-id')).toHaveCount(0);
+  await expect(page.getByLabel('Saved sessions').getByText('relay-thread-id')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Recent sessions' })).toBeVisible();
+  await expect(page.getByLabel('Recent sessions').getByText('2 hours ago')).toBeVisible();
+  await expect(page.getByLabel('Recent sessions').getByText('/projects/from-ssh')).toBeVisible();
+  await expect(page.getByLabel('Recent sessions').getByText('recent-thread-id')).toHaveCount(0);
+
+  await page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await page
+    .getByLabel('Recent sessions')
+    .getByRole('listitem')
+    .filter({ hasText: '/projects/from-ssh' })
+    .getByRole('button', { name: 'Open' })
+    .click();
+  await expect.poll(() => recentOpened).toBe(true);
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+  await expect(page.getByText('Connected Codex session: recent-thread-id')).toBeVisible();
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await expect(page.getByLabel('Saved sessions').getByText('/projects/from-ssh')).toBeVisible();
 });
 
 test('manages saved sessions with their running state, resume command, and forget action', async ({
@@ -153,7 +194,7 @@ test('manages saved sessions with their running state, resume command, and forge
   const savedSessions = page.getByLabel('Saved sessions');
   await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(2);
   await expect(savedSessions.getByText('running', { exact: true })).toHaveCount(1);
-  await expect(savedSessions.getByRole('button', { name: 'Copy resume command' })).toHaveCount(2);
+  await expect(savedSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(2);
   await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(2);
   await expect(savedSessions.getByRole('button', { name: /Release|Restore/ })).toHaveCount(0);
 
@@ -197,7 +238,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
   await page.getByLabel('Approval policy').selectOption('never');
   await expect(page.getByLabel('Model')).toHaveCount(0);
   await page.getByRole('button', { name: 'New session' }).click();
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
 
 test('rehydrates a durable pending interaction after a browser reload', async ({ page }) => {
@@ -324,6 +365,7 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   const summary = {
     available: true,
     branch: 'main',
+    branches: ['main', 'topic'],
     upstream: 'origin/main',
     ahead: 2,
     behind: 0,
@@ -332,6 +374,7 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
     fetchedAt: '2026-07-14T10:00:00.000Z',
   };
   let pushed = false;
+  let checkedOut = 'main';
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -349,8 +392,15 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
     }),
   );
   await page.route('**/api/sessions/session-1/git', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify(summary) }),
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ ...summary, branch: checkedOut }),
+    }),
   );
+  await page.route('**/api/sessions/session-1/git/checkout', async (route) => {
+    checkedOut = (route.request().postDataJSON() as { branch: string }).branch;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
   await page.route('**/api/sessions/session-1/git/push', async (route) => {
     pushed = true;
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
@@ -358,14 +408,17 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByRole('button', { name: 'Load status' }).click();
 
-  await expect(page.getByText('Branch: main · upstream: origin/main')).toBeVisible();
+  await expect(page.getByLabel('Branch')).toHaveValue('main');
+  await expect(page.getByText('Upstream: origin/main')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Push' })).toBeEnabled();
   await page.getByRole('button', { name: 'Push' }).click();
   await expect(page.getByText('Push HEAD to origin/main?')).toBeVisible();
   await page.getByRole('button', { name: 'Confirm push' }).click();
   await expect.poll(() => pushed).toBe(true);
+  await page.getByLabel('Branch').selectOption('topic');
+  await expect.poll(() => checkedOut).toBe('topic');
+  await expect(page.getByLabel('Branch')).toHaveValue('topic');
 });
 
 test('hydrates canonical history for a persisted session', async ({ page }) => {
@@ -480,7 +533,7 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
   await expect(page.getByText('Terminal answer')).toBeVisible();
 });
 
-test('shows Git fetch progress and disables push without an upstream', async ({ page }) => {
+test('shows Git pull progress and disables push without an upstream', async ({ page }) => {
   const session = {
     id: 'session-1',
     state: 'ready',
@@ -511,6 +564,7 @@ test('shows Git fetch progress and disables push without an upstream', async ({ 
       body: JSON.stringify({
         available: true,
         branch: 'topic',
+        branches: ['main', 'topic'],
         upstream: null,
         ahead: 1,
         behind: 0,
@@ -520,7 +574,7 @@ test('shows Git fetch progress and disables push without an upstream', async ({ 
       }),
     }),
   );
-  await page.route('**/api/sessions/session-1/git/refresh', async (route) => {
+  await page.route('**/api/sessions/session-1/git/pull', async (route) => {
     await new Promise<void>((resolve) => {
       completeRefresh = resolve;
     });
@@ -529,12 +583,11 @@ test('shows Git fetch progress and disables push without an upstream', async ({ 
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByRole('button', { name: 'Load status' }).click();
   await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Fetch' }).click();
-  await expect(page.getByRole('button', { name: 'Fetching…' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Pull' }).click();
+  await expect(page.getByRole('button', { name: 'Pulling…' })).toBeDisabled();
   completeRefresh?.();
-  await expect(page.getByRole('button', { name: 'Fetch' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Pull' })).toBeEnabled();
 });
 
 test('renders and resolves a relay approval request', async ({ page }) => {
@@ -1003,13 +1056,15 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
 
   await page.goto('/');
   const chat = page.getByRole('button', { name: 'Chat', pressed: true });
+  await expect(chat).toHaveCSS('font-weight', '700');
   await chat.press('ArrowRight');
-  await expect(page.getByRole('heading', { name: 'Git' })).toBeVisible();
   const git = page.getByRole('button', { name: 'Git', pressed: true });
+  await expect(git).toHaveCSS('font-weight', '700');
   await expect(git).toBeFocused();
   await git.press('ArrowLeft');
-  await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeFocused();
+  const selectedChat = page.getByRole('button', { name: 'Chat', pressed: true });
+  await expect(selectedChat).toHaveCSS('font-weight', '700');
+  await expect(selectedChat).toBeFocused();
 });
 
 test('shows Gestalt branding and changes appearance from configuration', async ({ page }) => {
