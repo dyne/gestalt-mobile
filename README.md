@@ -47,3 +47,13 @@ an upstream or force-pushes.
 Run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and
 `npm run protocol:check`. Generated Codex bindings are checked with the pinned
 installed CLI; regenerate them only with `npm run protocol:generate`.
+
+## Copyright and license
+
+Copyright (C) 2026 Dyne.org foundation
+Designed by Denis Roio <jaromil@dyne.org>
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+Gestalt Mobile is distributed under the GNU Affero General Public License
+version 3 or, at your option, any later version. See [LICENSE](LICENSE).
