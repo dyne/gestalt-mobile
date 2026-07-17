@@ -1,8 +1,10 @@
-# Codex Relay
+# Gestalt mobile client
 
-Mobile-first relay for one Codex CLI app-server process per durable session.
-It is intentionally HTTP-only: run it only on a private VPN or equivalent
-trusted network.
+Mobile-first relay for [gestalt](https://dyne.org/gestalt)
+orchestrated development with support for durable sessions.
+
+It is intentionally HTTP-only: run it only on a private VPN or
+equivalent trusted network.
 
 ## Run
 
@@ -12,28 +14,20 @@ npm run build
 npm start -- --cwd <relay-root>
 ```
 
-`--cwd` is the relay root. Its immediate child directories are selectable
-workspaces. Profiles come from `codex-profile status --json`; if it reports no
-managed profiles but `~/.codex` exists, the selectable `default` profile launches
-`codex app-server --stdio` directly.
+`--cwd` is the relay root, which should be a folder containing
+organizations which then contain cloned repositories. So its immediate
+child directories are selectable workspaces.
 
-The relay keeps SQLite state under the supplied data directory, or under the
-root-hashed XDG state directory when `--data-dir` is omitted. Active durable
-threads are resumed after a relay restart. A failed child process is retried
-with bounded backoff before the session is marked as requiring attention.
+## Sessions
 
-## Session handoff
+Use **Open** to relaunch a released, stopped, or attention-required
+relay session from the browser.
 
-Use **Release** in the mobile Sessions tab before taking over from SSH. It stops
-the relay-owned process while retaining the Codex thread ID. The same tab can
-copy an argument-safe resume command, for example:
-
-```sh
-codex-profile cli <profile> resume <thread-id> -C <workspace> --include-non-interactive
-```
-
-Use **Restore** to relaunch a released, stopped, or attention-required relay
-session from the browser.
+The relay keeps SQLite state under the supplied data directory, or
+under the root-hashed XDG state directory when `--data-dir` is
+omitted. Active durable threads are resumed after a relay restart. A
+failed child process is retried with bounded backoff before the
+session is marked as requiring attention.
 
 ## Mobile recovery
 
@@ -41,7 +35,7 @@ The browser stores the selected session, its replay cursor, and per-session
 composer drafts. On a dropped connection it replays retained events; if the
 server has pruned the gap, it reloads canonical Codex thread history.
 
-## Git behavior
+## Git
 
 The Git tab reports branch divergence, dirty counts, and recent commits. Fetch
 is coalesced and throttled for 60 seconds after success. Push is available only
