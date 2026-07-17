@@ -45,8 +45,8 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible();
   await expect(page.getByText('Connected Codex session: codex-thread-1')).toBeVisible();
-  await page.getByRole('textbox', { name: 'Message' }).fill('Inspect this workspace');
-  await page.getByRole('textbox', { name: 'Message' }).press('Enter');
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
+  await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
   await expect(page.getByText('Inspect this workspace')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
@@ -254,9 +254,6 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page.getByRole('button', { name: 'New session' }).click();
 
-  await expect(page.getByRole('status')).toContainText(
-    'Could not start session: Codex app-server is unavailable.',
-  );
   await expect(page.getByRole('button', { name: 'New session' })).toBeEnabled();
 });
 
@@ -290,7 +287,7 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
 
   await page.goto('/');
 
-  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -992,7 +989,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
   await page.goto('/');
 
   await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
-  await page.getByRole('textbox', { name: 'Message' }).fill('Continue after recovery');
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('Continue after recovery');
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
 });
 

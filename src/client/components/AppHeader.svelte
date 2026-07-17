@@ -2,11 +2,9 @@
   type ThemePreference = 'system' | 'light' | 'dark';
 
   let {
-    status,
     theme,
     onthemechange,
   }: {
-    status: string;
     theme: ThemePreference;
     onthemechange: (theme: ThemePreference) => void;
   } = $props();
@@ -27,7 +25,6 @@
   >
     <span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span>
   </button>
-  <p role="status">{status}</p>
 </header>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">

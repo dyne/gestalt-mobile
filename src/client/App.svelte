@@ -489,7 +489,7 @@
 </svelte:head>
 
 <main>
-  <AppHeader {status} {theme} onthemechange={setTheme} />
+  <AppHeader {theme} onthemechange={setTheme} />
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
@@ -499,7 +499,7 @@
         <MessageList {messages} />
         <ActivityList {activities} />
         <InteractionList {interactions} answers={userInputAnswers} onanswer={setUserInputAnswer} onuserinput={(interaction) => void resolveUserInput(interaction)} onpermission={(interaction) => void resolvePermissions(interaction)} ondecision={(id, decision) => void resolveInteraction(id, decision)} />
-        <Composer {message} activeTurnId={activeTurnId} starting={startingTurn} onchange={updateDraft} onsend={() => void sendMessage()} oninterrupt={() => void interruptTurn()} />
+        <Composer {status} {message} activeTurnId={activeTurnId} starting={startingTurn} onchange={updateDraft} onsend={() => void sendMessage()} oninterrupt={() => void interruptTurn()} />
       {:else}
         <p>Start a session from the Sessions tab to chat with Codex.</p>
       {/if}

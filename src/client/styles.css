@@ -26,12 +26,18 @@ main {
 }
 
 .app-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 1rem;
-  margin-block-end: 1.5rem;
+  margin-block: calc(-1rem - env(safe-area-inset-top)) 1.5rem;
+  padding: calc(1rem + env(safe-area-inset-top)) 0 0.75rem;
+  background: color-mix(in srgb, Canvas 78%, transparent);
+  backdrop-filter: blur(0.75rem);
 }
 
 .app-header [role='status'] {
