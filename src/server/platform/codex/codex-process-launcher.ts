@@ -17,6 +17,7 @@ export function launchCodexAppServer(input: { profile: string; cwd: string }): C
     stdio: 'pipe',
   });
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
+  child.once('error', (error) => rpc.fail(error));
   return {
     child,
     rpc,

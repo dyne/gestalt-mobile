@@ -13,6 +13,7 @@ export class JsonRpcClient {
   private readonly serverRequests = new Set<
     (request: { id: number; method: string; params: unknown }) => Promise<unknown> | unknown
   >();
+  private failure: unknown = null;
   constructor(
     input: Readable,
     private readonly output: Writable,
@@ -20,9 +21,16 @@ export class JsonRpcClient {
     createInterface({ input, crlfDelay: Infinity }).on('line', (line) => this.receive(line));
   }
   request(method: string, params: unknown): Promise<unknown> {
+    if (this.failure) return Promise.reject(this.failure);
     const id = ++this.sequence;
     this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+  }
+  fail(error: unknown): void {
+    if (this.failure) return;
+    this.failure = error;
+    for (const { reject } of this.pending.values()) reject(error);
+    this.pending.clear();
   }
   onNotification(
     listener: (notification: { method: string; params: unknown }) => void,

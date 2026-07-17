@@ -44,4 +44,17 @@ describe('JsonRpcClient', () => {
     );
     await expect(written).resolves.toContain('"id":41');
   });
+
+  it('rejects pending and later requests after the app-server process fails', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const pending = client.request('initialize', {});
+    const failure = new Error('spawn codex-profile ENOENT');
+
+    client.fail(failure);
+
+    await expect(pending).rejects.toBe(failure);
+    await expect(client.request('thread/start', {})).rejects.toBe(failure);
+  });
 });
