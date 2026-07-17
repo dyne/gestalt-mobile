@@ -46,6 +46,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
     "protocol:generate": "node scripts/generate-codex-protocol.mjs",
     "protocol:check": "node scripts/check-codex-protocol.mjs"
