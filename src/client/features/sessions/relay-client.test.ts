@@ -43,16 +43,18 @@ describe('relay client', () => {
     ]);
   });
 
-  it('posts a Git address to clone into the workspace root', async () => {
+  it('posts a Git address and workspace destination to clone', async () => {
     let body: unknown;
     const client = createRelayClient(async (_url, init) => {
       body = init?.body;
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
 
-    await client.cloneGitRepository('https://example.test/gestalt.git');
+    await client.cloneGitRepository('workspace-1', 'https://example.test/gestalt.git');
 
-    expect(body).toBe(JSON.stringify({ address: 'https://example.test/gestalt.git' }));
+    expect(body).toBe(
+      JSON.stringify({ workspaceId: 'workspace-1', address: 'https://example.test/gestalt.git' }),
+    );
   });
 
   it('passes stable idempotency keys to Git mutations', async () => {

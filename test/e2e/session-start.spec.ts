@@ -427,30 +427,39 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   await expect(page.getByLabel('Branch')).toHaveValue('topic');
 });
 
-test('clones a repository from the Git tab into the workspace root', async ({ page }) => {
-  let cloneAddress = '';
+test('clones a repository from the Git tab into the selected workspace', async ({ page }) => {
+  let cloneRequest: { workspaceId: string; address: string } | null = null;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: [
+          { id: 'workspace-1', name: 'project' },
+          { id: 'workspace-2', name: 'archive' },
+        ],
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
     }),
   );
   await page.route('**/api/git/clone', async (route) => {
-    cloneAddress = (route.request().postDataJSON() as { address: string }).address;
+    cloneRequest = route.request().postDataJSON() as { workspaceId: string; address: string };
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByLabel('Clone repository').fill('https://example.test/cloned-repo.git');
+  await page.getByLabel('Destination workspace').selectOption('workspace-2');
+  await page.getByLabel('Git address').fill('https://example.test/cloned-repo.git');
   await page.getByRole('button', { name: 'Clone' }).click();
 
-  await expect.poll(() => cloneAddress).toBe('https://example.test/cloned-repo.git');
-  await expect(page.getByRole('status')).toContainText('Repository cloned');
+  await expect
+    .poll(() => cloneRequest)
+    .toEqual({
+      workspaceId: 'workspace-2',
+      address: 'https://example.test/cloned-repo.git',
+    });
+  await expect(page.getByRole('status')).toContainText('selected workspace');
 });
 
 test('hydrates canonical history for a persisted session', async ({ page }) => {

@@ -11,6 +11,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     sessionId: string | null;
+    workspaces: Array<{ id: string; name: string }>;
+    cloneWorkspaceId: string;
     summary: RelayGitSummary | null;
     refreshing: boolean;
     checkingOut: boolean;
@@ -23,11 +25,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenpushconfirmation: () => void;
     onpush: () => void;
     oncancelpush: () => void;
-    onclone: (address: string) => void;
+    onclone: (workspaceId: string, address: string) => void;
   };
 
   let {
     sessionId,
+    workspaces,
+    cloneWorkspaceId,
     summary,
     refreshing,
     checkingOut,
@@ -43,35 +47,59 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onclone,
   }: Props = $props();
   let cloneAddress = $state('');
+  let selectedCloneWorkspaceId = $state('');
+  const cloneWorkspaces = $derived(workspaces.filter((workspace) => workspace.name !== '/'));
+
+  $effect(() => {
+    if (cloneWorkspaces.some((workspace) => workspace.id === selectedCloneWorkspaceId)) return;
+    selectedCloneWorkspaceId =
+      cloneWorkspaces.find((workspace) => workspace.id === cloneWorkspaceId)?.id ??
+      cloneWorkspaces[0]?.id ??
+      '';
+  });
 
   function submitClone(event: SubmitEvent): void {
     event.preventDefault();
-    if (!cloneAddress.trim() || cloning) return;
-    onclone(cloneAddress.trim());
+    if (!cloneAddress.trim() || !selectedCloneWorkspaceId || cloning) return;
+    onclone(selectedCloneWorkspaceId, cloneAddress.trim());
   }
 </script>
 
 <section class="git-view" aria-labelledby="git-title">
   <h2 id="git-title" class="visually-hidden">Git</h2>
   <form class="clone-form" onsubmit={submitClone}>
-    <label for="git-clone-address">Clone repository</label>
     <div class="clone-controls">
-      <input
-        id="git-clone-address"
-        name="address"
-        bind:value={cloneAddress}
-        required
-        autocomplete="url"
-        inputmode="url"
-        enterkeyhint="done"
-        placeholder="https://example.com/owner/repository.git"
-        aria-describedby="clone-help"
-      />
+      <div class="clone-field clone-workspace">
+        <label for="git-clone-workspace">Destination workspace</label>
+        <select
+          id="git-clone-workspace"
+          name="workspaceId"
+          bind:value={selectedCloneWorkspaceId}
+          required
+          disabled={cloning || !cloneWorkspaces.length}
+        >
+          {#each cloneWorkspaces as workspace (workspace.id)}
+            <option value={workspace.id}>{workspace.name}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="clone-field">
+        <label for="git-clone-address">Git address</label>
+        <input
+          id="git-clone-address"
+          name="address"
+          bind:value={cloneAddress}
+          required
+          autocomplete="url"
+          inputmode="url"
+          enterkeyhint="done"
+          placeholder="https://example.com/owner/repository.git"
+          aria-describedby="clone-help"
+        />
+      </div>
       <button type="submit" disabled={cloning}>{cloning ? 'Cloning…' : 'Clone'}</button>
     </div>
-    <p id="clone-help">
-      The repository is cloned into the workspace root as a new first-level folder.
-    </p>
+    <p id="clone-help">The repository is cloned inside the selected workspace.</p>
     {#if cloneStatus}<p class="clone-status" role="status">{cloneStatus}</p>{/if}
   </form>
   {#if sessionId}
@@ -163,9 +191,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .clone-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(10rem, 0.45fr) minmax(0, 1fr) auto;
     gap: 0.5rem;
     align-items: end;
+  }
+  .clone-field {
+    display: grid;
+    gap: 0.35rem;
   }
   .clone-controls button {
     min-inline-size: 5.75rem;

@@ -120,7 +120,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getGitSummary: (sessionId: string) =>
       get<RelayGitSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
-    cloneGitRepository: (address: string) => request<void>('/api/git/clone', { address }),
+    cloneGitRepository: (workspaceId: string, address: string) =>
+      request<void>('/api/git/clone', { workspaceId, address }),
     pullGit: (sessionId: string, key?: string) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/git/pull`,

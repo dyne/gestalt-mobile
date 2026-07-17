@@ -95,7 +95,7 @@ export type AppDependencies = {
     refresh(path: string): Promise<void>;
     pull?(path: string): Promise<void>;
     checkout?(path: string, branch: string): Promise<void>;
-    clone?(address: string): Promise<void>;
+    clone?(workspaceId: string, address: string): Promise<void>;
   };
 };
 

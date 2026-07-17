@@ -372,16 +372,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
-  async function cloneGitRepository(address: string) {
+  async function cloneGitRepository(workspaceId: string, address: string) {
     if (gitCloning) return;
     gitCloning = true;
     gitError = null;
     gitCloneStatus = null;
     try {
-      await relay.cloneGitRepository(address);
+      await relay.cloneGitRepository(workspaceId, address);
       const bootstrap = await loadBootstrap();
       workspaces = bootstrap.workspaces;
-      gitCloneStatus = 'Repository cloned. It is now available as a workspace.';
+      gitCloneStatus = 'Repository cloned into the selected workspace.';
     } catch (error) {
       gitError = `Could not clone repository: ${errorMessage(error)}`;
     } finally {
@@ -601,6 +601,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if tab === 'git'}
     <GitView
       {sessionId}
+      {workspaces}
+      cloneWorkspaceId={workspaceId}
       summary={gitSummary}
       refreshing={gitRefreshing}
       checkingOut={gitCheckingOut}
@@ -613,7 +615,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onopenpushconfirmation={() => (pushConfirmationOpen = true)}
       onpush={() => void pushGit()}
       oncancelpush={() => (pushConfirmationOpen = false)}
-      onclone={(address) => void cloneGitRepository(address)}
+      onclone={(destination, address) => void cloneGitRepository(destination, address)}
     />
   {:else}
     <SessionsView

@@ -12,18 +12,23 @@ import { registerCloneRepository } from './endpoint.js';
 describe('POST /api/git/clone', () => {
   it('clones a supplied Git address into the workspace root', async () => {
     const app = fastify();
-    let address = '';
-    registerCloneRepository(app, { clone: async (value) => void (address = value) });
+    let clone: { workspaceId: string; address: string } | null = null;
+    registerCloneRepository(app, {
+      clone: async (workspaceId, address) => void (clone = { workspaceId, address }),
+    });
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/git/clone',
-      payload: { address: 'https://example.test/gestalt.git' },
+      payload: { workspaceId: 'workspace-1', address: 'https://example.test/gestalt.git' },
     });
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ accepted: true });
-    expect(address).toBe('https://example.test/gestalt.git');
+    expect(clone).toEqual({
+      workspaceId: 'workspace-1',
+      address: 'https://example.test/gestalt.git',
+    });
     await app.close();
   });
 
@@ -32,7 +37,11 @@ describe('POST /api/git/clone', () => {
     let called = false;
     registerCloneRepository(app, { clone: async () => void (called = true) });
 
-    const response = await app.inject({ method: 'POST', url: '/api/git/clone', payload: {} });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/git/clone',
+      payload: { workspaceId: 'workspace-1' },
+    });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ code: 'INVALID_CLONE_ADDRESS' });

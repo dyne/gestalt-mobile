@@ -79,8 +79,8 @@ server has pruned the gap, it reloads canonical Codex thread history.
 ## Git
 
 The Git tab reports branch divergence, dirty counts, and recent commits. It can
-also clone a Git address into the configured `--cwd` root; the cloned directory
-then becomes a selectable workspace. Pull
+also clone a Git address into a selected workspace directory below `--cwd`.
+Pull
 uses `git pull --rebase`. Push is available only for a branch that has an
 upstream, is ahead, and is not behind; it never creates an upstream or
 force-pushes.
