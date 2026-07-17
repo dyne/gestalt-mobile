@@ -86,7 +86,16 @@ export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
           authoredAt: authoredAt!,
         };
       });
-    return { available: true, branch, branches, upstream, ...divergence, dirty, commits, fetchedAt: null };
+    return {
+      available: true,
+      branch,
+      branches,
+      upstream,
+      ...divergence,
+      dirty,
+      commits,
+      fetchedAt: null,
+    };
   } catch {
     return {
       available: false,
@@ -135,4 +144,8 @@ export async function checkoutBranch(cwd: string, branch: string): Promise<void>
     .filter(Boolean);
   if (!branches.includes(branch)) throw new Error('LOCAL_BRANCH_NOT_FOUND');
   await git(cwd, ['switch', branch]);
+}
+
+export async function cloneRepository(workspaceRoot: string, address: string): Promise<void> {
+  await git(workspaceRoot, ['clone', '--', address], GIT_FETCH_TIMEOUT_MS);
 }

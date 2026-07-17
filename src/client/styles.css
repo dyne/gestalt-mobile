@@ -43,6 +43,16 @@ main {
   padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
+main.git-mode {
+  max-inline-size: none;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+main.git-mode .app-header {
+  padding-inline: 1rem;
+}
+
 .app-header {
   position: sticky;
   inset-block-start: 0;
@@ -197,7 +207,10 @@ main {
 }
 
 .bottom-navigation button {
-  transition: color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .bottom-navigation button[aria-pressed='true'] {

@@ -14,6 +14,7 @@ import { registerPushUpstream } from './features/git/push-upstream/endpoint.js';
 import { registerRefreshGit } from './features/git/refresh/endpoint.js';
 import { registerPullRebase } from './features/git/pull-rebase/endpoint.js';
 import { registerCheckoutBranch } from './features/git/checkout-branch/endpoint.js';
+import { registerCloneRepository } from './features/git/clone-repository/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
 import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
@@ -94,6 +95,7 @@ export type AppDependencies = {
     refresh(path: string): Promise<void>;
     pull?(path: string): Promise<void>;
     checkout?(path: string, branch: string): Promise<void>;
+    clone?(address: string): Promise<void>;
   };
 };
 
@@ -196,6 +198,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       checkout: deps.gitSummary.checkout,
     });
   }
+  if (deps.gitSummary?.clone) registerCloneRepository(app, { clone: deps.gitSummary.clone });
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }

@@ -25,7 +25,14 @@ import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pen
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
 import { legacyRelayStatePath, relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
-import { checkoutBranch, fetchUpstream, inspectGit, pullRebase, pushUpstream } from './platform/git/git-inspector.js';
+import {
+  checkoutBranch,
+  cloneRepository,
+  fetchUpstream,
+  inspectGit,
+  pullRebase,
+  pushUpstream,
+} from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
 import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
@@ -254,6 +261,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         await checkoutBranch(path, branch);
         gitSummaries.invalidate(path);
       },
+      clone: (address) => cloneRepository(root, address),
     },
   });
   const restoreActiveSessions = async () => {

@@ -427,6 +427,32 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
   await expect(page.getByLabel('Branch')).toHaveValue('topic');
 });
 
+test('clones a repository from the Git tab into the workspace root', async ({ page }) => {
+  let cloneAddress = '';
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/git/clone', async (route) => {
+    cloneAddress = (route.request().postDataJSON() as { address: string }).address;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByLabel('Clone repository').fill('https://example.test/cloned-repo.git');
+  await page.getByRole('button', { name: 'Clone' }).click();
+
+  await expect.poll(() => cloneAddress).toBe('https://example.test/cloned-repo.git');
+  await expect(page.getByRole('status')).toContainText('Repository cloned');
+});
+
 test('hydrates canonical history for a persisted session', async ({ page }) => {
   const session = {
     id: 'session-1',

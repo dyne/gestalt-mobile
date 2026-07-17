@@ -76,7 +76,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
   let gitCheckingOut = $state(false);
+  let gitCloning = $state(false);
   let gitError = $state<string | null>(null);
+  let gitCloneStatus = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
@@ -104,7 +106,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (sessionId) message = await sessionCache.readDraft(sessionId);
       if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
-      interactions = sessions.find((session) => session.id === sessionId)?.pendingInteractions ?? [];
+      interactions =
+        sessions.find((session) => session.id === sessionId)?.pendingInteractions ?? [];
       void refreshRecentSessions();
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? turnReadiness(activeTurnId) : 'Choose a workspace and start a session.';
@@ -326,7 +329,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function reconcileVisibleHistory(): void {
-    if (tab !== 'chat' || !sessionId || document.visibilityState !== 'visible' || historyRefreshInFlight)
+    if (
+      tab !== 'chat' ||
+      !sessionId ||
+      document.visibilityState !== 'visible' ||
+      historyRefreshInFlight
+    )
       return;
     historyRefreshInFlight = true;
     void resyncHistory(sessionId)
@@ -361,6 +369,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       gitError = error instanceof Error ? error.message : 'Git pull --rebase failed.';
     } finally {
       gitRefreshing = false;
+    }
+  }
+
+  async function cloneGitRepository(address: string) {
+    if (gitCloning) return;
+    gitCloning = true;
+    gitError = null;
+    gitCloneStatus = null;
+    try {
+      await relay.cloneGitRepository(address);
+      const bootstrap = await loadBootstrap();
+      workspaces = bootstrap.workspaces;
+      gitCloneStatus = 'Repository cloned. It is now available as a workspace.';
+    } catch (error) {
+      gitError = `Could not clone repository: ${errorMessage(error)}`;
+    } finally {
+      gitCloning = false;
     }
   }
 
@@ -450,7 +475,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     socket?.close();
     const generation = ++socketGeneration;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    socket = new WebSocket(`${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`);
+    socket = new WebSocket(
+      `${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`,
+    );
     socket.onopen = () => {
       if (generation !== socketGeneration || sessionId !== id) return;
       status = turnReadiness(activeTurnId);
@@ -462,11 +489,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     socket.onmessage = (message) => {
       const envelope = JSON.parse(String(message.data));
       if (envelope.type === 'relay.resyncRequired') {
-        void resyncHistory(id, typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0);
+        void resyncHistory(
+          id,
+          typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0,
+        );
         return;
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
-        const interaction = envelope.event.payload as { requestId: string; kind: string; payload: unknown };
+        const interaction = envelope.event.payload as {
+          requestId: string;
+          kind: string;
+          payload: unknown;
+        };
         if (!interactions.some((item) => item.requestId === interaction.requestId))
           interactions = [...interactions, interaction];
       }
@@ -497,15 +531,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       }
       if (envelope.type === 'relay.event' && envelope.event?.type === 'activity.updated') {
         const activity = envelope.event.payload as HistoryActivity;
-        if (typeof activity.id === 'string' && typeof activity.label === 'string' && typeof activity.detail === 'string')
+        if (
+          typeof activity.id === 'string' &&
+          typeof activity.label === 'string' &&
+          typeof activity.detail === 'string'
+        )
           activities = [...activities.filter((item) => item.id !== activity.id), activity];
       }
-      cursor = applyRelayEvent(cursor, envelope, (text) => {
-        messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
-        persistMessages(id);
-      }, () => {
-        void resyncHistory(id);
-      });
+      cursor = applyRelayEvent(
+        cursor,
+        envelope,
+        (text) => {
+          messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
+          persistMessages(id);
+        },
+        () => {
+          void resyncHistory(id);
+        },
+      );
       void sessionCache.saveCursor(id, cursor);
     };
     socket.onclose = () => {
@@ -521,18 +564,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <title>Gestalt Mobile</title>
 </svelte:head>
 
-<main>
+<main class:git-mode={tab === 'git'}>
   <AppHeader {theme} onthemechange={setTheme} />
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
       <h2 id="chat-title" class="visually-hidden">Chat</h2>
       {#if sessionId}
-        <p>Connected Codex session: {sessions.find((session) => session.id === sessionId)?.threadId ?? 'starting…'}</p>
+        <p>
+          Connected Codex session: {sessions.find((session) => session.id === sessionId)
+            ?.threadId ?? 'starting…'}
+        </p>
         <MessageList {messages} />
         <ActivityList {activities} />
-        <InteractionList {interactions} answers={userInputAnswers} onanswer={setUserInputAnswer} onuserinput={(interaction) => void resolveUserInput(interaction)} onpermission={(interaction) => void resolvePermissions(interaction)} ondecision={(id, decision) => void resolveInteraction(id, decision)} />
-        <Composer {status} {message} activeTurnId={activeTurnId} starting={startingTurn} onchange={updateDraft} onsend={() => void sendMessage()} oninterrupt={() => void interruptTurn()} />
+        <InteractionList
+          {interactions}
+          answers={userInputAnswers}
+          onanswer={setUserInputAnswer}
+          onuserinput={(interaction) => void resolveUserInput(interaction)}
+          onpermission={(interaction) => void resolvePermissions(interaction)}
+          ondecision={(id, decision) => void resolveInteraction(id, decision)}
+        />
+        <Composer
+          {status}
+          {message}
+          {activeTurnId}
+          starting={startingTurn}
+          onchange={updateDraft}
+          onsend={() => void sendMessage()}
+          oninterrupt={() => void interruptTurn()}
+        />
       {:else}
         <p>Start a session from the Sessions tab to chat with Codex.</p>
       {/if}
@@ -543,13 +604,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       summary={gitSummary}
       refreshing={gitRefreshing}
       checkingOut={gitCheckingOut}
+      cloning={gitCloning}
       error={gitError}
+      cloneStatus={gitCloneStatus}
       confirmingPush={pushConfirmationOpen}
       onpull={() => void pullGit()}
       oncheckout={(branch) => void checkoutGitBranch(branch)}
       onopenpushconfirmation={() => (pushConfirmationOpen = true)}
       onpush={() => void pushGit()}
       oncancelpush={() => (pushConfirmationOpen = false)}
+      onclone={(address) => void cloneGitRepository(address)}
     />
   {:else}
     <SessionsView
