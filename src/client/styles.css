@@ -124,8 +124,8 @@ main {
 .configuration-panel {
   position: fixed;
   inset: 4.5rem 1rem auto auto;
-  min-inline-size: min(18rem, calc(100vw - 2rem));
-  padding: 1rem;
+  min-inline-size: min(13rem, calc(100vw - 2rem));
+  padding: 0.75rem;
   color: CanvasText;
   background: Canvas;
   border: 1px solid CanvasText;
@@ -137,7 +137,8 @@ main {
   display: block;
   inline-size: 4.5rem;
   block-size: auto;
-  margin-block-end: 1rem;
+  margin-inline-start: auto;
+  margin-block-end: 0.5rem;
 }
 
 .appearance-control {
@@ -152,7 +153,11 @@ main {
 }
 
 .appearance-control select {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  inline-size: auto;
+  min-block-size: 2.25rem;
+  padding-inline: 0.5rem;
+  field-sizing: content;
 }
 
 nav {
