@@ -48,6 +48,9 @@ Run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and
 `npm run protocol:check`. Generated Codex bindings are checked with the pinned
 installed CLI; regenerate them only with `npm run protocol:generate`.
 
+Maintainers should follow the [npm release operations guide](docs/releasing.md)
+when configuring GitHub, rotating credentials, or recovering a partial release.
+
 ## Copyright and license
 
 Copyright (C) 2026 Dyne.org foundation
