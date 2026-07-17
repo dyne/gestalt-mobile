@@ -6,9 +6,9 @@ Organize server use cases under `src/server/features/<context>/<use-case>` as ve
 
 Domain and application code must not import Fastify, SQLite, filesystem, child-process, Svelte, or concrete Git implementations. Put those integrations in `src/server/platform`; wire adapters to slices only in `src/server/composition.ts`. Keep client behavior organized under `src/client/features`.
 
-## Generated protocol
+## Codex compatibility
 
-Treat `src/server/platform/codex/generated` as a version-pinned build input: never edit it by hand. Check compatibility with `npm run protocol:check`; regenerate only with `npm run protocol:generate` and review the entire generated diff.
+The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Check the installed CLI against the tested version with `npm run protocol:check`.
 
 ## Completion rules
 

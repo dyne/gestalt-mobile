@@ -45,8 +45,8 @@ an upstream or force-pushes.
 ## Development
 
 Run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and
-`npm run protocol:check`. Generated Codex bindings are checked with the pinned
-installed CLI; regenerate them only with `npm run protocol:generate`.
+`npm run protocol:check`. The protocol check ensures the installed Codex CLI
+matches the version tested with the relay's app-server adapter.
 
 Maintainers should follow the [npm release operations guide](docs/releasing.md)
 when configuring GitHub, rotating credentials, or recovering a partial release.

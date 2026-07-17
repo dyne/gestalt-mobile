@@ -7,6 +7,6 @@
 import tseslint from 'typescript-eslint';
 
 export default [
-  { ignores: ['dist/', 'node_modules/', 'src/server/platform/codex/generated/'] },
+  { ignores: ['dist/', 'node_modules/'] },
   ...tseslint.configs.recommended,
 ];

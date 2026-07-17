@@ -6,8 +6,4 @@
 
 import { applySourceHeaders, repositorySourceFiles } from './license-headers.mjs';
 
-applySourceHeaders(
-  repositorySourceFiles().filter(
-    (path) => !path.startsWith('src/server/platform/codex/generated/'),
-  ),
-);
+applySourceHeaders(repositorySourceFiles());

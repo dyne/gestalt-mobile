@@ -5,7 +5,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 
 const lines = [
@@ -51,12 +51,13 @@ export function insertSourceHeader(path, content) {
 }
 
 export function repositorySourceFiles(cwd = process.cwd()) {
+  const root = `file://${cwd.replace(/\/$/, '')}/`;
   return execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd,
     encoding: 'utf8',
   })
     .split('\0')
-    .filter((path) => path && sourceHeader(path));
+    .filter((path) => path && sourceHeader(path) && existsSync(new URL(path, root)));
 }
 
 export function applySourceHeaders(paths, cwd = process.cwd()) {
