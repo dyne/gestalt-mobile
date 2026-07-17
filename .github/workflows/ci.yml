@@ -39,8 +39,6 @@ jobs:
         run: npm run lint
       - name: Build production application
         run: npm run build
-      - name: Check Codex protocol compatibility
-        run: npm run protocol:check
       - name: Run browser tests
         run: npm run test:e2e
       - name: Upload failed Playwright traces

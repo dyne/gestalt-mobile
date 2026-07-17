@@ -8,10 +8,10 @@ Domain and application code must not import Fastify, SQLite, filesystem, child-p
 
 ## Codex compatibility
 
-The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Check the installed CLI against the tested version with `npm run protocol:check`.
+The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Runtime startup reports incompatible Codex CLI versions.
 
 ## Completion rules
 
-Use Node.js 24 or newer. Before completion run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and `npm run protocol:check`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows.
+Use Node.js 24 or newer. Before completion run `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows.
 
 Do not log prompts, model output, secrets, or environment values. Every file-changing Org L2 has a conventional commit.

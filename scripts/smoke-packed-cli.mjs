@@ -17,7 +17,6 @@ let server;
 
 try {
   run('npm', ['run', 'build'], root);
-  run('npm', ['run', 'protocol:check'], root);
   const pack = run(
     'npm',
     ['pack', '--ignore-scripts', '--json', '--pack-destination', temporaryRoot],

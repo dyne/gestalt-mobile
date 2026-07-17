@@ -39,7 +39,7 @@
     "build": "npm run build:server && npm run build:client",
     "build:server": "node scripts/build-server.mjs",
     "build:client": "vite build",
-    "prepack": "npm run build && npm run protocol:check",
+    "prepack": "npm run build",
     "check": "tsc -p tsconfig.server.json --noEmit && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -48,7 +48,6 @@
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
-    "protocol:check": "node scripts/check-codex-protocol.mjs",
     "license:check": "node scripts/check-license-headers.mjs",
     "license:apply": "node scripts/apply-license-headers.mjs"
   },

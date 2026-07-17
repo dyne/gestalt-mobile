@@ -26,7 +26,6 @@ describe('GitHub verification workflow', () => {
     'npm test',
     'npm run lint',
     'npm run build',
-    'npm run protocol:check',
     'npm run test:e2e',
     'npm run test:package',
   ])('runs %s', (command) => {

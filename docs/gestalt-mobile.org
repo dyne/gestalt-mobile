@@ -150,9 +150,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "protocol:generate": "node scripts/generate-codex-protocol.mjs",
-    "protocol:check": "node scripts/check-codex-protocol.mjs"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fastify/static": "^10.1.0",
@@ -426,24 +424,20 @@ Commit: =feat: add bootstrap catalog endpoint=
 * DONE [#A] Isolate the Codex app-server protocol
 
 - Effort :: 3 days
-- Goal :: Provide a tested, version-checked port over JSONL stdio without
+- Goal :: Provide a tested, runtime-checked port over JSONL stdio without
   leaking generated Codex types into use cases or UI contracts.
-- Notes :: Generated files are build inputs and may be numerous. Never hand-edit
-  them. Commit the generated output and version metadata.
+- Notes :: Keep transport types isolated from use cases and UI contracts, and
+  report unsupported CLI versions when the relay starts.
 
-** DONE [#A] Generate bindings and enforce the installed Codex version
+** DONE [#A] Implement the adapter and report incompatible Codex versions
 
-- Why :: App-server is experimental and generated bindings are guaranteed only
-  for the CLI version that generated them.
-- Change :: Create =scripts/generate-codex-protocol.mjs=,
-  =scripts/check-codex-protocol.mjs=,
-  =src/server/platform/codex/generated/=, and
-  =src/server/platform/codex/protocol-version.json=. Generation runs
-  =codex app-server generate-ts --experimental --out <dir>=, formats nothing,
-  and records the exact =codex --version= stdout. Check compares installed and
-  recorded versions. Add =src/server/platform/codex/protocol-compatibility.ts=
-  and test it with injected command results. Do not auto-regenerate at runtime.
-- Tests :: Run generator, check, version unit tests, =npm run check=, and build.
+- Why :: App-server is experimental, so unsupported CLI versions must fail with
+  a clear runtime diagnostic.
+- Change :: Keep a narrow handwritten adapter and
+  =src/server/platform/codex/protocol-version.json=. Add
+  =src/server/platform/codex/protocol-compatibility.ts= and test it with
+  injected command results. Do not require Codex during build or packaging.
+- Tests :: Run version unit tests, =npm run check=, and build.
   Test missing Codex and mismatched version as degraded health with stable codes
   =CODEX_NOT_FOUND= and =CODEX_PROTOCOL_MISMATCH=.
 - Done when :: The generated union types compile and startup health can report
@@ -1025,11 +1019,11 @@ Commit: =test: cover relay recovery user journeys=
 
 Commit: =docs: add operation and ssh handoff guide=
 
-** TODO [#A] Run final protocol and release verification
+** TODO [#A] Run final release verification
 
 - Status :: On 2026-07-14, the then-current tree passed =lint=, =check=,
-  =test= (86 files/132 tests), =build=, =protocol:check= against Codex CLI
-  0.144.4, and two consecutive =test:e2e= runs (12 browser tests each).
+  =test= (86 files/132 tests), =build=, and two consecutive =test:e2e= runs
+  (12 browser tests each).
   This remains open until every L1/L2 heading is complete and the final
   post-audit run, including =format:check=, is recorded.
 
@@ -1037,8 +1031,8 @@ Commit: =docs: add operation and ssh handoff guide=
 - Change :: Do not change code unless a verification command fails. If a fix is
   required, return to the owning L2, set it WIP, add a regression test, fix, and
   make a conventional commit there. Do not create a “misc fixes” commit.
-- Tests :: Run in order: =npm ci=, =npm run protocol:check=,
-  =npm run format:check=, =npm run lint=, =npm run check=, =npm test=,
+- Tests :: Run in order: =npm ci=, =npm run format:check=,
+  =npm run lint=, =npm run check=, =npm test=,
   =npm run build=, =npm run test:e2e=, =git status --short=, and
   =git log --oneline --decorate main..HEAD=. Optionally run the installed-CLI
   contract suite with =CODEX_RELAY_LIVE_CODEX=1 npm test -- live-codex=.

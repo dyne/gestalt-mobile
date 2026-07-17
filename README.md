@@ -115,9 +115,7 @@ npm start -- --cwd <relay-root>
 
 ## Development
 
-Run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and
-`npm run protocol:check`. The protocol check ensures the installed Codex CLI
-matches the version tested with the relay's app-server adapter.
+Run `npm run check`, `npm test`, `npm run lint`, and `npm run build`.
 
 Maintainers should follow the [npm release operations guide](docs/releasing.md)
 when configuring GitHub, rotating credentials, or recovering a partial release.

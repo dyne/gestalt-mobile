@@ -35,8 +35,8 @@ describe('publishable package manifest', () => {
     });
     expect(manifest.private).not.toBe(true);
     expect(Object.keys(manifest.bin)).toEqual(['gestalt-mobile']);
-    expect(manifest.scripts.prepack).toContain('npm run build');
-    expect(manifest.scripts.prepack).toContain('npm run protocol:check');
+    expect(manifest.scripts.prepack).toBe('npm run build');
+    expect(manifest.scripts['protocol:check']).toBeUndefined();
     expect(manifest.scripts['build:server']).toBe('node scripts/build-server.mjs');
   });
 
