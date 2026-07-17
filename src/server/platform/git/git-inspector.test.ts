@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 async function createTemporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'codex-relay-git-'));
+  const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-git-'));
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -31,7 +31,7 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 
 async function configureAuthor(cwd: string): Promise<void> {
   await git(cwd, 'config', 'user.name', 'Codex Relay Test');
-  await git(cwd, 'config', 'user.email', 'codex-relay@example.test');
+  await git(cwd, 'config', 'user.email', 'gestalt-mobile@example.test');
 }
 
 describe('git inspector', () => {

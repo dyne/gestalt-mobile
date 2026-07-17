@@ -22,8 +22,8 @@ function fakeAppServer(calls: string[]) {
   };
 }
 test('restores a persisted thread after an HTTP relay restart', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
-  const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+  const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
   paths.push(root, dataDir);
   await mkdir(join(root, 'workspace'));
   const profiles = {

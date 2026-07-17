@@ -8,7 +8,7 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
       return reply.type('text/html; charset=utf-8').sendFile('index.html');
     }
     const problem: ProblemDetail = {
-      type: 'urn:codex-relay:error:not-found',
+      type: 'urn:gestalt-mobile:error:not-found',
       title: 'Not found',
       status: 404,
       detail: `No route matches ${request.method} ${request.url}`,
@@ -20,7 +20,7 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
 
   app.setErrorHandler((error, _request, reply) => {
     const problem: ProblemDetail = {
-      type: 'urn:codex-relay:error:internal',
+      type: 'urn:gestalt-mobile:error:internal',
       title: 'Internal server error',
       status: 500,
       detail: 'The relay could not complete this request.',

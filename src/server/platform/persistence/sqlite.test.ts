@@ -18,7 +18,7 @@ describe('SQLite relay persistence', () => {
   );
 
   it('migrates idempotently and enables its required SQLite settings', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codex-relay-db-'));
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
 
@@ -30,7 +30,7 @@ describe('SQLite relay persistence', () => {
   });
 
   it('orders events atomically and prunes the oldest entries', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codex-relay-db-'));
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
     migrate(database);
@@ -50,7 +50,7 @@ describe('SQLite relay persistence', () => {
   });
 
   it('replays idempotent response bytes exactly', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codex-relay-db-'));
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
     migrate(database);
@@ -62,7 +62,7 @@ describe('SQLite relay persistence', () => {
   });
 
   it('round trips a session snapshot across database reopen', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codex-relay-db-'));
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const path = join(directory, 'relay.sqlite');
     const database = openRelayDatabase(path);
@@ -96,7 +96,7 @@ describe('SQLite relay persistence', () => {
   });
 
   it('permits one pending interaction and one resolution', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codex-relay-db-'));
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
     migrate(database);

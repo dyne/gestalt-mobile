@@ -13,11 +13,11 @@ describe('FilesystemWorkspaceCatalog', () => {
   );
 
   it('lists only immediate readable directories contained by the relay root', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     directories.push(root);
     await mkdir(join(root, 'beta'));
     await mkdir(join(root, 'Alpha'));
-    const outside = await mkdtemp(join(tmpdir(), 'codex-relay-outside-'));
+    const outside = await mkdtemp(join(tmpdir(), 'gestalt-mobile-outside-'));
     directories.push(outside);
     await symlink(outside, join(root, 'escape'));
 

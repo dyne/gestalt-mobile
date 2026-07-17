@@ -38,7 +38,7 @@ describe('GET /health', () => {
   });
 
   it('serves the SPA fallback but leaves unknown API paths as problem documents', async () => {
-    const staticDir = await mkdtemp(join(tmpdir(), 'codex-relay-static-'));
+    const staticDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-static-'));
     directories.push(staticDir);
     await writeFile(join(staticDir, 'index.html'), '<h1>Relay</h1>');
     const app = await buildApp(Object.assign({}, deps, { staticDir }) as AppDependencies);

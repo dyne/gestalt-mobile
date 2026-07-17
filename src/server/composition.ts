@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -16,7 +17,7 @@ import { SqliteSessionRepository } from './platform/persistence/sqlite-session-r
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
 import { SqliteIdempotencyStore } from './platform/persistence/sqlite-idempotency-store.js';
-import { relayStatePath } from './platform/persistence/state-path.js';
+import { legacyRelayStatePath, relayStatePath } from './platform/persistence/state-path.js';
 import { SessionEventBus } from './platform/events/session-event-bus.js';
 import { fetchUpstream, inspectGit, pushUpstream } from './platform/git/git-inspector.js';
 import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
@@ -43,7 +44,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const root = resolve(options.root);
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
-    : relayStatePath(root, process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'));
+    : resolveStateDatabasePath(
+        root,
+        process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),
+      );
   const database = openRelayDatabase(databasePath);
   migrate(database);
   const sessions = new SqliteSessionRepository(database);
@@ -251,4 +255,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     database.close();
   });
   return app;
+}
+
+function resolveStateDatabasePath(root: string, stateHome: string): string {
+  const currentPath = relayStatePath(root, stateHome);
+  if (existsSync(currentPath)) return currentPath;
+  const legacyPath = legacyRelayStatePath(root, stateHome);
+  return existsSync(legacyPath) ? legacyPath : currentPath;
 }

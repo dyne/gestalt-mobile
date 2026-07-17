@@ -6,7 +6,7 @@ export function problem(
   retryable = false,
 ): ProblemDetail {
   return {
-    type: `urn:codex-relay:error:${code.toLowerCase()}`,
+    type: `urn:gestalt-mobile:error:${code.toLowerCase()}`,
     title: code.replaceAll('_', ' '),
     status,
     detail,

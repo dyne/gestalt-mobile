@@ -1,4 +1,4 @@
-const databaseName = 'codex-relay';
+const databaseName = 'gestalt-mobile';
 const databaseVersion = 2;
 const storeNames = ['settings', 'drafts', 'cursors', 'messages'] as const;
 

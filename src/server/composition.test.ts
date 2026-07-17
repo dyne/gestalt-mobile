@@ -31,8 +31,8 @@ afterEach(async () => {
 
 describe('production composition', () => {
   it('persists a catalog-selected session under the configured data directory', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
-    const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
     await mkdir(join(root, 'workspace'));
     const app = await composeRelayApp({
@@ -65,8 +65,8 @@ describe('production composition', () => {
   });
 
   it('restores active persisted threads when the relay restarts', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
-    const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
     await mkdir(join(root, 'workspace'));
     const profiles = {
@@ -113,8 +113,8 @@ describe('production composition', () => {
   });
 
   it('closes an active Codex child during graceful relay shutdown', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codex-relay-root-'));
-    const dataDir = await mkdtemp(join(tmpdir(), 'codex-relay-state-'));
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
     await mkdir(join(root, 'workspace'));
     let closed = 0;

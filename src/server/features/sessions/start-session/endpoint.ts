@@ -20,7 +20,7 @@ export function registerStartSession(
     const body = parseStartSessionRequest(request.body);
     if (!body)
       return reply.code(400).type('application/problem+json').send({
-        type: 'urn:codex-relay:error:invalid-start-session-request',
+        type: 'urn:gestalt-mobile:error:invalid-start-session-request',
         title: 'Invalid start session request',
         status: 400,
         detail: 'Workspace, profile, and Codex session settings must be valid.',

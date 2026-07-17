@@ -1,5 +1,5 @@
 export type ProblemDetail = {
-  type: `urn:codex-relay:error:${string}`;
+  type: `urn:gestalt-mobile:error:${string}`;
   title: string;
   status: number;
   detail: string;

@@ -35,7 +35,7 @@ async function listProfileThreads(
   const process = launch({ profile, cwd });
   try {
     await process.rpc.request('initialize', {
-      clientInfo: { name: 'codex-relay', version: '0.1.0' },
+      clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
       capabilities: null,
     });
     const result = (await process.rpc.request('thread/list', {

@@ -133,7 +133,7 @@ On normal relay shutdown, child processes stop while active Desired State is ret
 
 ### SSH handoff
 
-The Sessions view and `codex-relay sessions` expose the workspace, profile, Thread ID, state, and an exact copyable resume command:
+The Sessions view and `gestalt-mobile sessions` expose the workspace, profile, Thread ID, state, and an exact copyable resume command:
 
 ```sh
 codex-profile cli <profile> resume <thread-id> -C <workspace> --include-non-interactive

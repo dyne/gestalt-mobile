@@ -5,7 +5,7 @@
 #+TODO: TODO WIP | DONE
 
 This file is the execution authority for the first Codex Relay release. Read
-=docs/2026-07-14-codex-relay-design.md= and =docs/codex-app-server.txt= before
+=docs/2026-07-14-gestalt-mobile-design.md= and =docs/codex-app-server.txt= before
 changing code. Work through L1 and L2 headings in order. Do not invent alternate
 frameworks, persistence mechanisms, endpoints, names, or scope.
 
@@ -17,7 +17,7 @@ frameworks, persistence mechanisms, endpoints, names, or scope.
   process, Codex, SQLite, Git, and clock access goes through ports/adapters.
 - Runtime stack :: Node.js 24+, Svelte 5, Vite 8, Fastify 5, =ws= 8, Zod 4,
   built-in =node:sqlite=, Vitest 4, and Playwright 1.61.
-- Required workflow :: Before implementation, create branch =codex-relay= from
+- Required workflow :: Before implementation, create branch =gestalt-mobile= from
   the current commit and run the existing tests. For each L2: set it to WIP,
   write the failing test, run it and observe the intended failure, implement the
   smallest code, run touched tests, commit with the prescribed conventional
@@ -83,7 +83,7 @@ All failures use =application/problem+json= and:
 
 #+begin_src typescript
 export type ProblemDetail = {
-  type: `urn:codex-relay:error:${string}`;
+  type: `urn:gestalt-mobile:error:${string}`;
   title: string;
   status: number;
   detail: string;
@@ -132,7 +132,7 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
 
 #+begin_src json
 {
-  "name": "codex-relay",
+  "name": "gestalt-mobile",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -286,7 +286,7 @@ Commit: =feat: model relay session lifecycle=
   Define application ports in
   =src/server/features/sessions/application/ports.ts=. Use the schema below.
   Default the database to
-  =${XDG_STATE_HOME:-~/.local/state}/codex-relay/<12-char-root-sha256>/relay.sqlite=;
+  =${XDG_STATE_HOME:-~/.local/state}/gestalt-mobile/<12-char-root-sha256>/relay.sqlite=;
   =--data-dir= overrides its parent. Set WAL mode, foreign keys, and a 5-second
   busy timeout. Retain the newest 2,000 events per session.
 - Tests :: Create a new temporary DB for each test. Prove migration idempotence,
@@ -822,7 +822,7 @@ Commit: =feat: expose safe git upstream actions=
 - Change :: Create =src/client/lib/api.ts=, =problem.ts=, =idempotency.ts=,
   =indexed-db.ts=, =relay-connection.svelte.ts=, =app-state.svelte.ts=, and tests.
   =ApiClient= implements every fixed REST route and throws typed =ApiProblem=.
-  IndexedDB database =codex-relay= version 1 has stores =settings=, =drafts=,
+  IndexedDB database =gestalt-mobile= version 1 has stores =settings=, =drafts=,
   =cursors=, and =messages=; retain 200 messages per session. Connection state is
   =offline|connecting|replaying|live|resyncing=. It hydrates canonical history
   with its response cursor before opening the replay socket, applies events by
