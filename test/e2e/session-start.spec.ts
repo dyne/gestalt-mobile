@@ -570,7 +570,7 @@ test('renders and resolves a relay approval request', async ({ page }) => {
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       socket.send(
         JSON.stringify({
@@ -621,7 +621,7 @@ test('answers a relay user-input request', async ({ page }) => {
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) =>
       socket.send(
         JSON.stringify({
@@ -679,7 +679,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
     }),
   );
   await page.routeWebSocket(
-    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    'ws://127.0.0.1:4173/api/sessions/session-1/events?after=0',
     (socket) => {
       socket.send(
         JSON.stringify({
@@ -727,7 +727,7 @@ test('projects a live activity update from the relay socket', async ({ page }) =
       body: JSON.stringify({ items: [], currentSequence: 0 }),
     }),
   );
-  await page.routeWebSocket('ws://127.0.0.1:5173/api/sessions/session-1/events?after=0', (socket) =>
+  await page.routeWebSocket('ws://127.0.0.1:4173/api/sessions/session-1/events?after=0', (socket) =>
     socket.send(
       JSON.stringify({
         type: 'relay.event',
@@ -776,7 +776,7 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
     });
   });
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       socket.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence: 8 }));
     },
@@ -818,7 +818,7 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
     });
   });
   await page.routeWebSocket(
-    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    'ws://127.0.0.1:4173/api/sessions/session-1/events?after=0',
     (socket) => {
       socket.send(
         JSON.stringify({
@@ -860,7 +860,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
     }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       connections += 1;
       if (connections === 1) {
@@ -921,7 +921,7 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
     });
   });
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:5173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       connections += 1;
       if (connections === 1) {
@@ -974,7 +974,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
     }),
   );
   await page.routeWebSocket(
-    'ws://127.0.0.1:5173/api/sessions/session-1/events?after=0',
+    'ws://127.0.0.1:4173/api/sessions/session-1/events?after=0',
     (socket) => {
       socket.send(
         JSON.stringify({

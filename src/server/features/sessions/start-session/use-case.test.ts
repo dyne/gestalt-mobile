@@ -38,8 +38,8 @@ describe('startSession', () => {
         resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
       },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
-      activate: async function (session) {
-        received = arguments[1];
+      activate: async (session, settings) => {
+        received = settings;
         return session;
       },
     });
