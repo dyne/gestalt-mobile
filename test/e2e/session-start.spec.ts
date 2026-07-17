@@ -23,7 +23,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
     if (route.request().method() === 'POST') {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
-        profile: 'work',
+        profile: 'default',
         approvalPolicy: 'on-request',
       });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
@@ -162,7 +162,7 @@ test('manages saved sessions with their running state, resume command, and forge
   await expect(savedSessions.getByText('running-thread')).toHaveCount(0);
 });
 
-test('starts a session with profile, sandbox, and approval settings', async ({ page }) => {
+test('starts a session with sandbox and approval settings', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -180,7 +180,7 @@ test('starts a session with profile, sandbox, and approval settings', async ({ p
     }
     expect(route.request().postDataJSON()).toEqual({
       workspaceId: 'workspace-1',
-      profile: 'work',
+      profile: 'default',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     });

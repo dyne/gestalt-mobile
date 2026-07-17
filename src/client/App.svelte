@@ -45,12 +45,10 @@
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
-  let profiles = $state<Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>>([]);
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let recentSessions = $state<RecentSession[]>([]);
   let workspaceId = $state('');
-  let profile = $state('');
   let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
@@ -90,9 +88,7 @@
     try {
       const bootstrap = await loadBootstrap();
       workspaces = bootstrap.workspaces;
-      profiles = bootstrap.profiles;
       workspaceId = workspaces[0]?.id ?? '';
-      profile = profiles.find((item) => item.state === 'ok')?.name ?? profiles[0]?.name ?? '';
       const remembered = await sessionCache.readSelectedSession();
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
@@ -131,12 +127,11 @@
   });
 
   async function startSession() {
-    if (!workspaceId || !profile || startingSession) return;
-    const selectedProfile = profiles.find((item) => item.name === profile);
+    if (!workspaceId || startingSession) return;
     const errors = validateStartForm({
       workspaceId,
-      profile,
-      profileState: selectedProfile?.state,
+      profile: 'default',
+      profileState: 'ok',
     });
     if (errors.profile) {
       status = errors.profile;
@@ -148,7 +143,6 @@
     try {
       const session = await relay.startSession(
         workspaceId,
-        profile,
         {
           sandbox: sandbox || undefined,
           approvalPolicy,
@@ -528,14 +522,11 @@
       {sessions}
       {recentSessions}
       {workspaces}
-      {profiles}
       {workspaceId}
-      {profile}
       {sandbox}
       {approvalPolicy}
       {startingSession}
       onworkspacechange={(value) => (workspaceId = value)}
-      onprofilechange={(value) => (profile = value)}
       onsandboxchange={(value) => (sandbox = value)}
       onapprovalpolicychange={(value) => (approvalPolicy = value)}
       onopen={openSession}

@@ -4,19 +4,15 @@
   import { managedSessionDetails } from './session-list.js';
 
   type Workspace = { id: string; name: string };
-  type Profile = { name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string };
   type Props = {
     sessions: RelaySession[];
     recentSessions: RecentSession[];
     workspaces: Workspace[];
-    profiles: Profile[];
     workspaceId: string;
-    profile: string;
     sandbox: StartSessionSettings['sandbox'] | '';
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
     startingSession: boolean;
     onworkspacechange: (value: string) => void;
-    onprofilechange: (value: string) => void;
     onsandboxchange: (value: StartSessionSettings['sandbox'] | '') => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
     onopen: (id: string) => void;
@@ -29,14 +25,11 @@
     sessions,
     recentSessions,
     workspaces,
-    profiles,
     workspaceId,
-    profile,
     sandbox,
     approvalPolicy,
     startingSession,
     onworkspacechange,
-    onprofilechange,
     onsandboxchange,
     onapprovalpolicychange,
     onopen,
@@ -45,7 +38,6 @@
     onstart,
   }: Props = $props();
 
-  const selectedProfileReady = () => profiles.find((item) => item.name === profile)?.state === 'ok';
 </script>
 
 <section aria-labelledby="sessions-title">
@@ -83,15 +75,9 @@
   <form onsubmit={(event) => { event.preventDefault(); onstart(); }}>
     <div class="form-row">
       <label for="workspace">Workspace</label>
-      <label for="profile">Profile</label>
       <select id="workspace" value={workspaceId} onchange={(event) => onworkspacechange(event.currentTarget.value)} required>
         {#each workspaces as workspace (workspace.id)}
           <option value={workspace.id}>{workspace.name}</option>
-        {/each}
-      </select>
-      <select id="profile" value={profile} onchange={(event) => onprofilechange(event.currentTarget.value)} required>
-        {#each profiles as item (item.name)}
-          <option value={item.name} disabled={item.state !== 'ok'}>{item.name}{item.state !== 'ok' ? ` — ${item.status}` : ''}</option>
         {/each}
       </select>
     </div>
@@ -110,7 +96,7 @@
         <option value="never">never</option>
       </select>
     </div>
-    <button type="submit" disabled={!workspaceId || !profile || startingSession || !selectedProfileReady()}>
+    <button type="submit" disabled={!workspaceId || startingSession}>
       {startingSession ? 'Starting…' : 'New session'}
     </button>
   </form>

@@ -84,13 +84,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
     startSession: (
       workspaceId: string,
-      profile: string,
       settings: StartSessionSettings = {},
       key?: string,
     ) =>
       request<RelaySession>(
         '/api/sessions',
-        { workspaceId, profile, ...settings },
+        { workspaceId, profile: 'default', ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
     startTurn: (sessionId: string, text: string) =>

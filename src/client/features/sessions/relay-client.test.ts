@@ -12,7 +12,7 @@ describe('relay client', () => {
         { status: 202 },
       );
     });
-    await client.startSession('workspace-1', 'default');
+    await client.startSession('workspace-1');
     await client.startTurn('session-1', 'hello');
     expect(requests).toEqual([
       {
@@ -75,7 +75,7 @@ describe('relay client', () => {
           { status: 409, headers: { 'content-type': 'application/problem+json' } },
         ),
     );
-    await expect(client.startSession('workspace-1', 'profile')).rejects.toThrow(
+    await expect(client.startSession('workspace-1')).rejects.toThrow(
       'The selected profile is not logged in.',
     );
   });

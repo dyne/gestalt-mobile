@@ -7,9 +7,9 @@ describe('profileAppServerArgs', () => {
       args: ['app-server', '--stdio'],
     }));
 
-  it('uses codex-profile for a managed profile', () =>
+  it('uses direct Codex app-server semantics for a legacy managed profile', () =>
     expect(profileAppServerCommand('work')).toEqual({
-      command: 'codex-profile',
-      args: ['cli', 'work', 'app-server', '--stdio'],
+      command: 'codex',
+      args: ['app-server', '--stdio'],
     }));
 });
