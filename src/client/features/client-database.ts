@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 const databaseName = 'gestalt-mobile';
 const databaseVersion = 2;
 const storeNames = ['settings', 'drafts', 'cursors', 'messages'] as const;

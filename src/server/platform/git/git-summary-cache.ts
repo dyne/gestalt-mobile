@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 import { resolve } from 'node:path';
 
 /** Caches successful workspace inspections until a Git mutation invalidates them. */

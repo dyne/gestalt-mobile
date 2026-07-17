@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 import type { ProfileCatalog } from '../../features/catalog/application/ports.js';
 import type { RecentThread } from '../../features/sessions/list-recent-threads/endpoint.js';
 import type { AppServer } from './session-runtime.js';

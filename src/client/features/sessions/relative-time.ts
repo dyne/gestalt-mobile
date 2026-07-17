@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 export function formatRelativeTime(timestamp: number | null, now = Date.now()): string {
   if (timestamp === null) return 'Unknown activity time';
   const elapsed = Math.max(0, now - timestamp);

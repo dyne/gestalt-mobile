@@ -1,3 +1,9 @@
+<!--
+Copyright (C) 2026 Dyne.org foundation
+Designed by Denis Roio <jaromil@dyne.org>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 <script lang="ts">
   import { submitsOnEnter } from './keyboard.js';
   type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; onchange(value: string): void; onsend(): void; oninterrupt(): void };

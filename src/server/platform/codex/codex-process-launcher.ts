@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { JsonRpcClient } from './json-rpc-client.js';
 import { profileAppServerCommand } from '../catalog/profile-command.js';
