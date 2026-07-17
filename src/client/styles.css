@@ -133,26 +133,26 @@ main {
   box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, CanvasText 25%, transparent);
 }
 
-.configuration-panel h2 {
-  margin-block: 0 0.75rem;
-  font-size: 1rem;
-}
-
-.configuration-panel label {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.app-footer {
-  position: fixed;
-  inset-inline-end: 1rem;
-  inset-block-end: calc(4.75rem + env(safe-area-inset-bottom));
-}
-
-.app-footer img {
+.configuration-logo {
   display: block;
   inline-size: 4.5rem;
   block-size: auto;
+  margin-block-end: 1rem;
+}
+
+.appearance-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.appearance-control span {
+  font-weight: 700;
+  letter-spacing: -0.08em;
+}
+
+.appearance-control select {
+  flex: 1 1 auto;
 }
 
 nav {

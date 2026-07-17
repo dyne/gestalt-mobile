@@ -1026,9 +1026,9 @@ test('shows Gestalt branding and changes appearance from configuration', async (
   await page.goto('/');
   await expect(page).toHaveTitle('Gestalt Mobile');
   await expect(page.getByRole('link', { name: 'Gestalt Mobile' })).toBeVisible();
-  await expect(page.locator('.app-footer')).toBeVisible();
 
   await page.getByRole('button', { name: 'Open configuration' }).click();
+  await expect(page.locator('.configuration-brand')).toBeVisible();
   await page.getByLabel('Appearance').selectOption('dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });

@@ -31,15 +31,21 @@
 </header>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">
-  <h2>Configuration</h2>
-  <label for="appearance">Appearance</label>
-  <select
-    id="appearance"
-    value={theme}
-    onchange={(event) => onthemechange(event.currentTarget.value as ThemePreference)}
-  >
-    <option value="system">System</option>
-    <option value="light">Light</option>
-    <option value="dark">Dark</option>
-  </select>
+  <div class="configuration-brand" aria-label="Dyne">
+    <img class="configuration-logo light-asset" src="/branding/dyne-logotype-black.svg" alt="" />
+    <img class="configuration-logo dark-asset" src="/branding/dyne-logotype-white.svg" alt="" />
+  </div>
+  <label class="appearance-control" for="appearance">
+    <span aria-hidden="true">aA</span>
+    <select
+      id="appearance"
+      aria-label="Appearance"
+      value={theme}
+      onchange={(event) => onthemechange(event.currentTarget.value as ThemePreference)}
+    >
+      <option value="system">System</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </label>
 </div>

@@ -537,9 +537,4 @@
   {/if}
 
   <BottomNavigation activeTab={tab} onselect={selectTab} />
-
-  <footer class="app-footer" aria-label="Dyne">
-    <img class="light-asset" src="/branding/dyne-logotype-black.svg" alt="" />
-    <img class="dark-asset" src="/branding/dyne-logotype-white.svg" alt="" />
-  </footer>
 </main>
