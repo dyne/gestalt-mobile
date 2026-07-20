@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function openChat(page: Page): Promise<void> {
+  const chat = page.getByRole('button', { name: 'Chat' });
+  await expect(chat).toBeEnabled();
+  await chat.click();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+}
 
 test('starts a selected workspace session and opens chat', async ({ page }) => {
   const session = {
@@ -50,7 +57,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await page.getByRole('button', { name: 'New session' }).click();
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-  await expect(page.getByText('Connected Codex session: codex-thread-1')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
   await expect(page.getByText('Inspect this workspace')).toBeVisible();
@@ -160,7 +167,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     .click();
   await expect.poll(() => recentOpened).toBe(true);
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-  await expect(page.getByText('Connected Codex session: recent-thread-id')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   await page.getByRole('button', { name: 'Sessions' }).click();
   await expect(page.getByLabel('Open sessions').getByText('/projects/from-ssh')).toBeVisible();
 });
@@ -320,6 +327,7 @@ test('rehydrates a durable pending interaction after a browser reload', async ({
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByRole('heading', { name: 'Codex needs your decision' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve' })).toBeVisible();
 });
@@ -380,6 +388,7 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -555,6 +564,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByText('Check the branch')).toBeVisible();
   await expect(page.getByText('answer')).toBeVisible();
   await expect(page.getByText('No changes are needed.')).toBeVisible();
@@ -615,6 +625,7 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByText('Initial message')).toBeVisible();
   await expect(page.getByText('Message from terminal')).toBeVisible({ timeout: 3_000 });
   await expect(page.getByText('Terminal answer')).toBeVisible();
@@ -723,6 +734,7 @@ test('renders and resolves a relay approval request', async ({ page }) => {
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByRole('heading', { name: 'Codex needs your decision' })).toBeVisible();
   await page.getByRole('button', { name: 'Approve' }).click();
   await expect.poll(() => response).toEqual({ decision: 'accept' });
@@ -786,6 +798,7 @@ test('answers a relay user-input request', async ({ page }) => {
   );
 
   await page.goto('/');
+  await openChat(page);
   await page.getByRole('button', { name: 'Safe' }).click();
   await page.getByRole('button', { name: 'Send answers' }).click();
   await expect.poll(() => response).toEqual({ answers: { 'question-1': { answers: ['Safe'] } } });
@@ -832,6 +845,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByText('commentary', { exact: true })).toBeVisible();
   await expect(page.getByText('Working on it.\nStill working.')).toBeHidden();
   await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS(
@@ -878,6 +892,7 @@ test('projects a live activity update from the relay socket', async ({ page }) =
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByText('Command · completed')).toBeVisible();
   await page.getByText('Command · completed').click();
   await expect(page.getByText('git status')).toBeVisible();
@@ -920,6 +935,7 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByText('Recovered history')).toBeVisible();
   await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
 });
@@ -967,6 +983,7 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByText('Recovered missing event')).toBeVisible();
   await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
 });
@@ -1020,6 +1037,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   );
 
   await page.goto('/');
+  await openChat(page);
   await expect(page.getByText('commentary', { exact: true })).toBeVisible();
   await expect(page.getByText('before drop after replay')).toBeHidden();
   await expect.poll(() => connections).toBe(2);
@@ -1077,11 +1095,12 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByText('Restored after restart')).toBeVisible();
   await expect(page.getByText('commentary', { exact: true })).toBeVisible();
   await expect(page.getByText('live again')).toBeHidden();
   await expect.poll(() => connections).toBe(2);
-  await expect(page.getByRole('status')).toHaveText('Ready.');
+  await expect(page.getByRole('status')).toHaveText('Ready');
 });
 
 test('clears an interrupted active turn when relay recovery updates the session', async ({
@@ -1128,6 +1147,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
 
   await page.goto('/');
 
+  await openChat(page);
   await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Continue after recovery');
   await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled();
@@ -1143,16 +1163,13 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
 
   await page.goto('/');
   const sessions = page.getByRole('button', { name: 'Sessions', pressed: true });
+  await expect(page.getByRole('button', { name: 'Chat' })).toBeDisabled();
   await expect(sessions).toHaveCSS('font-weight', '700');
   await sessions.press('ArrowRight');
   const git = page.getByRole('button', { name: 'Git', pressed: true });
   await expect(git).toHaveCSS('font-weight', '700');
   await expect(git).toBeFocused();
   await git.press('ArrowRight');
-  const chat = page.getByRole('button', { name: 'Chat', pressed: true });
-  await expect(chat).toHaveCSS('font-weight', '700');
-  await expect(chat).toBeFocused();
-  await chat.press('ArrowRight');
   const selectedSessions = page.getByRole('button', { name: 'Sessions', pressed: true });
   await expect(selectedSessions).toHaveCSS('font-weight', '700');
   await expect(selectedSessions).toBeFocused();
