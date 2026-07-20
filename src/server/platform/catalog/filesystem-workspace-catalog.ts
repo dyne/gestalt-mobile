@@ -5,8 +5,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { Dirent } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 import type {
   WorkspaceCatalog,
@@ -28,49 +29,90 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
   }
   private async tree(): Promise<CatalogEntry> {
     const root = await this.root;
-    const children = await readdir(root, { withFileTypes: true });
-    const rootIsRepository = await this.isGitRepository(root);
-    const output = await Promise.all(
-      children.map(async (child) => {
-        if (!child.isDirectory() && !child.isSymbolicLink()) return null;
-        try {
-          const path = await realpath(join(root, child.name));
-          const info = await stat(path);
-          if (!info.isDirectory() || relative(root, path).startsWith('..')) return null;
-          return {
-            option: {
-              id: this.id(path),
-              name: child.name,
-              relativePath: child.name,
-              isGitRepository: await this.isGitRepository(path),
-              children: [],
-            },
-            realPath: path,
-            children: [],
-          };
-        } catch {
-          return null;
-        }
-      }),
-    );
-    const visibleChildren = output
-      .filter((value): value is NonNullable<typeof value> => value !== null)
-      .sort((a, b) =>
-        a.option.name.localeCompare(b.option.name, undefined, { sensitivity: 'base' }),
-      );
-    const childOptions = rootIsRepository
-      ? []
-      : visibleChildren.map((entry) => entry.option);
-    return {
-      option: {
-        id: this.id(root),
+    return (
+      (await this.visit({
+        root,
+        realPath: root,
         name: '/',
         relativePath: '.',
-        isGitRepository: rootIsRepository,
-        children: childOptions,
+        visited: new Set<string>(),
+        isRoot: true,
+      })) ?? this.entry(root, '/', '.', false, [])
+    );
+  }
+  private async visit(input: {
+    root: string;
+    realPath: string;
+    name: string;
+    relativePath: string;
+    visited: Set<string>;
+    isRoot?: boolean;
+  }): Promise<CatalogEntry | null> {
+    if (input.visited.has(input.realPath)) return null;
+    input.visited.add(input.realPath);
+
+    const isGitRepository = await this.isGitRepository(input.realPath);
+    if (isGitRepository) {
+      return this.entry(input.realPath, input.name, input.relativePath, true, []);
+    }
+
+    let directoryEntries: Dirent[];
+    try {
+      directoryEntries = await readdir(input.realPath, { withFileTypes: true });
+    } catch {
+      return input.isRoot
+        ? this.entry(input.realPath, input.name, input.relativePath, false, [])
+        : null;
+    }
+
+    const children: CatalogEntry[] = [];
+    for (const child of directoryEntries
+      .filter((entry) => !entry.name.startsWith('.'))
+      .sort((left, right) => this.compareNames(left.name, right.name))) {
+      if (!child.isDirectory() && !child.isSymbolicLink()) continue;
+      try {
+        const childRealPath = await realpath(join(input.realPath, child.name));
+        const info = await stat(childRealPath);
+        if (!info.isDirectory() || !this.isWithin(input.root, childRealPath)) continue;
+        const childRelativePath =
+          input.relativePath === '.' ? child.name : `${input.relativePath}/${child.name}`;
+        const visitedChild = await this.visit({
+          root: input.root,
+          realPath: childRealPath,
+          name: child.name,
+          relativePath: childRelativePath,
+          visited: input.visited,
+        });
+        if (visitedChild) children.push(visitedChild);
+      } catch {
+        // Entries may vanish or become unreadable while the tree is being discovered.
+      }
+    }
+    return this.entry(
+      input.realPath,
+      input.name,
+      input.relativePath,
+      false,
+      children,
+    );
+  }
+  private entry(
+    realPath: string,
+    name: string,
+    relativePath: string,
+    isGitRepository: boolean,
+    children: CatalogEntry[],
+  ): CatalogEntry {
+    return {
+      option: {
+        id: this.id(realPath),
+        name,
+        relativePath,
+        isGitRepository,
+        children: children.map((child) => child.option),
       },
-      realPath: root,
-      children: rootIsRepository ? [] : visibleChildren,
+      realPath,
+      children,
     };
   }
   private find(entry: CatalogEntry, id: string): CatalogEntry | undefined {
@@ -83,6 +125,20 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
   }
   private id(path: string): string {
     return createHash('sha256').update(path).digest('base64url');
+  }
+  private compareNames(left: string, right: string): number {
+    const foldedLeft = left.toLowerCase();
+    const foldedRight = right.toLowerCase();
+    if (foldedLeft < foldedRight) return -1;
+    if (foldedLeft > foldedRight) return 1;
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
+  private isWithin(root: string, path: string): boolean {
+    const fromRoot = relative(root, path);
+    return (
+      fromRoot === '' ||
+      (!isAbsolute(fromRoot) && fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`))
+    );
   }
   private async isGitRepository(path: string): Promise<boolean> {
     return stat(join(path, '.git'))
