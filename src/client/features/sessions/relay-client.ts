@@ -17,7 +17,12 @@ export type RelaySession = {
   createdAt?: string;
   updatedAt?: string;
 };
-export type RecentSession = { id: string; cwd: string; recencyAt: number | null };
+export type RecentSession = {
+  id: string;
+  cwd: string;
+  recencyAt: number | null;
+  resumeCommand: string;
+};
 export type StartSessionSettings = {
   model?: string;
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';

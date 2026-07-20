@@ -13,6 +13,6 @@ describe('reconnectDelay', () => {
 describe('turnReadiness', () => {
   it('tells the user when Codex is working or ready for the next instruction', () => {
     expect(turnReadiness('turn-1')).toBe('Codex is working…');
-    expect(turnReadiness(null)).toBe('Ready for your next instruction.');
+    expect(turnReadiness(null)).toBe('Ready.');
   });
 });

@@ -15,7 +15,7 @@ export function registerReleaseSession(
     find(id: string): RelaySessionSnapshot | null;
     release(session: RelaySessionSnapshot): RelaySessionSnapshot;
     save(session: RelaySessionSnapshot): void;
-    close(id: string): void;
+    close(id: string): void | Promise<void>;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
@@ -32,7 +32,7 @@ export function registerReleaseSession(
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     const released = deps.release(session);
     deps.save(released);
-    deps.close(id);
+    await deps.close(id);
     if (key) deps.idempotency?.put(scope, key, 202, JSON.stringify(released));
     return reply.code(202).send(released);
   });

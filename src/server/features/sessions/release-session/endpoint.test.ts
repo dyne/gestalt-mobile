@@ -17,7 +17,9 @@ describe('POST /api/sessions/:id/release', () => {
       find: () => ({ id: 'session-1' }) as never,
       release: () => ({ id: 'session-1', state: 'released' }) as never,
       save: () => calls.push('save'),
-      close: () => calls.push('close'),
+      close: () => {
+        calls.push('close');
+      },
     });
     expect(
       (await app.inject({ method: 'POST', url: '/api/sessions/session-1/release' })).statusCode,

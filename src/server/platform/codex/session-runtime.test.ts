@@ -125,6 +125,50 @@ describe('CodexSessionRuntime', () => {
     expect(closed).toBe(2);
   });
 
+  it('unsubscribes a thread before closing its app-server process', async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    let closed = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          calls.push({ method, params });
+          return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {
+        closed += 1;
+      },
+    }));
+
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    await runtime.release('session-1');
+
+    expect(calls.at(-1)).toEqual({
+      method: 'thread/unsubscribe',
+      params: { threadId: 'thread-1' },
+    });
+    expect(closed).toBe(1);
+  });
+
   it('forwards app-server notifications with their relay session identity', async () => {
     let notify: ((value: { method: string; params: unknown }) => void) | undefined;
     const received: unknown[] = [];

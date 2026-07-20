@@ -21,8 +21,8 @@ describe('GET /api/sessions/recent-threads', () => {
       logger: console,
       recentThreads: {
         list: async () => [
-          { id: 'thread-new', cwd: '/projects/new', recencyAt: 200 },
-          { id: 'thread-old', cwd: '/projects/old', recencyAt: 100 },
+          { id: 'thread-new', cwd: '/projects/new', profile: 'work', recencyAt: 200 },
+          { id: 'thread-old', cwd: '/projects/old', profile: 'default', recencyAt: 100 },
         ],
       },
     } as AppDependencies);
@@ -31,8 +31,20 @@ describe('GET /api/sessions/recent-threads', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
-      { id: 'thread-new', cwd: '/projects/new', recencyAt: 200 },
-      { id: 'thread-old', cwd: '/projects/old', recencyAt: 100 },
+      {
+        id: 'thread-new',
+        cwd: '/projects/new',
+        recencyAt: 200,
+        resumeCommand:
+          "'codex-profile' 'cli' 'work' 'resume' 'thread-new' '-C' '/projects/new' '--include-non-interactive'",
+      },
+      {
+        id: 'thread-old',
+        cwd: '/projects/old',
+        recencyAt: 100,
+        resumeCommand:
+          "'codex-profile' 'cli' 'default' 'resume' 'thread-old' '-C' '/projects/old' '--include-non-interactive'",
+      },
     ]);
     await app.close();
   });

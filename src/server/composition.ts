@@ -214,7 +214,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
       remove: (id) => sessions.remove(id),
       idempotency,
-      close: runtime ? (id) => runtime.stop(id) : undefined,
+      close: runtime ? (id) => runtime.release(id) : undefined,
       replyInteraction: runtime
         ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)
         : undefined,

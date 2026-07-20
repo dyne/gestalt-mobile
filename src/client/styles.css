@@ -43,16 +43,6 @@ main {
   padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
-main.git-mode {
-  max-inline-size: none;
-  margin-inline: 0;
-  padding-inline: 0;
-}
-
-main.git-mode .app-header {
-  padding-inline: 1rem;
-}
-
 .app-header {
   position: sticky;
   inset-block-start: 0;
@@ -218,6 +208,12 @@ main.git-mode .app-header {
   font-weight: 700;
   background: CanvasText;
   box-shadow: inset 0 0.2rem 0 color-mix(in srgb, Canvas 70%, transparent);
+}
+
+.bottom-navigation button:disabled {
+  color: color-mix(in srgb, CanvasText 40%, transparent);
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 button {
   min-block-size: 44px;

@@ -7,5 +7,15 @@
 import { describe, expect, it } from 'vitest';
 import { nextTab } from './tab-state.js';
 describe('nextTab', () => {
-  it('wraps keyboard tab navigation', () => expect(nextTab('chat', -1)).toBe('sessions'));
+  it('follows the visible tab order', () => {
+    expect(nextTab('sessions', 1)).toBe('git');
+    expect(nextTab('git', 1)).toBe('chat');
+    expect(nextTab('chat', 1)).toBe('sessions');
+    expect(nextTab('sessions', -1)).toBe('chat');
+  });
+
+  it('skips Chat when no session is open', () => {
+    expect(nextTab('sessions', 1, false)).toBe('git');
+    expect(nextTab('git', 1, false)).toBe('sessions');
+  });
 });

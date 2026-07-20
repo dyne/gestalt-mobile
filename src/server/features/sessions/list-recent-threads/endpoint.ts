@@ -6,7 +6,14 @@
 
 import type { FastifyInstance } from 'fastify';
 
-export type RecentThread = { id: string; cwd: string; recencyAt: number | null };
+import { buildResumeCommand } from '../application/resume-command.js';
+
+export type RecentThread = {
+  id: string;
+  cwd: string;
+  profile: string;
+  recencyAt: number | null;
+};
 
 export function registerListRecentThreads(
   app: FastifyInstance,
@@ -14,6 +21,11 @@ export function registerListRecentThreads(
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
-    return threads.map(({ id, cwd, recencyAt }) => ({ id, cwd, recencyAt }));
+    return threads.map(({ id, cwd, profile, recencyAt }) => ({
+      id,
+      cwd,
+      recencyAt,
+      resumeCommand: buildResumeCommand({ profile, threadId: id, workspacePath: cwd }),
+    }));
   });
 }

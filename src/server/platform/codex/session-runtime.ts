@@ -41,6 +41,7 @@ export class CodexSessionRuntime {
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
   private readonly exitUnsubscribers = new Map<string, () => void>();
+  private readonly threadIds = new Map<string, string>();
 
   async start(
     session: RelaySessionSnapshot,
@@ -64,6 +65,7 @@ export class CodexSessionRuntime {
       })) as { thread?: { id?: string } };
       if (!result.thread?.id) throw new Error('CODEX_THREAD_ID_MISSING');
       this.processes.set(session.id, process);
+      this.threadIds.set(session.id, result.thread.id);
       return RelaySession.rehydrate(session).bindThread(result.thread.id, now).snapshot;
     } catch (error) {
       process.close();
@@ -76,6 +78,20 @@ export class CodexSessionRuntime {
     this.exitUnsubscribers.delete(sessionId);
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
+    this.threadIds.delete(sessionId);
+  }
+
+  async release(sessionId: string): Promise<void> {
+    const process = this.processes.get(sessionId);
+    const threadId = this.threadIds.get(sessionId);
+    if (process && threadId) {
+      try {
+        await process.rpc.request('thread/unsubscribe', { threadId });
+      } catch {
+        // Closing the child still releases relay ownership if Codex has already exited.
+      }
+    }
+    this.stop(sessionId);
   }
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
@@ -163,6 +179,7 @@ export class CodexSessionRuntime {
         cwd: session.workspacePath,
       });
       this.processes.set(session.id, process);
+      this.threadIds.set(session.id, session.threadId);
       return RelaySession.rehydrate(session).restore(now).snapshot;
     } catch (error) {
       process.close();
@@ -187,6 +204,7 @@ export class CodexSessionRuntime {
       sessionId,
       process.onExit?.(() => {
         this.processes.delete(sessionId);
+        this.threadIds.delete(sessionId);
         this.exitUnsubscribers.delete(sessionId);
         this.onProcessExit?.(sessionId);
       }) ?? (() => {}),

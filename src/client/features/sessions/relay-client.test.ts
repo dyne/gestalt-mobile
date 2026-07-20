@@ -83,6 +83,28 @@ describe('relay client', () => {
     expect(requests).toEqual(['GET /api/sessions']);
   });
 
+  it('releases a session without forgetting it', async () => {
+    const requests: Array<{ url: string; method?: string; body?: string }> = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push({
+        url: String(url),
+        method: init?.method,
+        body: init?.body as string | undefined,
+      });
+      return new Response(JSON.stringify({ state: 'released' }), { status: 202 });
+    });
+
+    await client.releaseSession('session/1');
+
+    expect(requests).toEqual([
+      {
+        url: '/api/sessions/session%2F1/release',
+        method: 'POST',
+        body: '{}',
+      },
+    ]);
+  });
+
   it('promotes a recent Codex thread into a managed session', async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {

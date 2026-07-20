@@ -52,7 +52,7 @@ async function listProfileThreads(
     })) as ThreadListResult;
     return (result.data ?? []).flatMap((thread) => {
       if (typeof thread.id !== 'string' || typeof thread.cwd !== 'string') return [];
-      return [{ id: thread.id, cwd: thread.cwd, recencyAt: toRecency(thread.recencyAt) }];
+      return [{ id: thread.id, cwd: thread.cwd, profile, recencyAt: toRecency(thread.recencyAt) }];
     });
   } catch {
     return [];

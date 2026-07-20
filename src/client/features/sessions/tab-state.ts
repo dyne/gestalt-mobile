@@ -5,7 +5,7 @@
  */
 
 export type Tab = 'chat' | 'git' | 'sessions';
-export function nextTab(current: Tab, direction: 1 | -1): Tab {
-  const tabs: Tab[] = ['chat', 'git', 'sessions'];
+export function nextTab(current: Tab, direction: 1 | -1, chatEnabled = true): Tab {
+  const tabs: Tab[] = chatEnabled ? ['sessions', 'git', 'chat'] : ['sessions', 'git'];
   return tabs[(tabs.indexOf(current) + direction + tabs.length) % tabs.length]!;
 }

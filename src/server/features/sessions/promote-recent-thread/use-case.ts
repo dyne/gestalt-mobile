@@ -26,7 +26,7 @@ export async function promoteRecentThread(
       id: deps.createId(),
       workspaceId: thread.cwd,
       workspacePath: thread.cwd,
-      profile: 'default',
+      profile: thread.profile,
       threadId: thread.id,
       now,
     }).snapshot;

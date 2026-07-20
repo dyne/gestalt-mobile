@@ -16,3 +16,10 @@ export function managedSessionDetails(session: {
     updatedAt: Number.isFinite(timestamp) ? timestamp : null,
   };
 }
+
+export function displayWorkspacePath(path: string): string {
+  const homeDirectory = /^\/home\/[^/]+/.exec(path)?.[0];
+  if (!homeDirectory) return path;
+  const remainder = path.slice(homeDirectory.length);
+  return remainder ? `~${remainder}` : '~/';
+}

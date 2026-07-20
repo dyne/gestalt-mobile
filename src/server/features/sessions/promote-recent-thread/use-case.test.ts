@@ -21,7 +21,7 @@ describe('promoteRecentThread', () => {
     }));
 
     const promoted = await promoteRecentThread(
-      { id: 'thread-1', cwd: '/work/project', recencyAt: 100 },
+      { id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 100 },
       {
         createId: () => 'session-1',
         now: () => now,
@@ -36,6 +36,7 @@ describe('promoteRecentThread', () => {
         id: 'session-1',
         threadId: 'thread-1',
         workspacePath: '/work/project',
+        profile: 'work',
         state: 'stopped',
       }),
     );
@@ -52,7 +53,7 @@ describe('promoteRecentThread', () => {
     const restore = vi.fn();
 
     const promoted = await promoteRecentThread(
-      { id: 'thread-1', cwd: '/work/project', recencyAt: 100 },
+      { id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 100 },
       {
         createId: () => 'unused',
         now: () => now,

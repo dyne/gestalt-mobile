@@ -7,7 +7,9 @@
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-export function buildResumeCommand(session: RelaySessionSnapshot): string {
+export function buildResumeCommand(
+  session: Pick<RelaySessionSnapshot, 'profile' | 'threadId' | 'workspacePath'>,
+): string {
   if (!session.threadId) throw new Error('THREAD_REQUIRED');
   return [
     'codex-profile',

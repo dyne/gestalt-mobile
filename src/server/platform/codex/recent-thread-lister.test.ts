@@ -48,9 +48,9 @@ describe('recent Codex thread lister', () => {
     });
 
     await expect(lister.list()).resolves.toEqual([
-      { id: 'new', cwd: '/projects/new', recencyAt: 20 },
-      { id: 'same', cwd: '/projects/shared', recencyAt: 10 },
-      { id: 'old', cwd: '/projects/old', recencyAt: 5 },
+      { id: 'new', cwd: '/projects/new', profile: 'work', recencyAt: 20 },
+      { id: 'same', cwd: '/projects/shared', profile: 'default', recencyAt: 10 },
+      { id: 'old', cwd: '/projects/old', profile: 'default', recencyAt: 5 },
     ]);
     expect(calls.filter((call) => call.method === 'initialize')).toHaveLength(2);
     expect(calls.filter((call) => call.method === 'thread/list')).toEqual([

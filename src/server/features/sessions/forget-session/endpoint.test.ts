@@ -15,7 +15,9 @@ describe('DELETE /api/sessions/:id', () => {
     const calls: string[] = [];
     registerForgetSession(app, {
       find: () => ({ id: 'session-1' }) as never,
-      close: () => calls.push('close'),
+      close: () => {
+        calls.push('close');
+      },
       remove: () => calls.push('remove'),
     });
 

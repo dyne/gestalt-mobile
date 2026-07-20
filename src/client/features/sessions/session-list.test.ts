@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { managedSessionDetails } from './session-list.js';
+import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
 
 describe('managedSessionDetails', () => {
   it('exposes the resumable thread ID, workspace path, and updated time', () => {
@@ -31,5 +31,18 @@ describe('managedSessionDetails', () => {
       workspacePath: '/workspace',
       updatedAt: null,
     });
+  });
+});
+
+describe('displayWorkspacePath', () => {
+  it('abbreviates a Linux home-directory prefix', () => {
+    expect(displayWorkspacePath('/home/alice/projects/gestalt-mobile')).toBe(
+      '~/projects/gestalt-mobile',
+    );
+    expect(displayWorkspacePath('/home/alice')).toBe('~/');
+  });
+
+  it('keeps paths outside a Linux home directory unchanged', () => {
+    expect(displayWorkspacePath('/workspace/project')).toBe('/workspace/project');
   });
 });

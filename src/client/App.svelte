@@ -45,14 +45,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { validateStartForm } from './features/sessions/start-form.js';
   import type { Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
+  import { displayWorkspacePath } from './features/sessions/session-list.js';
 
-  let tab = $state<Tab>('chat');
+  let tab = $state<Tab>('sessions');
   let status = $state('Loading relay…');
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
   let workspaces = $state<Array<{ id: string; name: string }>>([]);
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
+  let chatEnabled = $derived(
+    sessions.some(
+      (session) =>
+        session.id === sessionId && (session.state === 'ready' || session.state === 'turnActive'),
+    ),
+  );
   let recentSessions = $state<RecentSession[]>([]);
   let workspaceId = $state('');
   let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
@@ -171,6 +178,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       message = await sessionCache.readDraft(session.id);
       connectSession(session.id);
       tab = 'chat';
+      void loadGitSummary();
+      scrollChatToBottom();
       status = 'Session started.';
     } catch (error) {
       status = `Could not start session: ${error instanceof Error ? error.message : 'Unknown relay error.'}`;
@@ -200,21 +209,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function openSession(id: string) {
-    const existing = sessions.find((session) => session.id === id);
-    if (existing && existing.state !== 'ready' && existing.state !== 'turnActive') {
-      await relay.restoreSession(id);
-      await refreshSessions();
-    }
-    sessionId = id;
-    void sessionCache.saveSelectedSession(id);
-    messages = await messageCache.read(id);
-    activities = [];
-    cursor = 0;
-    message = await sessionCache.readDraft(id);
-    activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
-    interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
-    tab = 'chat';
+    status = 'Opening session…';
     try {
+      const existing = sessions.find((session) => session.id === id);
+      if (existing && existing.state !== 'ready' && existing.state !== 'turnActive') {
+        const restored = await relay.restoreSession(id);
+        sessions = sessions.map((session) => (session.id === id ? restored : session));
+      }
+      sessionId = id;
+      void sessionCache.saveSelectedSession(id);
+      messages = await messageCache.read(id);
+      activities = [];
+      cursor = 0;
+      message = await sessionCache.readDraft(id);
+      activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
+      interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
+      tab = 'chat';
+      void loadGitSummary();
+      scrollChatToBottom();
       await resyncHistory(id);
       connectSession(id);
     } catch (error) {
@@ -230,6 +242,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await openSession(session.id);
     } catch (error) {
       status = `Could not open recent session: ${errorMessage(error)}`;
+    }
+  }
+
+  async function closeSession(id: string) {
+    status = 'Closing session…';
+    try {
+      await relay.releaseSession(id);
+      if (sessionId === id) {
+        sessionId = null;
+        tab = 'sessions';
+        activeTurnId = null;
+        interactions = [];
+        void sessionCache.saveSelectedSession(null);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        socket?.close();
+        socket = null;
+      }
+      await refreshSessionLists();
+      status = 'Session closed.';
+    } catch (error) {
+      status = `Could not close session: ${errorMessage(error)}`;
     }
   }
 
@@ -250,8 +284,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function copyResumeCommand(command: string) {
     status = (await copyText(command))
-      ? 'SSH resume command copied.'
-      : 'Could not copy the SSH resume command.';
+      ? 'Resume command copied.'
+      : 'Could not copy the resume command.';
   }
 
   async function sendMessage() {
@@ -345,10 +379,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function selectTab(next: Tab): void {
+    if (next === 'chat' && !chatEnabled) return;
     tab = next;
-    if (next === 'chat') reconcileVisibleHistory();
+    if (next === 'chat') {
+      reconcileVisibleHistory();
+      void loadGitSummary();
+      scrollChatToBottom();
+    }
     if (next === 'git') void loadGitSummary();
     if (next === 'sessions') void refreshSessionLists();
+  }
+
+  function scrollChatToBottom(): void {
+    requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight }));
   }
 
   async function loadGitSummary() {
@@ -564,17 +607,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <title>Gestalt Mobile</title>
 </svelte:head>
 
-<main class:git-mode={tab === 'git'}>
-  <AppHeader {theme} onthemechange={setTheme} />
+<main>
+  <AppHeader
+    {theme}
+    sessionPath={tab === 'chat' ? displayWorkspacePath(sessions.find((session) => session.id === sessionId)?.workspacePath ?? '') : null}
+    onthemechange={setTheme}
+  />
 
   {#if tab === 'chat'}
     <section aria-labelledby="chat-title">
       <h2 id="chat-title" class="visually-hidden">Chat</h2>
       {#if sessionId}
-        <p>
-          Connected Codex session: {sessions.find((session) => session.id === sessionId)
-            ?.threadId ?? 'starting…'}
-        </p>
         <MessageList {messages} />
         <ActivityList {activities} />
         <InteractionList
@@ -585,6 +628,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onpermission={(interaction) => void resolvePermissions(interaction)}
           ondecision={(id, decision) => void resolveInteraction(id, decision)}
         />
+        <p class="chat-metrics">
+          Branch: &lt;{gitSummary?.branch ?? '—'}&gt;
+        </p>
         <Composer
           {status}
           {message}
@@ -630,6 +676,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onsandboxchange={(value) => (sandbox = value)}
       onapprovalpolicychange={(value) => (approvalPolicy = value)}
       onopen={openSession}
+      onclose={(id) => void closeSession(id)}
       onopenrecent={(session) => void openRecentSession(session)}
       onforget={(id) => void forgetSession(id)}
       oncopyresume={(command) => void copyResumeCommand(command)}
@@ -637,5 +684,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     />
   {/if}
 
-  <BottomNavigation activeTab={tab} onselect={selectTab} />
+  <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
 </main>
+
+<style>
+  .chat-metrics { margin-block: 0 0.75rem; }
+</style>

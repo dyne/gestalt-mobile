@@ -9,9 +9,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let {
     theme,
+    sessionPath = null,
     onthemechange,
   }: {
     theme: ThemePreference;
+    sessionPath?: string | null;
     onthemechange: (theme: ThemePreference) => void;
   } = $props();
 </script>
@@ -23,6 +25,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <img class="brand-logotype light-asset" src="/branding/t_glogo_grey.svg" alt="" />
     <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
   </a>
+  {#if sessionPath}
+    <p class="session-path" title={sessionPath}>{sessionPath}</p>
+  {/if}
   <button
     class="menu-trigger"
     type="button"
@@ -32,6 +37,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span>
   </button>
 </header>
+
+<style>
+  .session-path {
+    min-inline-size: 0;
+    margin: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">
   <div class="configuration-brand" aria-label="Dyne">

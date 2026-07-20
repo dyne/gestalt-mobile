@@ -7,7 +7,7 @@
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'resyncing' | 'offline';
 
 export function turnReadiness(activeTurnId: string | null): string {
-  return activeTurnId ? 'Codex is working…' : 'Ready for your next instruction.';
+  return activeTurnId ? 'Codex is working…' : 'Ready.';
 }
 
 export function reconnectDelay(attempt: number, random = Math.random): number {

@@ -59,7 +59,7 @@ export type AppDependencies = {
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
-    close?(id: string): void;
+    close?(id: string): void | Promise<void>;
     remove?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
     readHistory?(session: RelaySessionSnapshot): Promise<{
