@@ -18,7 +18,7 @@ describe('FilesystemWorkspaceCatalog', () => {
     Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true }))),
   );
 
-  it('lists only immediate readable directories contained by the relay root', async () => {
+  it('returns a selectable rooted tree with opaque resolvable node IDs', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     directories.push(root);
     await mkdir(join(root, 'beta'));
@@ -27,9 +27,31 @@ describe('FilesystemWorkspaceCatalog', () => {
     directories.push(outside);
     await symlink(outside, join(root, 'escape'));
 
-    const workspaces = await new FilesystemWorkspaceCatalog(root).list();
+    const catalog = new FilesystemWorkspaceCatalog(root);
+    const workspaces = await catalog.list();
 
-    expect(workspaces.map((workspace) => workspace.name)).toEqual(['/', 'Alpha', 'beta']);
-    expect(workspaces.every((workspace) => !workspace.name.includes('escape'))).toBe(true);
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0]).toMatchObject({
+      name: '/',
+      relativePath: '.',
+      isGitRepository: false,
+    });
+    expect(workspaces[0]?.children.map((workspace) => workspace.name)).toEqual(['Alpha', 'beta']);
+    expect(workspaces[0]?.children.every((workspace) => !workspace.name.includes('escape'))).toBe(
+      true,
+    );
+
+    const rootNode = workspaces[0];
+    const alpha = rootNode?.children[0];
+    expect(rootNode && (await catalog.resolve(rootNode.id))).toEqual({
+      id: rootNode?.id,
+      name: '/',
+      realPath: root,
+    });
+    expect(alpha && (await catalog.resolve(alpha.id))).toEqual({
+      id: alpha?.id,
+      name: 'Alpha',
+      realPath: join(root, 'Alpha'),
+    });
   });
 });

@@ -12,7 +12,33 @@ describe('GET /api/bootstrap', () => {
   it('returns public catalogs and relay capabilities', async () => {
     const app = fastify();
     registerGetBootstrap(app, {
-      workspaces: { list: async () => [{ id: 'w', name: 'Work', isGitRepository: true }] },
+      workspaces: {
+        list: async () => [
+          {
+            id: 'root',
+            name: '/',
+            relativePath: '.',
+            isGitRepository: false,
+            children: [
+              {
+                id: 'group',
+                name: 'Group',
+                relativePath: 'Group',
+                isGitRepository: false,
+                children: [
+                  {
+                    id: 'repo',
+                    name: 'Repo',
+                    relativePath: 'Group/Repo',
+                    isGitRepository: true,
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
       profiles: { list: async () => [{ name: 'default', state: 'ok', status: 'ready' }] },
       sessions: { list: () => [] },
       protocolCompatible: true,
@@ -20,7 +46,31 @@ describe('GET /api/bootstrap', () => {
     const response = await app.inject('/api/bootstrap');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      workspaces: [{ id: 'w', name: 'Work', isGitRepository: true }],
+      workspaces: [
+        {
+          id: 'root',
+          name: '/',
+          relativePath: '.',
+          isGitRepository: false,
+          children: [
+            {
+              id: 'group',
+              name: 'Group',
+              relativePath: 'Group',
+              isGitRepository: false,
+              children: [
+                {
+                  id: 'repo',
+                  name: 'Repo',
+                  relativePath: 'Group/Repo',
+                  isGitRepository: true,
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
       profiles: [{ name: 'default', state: 'ok', status: 'ready' }],
       sessions: [],
       capabilities: { approvals: true, userInput: true, git: true, protocolCompatible: true },

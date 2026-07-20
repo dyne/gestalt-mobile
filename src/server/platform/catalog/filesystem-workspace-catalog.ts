@@ -19,26 +19,17 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
     this.root = realpath(root);
   }
   async list(): Promise<WorkspaceOption[]> {
-    return (await this.entries()).map(({ id, name, git }) => ({ id, name, isGitRepository: git }));
+    return [(await this.tree()).option];
   }
   async resolve(id: string): Promise<{ id: string; name: string; realPath: string }> {
-    const found = (await this.entries()).find((entry) => entry.id === id);
+    const found = this.find(await this.tree(), id);
     if (!found) throw new Error('WORKSPACE_NOT_FOUND');
-    return { id: found.id, name: found.name, realPath: found.path };
+    return { id: found.option.id, name: found.option.name, realPath: found.realPath };
   }
-  private async entries(): Promise<
-    Array<{ id: string; name: string; path: string; git: boolean }>
-  > {
+  private async tree(): Promise<CatalogEntry> {
     const root = await this.root;
     const children = await readdir(root, { withFileTypes: true });
-    const rootEntry = {
-      id: createHash('sha256').update(root).digest('base64url'),
-      name: '/',
-      path: root,
-      git: await stat(join(root, '.git'))
-        .then(() => true)
-        .catch(() => false),
-    };
+    const rootIsRepository = await this.isGitRepository(root);
     const output = await Promise.all(
       children.map(async (child) => {
         if (!child.isDirectory() && !child.isSymbolicLink()) return null;
@@ -46,22 +37,62 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
           const path = await realpath(join(root, child.name));
           const info = await stat(path);
           if (!info.isDirectory() || relative(root, path).startsWith('..')) return null;
-          const git = await stat(join(path, '.git'))
-            .then(() => true)
-            .catch(() => false);
           return {
-            id: createHash('sha256').update(path).digest('base64url'),
-            name: child.name,
-            path,
-            git,
+            option: {
+              id: this.id(path),
+              name: child.name,
+              relativePath: child.name,
+              isGitRepository: await this.isGitRepository(path),
+              children: [],
+            },
+            realPath: path,
+            children: [],
           };
         } catch {
           return null;
         }
       }),
     );
-    return [rootEntry, ...output]
+    const visibleChildren = output
       .filter((value): value is NonNullable<typeof value> => value !== null)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      .sort((a, b) =>
+        a.option.name.localeCompare(b.option.name, undefined, { sensitivity: 'base' }),
+      );
+    const childOptions = rootIsRepository
+      ? []
+      : visibleChildren.map((entry) => entry.option);
+    return {
+      option: {
+        id: this.id(root),
+        name: '/',
+        relativePath: '.',
+        isGitRepository: rootIsRepository,
+        children: childOptions,
+      },
+      realPath: root,
+      children: rootIsRepository ? [] : visibleChildren,
+    };
+  }
+  private find(entry: CatalogEntry, id: string): CatalogEntry | undefined {
+    if (entry.option.id === id) return entry;
+    for (const child of entry.children) {
+      const found = this.find(child, id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  private id(path: string): string {
+    return createHash('sha256').update(path).digest('base64url');
+  }
+  private async isGitRepository(path: string): Promise<boolean> {
+    return stat(join(path, '.git'))
+      .then(() => true)
+      .catch(() => false);
   }
 }
+
+type CatalogEntry = {
+  option: WorkspaceOption;
+  realPath: string;
+  children: CatalogEntry[];
+};
