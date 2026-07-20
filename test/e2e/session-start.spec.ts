@@ -6,6 +6,30 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
+type BootstrapWorkspace = {
+  id: string;
+  name: string;
+  relativePath: string;
+  isGitRepository: boolean;
+  children: BootstrapWorkspace[];
+};
+
+function workspaceTree(children: BootstrapWorkspace[] = []): BootstrapWorkspace[] {
+  return [
+    {
+      id: 'workspace-1',
+      name: 'project',
+      relativePath: '.',
+      isGitRepository: false,
+      children,
+    },
+  ];
+}
+
+function workspaceNode(id: string, name: string): BootstrapWorkspace {
+  return { id, name, relativePath: name, isGitRepository: false, children: [] };
+}
+
 async function openChat(page: Page): Promise<void> {
   const chat = page.getByRole('button', { name: 'Chat' });
   await expect(chat).toBeEnabled();
@@ -26,7 +50,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
@@ -88,7 +112,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [managedSession],
       }),
@@ -197,7 +221,7 @@ test('separates open and saved sessions and closes without forgetting', async ({
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions,
       }),
@@ -267,7 +291,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
@@ -305,7 +329,7 @@ test('rehydrates a durable pending interaction after a browser reload', async ({
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [
           {
@@ -337,7 +361,7 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
@@ -373,7 +397,7 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -401,7 +425,7 @@ test('keeps the session controls within a 320px viewport', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
@@ -440,7 +464,7 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -488,10 +512,7 @@ test('clones a repository from the Git tab into the selected workspace', async (
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [
-          { id: 'workspace-1', name: 'project' },
-          { id: 'workspace-2', name: 'archive' },
-        ],
+        workspaces: workspaceTree([workspaceNode('workspace-2', 'archive')]),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
@@ -529,7 +550,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -593,7 +614,7 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -644,7 +665,7 @@ test('shows Git pull progress and disables push without an upstream', async ({ p
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -701,7 +722,7 @@ test('renders and resolves a relay approval request', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -753,7 +774,7 @@ test('answers a relay user-input request', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -816,7 +837,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -866,7 +887,7 @@ test('projects a live activity update from the relay socket', async ({ page }) =
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -911,7 +932,7 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -953,7 +974,7 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -1001,7 +1022,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -1058,7 +1079,7 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),
@@ -1117,7 +1138,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: [{ id: 'workspace-1', name: 'project' }],
+        workspaces: workspaceTree(),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [session],
       }),

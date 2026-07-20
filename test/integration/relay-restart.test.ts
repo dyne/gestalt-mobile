@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { composeRelayApp } from '../../src/server/composition.js';
+import type { WorkspaceOption } from '../../src/server/features/catalog/application/ports.js';
 const paths: string[] = [];
 afterEach(async () =>
   Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true }))),
@@ -47,12 +48,19 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
   await first.listen({ host: '127.0.0.1', port: 0 });
   const base = `http://127.0.0.1:${(first.server.address() as { port: number }).port}`;
   const bootstrap = await fetch(`${base}/api/bootstrap`).then(
-    (response) => response.json() as Promise<{ workspaces: Array<{ id: string }> }>,
+    (response) => response.json() as Promise<{ workspaces: WorkspaceOption[] }>,
   );
+  const workspace = bootstrap.workspaces[0]?.children[0];
+  expect(bootstrap.workspaces).toMatchObject([
+    {
+      relativePath: '.',
+      children: [{ id: workspace?.id, name: 'workspace', relativePath: 'workspace' }],
+    },
+  ]);
   const created = await fetch(`${base}/api/sessions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ workspaceId: bootstrap.workspaces[0]?.id, profile: 'default' }),
+    body: JSON.stringify({ workspaceId: workspace?.id, profile: 'default' }),
   }).then((response) => response.json() as Promise<{ id: string }>);
   await first.close();
   const restoredCalls: string[] = [];

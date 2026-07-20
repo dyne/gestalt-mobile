@@ -12,7 +12,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import InteractionList from './features/chat/InteractionList.svelte';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
-  import { loadBootstrap } from './features/catalog/bootstrap-client.js';
+  import {
+    flattenWorkspaceTree,
+    loadBootstrap,
+    type WorkspaceOption,
+  } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
@@ -51,7 +55,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let status = $state('Loading relay…');
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
-  let workspaces = $state<Array<{ id: string; name: string }>>([]);
+  let workspaceTree = $state<WorkspaceOption[]>([]);
+  let workspaces = $derived(flattenWorkspaceTree(workspaceTree));
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let chatEnabled = $derived(
@@ -103,7 +108,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     window.addEventListener('focus', reconcileVisibleHistory);
     try {
       const bootstrap = await loadBootstrap();
-      workspaces = bootstrap.workspaces;
+      workspaceTree = bootstrap.workspaces;
       workspaceId = workspaces[0]?.id ?? '';
       const remembered = await sessionCache.readSelectedSession();
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
@@ -423,7 +428,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.cloneGitRepository(workspaceId, address);
       const bootstrap = await loadBootstrap();
-      workspaces = bootstrap.workspaces;
+      workspaceTree = bootstrap.workspaces;
       gitCloneStatus = 'Repository cloned into the selected workspace.';
     } catch (error) {
       gitError = `Could not clone repository: ${errorMessage(error)}`;

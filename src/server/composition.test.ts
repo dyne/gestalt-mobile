@@ -54,7 +54,7 @@ describe('production composition', () => {
     const bootstrap = await app.inject({ method: 'GET', url: '/api/bootstrap' });
     const workspace = bootstrap
       .json()
-      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+      .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
     expect(workspace).toBeDefined();
     const created = await app.inject({
       method: 'POST',
@@ -90,7 +90,7 @@ describe('production composition', () => {
     });
     const workspace = (await first.inject('/api/bootstrap'))
       .json()
-      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+      .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
     expect(workspace).toBeDefined();
     const created = await first.inject({
       method: 'POST',
@@ -148,7 +148,7 @@ describe('production composition', () => {
     });
     const workspace = (await app.inject('/api/bootstrap'))
       .json()
-      .workspaces.find((item: { name: string }) => item.name === 'workspace');
+      .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
     await app.inject({
       method: 'POST',
       url: '/api/sessions',
