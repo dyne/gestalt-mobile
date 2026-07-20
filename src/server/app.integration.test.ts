@@ -78,7 +78,23 @@ describe('relay application composition', () => {
       logger: console,
       bootstrap: {
         workspaces: {
-          list: async () => [{ id: 'workspace-1', name: 'workspace', isGitRepository: false }],
+          list: async () => [
+            {
+              id: 'root',
+              name: '/',
+              relativePath: '.',
+              isGitRepository: false,
+              children: [
+                {
+                  id: 'workspace-1',
+                  name: 'workspace',
+                  relativePath: 'workspace',
+                  isGitRepository: false,
+                  children: [],
+                },
+              ],
+            },
+          ],
         },
         profiles: { list: async () => [{ name: 'default', state: 'ok', status: 'ready' }] },
         sessions: { list: () => sessions },
@@ -98,6 +114,18 @@ describe('relay application composition', () => {
         },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
       },
+    });
+
+    const bootstrap = await app.inject({ method: 'GET', url: '/api/bootstrap' });
+    expect(bootstrap.statusCode).toBe(200);
+    expect(bootstrap.json()).toMatchObject({
+      workspaces: [
+        {
+          id: 'root',
+          relativePath: '.',
+          children: [{ id: 'workspace-1', relativePath: 'workspace', children: [] }],
+        },
+      ],
     });
 
     const created = await app.inject({

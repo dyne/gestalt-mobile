@@ -42,8 +42,13 @@ active Codex subprocesses, and database cleanly.
 | `--help`            |                     | Print usage without starting the application |
 | `--version`         |                     | Print the installed package version          |
 
-`--cwd` may be relative to the directory where the command is invoked. Its
-immediate child directories are the workspaces offered by the application.
+`--cwd` may be relative to the directory where the command is invoked. The
+resolved directory is the selectable root of a recursive workspace tree. Dot
+directories are omitted, and traversal stops at each directory containing a
+`.git` marker, so repositories are terminal nodes. Directory symlinks are
+included only when their real target stays under the resolved root; repeated
+real targets and cycles are omitted. Browser requests select nodes by opaque ID,
+while real filesystem paths remain server-side.
 
 Gestalt Mobile has no built-in authentication or TLS. The loopback default is
 safe for use on the same computer. `--host 0.0.0.0` exposes the relay and its
