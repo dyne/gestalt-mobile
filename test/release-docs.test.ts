@@ -14,9 +14,10 @@ describe('release operations documentation', () => {
   it.each([
     'Protect `main`',
     '`Verify` and `Package smoke`',
-    '`NPM_TOKEN`',
-    'npm maintainer',
     'npm trusted publishing',
+    'workflow filename to `ci.yml`',
+    'Do not configure an npm token',
+    '`id-token: write`',
     'Partial-release recovery',
     'git push --tags',
     'git push origin "refs/tags/v$VERSION"',
@@ -28,5 +29,10 @@ describe('release operations documentation', () => {
   it('warns maintainers not to push inherited tags', () => {
     expect(documentation).toContain('Never run `git push --tags`');
     expect(documentation).toContain('unrelated `v1.x` tags');
+  });
+
+  it('documents revocation without long-lived npm credentials', () => {
+    expect(documentation).toContain('remove or replace that trusted publisher');
+    expect(documentation).not.toContain('NPM_TOKEN');
   });
 });

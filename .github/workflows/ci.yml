@@ -136,9 +136,9 @@ jobs:
         run: node scripts/inspect-release.mjs target "${{ steps.target.outputs.version }}"
       - name: Publish npm package
         if: steps.state.outputs.publish == 'true'
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install -g npm@latest
+          npm publish . --tag latest
       - name: Create and push exact release tag
         if: steps.state.outputs.tag == 'true'
         env:

@@ -14,15 +14,17 @@ Configure the canonical `dyne/gestalt-mobile` repository as follows:
 - Allow GitHub Actions to create releases and tags. The release job itself has
   only `contents: write` and `id-token: write`; all other jobs have
   `contents: read`.
-- Grant this repository access to the organization Actions secret named
-  `NPM_TOKEN`. Do not expose it to pull-request jobs or other environments.
-- Ensure `NPM_TOKEN` belongs to an npm maintainer authorized to publish the
-  unscoped `gestalt-mobile` package and requires the least privileges npm
-  supports for publication.
+- Configure npm trusted publishing for the unscoped `gestalt-mobile` package.
+  Select GitHub Actions and set the organization to `dyne`, the repository to
+  `gestalt-mobile`, and the workflow filename to `ci.yml`.
+- Do not configure an npm token or a `NODE_AUTH_TOKEN` secret. The release job
+  exchanges GitHub's short-lived OIDC identity for npm publication access via
+  its `id-token: write` permission.
 
 Verify these settings after changing the workflow or repository rules. A test
-pull request with a deliberately failing required check must remain unmergeable,
-and its jobs must not have access to `NPM_TOKEN`.
+pull request with a deliberately failing required check must remain unmergeable.
+Pull-request jobs retain read-only permissions and cannot request the OIDC token
+used for npm publication.
 
 ## Version and release behavior
 
@@ -39,18 +41,14 @@ The workflow changes package versions only inside its runner. It publishes npm
 first, then pushes exactly one annotated tag, then creates the GitHub Release.
 It never changes the version committed on `main`.
 
-## Credential rotation and revocation
+## Trusted publisher changes and revocation
 
-Rotate `NPM_TOKEN` from npm first, replace the organization secret, then revoke
-the old token. Run a normal verified release only when a release-worthy change
-is ready; do not print or test the token in a pull-request workflow. If the token
-is suspected to be exposed, revoke it immediately, audit npm package versions
-and GitHub releases, and replace the secret before any retry.
-
-Prefer migrating to [npm trusted publishing](https://docs.npmjs.com/trusted-publishers)
-when the organization is ready. Remove the token only after a rehearsed trusted
-publisher configuration successfully proves the same repository, workflow, and
-release environment restrictions.
+The workflow follows Zenroom's npm release technique: it installs the latest npm
+client, then publishes through [npm trusted publishing](https://docs.npmjs.com/trusted-publishers)
+without a long-lived npm credential. If the repository or workflow filename
+changes, update the trusted publisher configuration on npm before the next
+release. To revoke publication access, remove or replace that trusted publisher.
+Then audit npm package versions and GitHub releases before retrying a release.
 
 ## Partial-release recovery
 

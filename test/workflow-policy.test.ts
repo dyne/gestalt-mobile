@@ -41,12 +41,13 @@ describe('GitHub verification workflow', () => {
     }
   });
 
-  it('keeps verification read-only and scopes publication credentials to npm publish', () => {
+  it('keeps verification read-only and publishes through trusted OIDC identity', () => {
     expect(workflow).toMatch(/permissions:\n\s+contents: read/);
-    expect(workflow.match(/NPM_TOKEN/g)).toHaveLength(1);
-    expect(workflow.match(/NODE_AUTH_TOKEN/g)).toHaveLength(1);
+    expect(workflow).toMatch(/release:[\s\S]*permissions:\n\s+contents: write\n\s+id-token: write/);
+    expect(workflow).not.toContain('NPM_TOKEN');
+    expect(workflow).not.toContain('NODE_AUTH_TOKEN');
     expect(workflow).toMatch(
-      /Publish npm package[\s\S]*npm publish --access public --provenance[\s\S]*NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/,
+      /Publish npm package[\s\S]*npm install -g npm@latest[\s\S]*npm publish \. --tag latest/,
     );
   });
 
