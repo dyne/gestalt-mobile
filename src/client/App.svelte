@@ -20,6 +20,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
+  import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
+  import { createToastQueue } from './features/feedback/toast-queue.js';
+  import ToastEvidence from './features/feedback/ToastEvidence.svelte';
+  import ToastViewport from './features/feedback/ToastViewport.svelte';
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
   import GitView from './features/git/GitView.svelte';
   import {
@@ -99,13 +103,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const relay = createRelayClient();
   const messageCache = createMessageCache();
   const sessionCache = createSessionCache();
+  const toastQueue = createToastQueue();
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
+  const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
 
   onMount(async () => {
     const savedTheme = localStorage.getItem('gestalt-mobile.theme');
     if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system')
       setTheme(savedTheme);
-    if (evidenceContext === 'sessions' || evidenceContext === 'git') return;
+    if (
+      evidenceContext === 'sessions' ||
+      evidenceContext === 'git' ||
+      toastEvidence === 'error' ||
+      toastEvidence === 'stacked'
+    )
+      return;
     historyRefreshTimer = setInterval(reconcileVisibleHistory, 2_000);
     document.addEventListener('visibilitychange', reconcileVisibleHistory);
     window.addEventListener('focus', reconcileVisibleHistory);
@@ -130,8 +142,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         await resyncHistory(sessionId);
         connectSession(sessionId);
       }
-    } catch {
-      status = 'Relay unavailable. Check the server connection.';
+    } catch (error) {
+      status = reportRelayError(error, 'RELAY_UNAVAILABLE');
     }
   });
 
@@ -190,7 +202,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       scrollChatToBottom();
       status = 'Session started.';
     } catch (error) {
-      status = `Could not start session: ${error instanceof Error ? error.message : 'Unknown relay error.'}`;
+      status = reportRelayError(error, 'SESSION_START_FAILED');
     } finally {
       startingSession = false;
     }
@@ -212,7 +224,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await Promise.all([refreshSessions(), refreshRecentSessions()]);
     } catch (error) {
-      status = `Could not refresh sessions: ${errorMessage(error)}`;
+      status = reportRelayError(error, 'SESSION_REFRESH_FAILED');
     }
   }
 
@@ -313,8 +325,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       message = '';
       void sessionCache.saveDraft(sessionId, '');
       status = turnReadiness(activeTurnId);
-    } catch {
-      status = 'Message was not sent. Your draft is preserved.';
+    } catch (error) {
+      status = reportRelayError(error, 'MESSAGE_SEND_FAILED');
     } finally {
       startingTurn = false;
     }
@@ -417,7 +429,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await loadGitSummary();
       refreshRequestKey = null;
     } catch (error) {
-      gitError = error instanceof Error ? error.message : 'Git pull --rebase failed.';
+      gitError = reportRelayError(error, 'GIT_PULL_FAILED');
     } finally {
       gitRefreshing = false;
     }
@@ -433,8 +445,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const bootstrap = await loadBootstrap();
       workspaceTree = bootstrap.workspaces;
       gitCloneStatus = 'Repository cloned into the selected workspace.';
+      toastQueue.enqueue({ kind: 'success', message: 'Repository cloned.' });
     } catch (error) {
-      gitError = `Could not clone repository: ${errorMessage(error)}`;
+      gitError = reportRelayError(error, 'GIT_CLONE_FAILED');
     } finally {
       gitCloning = false;
     }
@@ -448,7 +461,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await relay.checkoutGitBranch(sessionId, branch);
       await loadGitSummary();
     } catch (error) {
-      gitError = error instanceof Error ? error.message : 'Git checkout failed.';
+      gitError = reportRelayError(error, 'GIT_CHECKOUT_FAILED');
     } finally {
       gitCheckingOut = false;
     }
@@ -463,8 +476,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       pushConfirmationOpen = false;
       await loadGitSummary();
       pushRequestKey = null;
-    } catch {
-      gitError = 'Push failed. Refresh the branch status and resolve remote divergence first.';
+    } catch (error) {
+      gitError = reportRelayError(error, 'GIT_PUSH_FAILED');
     }
   }
 
@@ -512,6 +525,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : 'Unknown relay error.';
+  }
+
+  function reportRelayError(error: unknown, fallbackCode: RelayFeedbackCode): string {
+    const feedback = relayFeedback(error, fallbackCode);
+    toastQueue.enqueue({ kind: 'error', ...feedback });
+    return feedback.message;
   }
 
   function handleComposerKeydown(event: KeyboardEvent): void {
@@ -615,7 +634,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <title>Gestalt Mobile</title>
 </svelte:head>
 
-{#if evidenceContext === 'sessions' || evidenceContext === 'git'}
+{#if toastEvidence === 'error' || toastEvidence === 'stacked'}
+  <ToastEvidence variant={toastEvidence} />
+{:else if evidenceContext === 'sessions' || evidenceContext === 'git'}
   <main class="evidence-mode">
     <FilesystemTreeEvidence context={evidenceContext} />
   </main>
@@ -699,6 +720,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
 </main>
+{/if}
+{#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}
+  <ToastViewport queue={toastQueue} />
 {/if}
 
 <style>
