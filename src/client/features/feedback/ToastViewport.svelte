@@ -136,14 +136,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   @media (max-width: 24rem) {
     .toast {
+      grid-template-columns: minmax(0, 1fr) 44px;
       gap: 0.25rem;
       padding: 0.35rem;
     }
 
     .toast-symbol {
-      inline-size: 1.25rem;
-      block-size: 1.25rem;
-      font-size: 0.75rem;
+      display: none;
     }
 
     .toast-copy strong {

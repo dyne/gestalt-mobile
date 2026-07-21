@@ -267,12 +267,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   @media (max-width: 24rem) {
     .tree-row {
-      padding-inline-start: min(calc(var(--tree-level) * 0.5rem), 3rem);
+      padding-inline-start: min(calc(var(--tree-level) * 0.25rem), 1.5rem);
     }
 
     .tree-item {
       gap: 0.35rem;
       padding-inline: 0.35rem;
+    }
+
+    .repository-badge {
+      display: none;
     }
   }
 

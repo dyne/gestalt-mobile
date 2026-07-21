@@ -27,7 +27,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <nav class="bottom-navigation" aria-label="Primary">
-  <button bind:this={buttons.sessions} aria-pressed={activeTab === 'sessions'} onkeydown={handleKeydown} onclick={() => onselect('sessions')}>Sessions</button>
-  <button bind:this={buttons.git} aria-pressed={activeTab === 'git'} onkeydown={handleKeydown} onclick={() => onselect('git')}>Git</button>
-  <button bind:this={buttons.chat} aria-pressed={activeTab === 'chat'} disabled={!chatEnabled} onkeydown={handleKeydown} onclick={() => onselect('chat')}>Chat</button>
+  <button
+    bind:this={buttons.sessions}
+    aria-pressed={activeTab === 'sessions'}
+    onkeydown={handleKeydown}
+    onclick={() => onselect('sessions')}>Sess<wbr />ions</button
+  >
+  <button
+    bind:this={buttons.git}
+    aria-pressed={activeTab === 'git'}
+    onkeydown={handleKeydown}
+    onclick={() => onselect('git')}>Git</button
+  >
+  <button
+    bind:this={buttons.chat}
+    aria-pressed={activeTab === 'chat'}
+    disabled={!chatEnabled}
+    onkeydown={handleKeydown}
+    onclick={() => onselect('chat')}>Chat</button
+  >
 </nav>

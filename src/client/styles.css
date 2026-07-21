@@ -43,6 +43,12 @@ main {
   padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
 }
 
+@media (max-width: 24rem) {
+  main {
+    padding-inline: 0.5rem;
+  }
+}
+
 .app-header {
   position: sticky;
   inset-block-start: 0;
@@ -77,9 +83,9 @@ main {
 .menu-trigger {
   display: grid;
   place-items: center;
-  min-block-size: 2rem;
+  min-block-size: 44px;
   flex: 0 0 auto;
-  inline-size: 2.5rem;
+  inline-size: 44px;
   margin-inline-start: auto;
   padding: 0;
   color: inherit;
@@ -189,7 +195,7 @@ main {
   inset-inline: 0;
   inset-block-end: 0;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
   background: Canvas;
@@ -197,6 +203,11 @@ main {
 }
 
 .bottom-navigation button {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding-inline: 0;
+  overflow-wrap: normal;
+  word-break: normal;
   transition:
     color 120ms ease,
     background-color 120ms ease,
@@ -217,6 +228,7 @@ main {
 }
 button {
   min-block-size: 44px;
+  font: inherit;
 }
 
 input,
