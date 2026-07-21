@@ -20,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
+  import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
   import GitView from './features/git/GitView.svelte';
   import {
     appendUserMessage,
@@ -98,11 +99,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const relay = createRelayClient();
   const messageCache = createMessageCache();
   const sessionCache = createSessionCache();
+  const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
 
   onMount(async () => {
     const savedTheme = localStorage.getItem('gestalt-mobile.theme');
     if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system')
       setTheme(savedTheme);
+    if (evidenceContext === 'sessions' || evidenceContext === 'git') return;
     historyRefreshTimer = setInterval(reconcileVisibleHistory, 2_000);
     document.addEventListener('visibilitychange', reconcileVisibleHistory);
     window.addEventListener('focus', reconcileVisibleHistory);
@@ -612,6 +615,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <title>Gestalt Mobile</title>
 </svelte:head>
 
+{#if evidenceContext === 'sessions' || evidenceContext === 'git'}
+  <main class="evidence-mode">
+    <FilesystemTreeEvidence context={evidenceContext} />
+  </main>
+{:else}
 <main>
   <AppHeader
     {theme}
@@ -691,7 +699,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
 </main>
+{/if}
 
 <style>
   .chat-metrics { margin-block: 0 0.75rem; }
+  .evidence-mode { box-sizing: border-box; inline-size: 100%; min-inline-size: 0; padding: 0; }
 </style>
