@@ -25,6 +25,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
   import ToastViewport from './features/feedback/ToastViewport.svelte';
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
+  import {
+    defaultExpandedIds,
+    refreshSelection,
+    treeNodePolicies,
+  } from './features/filesystem-tree/tree-state.js';
   import GitView from './features/git/GitView.svelte';
   import {
     appendUserMessage,
@@ -62,6 +67,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let theme = $state<ThemePreference>('system');
   let workspaceTree = $state<WorkspaceOption[]>([]);
   let workspaces = $derived(flattenWorkspaceTree(workspaceTree));
+  let sessionWorkspaceId = $state('');
+  let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let chatEnabled = $derived(
@@ -71,7 +78,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ),
   );
   let recentSessions = $state<RecentSession[]>([]);
-  let workspaceId = $state('');
   let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
@@ -123,8 +129,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     window.addEventListener('focus', reconcileVisibleHistory);
     try {
       const bootstrap = await loadBootstrap();
+      sessionWorkspaceId =
+        refreshSelection(
+          sessionWorkspaceId || null,
+          workspaceTree,
+          bootstrap.workspaces,
+          treeNodePolicies.sessionBase,
+        ) ?? '';
       workspaceTree = bootstrap.workspaces;
-      workspaceId = workspaces[0]?.id ?? '';
+      sessionExpandedIds = defaultExpandedIds(workspaceTree);
       const remembered = await sessionCache.readSelectedSession();
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
@@ -164,9 +177,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 
   async function startSession() {
-    if (!workspaceId || startingSession) return;
+    if (!sessionWorkspaceId || startingSession) return;
     const errors = validateStartForm({
-      workspaceId,
+      workspaceId: sessionWorkspaceId,
       profile: 'default',
       profileState: 'ok',
     });
@@ -179,7 +192,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     status = 'Starting session…';
     try {
       const session = await relay.startSession(
-        workspaceId,
+        sessionWorkspaceId,
         {
           sandbox: sandbox || undefined,
           approvalPolicy,
@@ -443,6 +456,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.cloneGitRepository(workspaceId, address);
       const bootstrap = await loadBootstrap();
+      sessionWorkspaceId =
+        refreshSelection(
+          sessionWorkspaceId || null,
+          workspaceTree,
+          bootstrap.workspaces,
+          treeNodePolicies.sessionBase,
+        ) ?? '';
       workspaceTree = bootstrap.workspaces;
       gitCloneStatus = 'Repository cloned into the selected workspace.';
       toastQueue.enqueue({ kind: 'success', message: 'Repository cloned.' });
@@ -641,91 +661,104 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <FilesystemTreeEvidence context={evidenceContext} />
   </main>
 {:else}
-<main>
-  <AppHeader
-    {theme}
-    sessionPath={tab === 'chat' ? displayWorkspacePath(sessions.find((session) => session.id === sessionId)?.workspacePath ?? '') : null}
-    onthemechange={setTheme}
-  />
-
-  {#if tab === 'chat'}
-    <section aria-labelledby="chat-title">
-      <h2 id="chat-title" class="visually-hidden">Chat</h2>
-      {#if sessionId}
-        <MessageList {messages} />
-        <ActivityList {activities} />
-        <InteractionList
-          {interactions}
-          answers={userInputAnswers}
-          onanswer={setUserInputAnswer}
-          onuserinput={(interaction) => void resolveUserInput(interaction)}
-          onpermission={(interaction) => void resolvePermissions(interaction)}
-          ondecision={(id, decision) => void resolveInteraction(id, decision)}
-        />
-        <p class="chat-metrics">
-          Branch: &lt;{gitSummary?.branch ?? '—'}&gt;
-        </p>
-        <Composer
-          {status}
-          {message}
-          {activeTurnId}
-          starting={startingTurn}
-          onchange={updateDraft}
-          onsend={() => void sendMessage()}
-          oninterrupt={() => void interruptTurn()}
-        />
-      {:else}
-        <p>Start a session from the Sessions tab to chat with Codex.</p>
-      {/if}
-    </section>
-  {:else if tab === 'git'}
-    <GitView
-      {sessionId}
-      {workspaces}
-      cloneWorkspaceId={workspaceId}
-      summary={gitSummary}
-      refreshing={gitRefreshing}
-      checkingOut={gitCheckingOut}
-      cloning={gitCloning}
-      error={gitError}
-      cloneStatus={gitCloneStatus}
-      confirmingPush={pushConfirmationOpen}
-      onpull={() => void pullGit()}
-      oncheckout={(branch) => void checkoutGitBranch(branch)}
-      onopenpushconfirmation={() => (pushConfirmationOpen = true)}
-      onpush={() => void pushGit()}
-      oncancelpush={() => (pushConfirmationOpen = false)}
-      onclone={(destination, address) => void cloneGitRepository(destination, address)}
+  <main>
+    <AppHeader
+      {theme}
+      sessionPath={tab === 'chat'
+        ? displayWorkspacePath(
+            sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
+          )
+        : null}
+      onthemechange={setTheme}
     />
-  {:else}
-    <SessionsView
-      {sessions}
-      {recentSessions}
-      {workspaces}
-      {workspaceId}
-      {sandbox}
-      {approvalPolicy}
-      {startingSession}
-      onworkspacechange={(value) => (workspaceId = value)}
-      onsandboxchange={(value) => (sandbox = value)}
-      onapprovalpolicychange={(value) => (approvalPolicy = value)}
-      onopen={openSession}
-      onclose={(id) => void closeSession(id)}
-      onopenrecent={(session) => void openRecentSession(session)}
-      onforget={(id) => void forgetSession(id)}
-      oncopyresume={(command) => void copyResumeCommand(command)}
-      onstart={() => void startSession()}
-    />
-  {/if}
 
-  <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
-</main>
+    {#if tab === 'chat'}
+      <section aria-labelledby="chat-title">
+        <h2 id="chat-title" class="visually-hidden">Chat</h2>
+        {#if sessionId}
+          <MessageList {messages} />
+          <ActivityList {activities} />
+          <InteractionList
+            {interactions}
+            answers={userInputAnswers}
+            onanswer={setUserInputAnswer}
+            onuserinput={(interaction) => void resolveUserInput(interaction)}
+            onpermission={(interaction) => void resolvePermissions(interaction)}
+            ondecision={(id, decision) => void resolveInteraction(id, decision)}
+          />
+          <p class="chat-metrics">
+            Branch: &lt;{gitSummary?.branch ?? '—'}&gt;
+          </p>
+          <Composer
+            {status}
+            {message}
+            {activeTurnId}
+            starting={startingTurn}
+            onchange={updateDraft}
+            onsend={() => void sendMessage()}
+            oninterrupt={() => void interruptTurn()}
+          />
+        {:else}
+          <p>Start a session from the Sessions tab to chat with Codex.</p>
+        {/if}
+      </section>
+    {:else if tab === 'git'}
+      <GitView
+        {sessionId}
+        {workspaces}
+        cloneWorkspaceId={sessionWorkspaceId}
+        summary={gitSummary}
+        refreshing={gitRefreshing}
+        checkingOut={gitCheckingOut}
+        cloning={gitCloning}
+        error={gitError}
+        cloneStatus={gitCloneStatus}
+        confirmingPush={pushConfirmationOpen}
+        onpull={() => void pullGit()}
+        oncheckout={(branch) => void checkoutGitBranch(branch)}
+        onopenpushconfirmation={() => (pushConfirmationOpen = true)}
+        onpush={() => void pushGit()}
+        oncancelpush={() => (pushConfirmationOpen = false)}
+        onclone={(destination, address) => void cloneGitRepository(destination, address)}
+      />
+    {:else}
+      <SessionsView
+        {sessions}
+        {recentSessions}
+        {workspaceTree}
+        workspaceId={sessionWorkspaceId}
+        expandedIds={sessionExpandedIds}
+        {sandbox}
+        {approvalPolicy}
+        {startingSession}
+        onworkspacechange={(value) => (sessionWorkspaceId = value)}
+        onexpandedchange={(value) => (sessionExpandedIds = value)}
+        onsandboxchange={(value) => (sandbox = value)}
+        onapprovalpolicychange={(value) => (approvalPolicy = value)}
+        onopen={openSession}
+        onclose={(id) => void closeSession(id)}
+        onopenrecent={(session) => void openRecentSession(session)}
+        onforget={(id) => void forgetSession(id)}
+        oncopyresume={(command) => void copyResumeCommand(command)}
+        onstart={() => void startSession()}
+      />
+    {/if}
+
+    <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
+  </main>
 {/if}
 {#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}
   <ToastViewport queue={toastQueue} />
 {/if}
 
 <style>
-  .chat-metrics { margin-block: 0 0.75rem; }
-  .evidence-mode { box-sizing: border-box; inline-size: 100%; min-inline-size: 0; padding: 0; }
+  .chat-metrics {
+    margin-block: 0 0.75rem;
+  }
+  .evidence-mode {
+    box-sizing: border-box;
+    inline-size: 100%;
+    min-inline-size: 0;
+    padding: 0;
+  }
 </style>

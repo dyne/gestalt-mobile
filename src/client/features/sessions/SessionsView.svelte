@@ -5,20 +5,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
+  import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
+  import { findTreeNode, treeNodePolicies } from '../filesystem-tree/tree-state.js';
   import type { RecentSession, RelaySession, StartSessionSettings } from './relay-client.js';
   import { formatRelativeTime } from './relative-time.js';
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
 
-  type Workspace = { id: string; name: string };
   type Props = {
     sessions: RelaySession[];
     recentSessions: RecentSession[];
-    workspaces: Workspace[];
+    workspaceTree: WorkspaceOption[];
     workspaceId: string;
+    expandedIds: ReadonlySet<string>;
     sandbox: StartSessionSettings['sandbox'] | '';
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
     startingSession: boolean;
     onworkspacechange: (value: string) => void;
+    onexpandedchange: (value: Set<string>) => void;
     onsandboxchange: (value: StartSessionSettings['sandbox'] | '') => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
     onopen: (id: string) => void;
@@ -32,12 +36,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     sessions,
     recentSessions,
-    workspaces,
+    workspaceTree,
     workspaceId,
+    expandedIds,
     sandbox,
     approvalPolicy,
     startingSession,
     onworkspacechange,
+    onexpandedchange,
     onsandboxchange,
     onapprovalpolicychange,
     onopen,
@@ -59,6 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       (recent) => !openSessions.some((session) => session.threadId === recent.id),
     ),
   );
+  let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
 </script>
 
 <section aria-labelledby="sessions-title">
@@ -113,21 +120,38 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if !openSessions.length}
     <p>No saved sessions yet.</p>
   {/if}
-  <form onsubmit={(event) => { event.preventDefault(); onstart(); }}>
-    <div class="form-row workspace-row">
-      <div class="form-field">
-        <label for="workspace">Workspace</label>
-        <select id="workspace" value={workspaceId} onchange={(event) => onworkspacechange(event.currentTarget.value)} required>
-          {#each workspaces as workspace (workspace.id)}
-            <option value={workspace.id}>{workspace.name}</option>
-          {/each}
-        </select>
+  <form
+    onsubmit={(event) => {
+      event.preventDefault();
+      onstart();
+    }}
+  >
+    <section class="session-base" aria-labelledby="session-base-title">
+      <div class="session-base-heading">
+        <h3 id="session-base-title">Session base</h3>
+        <p>Select the folder or repository Codex should use as its working directory.</p>
       </div>
-    </div>
+      <div class="tree-panel">
+        <FilesystemTree
+          roots={workspaceTree}
+          {expandedIds}
+          selectedId={selectedWorkspace?.id ?? null}
+          isSelectable={treeNodePolicies.sessionBase}
+          label="Session base"
+          {onexpandedchange}
+          onselect={(node) => onworkspacechange(node.id)}
+        />
+      </div>
+    </section>
     <div class="form-row session-settings-row">
       <div class="form-field">
         <label for="sandbox">Sandbox</label>
-        <select id="sandbox" value={sandbox} onchange={(event) => onsandboxchange(event.currentTarget.value as StartSessionSettings['sandbox'] | '')}>
+        <select
+          id="sandbox"
+          value={sandbox}
+          onchange={(event) =>
+            onsandboxchange(event.currentTarget.value as StartSessionSettings['sandbox'] | '')}
+        >
           <option value="">Codex default</option>
           <option value="read-only">read-only</option>
           <option value="workspace-write">workspace-write</option>
@@ -136,13 +160,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </div>
       <div class="form-field">
         <label for="approval-policy">Approval policy</label>
-        <select id="approval-policy" value={approvalPolicy} onchange={(event) => onapprovalpolicychange(event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>)}>
+        <select
+          id="approval-policy"
+          value={approvalPolicy}
+          onchange={(event) =>
+            onapprovalpolicychange(
+              event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>,
+            )}
+        >
           <option value="untrusted">untrusted</option>
           <option value="on-request">on-request</option>
           <option value="never">never</option>
         </select>
       </div>
-      <button class="new-session-button" type="submit" disabled={!workspaceId || startingSession}>
+      <button
+        class="new-session-button"
+        type="submit"
+        disabled={!selectedWorkspace || startingSession}
+      >
         {startingSession ? 'Starting…' : 'New session'}
       </button>
     </div>
@@ -155,7 +190,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <li class="recent-session">
             <div class="session-details">
               {#if session.recencyAt !== null}
-                <time datetime={new Date(session.recencyAt * 1000).toISOString()}>{formatRelativeTime(session.recencyAt * 1000)}</time>
+                <time datetime={new Date(session.recencyAt * 1000).toISOString()}
+                  >{formatRelativeTime(session.recencyAt * 1000)}</time
+                >
               {:else}
                 <div>{formatRelativeTime(null)}</div>
               {/if}
@@ -163,7 +200,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </div>
             <div class="session-actions">
               <button type="button" onclick={() => onopenrecent(session)}>Open</button>
-              <button type="button" onclick={() => oncopyresume(session.resumeCommand)}>Copy</button>
+              <button type="button" onclick={() => oncopyresume(session.resumeCommand)}>Copy</button
+              >
             </div>
           </li>
         {/each}
@@ -228,8 +266,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-end: 0.75rem;
   }
 
-  .workspace-row {
-    grid-template-columns: minmax(0, 1fr);
+  .session-base {
+    display: grid;
+    gap: 0.65rem;
+    min-inline-size: 0;
+    margin-block: 1rem;
+  }
+
+  .session-base-heading h3,
+  .session-base-heading p {
+    margin: 0;
+  }
+
+  .session-base-heading p {
+    margin-block-start: 0.25rem;
+  }
+
+  .tree-panel {
+    box-sizing: border-box;
+    min-inline-size: 0;
+    max-block-size: min(22rem, 48vh);
+    padding: 0.35rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+    border-radius: 0.6rem;
   }
 
   .session-settings-row {
@@ -252,6 +314,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   @media (max-width: 28rem) {
+    .tree-panel {
+      padding: 0.2rem;
+    }
+
     .session-settings-row {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }

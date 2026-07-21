@@ -26,8 +26,13 @@ function workspaceTree(children: BootstrapWorkspace[] = []): BootstrapWorkspace[
   ];
 }
 
-function workspaceNode(id: string, name: string): BootstrapWorkspace {
-  return { id, name, relativePath: name, isGitRepository: false, children: [] };
+function workspaceNode(
+  id: string,
+  name: string,
+  children: BootstrapWorkspace[] = [],
+  isGitRepository = false,
+): BootstrapWorkspace {
+  return { id, name, relativePath: name, isGitRepository, children };
 }
 
 async function openChat(page: Page): Promise<void> {
@@ -181,7 +186,9 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     page.getByLabel('Recent sessions').getByRole('button', { name: 'Copy' }),
   ).toHaveCount(1);
 
-  await expect(page.getByLabel('Open sessions').getByRole('button', { name: 'Open' })).toHaveCount(0);
+  await expect(page.getByLabel('Open sessions').getByRole('button', { name: 'Open' })).toHaveCount(
+    0,
+  );
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page
     .getByLabel('Recent sessions')
@@ -357,29 +364,64 @@ test('rehydrates a durable pending interaction after a browser reload', async ({
 });
 
 test('shows a start-session failure and permits a retry', async ({ page }) => {
+  const repositoryId = 'opaque:group/repository%leaf';
+  const intermediateId = 'opaque:group';
+  const requestedWorkspaceIds: string[] = [];
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: workspaceTree(),
+        workspaces: workspaceTree([
+          workspaceNode(intermediateId, 'group', [
+            workspaceNode(repositoryId, 'repository', [], true),
+          ]),
+        ]),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
         sessions: [],
       }),
     }),
   );
-  await page.route('**/api/sessions', (route) =>
-    route.fulfill({
-      status: 503,
-      contentType: 'application/problem+json',
-      body: JSON.stringify({ detail: 'Codex app-server is unavailable.' }),
-    }),
-  );
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fulfill({ contentType: 'application/json', body: '[]' });
+      return;
+    }
+    requestedWorkspaceIds.push(
+      (route.request().postDataJSON() as { workspaceId: string }).workspaceId,
+    );
+    if (requestedWorkspaceIds.length === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({ detail: 'Codex app-server is unavailable.' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'session-1', state: 'ready' }),
+    });
+  });
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await expect(page.getByLabel('Workspace')).toHaveCount(0);
+  const repository = page.getByRole('treeitem', { name: /^repository/ });
+  await repository.click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('button', { name: 'New session' }).click();
 
   await expect(page.getByRole('button', { name: 'New session' })).toBeEnabled();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+  const intermediate = page.getByRole('treeitem', { name: /^group/ });
+  await intermediate.click();
+  await expect(intermediate).toHaveAttribute('aria-selected', 'true');
+  await expect(repository).toHaveAttribute('aria-selected', 'false');
+  await page.getByRole('button', { name: 'New session' }).click();
+
+  await expect.poll(() => requestedWorkspaceIds).toEqual([repositoryId, intermediateId]);
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
 
 test('keeps the composer reachable at a phone viewport without horizontal overflow', async ({
@@ -536,6 +578,50 @@ test('clones a repository from the Git tab into the selected workspace', async (
       address: 'https://example.test/cloned-repo.git',
     });
   await expect(page.getByRole('status').filter({ hasText: 'selected workspace' })).toBeVisible();
+});
+
+test('preserves the Sessions highlight and folding after a bootstrap refresh', async ({ page }) => {
+  const repositoryId = 'opaque:group/repository%leaf';
+  const intermediateId = 'opaque:group';
+  let bootstrapReads = 0;
+  await page.route('**/api/bootstrap', (route) => {
+    bootstrapReads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree([
+          workspaceNode(intermediateId, 'group', [
+            workspaceNode(repositoryId, 'repository', [], true),
+            ...(bootstrapReads > 1 ? [workspaceNode('opaque:new', 'new-folder')] : []),
+          ]),
+        ]),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    });
+  });
+  await page.route('**/api/git/clone', (route) =>
+    route.fulfill({ status: 202, contentType: 'application/json', body: '{}' }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  const repository = page.getByRole('treeitem', { name: /^repository/ });
+  await repository.click();
+  await expect(repository).toHaveAttribute('aria-selected', 'true');
+
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByLabel('Destination workspace').selectOption(intermediateId);
+  await page.getByLabel('Git address').fill('https://example.test/new.git');
+  await page.getByRole('button', { name: 'Clone' }).click();
+  await expect.poll(() => bootstrapReads).toBe(2);
+
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await expect(page.getByRole('treeitem', { name: /^repository/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('treeitem', { name: /^new-folder/ })).toBeVisible();
 });
 
 test('hydrates canonical history for a persisted session', async ({ page }) => {
