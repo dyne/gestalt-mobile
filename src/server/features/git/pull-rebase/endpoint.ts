@@ -5,20 +5,24 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import type { RelaySessionSnapshot } from '../../sessions/model/relay-session.js';
+import type { GitWorkspaceResolver } from '../application/ports.js';
+import { resolveRepositoryTarget } from '../application/repository-target.js';
 
 export function registerPullRebase(
   app: FastifyInstance,
   deps: {
-    find(id: string): RelaySessionSnapshot | null;
+    workspaces: GitWorkspaceResolver;
     pull(path: string): Promise<void>;
   },
 ): void {
-  app.post('/api/sessions/:id/git/pull', async (request, reply) => {
-    const session = deps.find((request.params as { id: string }).id);
-    if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
+  app.post('/api/git/repositories/:workspaceId/pull', async (request, reply) => {
+    const target = await resolveRepositoryTarget(
+      deps.workspaces,
+      (request.params as { workspaceId: string }).workspaceId,
+    );
+    if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
     try {
-      await deps.pull(session.workspacePath);
+      await deps.pull(target.path);
       return reply.code(202).send({ accepted: true });
     } catch (error) {
       return reply.code(409).send({

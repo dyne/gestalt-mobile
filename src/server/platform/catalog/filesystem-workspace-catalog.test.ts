@@ -91,6 +91,16 @@ describe('FilesystemWorkspaceCatalog', () => {
       name: 'gestalt',
       realPath: join(root, 'devel', 'dyne', 'gestalt'),
     });
+    await expect(catalog.resolveGitWorkspace(repository!.id)).resolves.toEqual({
+      id: repository!.id,
+      path: join(root, 'devel', 'dyne', 'gestalt'),
+      isGitRepository: true,
+    });
+    await expect(catalog.resolveGitWorkspace(alias!.id)).resolves.toEqual({
+      id: alias!.id,
+      path: shared,
+      isGitRepository: false,
+    });
     const nodes = rootNode ? [rootNode] : [];
     for (let index = 0; index < nodes.length; index += 1) {
       nodes.push(...(nodes[index]?.children ?? []));
@@ -125,6 +135,9 @@ describe('FilesystemWorkspaceCatalog', () => {
 
     await expect(new FilesystemWorkspaceCatalog(root).resolve('unknown')).rejects.toThrow(
       'WORKSPACE_NOT_FOUND',
+    );
+    await expect(new FilesystemWorkspaceCatalog(root).resolveGitWorkspace('unknown')).resolves.toBe(
+      null,
     );
   });
 });

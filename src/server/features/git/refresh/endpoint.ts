@@ -7,12 +7,13 @@
 import type { FastifyInstance } from 'fastify';
 
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
-import type { RelaySessionSnapshot } from '../../sessions/model/relay-session.js';
+import type { GitWorkspaceResolver } from '../application/ports.js';
+import { resolveRepositoryTarget } from '../application/repository-target.js';
 
 export function registerRefreshGit(
   app: FastifyInstance,
   deps: {
-    find(id: string): RelaySessionSnapshot | null;
+    workspaces: GitWorkspaceResolver;
     refresh(path: string): Promise<void>;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
@@ -20,15 +21,15 @@ export function registerRefreshGit(
     };
   },
 ): void {
-  app.post('/api/sessions/:id/git/refresh', async (request, reply) => {
-    const id = (request.params as { id: string }).id;
+  app.post('/api/git/repositories/:workspaceId/refresh', async (request, reply) => {
+    const id = (request.params as { workspaceId: string }).workspaceId;
     const key = idempotencyKey(request.headers);
     const scope = `refresh-git:${id}`;
     const prior = key ? deps.idempotency?.get(scope, key) : null;
     if (prior) return reply.code(prior.statusCode).send(JSON.parse(prior.body));
-    const session = deps.find(id);
-    if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
-    await deps.refresh(session.workspacePath);
+    const target = await resolveRepositoryTarget(deps.workspaces, id);
+    if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
+    await deps.refresh(target.path);
     const body = { accepted: true };
     if (key) deps.idempotency?.put(scope, key, 202, JSON.stringify(body));
     return reply.code(202).send(body);

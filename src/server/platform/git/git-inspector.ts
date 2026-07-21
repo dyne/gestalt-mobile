@@ -5,24 +5,7 @@
  */
 
 import { GIT_FETCH_TIMEOUT_MS, git } from './command.js';
-
-export type WorkspaceGitSummary = {
-  available: boolean;
-  branch: string | null;
-  branches?: string[];
-  upstream: string | null;
-  ahead: number;
-  behind: number;
-  dirty: { staged: number; unstaged: number; untracked: number };
-  commits: Array<{
-    hash: string;
-    shortHash: string;
-    subject: string;
-    author: string;
-    authoredAt: string;
-  }>;
-  fetchedAt: string | null;
-};
+import type { GitSummary } from '../../features/git/application/ports.js';
 
 export function parseDirtyCounts(value: string): {
   staged: number;
@@ -51,7 +34,7 @@ export function parseDivergence(value: string): { ahead: number; behind: number 
   };
 }
 
-export async function inspectGit(cwd: string): Promise<WorkspaceGitSummary> {
+export async function inspectGit(cwd: string): Promise<GitSummary> {
   try {
     await git(cwd, ['rev-parse', '--is-inside-work-tree']);
     const branch = await git(cwd, ['branch', '--show-current']).then(

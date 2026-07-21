@@ -39,6 +39,10 @@ import type { RelaySessionSnapshot } from './features/sessions/model/relay-sessi
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
+import type {
+  GitSummary,
+  GitWorkspaceResolver,
+} from './features/git/application/ports.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -87,15 +91,18 @@ export type AppDependencies = {
     validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
   };
   gitSummary?: {
-    inspect(path: string): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
-    inspectForPush?(
-      path: string,
-    ): Promise<import('./platform/git/git-inspector.js').WorkspaceGitSummary>;
+    workspaces: GitWorkspaceResolver;
+    inspect(path: string): Promise<GitSummary>;
+    inspectForPush?(path: string): Promise<GitSummary>;
     push(path: string, upstream: string): Promise<void>;
     refresh(path: string): Promise<void>;
     pull?(path: string): Promise<void>;
     checkout?(path: string, branch: string): Promise<void>;
     clone?(workspaceId: string, address: string): Promise<void>;
+    idempotency?: {
+      get(scope: string, key: string): { statusCode: number; body: string } | null;
+      put(scope: string, key: string, statusCode: number, body: string): void;
+    };
   };
 };
 
@@ -176,25 +183,31 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
-  if (deps.gitSummary && deps.sessionRoutes)
-    registerGetGitSummary(app, { find: deps.sessionRoutes.find, inspect: deps.gitSummary.inspect });
-  if (deps.gitSummary && deps.sessionRoutes)
+  if (deps.gitSummary)
+    registerGetGitSummary(app, {
+      workspaces: deps.gitSummary.workspaces,
+      inspect: deps.gitSummary.inspect,
+    });
+  if (deps.gitSummary)
     registerPushUpstream(app, {
-      find: deps.sessionRoutes.find,
+      workspaces: deps.gitSummary.workspaces,
       inspect: deps.gitSummary.inspectForPush ?? deps.gitSummary.inspect,
       push: deps.gitSummary.push,
-      idempotency: deps.sessionRoutes.idempotency,
+      idempotency: deps.gitSummary.idempotency,
     });
-  if (deps.gitSummary && deps.sessionRoutes)
+  if (deps.gitSummary)
     registerRefreshGit(app, {
-      find: deps.sessionRoutes.find,
+      workspaces: deps.gitSummary.workspaces,
       refresh: deps.gitSummary.refresh,
-      idempotency: deps.sessionRoutes.idempotency,
+      idempotency: deps.gitSummary.idempotency,
     });
-  if (deps.gitSummary?.pull && deps.gitSummary.checkout && deps.sessionRoutes) {
-    registerPullRebase(app, { find: deps.sessionRoutes.find, pull: deps.gitSummary.pull });
+  if (deps.gitSummary?.pull && deps.gitSummary.checkout) {
+    registerPullRebase(app, {
+      workspaces: deps.gitSummary.workspaces,
+      pull: deps.gitSummary.pull,
+    });
     registerCheckoutBranch(app, {
-      find: deps.sessionRoutes.find,
+      workspaces: deps.gitSummary.workspaces,
       checkout: deps.gitSummary.checkout,
     });
   }

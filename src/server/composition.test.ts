@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { composeRelayApp } from './composition.js';
+import { workspaceId } from './platform/catalog/workspace-id.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -36,6 +37,33 @@ afterEach(async () => {
 });
 
 describe('production composition', () => {
+  it('does not resolve a Git operation target outside the configured root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const outside = await mkdtemp(join(tmpdir(), 'gestalt-mobile-outside-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, outside, dataDir);
+    await mkdir(join(outside, '.git'));
+    await symlink(outside, join(root, 'escape'));
+    const app = await composeRelayApp({
+      root,
+      dataDir,
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
+        require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+      },
+      installedCodexVersion: 'codex-cli 0.144.3',
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/git/repositories/${workspaceId(outside)}`,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ code: 'WORKSPACE_NOT_FOUND' });
+    await app.close();
+  });
+
   it('persists a catalog-selected session under the configured data directory', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

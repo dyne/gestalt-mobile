@@ -31,6 +31,13 @@ describe('relay application composition', () => {
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
       },
       gitSummary: {
+        workspaces: {
+          resolveGitWorkspace: async (id) => ({
+            id,
+            path: '/workspace',
+            isGitRepository: true,
+          }),
+        },
         inspect: async () => ({
           available: true,
           branch: 'main',
@@ -59,7 +66,7 @@ describe('relay application composition', () => {
     });
 
     expect(
-      (await app.inject({ method: 'POST', url: '/api/sessions/session-1/git/push' })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/git/repositories/workspace/push' })).statusCode,
     ).toBe(202);
     expect(pushed).toBe(true);
     await app.close();

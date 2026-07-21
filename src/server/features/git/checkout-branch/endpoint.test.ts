@@ -8,17 +8,19 @@ import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerCheckoutBranch } from './endpoint.js';
 
-describe('POST /api/sessions/:id/git/checkout', () => {
-  it('checks out a selected local branch for the session workspace', async () => {
+describe('POST /api/git/repositories/:workspaceId/checkout', () => {
+  it('checks out a selected local branch for the resolved repository', async () => {
     const app = fastify();
     const checkout = vi.fn(async () => undefined);
     registerCheckoutBranch(app, {
-      find: () => ({ workspacePath: '/workspace' }) as never,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
       checkout,
     });
     const response = await app.inject({
       method: 'POST',
-      url: '/api/sessions/s/git/checkout',
+      url: '/api/git/repositories/repo-1/checkout',
       payload: { branch: 'topic' },
     });
     expect(response.statusCode).toBe(202);
