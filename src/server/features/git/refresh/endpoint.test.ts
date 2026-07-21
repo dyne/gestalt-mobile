@@ -9,20 +9,23 @@ import { describe, expect, it } from 'vitest';
 
 import { registerRefreshGit } from './endpoint.js';
 
-describe('POST /api/sessions/:id/git/refresh', () => {
-  it('returns not found without refreshing an unknown session', async () => {
+describe('POST /api/git/repositories/:workspaceId/refresh', () => {
+  it('returns not found without refreshing an unknown workspace', async () => {
     const app = fastify();
     let refreshed = false;
     registerRefreshGit(app, {
-      find: () => null,
+      workspaces: { resolveGitWorkspace: async () => null },
       refresh: async () => {
         refreshed = true;
       },
     });
 
-    const response = await app.inject({ method: 'POST', url: '/api/sessions/missing/git/refresh' });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/git/repositories/missing/refresh',
+    });
     expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ code: 'SESSION_NOT_FOUND' });
+    expect(response.json()).toEqual({ code: 'WORKSPACE_NOT_FOUND' });
     expect(refreshed).toBe(false);
     await app.close();
   });
@@ -31,13 +34,15 @@ describe('POST /api/sessions/:id/git/refresh', () => {
     const app = fastify();
     let fetched = false;
     registerRefreshGit(app, {
-      find: () => ({ workspacePath: '/workspace' }) as never,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
       refresh: async () => {
         fetched = true;
       },
     });
     expect(
-      (await app.inject({ method: 'POST', url: '/api/sessions/session-1/git/refresh' })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/git/repositories/repo-1/refresh' })).statusCode,
     ).toBe(202);
     expect(fetched).toBe(true);
     await app.close();
@@ -48,7 +53,9 @@ describe('POST /api/sessions/:id/git/refresh', () => {
     let fetches = 0;
     const remembered = new Map<string, { statusCode: number; body: string }>();
     registerRefreshGit(app, {
-      find: () => ({ workspacePath: '/workspace' }) as never,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
       refresh: async () => {
         fetches += 1;
       },
@@ -60,7 +67,7 @@ describe('POST /api/sessions/:id/git/refresh', () => {
     });
     const request = {
       method: 'POST' as const,
-      url: '/api/sessions/session-1/git/refresh',
+      url: '/api/git/repositories/repo-1/refresh',
       headers: { 'idempotency-key': 'retry-1' },
     };
     expect((await app.inject(request)).statusCode).toBe(202);

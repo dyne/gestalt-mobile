@@ -9,12 +9,14 @@ import { describe, expect, it } from 'vitest';
 
 import { registerPushUpstream } from './endpoint.js';
 
-describe('POST /api/sessions/:id/git/push', () => {
-  it('returns not found without inspecting Git for an unknown session', async () => {
+describe('POST /api/git/repositories/:workspaceId/push', () => {
+  it('rejects an ordinary folder without inspecting Git', async () => {
     const app = fastify();
     let inspected = false;
     registerPushUpstream(app, {
-      find: () => null,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/ordinary', isGitRepository: false }),
+      },
       inspect: async () => {
         inspected = true;
         throw new Error('should not inspect');
@@ -22,9 +24,12 @@ describe('POST /api/sessions/:id/git/push', () => {
       push: async () => undefined,
     });
 
-    const response = await app.inject({ method: 'POST', url: '/api/sessions/missing/git/push' });
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ code: 'SESSION_NOT_FOUND' });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/git/repositories/ordinary/push',
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ code: 'WORKSPACE_NOT_GIT_REPOSITORY' });
     expect(inspected).toBe(false);
     await app.close();
   });
@@ -33,7 +38,9 @@ describe('POST /api/sessions/:id/git/push', () => {
     const app = fastify();
     let pushed = false;
     registerPushUpstream(app, {
-      find: () => ({ workspacePath: '/workspace' }) as never,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
       inspect: async () => ({
         available: true,
         branch: 'main',
@@ -49,7 +56,7 @@ describe('POST /api/sessions/:id/git/push', () => {
       },
     });
     expect(
-      (await app.inject({ method: 'POST', url: '/api/sessions/session-1/git/push' })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/git/repositories/repo-1/push' })).statusCode,
     ).toBe(202);
     expect(pushed).toBe(true);
     await app.close();
@@ -60,7 +67,9 @@ describe('POST /api/sessions/:id/git/push', () => {
     let pushes = 0;
     const remembered = new Map<string, { statusCode: number; body: string }>();
     registerPushUpstream(app, {
-      find: () => ({ workspacePath: '/workspace' }) as never,
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
       inspect: async () => ({
         available: true,
         branch: 'main',
@@ -82,7 +91,7 @@ describe('POST /api/sessions/:id/git/push', () => {
     });
     const request = {
       method: 'POST' as const,
-      url: '/api/sessions/session-1/git/push',
+      url: '/api/git/repositories/repo-1/push',
       headers: { 'idempotency-key': 'retry-1' },
     };
     expect((await app.inject(request)).statusCode).toBe(202);

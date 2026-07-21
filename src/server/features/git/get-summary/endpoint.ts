@@ -6,20 +6,22 @@
 
 import type { FastifyInstance } from 'fastify';
 
-import type { RelaySessionSnapshot } from '../../sessions/model/relay-session.js';
-import type { WorkspaceGitSummary } from '../../../platform/git/git-inspector.js';
+import type { GitSummary, GitWorkspaceResolver } from '../application/ports.js';
+import { resolveRepositoryTarget } from '../application/repository-target.js';
 
 export function registerGetGitSummary(
   app: FastifyInstance,
   deps: {
-    find(id: string): RelaySessionSnapshot | null;
-    inspect(path: string): Promise<WorkspaceGitSummary>;
+    workspaces: GitWorkspaceResolver;
+    inspect(path: string): Promise<GitSummary>;
   },
 ): void {
-  app.get('/api/sessions/:id/git', async (request, reply) => {
-    const session = deps.find((request.params as { id: string }).id);
-    return session
-      ? reply.send(await deps.inspect(session.workspacePath))
-      : reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
+  app.get('/api/git/repositories/:workspaceId', async (request, reply) => {
+    const target = await resolveRepositoryTarget(
+      deps.workspaces,
+      (request.params as { workspaceId: string }).workspaceId,
+    );
+    if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
+    return reply.send(await deps.inspect(target.path));
   });
 }

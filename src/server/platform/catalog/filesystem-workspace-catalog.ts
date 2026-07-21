@@ -13,8 +13,12 @@ import type {
   WorkspaceCatalog,
   WorkspaceOption,
 } from '../../features/catalog/application/ports.js';
+import type {
+  GitWorkspace,
+  GitWorkspaceResolver,
+} from '../../features/git/application/ports.js';
 
-export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
+export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspaceResolver {
   private readonly root: Promise<string>;
   constructor(root: string) {
     this.root = realpath(root);
@@ -26,6 +30,16 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog {
     const found = this.find(await this.tree(), id);
     if (!found) throw new Error('WORKSPACE_NOT_FOUND');
     return { id: found.option.id, name: found.option.name, realPath: found.realPath };
+  }
+  async resolveGitWorkspace(id: string): Promise<GitWorkspace | null> {
+    const found = this.find(await this.tree(), id);
+    return found
+      ? {
+          id: found.option.id,
+          path: found.realPath,
+          isGitRepository: found.option.isGitRepository,
+        }
+      : null;
   }
   private async tree(): Promise<CatalogEntry> {
     const root = await this.root;

@@ -239,6 +239,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     },
     gitSummary: {
+      workspaces,
       inspect: async (path) => {
         const summary = await gitSummaries.inspect(path);
         const fetchedAt = gitFetches.lastSuccessfulAt(path);
@@ -263,6 +264,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       clone: async (workspaceId, address) =>
         cloneRepository((await workspaces.resolve(workspaceId)).realPath, address),
+      idempotency,
     },
   });
   const restoreActiveSessions = async () => {
