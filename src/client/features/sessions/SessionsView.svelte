@@ -295,7 +295,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .session-settings-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) max-content;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
     align-items: end;
   }
 
@@ -316,10 +316,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   @media (max-width: 28rem) {
     .tree-panel {
       padding: 0.2rem;
-    }
-
-    .session-settings-row {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .new-session-button {
