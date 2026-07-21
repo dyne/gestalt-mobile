@@ -60,9 +60,14 @@ async function boxesOverlap(first: Locator, second: Locator): Promise<boolean> {
   return intersects(firstBox, secondBox);
 }
 
-test('is non-modal, keyboard-dismissible, and does not steal focus', async ({ page }) => {
+test('announces feedback, is non-modal, keyboard-dismissible, and does not steal focus', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const diagnostics = await openEvidence(page, 'error', 'light', 100);
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('Clone failed.');
+  await expect(alert).toHaveAttribute('aria-live', 'assertive');
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.focus();
   await expect(prompt).toBeFocused();
@@ -86,6 +91,11 @@ for (const variant of variants) {
           const statuses = page.getByRole('status');
           await expect(alerts).toHaveCount(1);
           await expect(statuses).toHaveCount(variant === 'stacked' ? 1 : 0);
+          await expect(alerts).toHaveAttribute('aria-live', 'assertive');
+          if (variant === 'stacked') {
+            await expect(statuses).toContainText('Cloned.');
+            await expect(statuses).toHaveAttribute('aria-live', 'polite');
+          }
 
           const dismiss = page.getByRole('button', { name: 'Dismiss error notification' });
           const dimensions = await dismiss.boundingBox();

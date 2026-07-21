@@ -570,7 +570,7 @@ test('switches Git operations between repository tree targets without a session'
   await expect(page.getByText(/available as a Clone destination/)).toBeVisible();
 });
 
-test('clones a repository from the Git tab into the selected workspace', async ({ page }) => {
+test('refreshes and selects the catalog after a successful clone', async ({ page }) => {
   let cloneRequest: { workspaceId: string; address: string } | null = null;
   let bootstrapReads = 0;
   await page.route('**/api/bootstrap', (route) => {
@@ -737,7 +737,9 @@ test('prevents duplicate clone requests and preserves the address after relay fa
   expect(cloneRequests).toBe(1);
 });
 
-test('preserves the Sessions highlight and folding after a bootstrap refresh', async ({ page }) => {
+test('keeps Sessions and Git selections independent through a successful clone refresh', async ({
+  page,
+}) => {
   const repositoryId = 'opaque:group/repository%leaf';
   const intermediateId = 'opaque:group';
   let bootstrapReads = 0;

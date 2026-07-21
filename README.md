@@ -66,6 +66,12 @@ when present.
 
 ## Sessions
 
+The Sessions tab uses the recursive filesystem tree to choose the base directory
+for a new session. Expand or collapse folders with the disclosure buttons, or
+use Left/Right while a tree item is focused. Up/Down, Home, and End move through
+visible items; Enter or Space selects the focused directory. The selected path
+remains highlighted when branches are folded or the catalog is refreshed.
+
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
 
@@ -83,12 +89,21 @@ server has pruned the gap, it reloads canonical Codex thread history.
 
 ## Git
 
-The Git tab reports branch divergence, dirty counts, and recent commits. It can
-also clone a Git address into a selected workspace directory below `--cwd`.
-Pull
-uses `git pull --rebase`. Push is available only for a branch that has an
+The Git tab has its own filesystem-tree selection, independent from the base
+directory selected in Sessions. Selecting a repository shows its branch
+divergence, dirty counts, recent commits, and repository actions even when no
+relay session exists. Selecting an ordinary directory makes it the destination
+for Clone; repositories cannot be clone destinations. After a successful clone,
+the catalog refreshes and selects the new repository without changing the
+Sessions selection.
+
+Pull uses `git pull --rebase`. Push is available only for a branch that has an
 upstream, is ahead, and is not behind; it never creates an upstream or
 force-pushes.
+
+Operation results appear as non-modal notifications. Errors are announced
+assertively, successful operations politely, and each notification can be
+dismissed with its keyboard-accessible close button.
 
 ## Versions and upgrades
 
