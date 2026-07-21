@@ -14,8 +14,10 @@ export type VisibleTreeNode = {
   parentId: string | null;
 };
 
+const sessionBase: TreeNodePolicy = () => true;
+
 export const treeNodePolicies = {
-  sessionBase: () => true,
+  sessionBase,
   gitRepositoryTarget: (node: WorkspaceOption) => node.isGitRepository,
   cloneDestination: (node: WorkspaceOption) => !node.isGitRepository,
 } satisfies Record<string, TreeNodePolicy>;
