@@ -481,14 +481,9 @@ test('keeps the session controls within a 320px viewport', async ({ page }) => {
   );
 });
 
-test('shows Git state and confirms a safe upstream push', async ({ page }) => {
-  const session = {
-    id: 'session-1',
-    state: 'ready',
-    workspaceId: 'workspace-1',
-    profile: 'work',
-    activeTurnId: null,
-  };
+test('switches Git operations between repository tree targets without a session', async ({
+  page,
+}) => {
   const summary = {
     available: true,
     branch: 'main',
@@ -500,63 +495,114 @@ test('shows Git state and confirms a safe upstream push', async ({ page }) => {
     commits: [],
     fetchedAt: '2026-07-14T10:00:00.000Z',
   };
-  let pushed = false;
-  let checkedOut = 'main';
+  const branches = new Map([
+    ['repo-one', 'main'],
+    ['repo-two', 'topic'],
+  ]);
+  const summaryTargets: string[] = [];
+  const actionTargets: Array<{ action: string; id: string }> = [];
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: workspaceTree(),
+        workspaces: workspaceTree([
+          workspaceNode('repo-one', 'alpha', [], true),
+          workspaceNode('repo-two', 'beta', [], true),
+          workspaceNode('ordinary', 'clones'),
+        ]),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [session],
+        sessions: [],
       }),
     }),
   );
-  await page.route('**/api/sessions/session-1/history', (route) =>
-    route.fulfill({
+  await page.route(/\/api\/git\/repositories\/(repo-one|repo-two)$/, (route) => {
+    const id = route.request().url().split('/').at(-1)!;
+    summaryTargets.push(id);
+    return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
-    }),
-  );
-  await page.route('**/api/sessions/session-1/git', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ ...summary, branch: checkedOut }),
-    }),
-  );
-  await page.route('**/api/sessions/session-1/git/checkout', async (route) => {
-    checkedOut = (route.request().postDataJSON() as { branch: string }).branch;
+      body: JSON.stringify({ ...summary, branch: branches.get(id) }),
+    });
+  });
+  await page.route(/\/api\/git\/repositories\/(repo-one|repo-two)\/checkout$/, async (route) => {
+    const id = route.request().url().split('/').at(-2)!;
+    branches.set(id, (route.request().postDataJSON() as { branch: string }).branch);
+    actionTargets.push({ action: 'checkout', id });
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
-  await page.route('**/api/sessions/session-1/git/push', async (route) => {
-    pushed = true;
+  await page.route(/\/api\/git\/repositories\/(repo-one|repo-two)\/pull$/, async (route) => {
+    actionTargets.push({ action: 'pull', id: route.request().url().split('/').at(-2)! });
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+  await page.route(/\/api\/git\/repositories\/(repo-one|repo-two)\/push$/, async (route) => {
+    actionTargets.push({ action: 'push', id: route.request().url().split('/').at(-2)! });
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
 
+  await page.getByRole('treeitem', { name: /^alpha/ }).click();
   await expect(page.getByLabel('Branch')).toHaveValue('main');
+  await page.getByRole('treeitem', { name: /^beta/ }).click();
+  await expect(page.getByLabel('Branch')).toHaveValue('topic');
   await expect(page.getByText('Upstream: origin/main')).toBeVisible();
+  await page.getByRole('button', { name: 'Pull' }).click();
   await expect(page.getByRole('button', { name: 'Push' })).toBeEnabled();
   await page.getByRole('button', { name: 'Push' }).click();
   await expect(page.getByText('Push HEAD to origin/main?')).toBeVisible();
   await page.getByRole('button', { name: 'Confirm push' }).click();
-  await expect.poll(() => pushed).toBe(true);
-  await page.getByLabel('Branch').selectOption('topic');
-  await expect.poll(() => checkedOut).toBe('topic');
-  await expect(page.getByLabel('Branch')).toHaveValue('topic');
+  await page.getByLabel('Branch').selectOption('main');
+  await expect.poll(() => branches.get('repo-two')).toBe('main');
+  await expect(page.getByLabel('Branch')).toHaveValue('main');
+  expect(summaryTargets).toEqual(expect.arrayContaining(['repo-one', 'repo-two']));
+  expect(actionTargets).toEqual(
+    expect.arrayContaining([
+      { action: 'pull', id: 'repo-two' },
+      { action: 'push', id: 'repo-two' },
+      { action: 'checkout', id: 'repo-two' },
+    ]),
+  );
+
+  await page.getByRole('treeitem', { name: /^clones/ }).click();
+  await expect(page.getByLabel('Branch')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Pull' })).toBeDisabled();
+  await expect(page.getByText(/available as a Clone destination/)).toBeVisible();
 });
 
 test('clones a repository from the Git tab into the selected workspace', async ({ page }) => {
   let cloneRequest: { workspaceId: string; address: string } | null = null;
-  await page.route('**/api/bootstrap', (route) =>
+  let bootstrapReads = 0;
+  await page.route('**/api/bootstrap', (route) => {
+    bootstrapReads += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree([
+          workspaceNode(
+            'workspace-2',
+            'archive',
+            bootstrapReads > 1 ? [workspaceNode('cloned-repository', 'cloned-repo', [], true)] : [],
+          ),
+        ]),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    });
+  });
+  await page.route('**/api/git/repositories/cloned-repository', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: workspaceTree([workspaceNode('workspace-2', 'archive')]),
-        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [],
+        available: true,
+        branch: 'main',
+        branches: ['main'],
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
+        commits: [],
+        fetchedAt: null,
       }),
     }),
   );
@@ -567,7 +613,7 @@ test('clones a repository from the Git tab into the selected workspace', async (
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByLabel('Destination workspace').selectOption('workspace-2');
+  await page.getByRole('treeitem', { name: /^archive/ }).click();
   await page.getByLabel('Git address').fill('https://example.test/cloned-repo.git');
   await page.getByRole('button', { name: 'Clone' }).click();
 
@@ -578,6 +624,10 @@ test('clones a repository from the Git tab into the selected workspace', async (
       address: 'https://example.test/cloned-repo.git',
     });
   await expect(page.getByRole('status').filter({ hasText: 'selected workspace' })).toBeVisible();
+  await expect(page.getByRole('treeitem', { name: /^cloned-repo/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
 });
 
 test('preserves the Sessions highlight and folding after a bootstrap refresh', async ({ page }) => {
@@ -611,7 +661,7 @@ test('preserves the Sessions highlight and folding after a bootstrap refresh', a
   await expect(repository).toHaveAttribute('aria-selected', 'true');
 
   await page.getByRole('button', { name: 'Git' }).click();
-  await page.getByLabel('Destination workspace').selectOption(intermediateId);
+  await page.getByRole('treeitem', { name: /^group/ }).click();
   await page.getByLabel('Git address').fill('https://example.test/new.git');
   await page.getByRole('button', { name: 'Clone' }).click();
   await expect.poll(() => bootstrapReads).toBe(2);
@@ -739,31 +789,18 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
 });
 
 test('shows Git pull progress and disables push without an upstream', async ({ page }) => {
-  const session = {
-    id: 'session-1',
-    state: 'ready',
-    workspaceId: 'workspace-1',
-    profile: 'work',
-    activeTurnId: null,
-  };
   let completeRefresh: (() => void) | undefined;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        workspaces: workspaceTree(),
+        workspaces: workspaceTree([workspaceNode('repo-one', 'repository', [], true)]),
         profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [session],
+        sessions: [],
       }),
     }),
   );
-  await page.route('**/api/sessions/session-1/history', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
-    }),
-  );
-  await page.route('**/api/sessions/session-1/git', (route) =>
+  await page.route('**/api/git/repositories/repo-one', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -779,7 +816,7 @@ test('shows Git pull progress and disables push without an upstream', async ({ p
       }),
     }),
   );
-  await page.route('**/api/sessions/session-1/git/pull', async (route) => {
+  await page.route('**/api/git/repositories/repo-one/pull', async (route) => {
     await new Promise<void>((resolve) => {
       completeRefresh = resolve;
     });
@@ -788,6 +825,7 @@ test('shows Git pull progress and disables push without an upstream', async ({ p
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByRole('treeitem', { name: /^repository/ }).click();
   await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
   await page.getByRole('button', { name: 'Pull' }).click();
   await expect(page.getByRole('button', { name: 'Pulling…' })).toBeDisabled();

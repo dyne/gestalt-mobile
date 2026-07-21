@@ -29,17 +29,23 @@ describe('relay client', () => {
     ]);
   });
 
-  it('reads and pulls the selected session Git summary', async () => {
+  it('targets every repository operation with the exact opaque catalog ID', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {
       requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
       return new Response(JSON.stringify({ available: true }), { status: 200 });
     });
-    await client.getGitSummary('session-1');
-    await client.pullGit('session-1');
+    await client.getGitSummary('opaque/repository id');
+    await client.refreshGit('opaque/repository id');
+    await client.pullGit('opaque/repository id');
+    await client.checkoutGitBranch('opaque/repository id', 'topic');
+    await client.pushGit('opaque/repository id');
     expect(requests).toEqual([
-      'GET /api/sessions/session-1/git',
-      'POST /api/sessions/session-1/git/pull',
+      'GET /api/git/repositories/opaque%2Frepository%20id',
+      'POST /api/git/repositories/opaque%2Frepository%20id/refresh',
+      'POST /api/git/repositories/opaque%2Frepository%20id/pull',
+      'POST /api/git/repositories/opaque%2Frepository%20id/checkout',
+      'POST /api/git/repositories/opaque%2Frepository%20id/push',
     ]);
   });
 
@@ -64,8 +70,8 @@ describe('relay client', () => {
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
 
-    await client.pullGit('session-1', 'pull-key');
-    await client.pushGit('session-1', 'push-key');
+    await client.pullGit('workspace-1', 'pull-key');
+    await client.pushGit('workspace-1', 'push-key');
 
     expect(headers).toEqual([
       { 'content-type': 'application/json', 'idempotency-key': 'pull-key' },

@@ -123,21 +123,29 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       ),
     getHistory: (sessionId: string) =>
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
-    getGitSummary: (sessionId: string) =>
-      get<RelayGitSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/git`),
+    getGitSummary: (workspaceId: string) =>
+      get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`),
     cloneGitRepository: (workspaceId: string, address: string) =>
       request<void>('/api/git/clone', { workspaceId, address }),
-    pullGit: (sessionId: string, key?: string) =>
+    refreshGit: (workspaceId: string, key?: string) =>
       request<void>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/git/pull`,
+        `/api/git/repositories/${encodeURIComponent(workspaceId)}/refresh`,
         {},
         key ? { 'idempotency-key': key } : {},
       ),
-    checkoutGitBranch: (sessionId: string, branch: string) =>
-      request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/git/checkout`, { branch }),
-    pushGit: (sessionId: string, key?: string) =>
+    pullGit: (workspaceId: string, key?: string) =>
       request<void>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/git/push`,
+        `/api/git/repositories/${encodeURIComponent(workspaceId)}/pull`,
+        {},
+        key ? { 'idempotency-key': key } : {},
+      ),
+    checkoutGitBranch: (workspaceId: string, branch: string) =>
+      request<void>(`/api/git/repositories/${encodeURIComponent(workspaceId)}/checkout`, {
+        branch,
+      }),
+    pushGit: (workspaceId: string, key?: string) =>
+      request<void>(
+        `/api/git/repositories/${encodeURIComponent(workspaceId)}/push`,
         {},
         key ? { 'idempotency-key': key } : {},
       ),
