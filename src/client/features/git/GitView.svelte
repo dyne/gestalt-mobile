@@ -293,6 +293,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .commit-entry {
     display: grid;
+    min-inline-size: 0;
     gap: 0.35rem;
     padding: 0.8rem 0;
     border-block-end: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
@@ -314,12 +315,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-size: 0.875em;
   }
   .commit-meta {
+    flex-wrap: wrap;
     justify-content: space-between;
     color: color-mix(in srgb, CanvasText 70%, Canvas);
     font-size: 0.875rem;
   }
   .commit-meta time {
-    flex: 0 0 auto;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
   }
   @media (max-width: 28rem) {
     .clone-controls {
