@@ -9,6 +9,7 @@ const relayMessages = {
   SESSION_START_FAILED: 'The session could not be started. Try again.',
   SESSION_REFRESH_FAILED: 'Sessions could not be refreshed. Try again.',
   MESSAGE_SEND_FAILED: 'The message was not sent. Your draft is preserved.',
+  GIT_SUMMARY_FAILED: 'Repository status could not be loaded. Select it again to retry.',
   GIT_PULL_FAILED: 'The branch could not be refreshed. Resolve any Git conflicts and try again.',
   GIT_CHECKOUT_FAILED: 'The branch could not be selected. Refresh Git status and try again.',
   GIT_PUSH_FAILED: 'The push failed. Refresh Git status and resolve remote divergence first.',

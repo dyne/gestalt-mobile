@@ -13,7 +13,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import {
-    flattenWorkspaceTree,
     loadBootstrap,
     type WorkspaceOption,
   } from './features/catalog/bootstrap-client.js';
@@ -27,10 +26,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
   import {
     defaultExpandedIds,
+    findTreeNode,
     refreshSelection,
     treeNodePolicies,
   } from './features/filesystem-tree/tree-state.js';
   import GitView from './features/git/GitView.svelte';
+  import { selectAfterClone } from './features/git/post-clone-selection.js';
   import {
     appendUserMessage,
     applyDelta,
@@ -66,7 +67,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
   let workspaceTree = $state<WorkspaceOption[]>([]);
-  let workspaces = $derived(flattenWorkspaceTree(workspaceTree));
   let sessionWorkspaceId = $state('');
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
@@ -96,6 +96,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let reconnectAttempt = 0;
   let socketGeneration = 0;
   let gitSummary = $state<RelayGitSummary | null>(null);
+  let gitWorkspaceId = $state<string | null>(null);
+  let gitExpandedIds = $state<Set<string>>(new Set());
   let pushConfirmationOpen = $state(false);
   let gitRefreshing = $state(false);
   let gitCheckingOut = $state(false);
@@ -104,6 +106,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let gitCloneStatus = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
+  let gitSummaryRequest = 0;
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
@@ -138,6 +141,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
+      gitExpandedIds = defaultExpandedIds(workspaceTree);
       const remembered = await sessionCache.readSelectedSession();
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
@@ -211,7 +215,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       message = await sessionCache.readDraft(session.id);
       connectSession(session.id);
       tab = 'chat';
-      void loadGitSummary();
       scrollChatToBottom();
       status = 'Session started.';
     } catch (error) {
@@ -258,7 +261,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
       interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
       tab = 'chat';
-      void loadGitSummary();
       scrollChatToBottom();
       await resyncHistory(id);
       connectSession(id);
@@ -416,10 +418,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     tab = next;
     if (next === 'chat') {
       reconcileVisibleHistory();
-      void loadGitSummary();
       scrollChatToBottom();
     }
-    if (next === 'git') void loadGitSummary();
+    if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
     if (next === 'sessions') void refreshSessionLists();
   }
 
@@ -427,19 +428,45 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight }));
   }
 
-  async function loadGitSummary() {
-    if (!sessionId) return;
-    gitSummary = await relay.getGitSummary(sessionId);
+  async function loadGitSummary(workspaceId = gitWorkspaceId) {
+    const selected = workspaceId ? findTreeNode(workspaceTree, workspaceId) : undefined;
+    if (!workspaceId || !selected?.isGitRepository) {
+      gitSummaryRequest += 1;
+      gitSummary = null;
+      return;
+    }
+    const request = ++gitSummaryRequest;
+    try {
+      const summary = await relay.getGitSummary(workspaceId);
+      if (request === gitSummaryRequest && gitWorkspaceId === workspaceId) gitSummary = summary;
+    } catch (error) {
+      if (request !== gitSummaryRequest || gitWorkspaceId !== workspaceId) return;
+      gitSummary = null;
+      gitError = reportRelayError(error, 'GIT_SUMMARY_FAILED');
+    }
+  }
+
+  function selectGitWorkspace(node: WorkspaceOption): void {
+    gitWorkspaceId = node.id;
+    gitError = null;
+    gitSummary = null;
+    pushConfirmationOpen = false;
+    if (node.isGitRepository) void loadGitSummary(node.id);
+    else {
+      gitSummaryRequest += 1;
+      gitSummary = null;
+    }
   }
 
   async function pullGit() {
-    if (!sessionId) return;
+    const workspaceId = gitWorkspaceId;
+    if (!workspaceId || !findTreeNode(workspaceTree, workspaceId)?.isGitRepository) return;
     refreshRequestKey ??= createIdempotencyKey();
     gitRefreshing = true;
     gitError = null;
     try {
-      await relay.pullGit(sessionId, refreshRequestKey);
-      await loadGitSummary();
+      await relay.pullGit(workspaceId, refreshRequestKey);
+      await loadGitSummary(workspaceId);
       refreshRequestKey = null;
     } catch (error) {
       gitError = reportRelayError(error, 'GIT_PULL_FAILED');
@@ -456,6 +483,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.cloneGitRepository(workspaceId, address);
       const bootstrap = await loadBootstrap();
+      const postClone = selectAfterClone(
+        workspaceTree,
+        bootstrap.workspaces,
+        workspaceId,
+        address,
+        gitExpandedIds,
+      );
       sessionWorkspaceId =
         refreshSelection(
           sessionWorkspaceId || null,
@@ -464,6 +498,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           treeNodePolicies.sessionBase,
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
+      gitWorkspaceId = postClone.selectedId;
+      gitExpandedIds = postClone.expandedIds;
+      if (gitWorkspaceId && findTreeNode(workspaceTree, gitWorkspaceId)?.isGitRepository)
+        await loadGitSummary(gitWorkspaceId);
+      else gitSummary = null;
       gitCloneStatus = 'Repository cloned into the selected workspace.';
       toastQueue.enqueue({ kind: 'success', message: 'Repository cloned.' });
     } catch (error) {
@@ -474,12 +513,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function checkoutGitBranch(branch: string) {
-    if (!sessionId || branch === gitSummary?.branch) return;
+    const workspaceId = gitWorkspaceId;
+    if (!workspaceId || branch === gitSummary?.branch) return;
     gitCheckingOut = true;
     gitError = null;
     try {
-      await relay.checkoutGitBranch(sessionId, branch);
-      await loadGitSummary();
+      await relay.checkoutGitBranch(workspaceId, branch);
+      await loadGitSummary(workspaceId);
     } catch (error) {
       gitError = reportRelayError(error, 'GIT_CHECKOUT_FAILED');
     } finally {
@@ -488,13 +528,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function pushGit() {
-    if (!sessionId) return;
+    const workspaceId = gitWorkspaceId;
+    if (!workspaceId) return;
     pushRequestKey ??= createIdempotencyKey();
     gitError = null;
     try {
-      await relay.pushGit(sessionId, pushRequestKey);
+      await relay.pushGit(workspaceId, pushRequestKey);
       pushConfirmationOpen = false;
-      await loadGitSummary();
+      await loadGitSummary(workspaceId);
       pushRequestKey = null;
     } catch (error) {
       gitError = reportRelayError(error, 'GIT_PUSH_FAILED');
@@ -686,9 +727,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onpermission={(interaction) => void resolvePermissions(interaction)}
             ondecision={(id, decision) => void resolveInteraction(id, decision)}
           />
-          <p class="chat-metrics">
-            Branch: &lt;{gitSummary?.branch ?? '—'}&gt;
-          </p>
           <Composer
             {status}
             {message}
@@ -704,9 +742,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </section>
     {:else if tab === 'git'}
       <GitView
-        {sessionId}
-        {workspaces}
-        cloneWorkspaceId={sessionWorkspaceId}
+        {workspaceTree}
+        selectedWorkspace={gitWorkspaceId
+          ? (findTreeNode(workspaceTree, gitWorkspaceId) ?? null)
+          : null}
+        expandedIds={gitExpandedIds}
         summary={gitSummary}
         refreshing={gitRefreshing}
         checkingOut={gitCheckingOut}
@@ -719,6 +759,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onopenpushconfirmation={() => (pushConfirmationOpen = true)}
         onpush={() => void pushGit()}
         oncancelpush={() => (pushConfirmationOpen = false)}
+        onselect={selectGitWorkspace}
+        onexpandedchange={(value) => (gitExpandedIds = value)}
         onclone={(destination, address) => void cloneGitRepository(destination, address)}
       />
     {:else}
@@ -752,9 +794,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
-  .chat-metrics {
-    margin-block: 0 0.75rem;
-  }
   .evidence-mode {
     box-sizing: border-box;
     inline-size: 100%;

@@ -8,11 +8,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { fetchAge } from './fetch-age.js';
   import { relativeTime } from './relative-time.js';
   import type { RelayGitSummary } from '../sessions/relay-client.js';
+  import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
+  import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
 
   type Props = {
-    sessionId: string | null;
-    workspaces: Array<{ id: string; name: string }>;
-    cloneWorkspaceId: string;
+    workspaceTree: WorkspaceOption[];
+    selectedWorkspace: WorkspaceOption | null;
+    expandedIds: ReadonlySet<string>;
     summary: RelayGitSummary | null;
     refreshing: boolean;
     checkingOut: boolean;
@@ -25,13 +27,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenpushconfirmation: () => void;
     onpush: () => void;
     oncancelpush: () => void;
+    onselect: (node: WorkspaceOption) => void;
+    onexpandedchange: (expandedIds: Set<string>) => void;
     onclone: (workspaceId: string, address: string) => void;
   };
 
   let {
-    sessionId,
-    workspaces,
-    cloneWorkspaceId,
+    workspaceTree,
+    selectedWorkspace,
+    expandedIds,
     summary,
     refreshing,
     checkingOut,
@@ -44,44 +48,45 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenpushconfirmation,
     onpush,
     oncancelpush,
+    onselect,
+    onexpandedchange,
     onclone,
   }: Props = $props();
   let cloneAddress = $state('');
-  let selectedCloneWorkspaceId = $state('');
-  const cloneWorkspaces = $derived(workspaces.filter((workspace) => workspace.name !== '/'));
-
-  $effect(() => {
-    if (cloneWorkspaces.some((workspace) => workspace.id === selectedCloneWorkspaceId)) return;
-    selectedCloneWorkspaceId =
-      cloneWorkspaces.find((workspace) => workspace.id === cloneWorkspaceId)?.id ??
-      cloneWorkspaces[0]?.id ??
-      '';
-  });
+  let cloneDestination = $derived(
+    selectedWorkspace && !selectedWorkspace.isGitRepository ? selectedWorkspace : null,
+  );
 
   function submitClone(event: SubmitEvent): void {
     event.preventDefault();
-    if (!cloneAddress.trim() || !selectedCloneWorkspaceId || cloning) return;
-    onclone(selectedCloneWorkspaceId, cloneAddress.trim());
+    if (!cloneAddress.trim() || !cloneDestination || cloning) return;
+    onclone(cloneDestination.id, cloneAddress.trim());
   }
 </script>
 
 <section class="git-view" aria-labelledby="git-title">
   <h2 id="git-title" class="visually-hidden">Git</h2>
+  <section class="git-tree" aria-labelledby="git-tree-title">
+    <div class="section-heading">
+      <h3 id="git-tree-title">Repository and clone destination</h3>
+      <p>Select any folder. Git repositories enable repository actions; other folders are clone destinations.</p>
+    </div>
+    <FilesystemTree
+      roots={workspaceTree}
+      {expandedIds}
+      selectedId={selectedWorkspace?.id ?? null}
+      label="Git repository and clone destination"
+      {onexpandedchange}
+      {onselect}
+    />
+  </section>
   <form class="clone-form" onsubmit={submitClone}>
     <div class="clone-controls">
-      <div class="clone-field clone-workspace">
-        <label for="git-clone-workspace">Destination workspace</label>
-        <select
-          id="git-clone-workspace"
-          name="workspaceId"
-          bind:value={selectedCloneWorkspaceId}
-          required
-          disabled={cloning || !cloneWorkspaces.length}
-        >
-          {#each cloneWorkspaces as workspace (workspace.id)}
-            <option value={workspace.id}>{workspace.name}</option>
-          {/each}
-        </select>
+      <div class="clone-field clone-destination">
+        <span class="field-label">Destination</span>
+        <output aria-live="polite">
+          {cloneDestination ? `~/${cloneDestination.relativePath}` : 'Select a non-repository folder'}
+        </output>
       </div>
       <div class="clone-field">
         <label for="git-clone-address">Git address</label>
@@ -97,13 +102,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           aria-describedby="clone-help"
         />
       </div>
-      <button type="submit" disabled={cloning}>{cloning ? 'Cloning…' : 'Clone'}</button>
+      <button type="submit" disabled={cloning || !cloneDestination}
+        >{cloning ? 'Cloning…' : 'Clone'}</button
+      >
     </div>
     <p id="clone-help">The repository is cloned inside the selected workspace.</p>
     {#if cloneStatus}<p class="clone-status" role="status">{cloneStatus}</p>{/if}
   </form>
-  {#if sessionId}
-    {#if summary}
+  <section class="repository-details" aria-labelledby="repository-details-title">
+    <h3 id="repository-details-title">Repository details</h3>
+    {#if selectedWorkspace?.isGitRepository}
+      {#if summary}
       {#if summary.available}
         <div class="git-overview">
           <div class="git-status">
@@ -143,7 +152,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
           </div>
         </div>
-        {#if error}<p role="alert">{error}</p>{/if}
         {#if confirmingPush}
           <section aria-label="Confirm push">
             <p>Push HEAD to {summary.upstream}?</p>
@@ -171,23 +179,55 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </ol>
           </section>
         {/if}
-      {:else}
+        {:else}
         <p>This workspace is not a Git repository.</p>
+        {/if}
+      {:else if !error}
+        <p role="status">Loading repository status…</p>
       {/if}
+    {:else if selectedWorkspace}
+      <p>
+        <strong>{selectedWorkspace.name}</strong> is available as a Clone destination. Select a Git
+        repository to inspect branches and enable repository actions.
+      </p>
+      <div class="git-actions" aria-label="Repository actions unavailable">
+        <button type="button" disabled><span aria-hidden="true">↑</span> Push</button>
+        <button type="button" disabled><span aria-hidden="true">↓</span> Pull</button>
+      </div>
+    {:else}
+      <p>Select a folder above to choose a Clone destination or inspect a Git repository.</p>
+      <div class="git-actions" aria-label="Repository actions unavailable">
+        <button type="button" disabled><span aria-hidden="true">↑</span> Push</button>
+        <button type="button" disabled><span aria-hidden="true">↓</span> Pull</button>
+      </div>
     {/if}
-  {:else}
-    <p>Select a session to view its workspace status.</p>
-  {/if}
+    {#if error}<p role="alert">{error}</p>{/if}
+  </section>
 </section>
 
 <style>
   .git-view {
+    display: grid;
+    gap: 1.5rem;
     inline-size: 100%;
+    min-inline-size: 0;
+  }
+  .git-tree,
+  .repository-details {
+    min-inline-size: 0;
+  }
+  .section-heading h3,
+  .repository-details h3 {
+    margin-block: 0 0.35rem;
+  }
+  .section-heading p {
+    margin-block: 0 0.75rem;
+    color: color-mix(in srgb, CanvasText 70%, Canvas);
   }
   .clone-form {
     display: grid;
     gap: 0.35rem;
-    margin-block-end: 1.5rem;
+    min-inline-size: 0;
   }
   .clone-controls {
     display: grid;
@@ -197,7 +237,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .clone-field {
     display: grid;
+    min-inline-size: 0;
     gap: 0.35rem;
+  }
+  .field-label {
+    font-weight: 600;
+  }
+  .clone-destination output {
+    min-block-size: 2.75rem;
+    padding: 0.65rem 0.75rem;
+    overflow-wrap: anywhere;
+    border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas);
+    border-radius: 0.35rem;
   }
   .clone-controls button {
     min-inline-size: 5.75rem;
