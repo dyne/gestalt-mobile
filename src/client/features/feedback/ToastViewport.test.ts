@@ -2,8 +2,9 @@
  * Copyright (C) 2026 Dyne.org foundation
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
- * @vitest-environment jsdom
  */
+
+/* @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
