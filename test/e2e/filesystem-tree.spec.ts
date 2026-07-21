@@ -48,7 +48,9 @@ async function openEvidence(
   return { consoleErrors, requestFailures };
 }
 
-test('supports pointer and ARIA tree keyboard interaction in a browser', async ({ page }) => {
+test('supports deep folding, pointer selection, and ARIA tree keyboard interaction', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const diagnostics = await openEvidence(page, 'sessions', 'light', 100);
   const tree = page.getByRole('tree', { name: 'Session base' });
