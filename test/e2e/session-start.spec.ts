@@ -535,7 +535,7 @@ test('clones a repository from the Git tab into the selected workspace', async (
       workspaceId: 'workspace-2',
       address: 'https://example.test/cloned-repo.git',
     });
-  await expect(page.getByRole('status')).toContainText('selected workspace');
+  await expect(page.getByRole('status').filter({ hasText: 'selected workspace' })).toBeVisible();
 });
 
 test('hydrates canonical history for a persisted session', async ({ page }) => {
