@@ -5,6 +5,8 @@
  */
 
 :root {
+  --bottom-navigation-clearance: calc(4rem + env(safe-area-inset-bottom));
+
   color-scheme: light dark;
   font-family: system-ui, sans-serif;
 }
@@ -40,7 +42,8 @@ main {
   min-block-size: 100dvh;
   max-inline-size: 42rem;
   margin-inline: auto;
-  padding: calc(1rem + env(safe-area-inset-top)) 1rem calc(5rem + env(safe-area-inset-bottom));
+  padding: calc(1rem + env(safe-area-inset-top)) 1rem
+    calc(var(--bottom-navigation-clearance) + 1rem);
 }
 
 @media (max-width: 24rem) {
@@ -229,6 +232,10 @@ main {
 button {
   min-block-size: 44px;
   font: inherit;
+}
+
+.git-view button {
+  scroll-margin-block-end: var(--bottom-navigation-clearance);
 }
 
 input,
