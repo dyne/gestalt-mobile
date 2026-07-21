@@ -262,8 +262,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         await checkoutBranch(path, branch);
         gitSummaries.invalidate(path);
       },
-      clone: async (workspaceId, address) =>
-        cloneRepository((await workspaces.resolve(workspaceId)).realPath, address),
+      clone: cloneRepository,
       idempotency,
     },
   });

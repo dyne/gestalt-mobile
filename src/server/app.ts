@@ -39,10 +39,7 @@ import type { RelaySessionSnapshot } from './features/sessions/model/relay-sessi
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
-import type {
-  GitSummary,
-  GitWorkspaceResolver,
-} from './features/git/application/ports.js';
+import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -98,7 +95,7 @@ export type AppDependencies = {
     refresh(path: string): Promise<void>;
     pull?(path: string): Promise<void>;
     checkout?(path: string, branch: string): Promise<void>;
-    clone?(workspaceId: string, address: string): Promise<void>;
+    clone?(path: string, address: string): Promise<void>;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
@@ -211,7 +208,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       checkout: deps.gitSummary.checkout,
     });
   }
-  if (deps.gitSummary?.clone) registerCloneRepository(app, { clone: deps.gitSummary.clone });
+  if (deps.gitSummary?.clone)
+    registerCloneRepository(app, {
+      workspaces: deps.gitSummary.workspaces,
+      clone: deps.gitSummary.clone,
+    });
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }

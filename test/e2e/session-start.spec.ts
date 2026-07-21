@@ -628,6 +628,113 @@ test('clones a repository from the Git tab into the selected workspace', async (
     'aria-selected',
     'true',
   );
+  await expect(page.getByLabel('Git address')).toHaveValue('https://example.test/cloned-repo.git');
+});
+
+test('explains and dismisses invalid clone destinations without a relay request', async ({
+  page,
+}) => {
+  let cloneRequests = 0;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree([workspaceNode('repository', 'repository', [], true)]),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/git/repositories/repository', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        available: true,
+        branch: 'main',
+        branches: ['main'],
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
+        commits: [],
+        fetchedAt: null,
+      }),
+    }),
+  );
+  await page.route('**/api/git/clone', async (route) => {
+    cloneRequests += 1;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByLabel('Git address').fill('https://example.test/repository.git');
+  await page.getByRole('button', { name: 'Clone' }).click();
+  const noSelectionAlert = page.getByRole('alert').filter({
+    hasText: 'Select a non-repository folder before cloning.',
+  });
+  await expect(noSelectionAlert).toBeVisible();
+  expect(cloneRequests).toBe(0);
+  await noSelectionAlert.getByRole('button', { name: 'Dismiss error notification' }).click();
+  await expect(noSelectionAlert).toBeHidden();
+
+  await page.getByRole('treeitem', { name: /^repository/ }).click();
+  await page.getByRole('button', { name: 'Clone' }).click();
+  await expect(
+    page.getByRole('alert').filter({
+      hasText: 'Select a non-repository folder before cloning.',
+    }),
+  ).toBeVisible();
+  expect(cloneRequests).toBe(0);
+});
+
+test('prevents duplicate clone requests and preserves the address after relay failure', async ({
+  page,
+}) => {
+  let cloneRequests = 0;
+  let completeClone: (() => void) | undefined;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree([workspaceNode('destination', 'destination')]),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/git/clone', async (route) => {
+    cloneRequests += 1;
+    await new Promise<void>((resolve) => {
+      completeClone = resolve;
+    });
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'INTERNAL_ERROR' }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Git' }).click();
+  await page.getByRole('treeitem', { name: /^destination/ }).click();
+  const address = page.getByLabel('Git address');
+  await address.fill('https://example.test/retry-me.git');
+  const clone = page.getByRole('button', { name: 'Clone' });
+  await clone.click();
+  await expect(page.getByRole('button', { name: 'Cloning…' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Cloning…' }).evaluate((button) => button.click());
+  expect(cloneRequests).toBe(1);
+  completeClone?.();
+  await expect(
+    page.getByLabel('Notifications').getByRole('alert').filter({ hasText: 'Clone failed.' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Repository details' }).getByRole('alert'),
+  ).toHaveCount(0);
+  await expect(address).toHaveValue('https://example.test/retry-me.git');
+  await expect(clone).toBeEnabled();
+  expect(cloneRequests).toBe(1);
 });
 
 test('preserves the Sessions highlight and folding after a bootstrap refresh', async ({ page }) => {

@@ -29,7 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     oncancelpush: () => void;
     onselect: (node: WorkspaceOption) => void;
     onexpandedchange: (expandedIds: Set<string>) => void;
-    onclone: (workspaceId: string, address: string) => void;
+    onclone: (address: string) => void;
   };
 
   let {
@@ -59,8 +59,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function submitClone(event: SubmitEvent): void {
     event.preventDefault();
-    if (!cloneAddress.trim() || !cloneDestination || cloning) return;
-    onclone(cloneDestination.id, cloneAddress.trim());
+    if (!cloneAddress.trim() || cloning) return;
+    onclone(cloneAddress.trim());
   }
 </script>
 
@@ -102,7 +102,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           aria-describedby="clone-help"
         />
       </div>
-      <button type="submit" disabled={cloning || !cloneDestination}
+      <button type="submit" disabled={cloning}
         >{cloning ? 'Cloning…' : 'Clone'}</button
       >
     </div>
