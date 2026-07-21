@@ -475,8 +475,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
-  async function cloneGitRepository(workspaceId: string, address: string) {
+  async function cloneGitRepository(address: string) {
     if (gitCloning) return;
+    const destination = gitWorkspaceId ? findTreeNode(workspaceTree, gitWorkspaceId) : undefined;
+    if (!destination || destination.isGitRepository) {
+      gitCloneStatus = null;
+      toastQueue.enqueue({
+        kind: 'error',
+        code: 'INVALID_CLONE_DESTINATION',
+        message: 'Select a non-repository folder before cloning.',
+      });
+      return;
+    }
+    const workspaceId = destination.id;
     gitCloning = true;
     gitError = null;
     gitCloneStatus = null;
@@ -506,7 +517,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       gitCloneStatus = 'Repository cloned into the selected workspace.';
       toastQueue.enqueue({ kind: 'success', message: 'Repository cloned.' });
     } catch (error) {
-      gitError = reportRelayError(error, 'GIT_CLONE_FAILED');
+      reportRelayError(error, 'GIT_CLONE_FAILED');
     } finally {
       gitCloning = false;
     }
@@ -761,7 +772,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         oncancelpush={() => (pushConfirmationOpen = false)}
         onselect={selectGitWorkspace}
         onexpandedchange={(value) => (gitExpandedIds = value)}
-        onclone={(destination, address) => void cloneGitRepository(destination, address)}
+        onclone={(address) => void cloneGitRepository(address)}
       />
     {:else}
       <SessionsView
