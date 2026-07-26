@@ -61,12 +61,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
   import { displayWorkspacePath } from './features/sessions/session-list.js';
+  import SkillsView from './features/skills/SkillsView.svelte';
+  import { SkillsState } from './features/skills/skills-state.js';
 
   let tab = $state<Tab>('sessions');
   let status = $state('Loading relay…');
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
   let workspaceTree = $state<WorkspaceOption[]>([]);
+  let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
+  let skillsState = $state<SkillsState | null>(null);
+  let skillsLoaded = false;
   let sessionWorkspaceId = $state('');
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
@@ -140,6 +145,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           treeNodePolicies.sessionBase,
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
+      codexProfiles = bootstrap.profiles;
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
       const remembered = await sessionCache.readSelectedSession();
@@ -416,12 +422,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function selectTab(next: Tab): void {
     if (next === 'chat' && !chatEnabled) return;
     tab = next;
+    if (next === 'skills' && !skillsLoaded) {
+      const workspaceId = sessionWorkspaceId || workspaceTree[0]?.id || '';
+      const profile = codexProfiles.find((item) => item.state === 'ok')?.name ?? '';
+      if (workspaceId && profile) void loadSkills(workspaceId, profile);
+    }
     if (next === 'chat') {
       reconcileVisibleHistory();
       scrollChatToBottom();
     }
     if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
     if (next === 'sessions') void refreshSessionLists();
+  }
+
+  async function loadSkills(workspaceId: string, profile: string): Promise<void> {
+    const next = new SkillsState(relay);
+    await next.load(workspaceId, profile);
+    skillsState = next;
+    skillsLoaded = true;
   }
 
   function scrollChatToBottom(): void {
@@ -774,6 +792,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onexpandedchange={(value) => (gitExpandedIds = value)}
         onclone={(address) => void cloneGitRepository(address)}
       />
+    {:else if tab === 'skills'}
+      {#if skillsState}
+        <SkillsView
+          {workspaceTree}
+          {codexProfiles}
+          skillsState={skillsState}
+          onworkspacechange={(workspaceId) => void loadSkills(workspaceId, skillsState?.codexProfile ?? '')}
+          oncodexprofilechange={(profile) => void loadSkills(skillsState?.workspaceId ?? '', profile)}
+        />
+      {:else}
+        <p>Loading skills…</p>
+      {/if}
     {:else}
       <SessionsView
         {sessions}

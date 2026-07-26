@@ -58,6 +58,43 @@ export type RelayGitSummary = {
   fetchedAt: string | null;
 };
 
+export type RelayAvailableSkill = {
+  name: string;
+  description?: string;
+  shortDescription?: string;
+  displayName?: string;
+  interfaceShortDescription?: string;
+  iconSmall?: string;
+  iconLarge?: string;
+  brandColor?: string;
+  defaultPrompt?: string;
+  dependencies?: { tools?: Array<{ type: string; value: string; description?: string; transport?: string; command?: string; url?: string }> };
+  path: string;
+  scope?: string;
+  nativeEnabled: boolean;
+  effectiveEnabled: boolean;
+};
+
+export type RelaySkillList = {
+  source: 'native' | 'project';
+  errors: Array<{ message: string }>;
+  skills: RelayAvailableSkill[];
+};
+
+export type RelaySkillProfile = {
+  version: 1;
+  name: string;
+  path: string;
+  skills: Array<{ name: string; path: string; enabled: boolean }>;
+};
+
+export type RelaySkillProfileList = {
+  profiles: Array<
+    | RelaySkillProfile
+    | { name: string; path: string; error: { code: 'INVALID_SKILL_PROFILE'; message: string } }
+  >;
+};
+
 export function createRelayClient(fetcher: typeof fetch = fetch) {
   async function failure(response: Response): Promise<Error> {
     const body = (await response.json().catch(() => null)) as {
@@ -80,6 +117,15 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     const response = await fetcher(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw await failure(response);
+    return response.json() as Promise<T>;
+  }
+  async function put<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetcher(path, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw await failure(response);
@@ -148,6 +194,19 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         `/api/git/repositories/${encodeURIComponent(workspaceId)}/push`,
         {},
         key ? { 'idempotency-key': key } : {},
+      ),
+    listAvailableSkills: (workspaceId: string, profile: string) =>
+      get<RelaySkillList>(
+        `/api/skills?${new URLSearchParams({ workspaceId, profile }).toString()}`,
+      ),
+    listSkillProfiles: () => get<RelaySkillProfileList>('/api/skill-profiles'),
+    replaceSkillProfile: (
+      name: string,
+      profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
+    ) =>
+      put<RelaySkillProfile>(
+        `/api/skill-profiles/${encodeURIComponent(name)}`,
+        profile,
       ),
     respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
       request<void>(

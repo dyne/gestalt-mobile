@@ -9,13 +9,15 @@ import { nextTab } from './tab-state.js';
 describe('nextTab', () => {
   it('follows the visible tab order', () => {
     expect(nextTab('sessions', 1)).toBe('git');
-    expect(nextTab('git', 1)).toBe('chat');
+    expect(nextTab('git', 1)).toBe('skills');
+    expect(nextTab('skills', 1)).toBe('chat');
     expect(nextTab('chat', 1)).toBe('sessions');
     expect(nextTab('sessions', -1)).toBe('chat');
   });
 
   it('skips Chat when no session is open', () => {
     expect(nextTab('sessions', 1, false)).toBe('git');
-    expect(nextTab('git', 1, false)).toBe('sessions');
+    expect(nextTab('git', 1, false)).toBe('skills');
+    expect(nextTab('skills', 1, false)).toBe('sessions');
   });
 });

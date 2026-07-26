@@ -40,6 +40,7 @@ body {
 main {
   --page-inline-padding: 1rem;
 
+  box-sizing: border-box;
   min-block-size: 100vh;
   min-block-size: 100dvh;
   max-inline-size: 42rem;
@@ -200,9 +201,9 @@ main {
   inset-inline: 0;
   inset-block-end: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-  padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.5rem calc(0.25rem + env(safe-area-inset-right)) calc(0.5rem + env(safe-area-inset-bottom)) calc(0.25rem + env(safe-area-inset-left));
   background: Canvas;
   border-block-start: 1px solid CanvasText;
 }
@@ -211,8 +212,8 @@ main {
   min-inline-size: 0;
   max-inline-size: 100%;
   padding-inline: 0;
-  overflow-wrap: normal;
-  word-break: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   transition:
     color 120ms ease,
     background-color 120ms ease,
@@ -230,6 +231,21 @@ main {
   color: color-mix(in srgb, CanvasText 40%, transparent);
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+@media (max-width: 30rem) {
+  :root {
+    --bottom-navigation-clearance: calc(10rem + env(safe-area-inset-bottom));
+  }
+
+  .bottom-navigation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bottom-navigation button {
+    padding-inline: 0.25rem;
+    text-align: center;
+  }
 }
 button {
   min-block-size: 44px;
