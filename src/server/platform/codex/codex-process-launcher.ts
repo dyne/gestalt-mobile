@@ -15,8 +15,8 @@ export type CodexProcess = {
   onExit(listener: () => void): () => void;
 };
 
-export function launchCodexAppServer(input: { profile: string; cwd: string }): CodexProcess {
-  const launch = profileAppServerCommand(input.profile);
+export function launchCodexAppServer(input: { profile: string; cwd: string; skillsConfig?: readonly { path: string; enabled: boolean }[] }): CodexProcess {
+  const launch = profileAppServerCommand(input.profile, undefined, input.skillsConfig);
   const child = spawn(launch.command, launch.args, {
     cwd: input.cwd,
     shell: false,
