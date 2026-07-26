@@ -126,6 +126,7 @@ describe('production composition', () => {
       payload: { workspaceId: workspace!.id, profile: 'default' },
     });
     expect(created.statusCode).toBe(202);
+    expect(firstCalls).toEqual(['initialize', 'thread/start']);
     await first.close();
 
     const secondCalls: string[] = [];
@@ -139,10 +140,9 @@ describe('production composition', () => {
     });
     expect(secondCalls).toEqual([]);
     await second.listen({ host: '127.0.0.1', port: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect.poll(() => secondCalls, { timeout: 1_000 }).toEqual(['initialize', 'thread/resume']);
     const restored = await second.inject(`/api/sessions/${created.json().id}`);
     expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'ready' });
-    expect(secondCalls).toEqual(['initialize', 'thread/resume']);
     await second.close();
   });
 

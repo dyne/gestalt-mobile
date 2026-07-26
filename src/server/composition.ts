@@ -80,10 +80,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const resolveSkills = async (profile: string, cwd: string) => {
-    const [catalog, project] = await Promise.all([
-      new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer).list(cwd),
-      skillProfiles.readWorkspaceDefault(cwd),
-    ]);
+    const project = await skillProfiles.readWorkspaceDefault(cwd);
+    if (!options.explicitSkillProfile && !project) return undefined;
+    const catalog = await new CodexSkillCatalog(
+      profile,
+      options.launchAppServer ?? launchCodexAppServer,
+    ).list(cwd);
     return compileSkillOverride({
       discovered: catalog.skills,
       explicit: options.explicitSkillProfile?.skills,
