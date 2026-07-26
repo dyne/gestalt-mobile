@@ -10,8 +10,11 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { createServer } from 'node:net';
 
+import { packedFilename } from './npm-pack-report.mjs';
+
 const root = process.cwd();
-const expectedVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const expectedVersion = packageManifest.version;
 const temporaryRoot = await mkdtemp(join(tmpdir(), 'gestalt-mobile-package-'));
 let server;
 
@@ -23,7 +26,7 @@ try {
     root,
     true,
   );
-  const [{ filename }] = JSON.parse(pack.stdout);
+  const filename = packedFilename(JSON.parse(pack.stdout), packageManifest.name);
   const tarball = join(temporaryRoot, filename);
   const installation = join(temporaryRoot, 'installation');
   const workspace = join(temporaryRoot, 'workspace');
