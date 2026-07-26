@@ -23,6 +23,11 @@ function missing(error: unknown): boolean {
 export class FilesystemSkillProfileStore implements SkillProfileStore {
   public constructor(private readonly homeDirectory: string) {}
 
+  /** Absolute canonical location of one normalized global profile. */
+  globalProfilePath(name: string): string {
+    return join(resolve(this.homeDirectory), '.gestalt', 'skill-profiles', `${normalizeSkillProfileName(name)}.yml`);
+  }
+
   async listGlobalProfileNames(): Promise<string[]> {
     const root = await this.globalRoot();
     try {
@@ -41,7 +46,7 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
   }
 
   async readGlobalProfile(name: string): Promise<SkillProfile | undefined> {
-    const path = join(await this.globalRoot(), `${normalizeSkillProfileName(name)}.yml`);
+    const path = this.globalProfilePath(name);
     return this.readProfile(path);
   }
 
