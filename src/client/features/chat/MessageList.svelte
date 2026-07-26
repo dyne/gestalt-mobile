@@ -12,6 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let { messages }: { messages: ChatMessage[] } = $props();
   let groups = $derived(groupMessages(messages));
+  let expandedCommentary = $state<Record<string, boolean>>({});
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
@@ -75,14 +76,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <div class="entry-content">{@render content(group.text)}</div>
       {:else if group.answer}
         <section class="answer-turn">
-          {#if group.commentary}
-            <details>
-              <summary>commentary</summary>
-              {@render content(group.commentary)}
-            </details>
-          {/if}
           <div class="entry-heading">
             <strong>answer</strong>
+            {#if group.commentary}
+              <button
+                class="commentary-toggle"
+                type="button"
+                aria-expanded={Boolean(expandedCommentary[group.id])}
+                aria-controls={`commentary-${group.id}`}
+                onclick={() =>
+                  (expandedCommentary[group.id] = !expandedCommentary[group.id])}
+              >
+                <span aria-hidden="true">{expandedCommentary[group.id] ? '⌄' : '>'}</span
+                >commentary
+              </button>
+            {/if}
             {#if group.occurredAt}
               <time datetime={new Date(group.occurredAt).toISOString()}>
                 {formatMessageTime(group.occurredAt)}
@@ -92,6 +100,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               </time>
             {/if}
           </div>
+          {#if group.commentary && expandedCommentary[group.id]}
+            <div class="commentary-content" id={`commentary-${group.id}`}>
+              {@render content(group.commentary)}
+            </div>
+          {/if}
           <div class="entry-content">{@render content(group.answer)}</div>
         </section>
       {:else if group.commentary}
@@ -132,14 +145,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .entry-heading {
     display: flex;
-    justify-content: space-between;
+    align-items: baseline;
     gap: 0.75rem;
   }
 
   time {
+    margin-inline-start: auto;
     color: #666;
     font-size: 0.875em;
     white-space: nowrap;
+  }
+
+  .commentary-toggle {
+    min-block-size: 1.5rem;
+    padding: 0 0.125rem;
+    color: #666;
+    background: transparent;
+    border: 0;
+    font-size: 0.875em;
+  }
+
+  .commentary-content {
+    margin-block: 0.25rem 0.5rem;
   }
 
   .entry-content {

@@ -824,6 +824,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
             id: 'answer-1',
             kind: 'agent',
             phase: 'final_answer',
+            occurredAt: Date.parse('2026-07-15T10:00:00.000Z'),
             text: 'No changes are needed.\n\nInstallation | What it receives\n|---|---|\n| `npx skills add` | Only `my-skill/` |',
           },
           { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
@@ -855,11 +856,17 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
   await expect(page.getByRole('button', { name: 'Send prompt' }).locator('svg')).toBeVisible();
   const commentary = page.locator('.answer-turn');
+  const answerHeading = commentary.locator('.entry-heading');
   expect(
-    await commentary.locator(':scope > *').first().evaluate((element) => element.tagName),
-  ).toBe('DETAILS');
+    await answerHeading
+      .locator(':scope > *')
+      .evaluateAll((elements) => elements.map((element) => element.tagName)),
+  ).toEqual(['STRONG', 'BUTTON', 'TIME']);
+  const commentaryToggle = answerHeading.getByRole('button', { name: 'commentary' });
+  await expect(commentaryToggle).toHaveText('>commentary');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
-  await commentary.getByText('commentary').click();
+  await commentaryToggle.click();
+  await expect(commentaryToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
   await expect(commentary.getByText('The branch is clean.')).toBeVisible();
   await expect(page.getByText('Command · completed')).toBeVisible();
