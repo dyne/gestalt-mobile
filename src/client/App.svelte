@@ -725,7 +725,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     />
 
     {#if tab === 'chat'}
-      <section aria-labelledby="chat-title">
+      <section class="chat-view" aria-labelledby="chat-title">
         <h2 id="chat-title" class="visually-hidden">Chat</h2>
         {#if sessionId}
           <MessageList {messages} />
@@ -805,6 +805,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
+  .chat-view {
+    margin-inline: calc(0.25rem - var(--page-inline-padding));
+  }
+
   .evidence-mode {
     box-sizing: border-box;
     inline-size: 100%;

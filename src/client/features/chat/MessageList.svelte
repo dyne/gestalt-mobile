@@ -59,7 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <ol aria-label="Chat messages">
   {#each groups as group, index (group.id)}
-    <li>
+    <li class={group.kind === 'user' ? 'prompt-turn' : 'answer-item'}>
       {#if group.kind === 'user'}
         <div class="entry-heading">
           <strong>prompt</strong>
@@ -75,6 +75,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <div class="entry-content">{@render content(group.text)}</div>
       {:else if group.answer}
         <section class="answer-turn">
+          {#if group.commentary}
+            <details>
+              <summary>commentary</summary>
+              {@render content(group.commentary)}
+            </details>
+          {/if}
           <div class="entry-heading">
             <strong>answer</strong>
             {#if group.occurredAt}
@@ -87,12 +93,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {/if}
           </div>
           <div class="entry-content">{@render content(group.answer)}</div>
-          {#if group.commentary}
-            <details>
-              <summary>commentary</summary>
-              {@render content(group.commentary)}
-            </details>
-          {/if}
         </section>
       {:else if group.commentary}
         <details>
@@ -105,13 +105,29 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </ol>
 
 <style>
+  ol {
+    inline-size: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
   li {
+    box-sizing: border-box;
+    inline-size: 100%;
     margin-block-end: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   li + li {
-    margin-block-start: 1.5rem;
+    margin-block-start: 1rem;
+  }
+
+  .prompt-turn {
+    padding: 0.5rem 0.625rem;
+    background: color-mix(in srgb, Canvas 94%, CanvasText);
+    border-radius: 0.375rem;
   }
 
   .entry-heading {
@@ -128,7 +144,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .entry-content {
     margin-block: 0.125rem 0;
-    margin-inline-start: 1rem;
+    margin-inline: 0;
   }
 
   pre,

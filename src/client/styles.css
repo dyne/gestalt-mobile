@@ -38,17 +38,19 @@ body {
 }
 
 main {
+  --page-inline-padding: 1rem;
+
   min-block-size: 100vh;
   min-block-size: 100dvh;
   max-inline-size: 42rem;
   margin-inline: auto;
-  padding: calc(1rem + env(safe-area-inset-top)) 1rem
+  padding: calc(1rem + env(safe-area-inset-top)) var(--page-inline-padding)
     calc(var(--bottom-navigation-clearance) + 1rem);
 }
 
 @media (max-width: 24rem) {
   main {
-    padding-inline: 0.5rem;
+    --page-inline-padding: 0.5rem;
   }
 }
 

@@ -456,6 +456,10 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
 
   await openChat(page);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+  const ready = page.getByRole('status', { name: 'Ready.' });
+  expect(await ready.evaluate((element) => parseFloat(getComputedStyle(element).marginTop))).toBeGreaterThan(
+    0,
+  );
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -838,7 +842,22 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByRole('columnheader', { name: 'Installation' })).toBeVisible();
   await expect(page.getByText('npx skills add')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  const messageList = page.getByRole('list', { name: 'Chat messages' });
+  const promptTurn = messageList.locator('.prompt-turn');
+  const answerTurn = messageList.locator('.answer-item');
+  await expect(messageList).toHaveCSS('padding-left', '0px');
+  await expect(promptTurn).toHaveCSS(
+    'width',
+    await messageList.evaluate((element) => `${element.clientWidth}px`),
+  );
+  expect(
+    await promptTurn.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
+  await expect(page.getByRole('button', { name: 'Send prompt' }).locator('svg')).toBeVisible();
   const commentary = page.locator('.answer-turn');
+  expect(
+    await commentary.locator(':scope > *').first().evaluate((element) => element.tagName),
+  ).toBe('DETAILS');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
   await commentary.getByText('commentary').click();
   await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
