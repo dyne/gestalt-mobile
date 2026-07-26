@@ -41,6 +41,8 @@ import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
 import { isValidInteractionResponse } from './features/sessions/interaction/response-validator.js';
 import { promoteRecentThread } from './features/sessions/promote-recent-thread/use-case.js';
+import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
+import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -52,6 +54,7 @@ export type ComposeRelayAppOptions = {
   installedCodexVersion: string | null;
   startAppServers?: boolean;
   launchAppServer?: (input: { profile: string; cwd: string }) => AppServer;
+  homeDirectory?: string;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -73,6 +76,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
+  const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const recentThreads = createRecentThreadLister({
     root,
     profiles: options.profiles,
@@ -166,6 +170,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           },
         };
       },
+    },
+    skills: {
+      workspaces,
+      profiles: options.profiles,
+      catalog: (profile) => new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer),
+      selections: skillProfiles,
+      listGlobalProfileNames: () => skillProfiles.listGlobalProfileNames(),
+      readGlobalProfile: (name) => skillProfiles.readGlobalProfile(name),
+      replaceGlobalProfile: (profile) => skillProfiles.replaceGlobalProfile(profile),
+      profilePath: (name) => skillProfiles.globalProfilePath(name),
     },
     logger: console,
     staticDir: options.staticDir,

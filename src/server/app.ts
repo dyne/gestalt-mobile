@@ -40,6 +40,9 @@ import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
+import { registerListAvailableSkills, type ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
+import { registerListSkillProfiles, type ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
+import { registerReplaceSkillProfile, type ReplaceSkillProfileDependencies } from './features/skills/replace-profile/endpoint.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -101,6 +104,7 @@ export type AppDependencies = {
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
   };
+  skills?: ListAvailableSkillsDependencies & ListSkillProfilesDependencies & ReplaceSkillProfileDependencies;
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -213,6 +217,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       workspaces: deps.gitSummary.workspaces,
       clone: deps.gitSummary.clone,
     });
+  if (deps.skills) {
+    registerListAvailableSkills(app, deps.skills);
+    registerListSkillProfiles(app, deps.skills);
+    registerReplaceSkillProfile(app, deps.skills);
+  }
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }
