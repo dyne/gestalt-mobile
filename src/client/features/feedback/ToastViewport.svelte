@@ -136,6 +136,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   @media (max-width: 24rem) {
     .toast {
+      max-block-size: 5rem;
+      overflow-y: auto;
+    }
+
+    .toast {
       grid-template-columns: minmax(0, 1fr) 44px;
       gap: 0.25rem;
       padding: 0.35rem;

@@ -6,6 +6,7 @@
 
 :root {
   --bottom-navigation-clearance: calc(4rem + env(safe-area-inset-bottom));
+  --sticky-header-clearance: calc(5rem + env(safe-area-inset-top));
 
   color-scheme: light dark;
   font-family: system-ui, sans-serif;
@@ -236,6 +237,7 @@ main {
 @media (max-width: 30rem) {
   :root {
     --bottom-navigation-clearance: calc(10rem + env(safe-area-inset-bottom));
+    --sticky-header-clearance: calc(14rem + env(safe-area-inset-top));
   }
 
   .bottom-navigation {
@@ -253,7 +255,7 @@ button {
 }
 
 .git-view button {
-  scroll-margin-block-end: var(--bottom-navigation-clearance);
+  scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
 }
 
 input,
