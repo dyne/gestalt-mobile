@@ -23,9 +23,13 @@ const localAvailability: GestaltProfileAvailability = {
 export function profileAppServerCommand(
   _profile: string,
   availability: GestaltProfileAvailability = localAvailability,
+  skillsConfig?: readonly { path: string; enabled: boolean }[],
 ): { command: string; args: string[] } {
   void _profile;
-  return availability.codexProfileAvailable() && availability.gestaltHomeExists()
+  const base = availability.codexProfileAvailable() && availability.gestaltHomeExists()
     ? { command: 'codex-profile', args: ['cli', 'gestalt', 'app-server', '--stdio'] }
     : { command: 'codex', args: ['app-server', '--stdio'] };
+  return skillsConfig === undefined
+    ? base
+    : { ...base, args: [...base.args, '--config', `skills.config = [${skillsConfig.map((entry) => `{ path = ${JSON.stringify(entry.path)}, enabled = ${entry.enabled} }`).join(', ')}]`] };
 }

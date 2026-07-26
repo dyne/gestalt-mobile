@@ -39,4 +39,19 @@ describe('profileAppServerArgs', () => {
       command: 'codex',
       args: ['app-server', '--stdio'],
     }));
+
+  it('keeps native arguments byte-identical without a skill override', () => {
+    const availability = { codexProfileAvailable: () => false, gestaltHomeExists: () => true };
+    expect(profileAppServerCommand('work', availability)).toEqual(profileAppServerCommand('work', availability, undefined));
+  });
+
+  it('passes skills.config as one non-shell child argument', () =>
+    expect(
+      profileAppServerCommand('work', { codexProfileAvailable: () => false, gestaltHomeExists: () => true }, [
+        { path: '/skills/$quoted/SKILL.md', enabled: false },
+      ]),
+    ).toEqual({
+      command: 'codex',
+      args: ['app-server', '--stdio', '--config', 'skills.config = [{ path = "/skills/$quoted/SKILL.md", enabled = false }]'],
+    }));
 });
