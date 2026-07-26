@@ -156,4 +156,21 @@ describe('relay client', () => {
       'POST /api/sessions/session-1/interactions/request-1 {"decision":"approved"}',
     ]);
   });
+
+  it('uses typed Skills transport routes and preserves a profile failure detail', async () => {
+    const requests: Array<{ url: string; method?: string; body?: string }> = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push({ url: String(url), method: init?.method, body: init?.body as string | undefined });
+      return new Response(JSON.stringify({ source: 'native', errors: [], skills: [] }), { status: 200 });
+    });
+    await client.listAvailableSkills('workspace/a', 'default profile');
+    await client.listSkillProfiles();
+    await client.replaceSkillProfile('team one', { version: 1, name: 'team one', skills: [] });
+
+    expect(requests).toEqual([
+      { url: '/api/skills?workspaceId=workspace%2Fa&profile=default+profile' },
+      { url: '/api/skill-profiles' },
+      { url: '/api/skill-profiles/team%20one', method: 'PUT', body: JSON.stringify({ version: 1, name: 'team one', skills: [] }) },
+    ]);
+  });
 });

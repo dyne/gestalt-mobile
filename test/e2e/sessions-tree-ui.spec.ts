@@ -139,19 +139,26 @@ async function expectUsableLayout(page: Page): Promise<void> {
     const viewportWidth = document.documentElement.clientWidth;
     const buttons = [...navigation.querySelectorAll('button')].map((button) => {
       const box = button.getBoundingClientRect();
-      return { left: box.left, right: box.right, width: box.width };
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width };
     });
     return {
       buttons,
       withinViewport: buttons.every(({ left, right }) => left >= 0 && right <= viewportWidth),
-      nonOverlapping: buttons.every(
-        ({ right }, index) => index === buttons.length - 1 || right <= buttons[index + 1]!.left,
+      nonOverlapping: buttons.every((button, index) =>
+        buttons.every(
+          (other, otherIndex) =>
+            index === otherIndex ||
+            button.right <= other.left ||
+            other.right <= button.left ||
+            button.bottom <= other.top ||
+            other.bottom <= button.top,
+        ),
       ),
     };
   });
   expect(navigationLayout.withinViewport, JSON.stringify(navigationLayout.buttons)).toBe(true);
   expect(navigationLayout.nonOverlapping, JSON.stringify(navigationLayout.buttons)).toBe(true);
-  expect(navigationLayout.buttons).toHaveLength(3);
+  expect(navigationLayout.buttons).toHaveLength(4);
   expect(
     Math.max(...navigationLayout.buttons.map(({ width }) => width)) -
       Math.min(...navigationLayout.buttons.map(({ width }) => width)),

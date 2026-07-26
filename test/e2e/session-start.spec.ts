@@ -171,6 +171,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByLabel('Primary').getByRole('button')).toHaveText([
     'Sessions',
     'Git',
+    'Skills',
     'Chat',
   ]);
   await page.getByRole('button', { name: 'Sessions' }).click();
@@ -1450,6 +1451,10 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(git).toHaveCSS('font-weight', '700');
   await expect(git).toBeFocused();
   await git.press('ArrowRight');
+  const selectedSkills = page.getByRole('button', { name: 'Skills', pressed: true });
+  await expect(selectedSkills).toHaveCSS('font-weight', '700');
+  await expect(selectedSkills).toBeFocused();
+  await selectedSkills.press('ArrowRight');
   const selectedSessions = page.getByRole('button', { name: 'Sessions', pressed: true });
   await expect(selectedSessions).toHaveCSS('font-weight', '700');
   await expect(selectedSessions).toBeFocused();
