@@ -31,6 +31,27 @@ The command prints the loopback URL when it is ready. Open that URL in a
 browser. Press Ctrl-C, or send SIGINT or SIGTERM, to stop the HTTP server,
 active Codex subprocesses, and database cleanly.
 
+## Skill profiles
+
+Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:
+
+```yaml
+version: 1
+name: focused
+skills:
+  - name: typescript-advanced-types
+    path: /absolute/path/to/SKILL.md
+    enabled: true
+```
+
+Use `gestalt-mobile --skills focused` to apply that profile to every Codex child,
+or `gestalt-mobile --skills list` to inspect saved profiles and their enabled
+skill paths without starting the server. Without `--skills`, a workspace
+`gestalt-skills.yml` is used when present; otherwise Codex-native selection is
+preserved. Explicit profiles take precedence over project defaults, which take
+precedence over native configuration. Gestalt Mobile never rewrites Codex
+configuration or skill files.
+
 ## Command-line options
 
 | Option              | Default             | Purpose                                      |
@@ -39,6 +60,8 @@ active Codex subprocesses, and database cleanly.
 | `--host <address>`  | `127.0.0.1`         | HTTP listen address                          |
 | `--port <number>`   | `3000`              | HTTP listen port, from 1 through 65535       |
 | `--data-dir <path>` | XDG state directory | Directory containing `relay.sqlite`          |
+| `--skills <profile>` |                     | Apply a saved global profile to every session |
+| `--skills list`     |                     | List global profiles without starting the server |
 | `--help`            |                     | Print usage without starting the application |
 | `--version`         |                     | Print the installed package version          |
 

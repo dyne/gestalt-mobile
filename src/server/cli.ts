@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -14,6 +15,7 @@ import { promisify } from 'node:util';
 import { composeRelayApp } from './composition.js';
 import { CliUsageError, parseConfig, type RelayConfig } from './config.js';
 import { CodexProfileCatalog } from './platform/catalog/codex-profile-catalog.js';
+import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 
 const runFile = promisify(execFile);
 
@@ -24,6 +26,8 @@ Options:
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
   --data-dir <path>  Directory for persistent application data
+  --skills <profile> Use a global skill profile for every session
+  --skills list      List saved global skill profiles without starting the server
   --help             Show this help
   --version          Show the installed version`;
 
@@ -38,6 +42,7 @@ export type CliDependencies = {
   signalSource?: Pick<NodeJS.Process, 'once' | 'removeListener'>;
   probeCodexVersion?: () => Promise<string | null>;
   compose?: typeof composeRelayApp;
+  homeDirectory?: string;
 };
 
 export function packageRoot(moduleUrl: string): string {
@@ -94,7 +99,7 @@ export function installShutdownHandlers(
 function parseInvocation(
   args: string[],
   cwd: string,
-): { command: 'run'; config: RelayConfig } | { command: 'help' } | { command: 'version' } {
+): { command: 'run'; config: RelayConfig } | { command: 'help' } | { command: 'version' } | { command: 'list' } {
   if (args.includes('--help')) {
     if (args.length !== 1)
       throw new CliUsageError('--help cannot be combined with other arguments');
@@ -105,7 +110,29 @@ function parseInvocation(
       throw new CliUsageError('--version cannot be combined with other arguments');
     return { command: 'version' };
   }
+  const skills = args.indexOf('--skills');
+  if (skills !== -1 && args[skills + 1] === 'list') {
+    if (args.length !== 2) throw new CliUsageError('--skills list cannot be combined with other arguments');
+    return { command: 'list' };
+  }
   return { command: 'run', config: parseConfig(args, cwd) };
+}
+
+async function listSkillProfiles(store: FilesystemSkillProfileStore, stdout: Output, stderr: Output): Promise<number> {
+  let failed = false;
+  for (const name of await store.listGlobalProfileNames()) {
+    try {
+      const profile = await store.readGlobalProfile(name);
+      if (!profile) continue;
+      stdout.write(`${profile.name}\n  ${store.globalProfilePath(name)}\n`);
+      for (const skill of [...profile.skills].filter((entry) => entry.enabled).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)))
+        stdout.write(`  ${skill.name}\t${skill.path}\n`);
+    } catch (error) {
+      failed = true;
+      stderr.write(`${name}: ${error instanceof Error ? error.message : 'Invalid skill profile.'}\n`);
+    }
+  }
+  return failed ? 1 : 0;
 }
 
 export async function runCli(dependencies: CliDependencies = {}): Promise<number> {
@@ -132,8 +159,23 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     stdout.write(`${await packageVersion(moduleUrl)}\n`);
     return 0;
   }
+  const skillProfiles = new FilesystemSkillProfileStore(dependencies.homeDirectory ?? homedir());
+  if (invocation.command === 'list') return listSkillProfiles(skillProfiles, stdout, stderr);
 
   const config = invocation.config;
+  let explicitSkillProfile;
+  try {
+    explicitSkillProfile = config.skillsProfile
+      ? await skillProfiles.readGlobalProfile(config.skillsProfile)
+      : undefined;
+  } catch {
+    stderr.write(`Invalid skill profile: ${config.skillsProfile}\n\n${usage}\n`);
+    return 2;
+  }
+  if (config.skillsProfile && !explicitSkillProfile) {
+    stderr.write(`Unknown skill profile: ${config.skillsProfile}\n\n${usage}\n`);
+    return 2;
+  }
   const app = await (dependencies.compose ?? composeRelayApp)({
     root: config.root,
     dataDir: config.dataDir,
@@ -141,6 +183,8 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     profiles: new CodexProfileCatalog(),
     installedCodexVersion: await (dependencies.probeCodexVersion ?? probeCodexVersion)(),
     startAppServers: true,
+    homeDirectory: dependencies.homeDirectory,
+    explicitSkillProfile,
   });
   installShutdownHandlers(app, dependencies.signalSource);
   let address: string;

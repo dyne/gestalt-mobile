@@ -20,6 +20,44 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })));
 });
 
+describe('skills CLI commands', () => {
+  it('lists profiles deterministically without composing or probing Codex', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'gestalt-skills-cli-'));
+    temporaryDirectories.push(home);
+    await mkdir(join(home, '.gestalt', 'skill-profiles'), { recursive: true });
+    await writeFile(join(home, '.gestalt', 'skill-profiles', 'zeta.yml'), 'version: 1\nname: zeta\nskills: []\n');
+    await writeFile(join(home, '.gestalt', 'skill-profiles', 'alpha.yml'), 'version: 1\nname: alpha\nskills: []\n');
+    const stdout = output();
+    const stderr = output();
+    const compose = vi.fn();
+    const probeCodexVersion = vi.fn();
+
+    await expect(runCli({ args: ['--skills', 'list'], homeDirectory: home, stdout: stdout.stream, stderr: stderr.stream, compose, probeCodexVersion })).resolves.toBe(0);
+
+    expect(stdout.value()).toContain('alpha');
+    expect(stdout.value().indexOf('alpha')).toBeLessThan(stdout.value().indexOf('zeta'));
+    expect(stderr.value()).toBe('');
+    expect(compose).not.toHaveBeenCalled();
+    expect(probeCodexVersion).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid explicit profile before composition or Codex probing', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'gestalt-skills-cli-'));
+    temporaryDirectories.push(home);
+    await mkdir(join(home, '.gestalt', 'skill-profiles'), { recursive: true });
+    await writeFile(join(home, '.gestalt', 'skill-profiles', 'broken.yml'), 'not: valid: yaml');
+    const stderr = output();
+    const compose = vi.fn();
+    const probeCodexVersion = vi.fn();
+
+    await expect(runCli({ args: ['--skills', 'broken'], homeDirectory: home, stderr: stderr.stream, compose, probeCodexVersion })).resolves.toBe(2);
+
+    expect(stderr.value()).toContain('Invalid skill profile: broken');
+    expect(compose).not.toHaveBeenCalled();
+    expect(probeCodexVersion).not.toHaveBeenCalled();
+  });
+});
+
 function output() {
   let value = '';
   return { stream: { write: (chunk: string) => ((value += chunk), true) }, value: () => value };

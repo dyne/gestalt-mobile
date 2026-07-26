@@ -44,6 +44,31 @@ describe('CodexSessionRuntime', () => {
     expect(session).toMatchObject({ state: 'ready', threadId: 'thread-1', updatedAt: 'after' });
   });
 
+  it('applies the resolved override to both new and restored child launches', async () => {
+    const launches: unknown[] = [];
+    const override = [{ path: '/skills/focused/SKILL.md', enabled: true }];
+    const runtime = new CodexSessionRuntime(
+      (input) => {
+        launches.push(input);
+        return {
+          rpc: {
+            request: async (method) => (method === 'thread/start' ? { thread: { id: 'thread-1' } } : {}),
+            onNotification: () => () => {}, onServerRequest: () => () => {},
+          }, close: () => {},
+        };
+      },
+      undefined, undefined, undefined, undefined,
+      async () => override,
+    );
+    const base = { id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', state: 'starting' as const, desiredState: 'active' as const, activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' };
+    await runtime.start({ ...base, threadId: null }, 'after');
+    await runtime.restore({ ...base, threadId: 'thread-1' }, 'after');
+    expect(launches).toEqual([
+      { profile: 'default', cwd: '/workspace', skillsConfig: override },
+      { profile: 'default', cwd: '/workspace', skillsConfig: override },
+    ]);
+  });
+
   it('passes requested Codex settings through to thread start', async () => {
     let threadStartParams: unknown;
     const runtime = new CodexSessionRuntime(() => ({

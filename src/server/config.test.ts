@@ -51,3 +51,14 @@ describe('parseConfig', () => {
     expect(() => parseConfig(args, '/caller')).toThrow(new CliUsageError(message));
   });
 });
+
+describe('--skills', () => {
+  it('parses an explicit profile', () => {
+    expect(parseConfig(['--skills', 'focused'], '/caller').skillsProfile).toBe('focused');
+  });
+
+  it('rejects missing, empty, and duplicate forms', () => {
+    for (const args of [['--skills'], ['--skills', ''], ['--skills', 'one', '--skills', 'two']])
+      expect(() => parseConfig(args, '/caller')).toThrow(CliUsageError);
+  });
+});
