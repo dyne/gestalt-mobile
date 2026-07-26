@@ -11,13 +11,15 @@ export type RelayConfig = {
   port: number;
   root: string;
   dataDir?: string;
+  /** A validated global selection to use for every child session. */
+  skillsProfile?: string;
 };
 
 export class CliUsageError extends Error {
   readonly exitCode = 2;
 }
 
-const optionNames = new Set(['--cwd', '--host', '--port', '--data-dir']);
+const optionNames = new Set(['--cwd', '--host', '--port', '--data-dir', '--skills']);
 
 export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
   const values = new Map<string, string>();
@@ -44,5 +46,6 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     port,
     root: resolve(cwd, values.get('--cwd') ?? '.'),
     dataDir: values.get('--data-dir'),
+    skillsProfile: values.get('--skills'),
   };
 }

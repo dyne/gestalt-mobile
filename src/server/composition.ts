@@ -43,6 +43,7 @@ import { isValidInteractionResponse } from './features/sessions/interaction/resp
 import { promoteRecentThread } from './features/sessions/promote-recent-thread/use-case.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
+import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -53,8 +54,9 @@ export type ComposeRelayAppOptions = {
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   startAppServers?: boolean;
-  launchAppServer?: (input: { profile: string; cwd: string }) => AppServer;
+  launchAppServer?: (input: { profile: string; cwd: string; skillsConfig?: readonly { path: string; enabled: boolean }[] }) => AppServer;
   homeDirectory?: string;
+  explicitSkillProfile?: SkillProfile;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -77,6 +79,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
+  const resolveSkills = async (profile: string, cwd: string) => {
+    const [catalog, project] = await Promise.all([
+      new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer).list(cwd),
+      skillProfiles.readWorkspaceDefault(cwd),
+    ]);
+    return compileSkillOverride({
+      discovered: catalog.skills,
+      explicit: options.explicitSkillProfile?.skills,
+      project: project?.skills,
+    }).skillsConfig;
+  };
   const recentThreads = createRecentThreadLister({
     root,
     profiles: options.profiles,
@@ -128,6 +141,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           return true;
         },
         (sessionId) => recoverExitedSession(sessionId),
+        resolveSkills,
       )
     : null;
   const saveSession = (
