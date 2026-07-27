@@ -79,13 +79,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
-  const resolveSkills = async (profile: string, cwd: string) => {
-    const project = await skillProfiles.readWorkspaceDefault(cwd);
-    if (!options.explicitSkillProfile && !project) return undefined;
-    const catalog = await new CodexSkillCatalog(
+  const skillCatalog = (profile: string) =>
+    new CodexSkillCatalog(
       profile,
       options.launchAppServer ?? launchCodexAppServer,
-    ).list(cwd);
+    );
+  const resolveSkills = async (
+    session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
+  ) => {
+    const catalog = await skillCatalog(session.profile).list(session.workspacePath);
+    if (session.effectiveSkillSelection)
+      return compileSkillOverride({
+        discovered: catalog.skills,
+        explicit: session.effectiveSkillSelection.skills,
+      }).skillsConfig;
+    const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
+    if (!options.explicitSkillProfile && !project) return undefined;
     return compileSkillOverride({
       discovered: catalog.skills,
       explicit: options.explicitSkillProfile?.skills,
@@ -216,6 +225,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       list: () => sessions.list().map((session) => withPendingInteractions(session)!),
       workspaces,
       profiles: options.profiles,
+      skillProfiles,
+      skillCatalog,
+      defaultSkillProfile: options.explicitSkillProfile,
       activate: runtime
         ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
         : undefined,

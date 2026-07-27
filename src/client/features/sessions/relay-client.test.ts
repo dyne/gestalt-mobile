@@ -29,6 +29,16 @@ describe('relay client', () => {
     ]);
   });
 
+  it('sends an optional named global skill profile with session creation', async () => {
+    let body: string | undefined;
+    const client = createRelayClient(async (_url, init) => {
+      body = init?.body as string | undefined;
+      return new Response(JSON.stringify({ id: 'session-1' }), { status: 202 });
+    });
+    await client.startSession('workspace-1', { skillProfile: 'focused' });
+    expect(body).toBe(JSON.stringify({ workspaceId: 'workspace-1', profile: 'default', skillProfile: 'focused' }));
+  });
+
   it('targets every repository operation with the exact opaque catalog ID', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {

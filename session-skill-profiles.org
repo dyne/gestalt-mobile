@@ -1,0 +1,170 @@
+#+TITLE: Session-owned skill profiles
+#+SUBTITLE: Move skill profile selection and management into Sessions
+#+DATE: 2026-07-27
+#+KEYWORDS: sessions skills profiles svelte repr vsa hexagonal
+
+* DONE [#A] Persist an immutable Effective Skill Selection per session
+:PROPERTIES:
+:ID: persist-session-skill-selection
+:SKILLS: $context-mode:context-mode $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+
+- Effort :: Large
+- Goal :: Make every newly created Relay Session own a durable snapshot of the
+  exact skills that were enabled when it was created, independently of later
+  profile edits, deletion, project-default changes, or newly discovered skills.
+- Notes :: Use the existing Sessions bounded context and SQLite session
+  repository.  Keep global profiles behind the existing =SkillProfileStore=
+  port and preserve the YAML/CLI contract.  The session aggregate owns an
+  immutable Effective Skill Selection consisting of the optional selected
+  global profile name plus a complete path-keyed snapshot.  The start-session
+  REPR slice resolves a selected named profile over the existing default
+  precedence, validates it before creating the aggregate, and persists the
+  resolved snapshot before activation.  Runtime start, restore, supervisor
+  recovery, and relay restart compile process-local Codex overrides from the
+  session snapshot; they never reread the named profile.  A fresh catalog may
+  be used only to disable skills discovered after the snapshot and ignore stale
+  paths safely.  Existing database rows without a snapshot retain their legacy
+  restore behavior and receive no invented historical selection.
+
+** DONE [#A] Extend session creation, persistence, and activation as one use case
+:PROPERTIES:
+:ID: implement-immutable-session-skill-selection
+:END:
+
+- Why :: Saving only a mutable profile name would let later edits or deletion
+  silently change a restored session, violating the session identity and the
+  user's requirement that changing skills requires a new session.
+- Change :: Extend the session start Request and client transport with an
+  optional global skill-profile selection.  Add a domain value representing the
+  selected profile name and complete enabled/disabled path snapshot to
+  =RelaySessionSnapshot=, populate it only during creation, and preserve it
+  unchanged through every aggregate transition.  Add a narrow profile-reading
+  dependency to the start-session slice and resolve the effective profile,
+  project default, CLI default, or native state against fresh discovery before
+  the first save.  Refactor composition/runtime skill resolution to consume the
+  stored snapshot for start and restore instead of the mutable profile record.
+  Keep imported recent threads and pre-change rows backward compatible.
+- Tests :: Add domain tests proving the snapshot is copied and never changed by
+  lifecycle transitions; start-session endpoint/use-case tests for omitted,
+  valid, unknown, and invalid named profiles; SQLite repository round-trip and
+  old-row compatibility tests; composition/runtime tests proving later profile
+  replacement/deletion and project/native changes do not affect restore, while
+  newly discovered skills remain disabled; and relay-restart coverage for the
+  same immutable snapshot.
+- Done when :: A newly created session response and persisted row contain its
+  complete Effective Skill Selection, every activation path launches with that
+  selection, deleting or editing the source profile cannot affect the session,
+  and legacy/imported sessions continue to operate under documented fallback
+  behavior.
+
+* TODO [#A] Add safe deletion for editable global profiles
+:PROPERTIES:
+:ID: delete-editable-skill-profiles
+:SKILLS: $context-mode:context-mode $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $modern-javascript-patterns $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+
+- Effort :: Medium
+- Goal :: Let users delete a saved global skill profile without affecting any
+  existing session-owned skill snapshot.
+- Notes :: Add a dedicated REPR delete slice under
+  =src/server/features/skills/delete-profile=.  Keep filesystem safety inside
+  the existing platform adapter and expose only normalized profile names to the
+  use case.  A profile is editable configuration for future sessions, not a
+  foreign key owned by current sessions, so deletion needs no session cascade
+  or reference check.
+
+** TODO [#A] Implement the delete profile API and client state transition
+:PROPERTIES:
+:ID: implement-delete-profile-use-case
+:END:
+
+- Why :: Profile management is incomplete without deletion, but deletion must
+  be idempotent, confined to the global profile store, and independent of
+  durable sessions.
+- Change :: Extend =SkillProfileStore= with a narrow delete capability and
+  implement symlink/path-escape-safe removal in
+  =FilesystemSkillProfileStore=.  Register
+  =DELETE /api/skill-profiles/:name= as its own Request/Endpoint/Response slice,
+  returning =204= for deletion and a stable =404= for a missing profile.
+  Compose the dependency through =app.ts= and =composition.ts=.  Add a typed
+  relay-client method and =SkillsState.deleteSelectedProfile()= that suppresses
+  concurrent actions, reports failure accessibly to its eventual view, removes
+  the deleted profile from local choices, and returns editing state to a safe
+  unsaved selection.
+- Tests :: Cover normalized and unsafe names, existing/missing profiles,
+  symlinks, filesystem failures, route registration, typed DELETE transport,
+  concurrent deletion suppression, successful state reconciliation, and
+  delete-failed state.  Prove deletion never reads, rewrites, or removes session
+  records.
+- Done when :: A valid global profile can be deleted through the API and client
+  state, unsafe or failed deletion leaves neighboring profiles intact, and
+  existing session snapshots remain unaffected by construction.
+
+* TODO [#A] Integrate profile selection and management into Sessions
+:PROPERTIES:
+:ID: integrate-profiles-into-sessions
+:SKILLS: $context-mode:context-mode $vertical-slice-architecture $modern-web-guidance $svelte-code-writer $svelte-core-bestpractices $playwright $vite $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+
+- Effort :: Large
+- Goal :: Remove the Skills tab completely, select a saved skill profile only
+  while creating a session, and manage profiles in a dedicated screen within
+  the active Sessions tab.
+- Notes :: Keep client code feature-first under =src/client/features/sessions=
+  and =src/client/features/skills=.  Use a small Sessions subview state
+  (=list= or =profile-manager=) rather than a modal: the editor is a long,
+  scrollable mobile task deserving its own heading and Back action.  Reuse the
+  existing =SkillsView= and =SkillsState= behavior instead of duplicating the
+  editor.  Use native labeled selects, buttons, checkboxes, and a confirmation
+  dialog/pattern already present in the app.  Follow Svelte 5 runes, keyed
+  lists, visible focus, 48px touch targets, safe-area padding, and plain-text
+  rendering.  Run the modern-web guidance search before editing and the Svelte
+  autofixer on every changed component.
+
+** TODO [#A] Replace the Skills tab with the Sessions profile workflow
+:PROPERTIES:
+:ID: implement-sessions-profile-workflow
+:END:
+
+- Why :: Skill profiles configure session birth and are not a mutable property
+  of a running session, so a peer application tab communicates the wrong
+  lifecycle and wastes constrained mobile navigation space.
+- Change :: Remove =skills= from =Tab=, arrow-key order,
+  =BottomNavigation.svelte=, and =App.svelte= tab rendering/loading.  Load global
+  profile summaries for the Sessions creation form and add a labeled
+  =Skills profile= select whose default option means current default resolution.
+  Add concise text that the skill set is fixed after creation and pass the
+  selected profile only in the new-session request.  Place a
+  =Manage skill profiles= button beside the field; it opens the reused editor as
+  a full in-tab subview, sets an appropriate heading/focus target, and provides
+  a clear Back to sessions action while retaining Sessions as the active bottom
+  tab.  Add delete controls for saved profiles with explicit confirmation and
+  restore focus after cancellation/success.  Refresh the creation choices after
+  create, replace, or delete.  Show the selected non-default profile name as a
+  compact textual badge/metadata row in every managed session list; omit it for
+  the default selection.  Do not expose a control that changes an existing
+  session's snapshot.
+- Tests :: Update tab-state, bottom-navigation, App, SessionsView, SkillsView,
+  SkillsState, relay-client, and session-list tests.  Cover default and named
+  creation payloads, fixed-after-creation help text, manager open/back focus,
+  create/replace/delete refresh, delete confirmation, empty/error states, and
+  named-profile badges across open and saved lists.  Replace the separate
+  Skills-tab Playwright spec with a Sessions workflow spec covering pointer and
+  keyboard navigation at 320x568, 390x844, and 768x1024 in light/dark themes
+  and 100%/200% root font scale.  Capture the session form, profile manager,
+  confirmation, saved, deleted, warning, empty, and error states; verify visible
+  focus, no horizontal document overflow, no clipped controls, readable text,
+  and persistent bottom navigation.
+- Done when :: Bottom navigation contains only Sessions, Git, and Chat; no
+  additional Skills tab, tab type, route, label, or E2E expectation remains;
+  users can select a profile only before starting a session, manage all profiles
+  without leaving Sessions, and see non-default profile names in session lists.
+  All named screenshots have been inspected at every required viewport,
+  theme, and font scale.  Svelte autofixer reports no actionable finding, and
+  =npm run check=, =npm test=, =npm run lint=, =npm run build=,
+  =npm run test:package=, =npm run license:check=, =npm run test:e2e=, and
+  =git diff --check= pass with only intended paths changed.

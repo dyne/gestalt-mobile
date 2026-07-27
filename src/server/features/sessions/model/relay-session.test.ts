@@ -16,10 +16,23 @@ const session = () =>
     workspaceId: 'workspace-1',
     workspacePath: '/work/project',
     profile: 'default',
+    effectiveSkillSelection: {
+      selectedProfileName: 'focused',
+      skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }],
+    },
     now: createdAt,
   });
 
 describe('RelaySession', () => {
+  it('keeps a copied effective skill selection through lifecycle transitions', () => {
+    const original = session().snapshot;
+    const changed = RelaySession.rehydrate(original).beginRecovery(createdAt).restore(createdAt).snapshot;
+    expect(changed.effectiveSkillSelection).toEqual(original.effectiveSkillSelection);
+    const leaked = changed.effectiveSkillSelection!;
+    (leaked.skills as unknown as Array<{ enabled: boolean }>)[0]!.enabled = false;
+    expect(original.effectiveSkillSelection?.skills[0]?.enabled).toBe(true);
+  });
+
   it('binds a thread and allows exactly one active turn', () => {
     const ready = session().bindThread('thread-1', createdAt);
     const active = ready.startTurn('turn-1', createdAt);

@@ -15,9 +15,11 @@ import { workspaceId } from './platform/catalog/workspace-id.js';
 function fakeAppServer(calls: string[]) {
   return {
     rpc: {
-      request: async (method: string) => {
+      request: async (method: string, params: unknown) => {
         calls.push(method);
         if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+        if (method === 'skills/list')
+          return { data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }] };
         return {};
       },
       onNotification: () => () => {},
@@ -77,6 +79,7 @@ describe('production composition', () => {
         require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
       },
       installedCodexVersion: 'codex-cli 0.144.3',
+      launchAppServer: () => fakeAppServer([]),
     });
 
     const bootstrap = await app.inject({ method: 'GET', url: '/api/bootstrap' });
@@ -126,7 +129,9 @@ describe('production composition', () => {
       payload: { workspaceId: workspace!.id, profile: 'default' },
     });
     expect(created.statusCode).toBe(202);
-    expect(firstCalls).toEqual(['initialize', 'thread/start']);
+    expect(firstCalls).toEqual([
+      'initialize', 'skills/list', 'initialize', 'skills/list', 'initialize', 'thread/start',
+    ]);
     await first.close();
 
     const secondCalls: string[] = [];
@@ -140,7 +145,9 @@ describe('production composition', () => {
     });
     expect(secondCalls).toEqual([]);
     await second.listen({ host: '127.0.0.1', port: 0 });
-    await expect.poll(() => secondCalls, { timeout: 1_000 }).toEqual(['initialize', 'thread/resume']);
+    await expect.poll(() => secondCalls, { timeout: 1_000 }).toEqual([
+      'initialize', 'skills/list', 'initialize', 'thread/resume',
+    ]);
     const restored = await second.inject(`/api/sessions/${created.json().id}`);
     expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'ready' });
     await second.close();
