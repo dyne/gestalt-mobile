@@ -8,6 +8,8 @@ import type { FastifyInstance } from 'fastify';
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
 import { parseStartSessionRequest } from './request.js';
 import { startSession } from './use-case.js';
+import { SkillProfileError } from '../../skills/model/errors.js';
+import { problem } from '../../../platform/http/problem.js';
 
 export function registerStartSession(
   app: FastifyInstance,
@@ -38,6 +40,16 @@ export function registerStartSession(
       started = await startSession(body, deps);
     } catch (error) {
       deps.reportFailure?.('start-session', error);
+      if (error instanceof SkillProfileError)
+        return reply.code(400).type('application/problem+json').send(
+          problem(
+            error.code,
+            400,
+            error.code === 'UNKNOWN_SKILL_PROFILE'
+              ? 'The selected skill profile does not exist.'
+              : 'The selected skill profile is invalid.',
+          ),
+        );
       throw error;
     }
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));

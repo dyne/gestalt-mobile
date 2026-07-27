@@ -38,7 +38,9 @@ export class CodexSessionRuntime {
       request: { id: number; method: string; params: unknown },
     ) => boolean,
     private readonly onProcessExit?: (sessionId: string) => void,
-    private readonly resolveSkills?: (profile: string, cwd: string) => Promise<readonly { path: string; enabled: boolean }[] | undefined>,
+    private readonly resolveSkills?: (
+      session: RelaySessionSnapshot,
+    ) => Promise<readonly { path: string; enabled: boolean }[] | undefined>,
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
   private readonly exitUnsubscribers = new Map<string, () => void>();
@@ -49,7 +51,7 @@ export class CodexSessionRuntime {
     now: string,
     settings: StartSessionSettings = {},
   ): Promise<RelaySessionSnapshot> {
-    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session.profile, session.workspacePath) });
+    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session) });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
@@ -166,7 +168,7 @@ export class CodexSessionRuntime {
 
   async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
-    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session.profile, session.workspacePath) });
+    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session) });
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));

@@ -29,6 +29,8 @@ describe('relay application composition', () => {
           resolve: async () => ({ id: 'workspace', name: 'workspace', realPath: '/workspace' }),
         },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        skillProfiles: { readGlobalProfile: async () => undefined, readWorkspaceDefault: async () => undefined },
+        skillCatalog: () => ({ list: async () => ({ skills: [], errors: [] }) }),
       },
       gitSummary: {
         workspaces: {
@@ -120,6 +122,8 @@ describe('relay application composition', () => {
           }),
         },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        skillProfiles: { readGlobalProfile: async () => undefined, readWorkspaceDefault: async () => undefined },
+        skillCatalog: () => ({ list: async () => ({ skills: [], errors: [] }) }),
       },
     });
 

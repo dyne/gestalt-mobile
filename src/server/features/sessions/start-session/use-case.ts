@@ -7,15 +7,24 @@
 import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { StartSessionSettings } from '../application/start-settings.js';
+import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
+import {
+  applySkillSelectionSnapshot,
+  type SkillProfile,
+} from '../../skills/model/skill-profile.js';
+import { SkillProfileError } from '../../skills/model/errors.js';
 
 export async function startSession(
-  input: { workspaceId: string; profile: string } & StartSessionSettings,
+  input: { workspaceId: string; profile: string; skillProfile?: string } & StartSessionSettings,
   deps: {
     createId(): string;
     now(): string;
     save(session: RelaySessionSnapshot): void;
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
+    skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
+    skillCatalog(profile: string): Pick<SkillCatalog, 'list'>;
+    defaultSkillProfile?: SkillProfile;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
@@ -26,11 +35,30 @@ export async function startSession(
     deps.workspaces.resolve(input.workspaceId),
     deps.profiles.require(input.profile),
   ]);
+  const selectedProfile = input.skillProfile
+    ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
+    : deps.defaultSkillProfile;
+  if (input.skillProfile && !selectedProfile)
+    throw new SkillProfileError('UNKNOWN_SKILL_PROFILE', 'The selected skill profile does not exist.');
+  const [projectProfile, catalog] = await Promise.all([
+    deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
+    deps.skillCatalog(input.profile).list(workspace.realPath),
+  ]);
+  const sourceProfile = selectedProfile ?? projectProfile;
+  const effectiveSkillSelection = {
+    ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
+    skills: applySkillSelectionSnapshot(catalog.skills, sourceProfile?.skills).map((skill) => ({
+      name: skill.name,
+      path: skill.path,
+      enabled: skill.enabled,
+    })),
+  };
   const session = RelaySession.create({
     id: deps.createId(),
     workspaceId: workspace.id,
     workspacePath: workspace.realPath,
     profile: input.profile,
+    effectiveSkillSelection,
     now: deps.now(),
   }).snapshot;
   deps.save(session);

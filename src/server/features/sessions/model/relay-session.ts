@@ -7,6 +7,11 @@
 import { DomainError } from './errors.js';
 import type { RelaySessionEvent } from './events.js';
 import {
+  createSkillSelection,
+  normalizeSkillProfileName,
+  type SkillSelection,
+} from '../../skills/model/skill-profile.js';
+import {
   interactionId,
   profileName,
   sessionId,
@@ -24,6 +29,25 @@ export type PendingInteraction = {
   kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput';
   payload: unknown;
 };
+
+/**
+ * The immutable, path-keyed skill state chosen when a managed session starts.
+ * A missing value is reserved for rows created before session-owned selections.
+ */
+export type EffectiveSkillSelection = {
+  selectedProfileName?: string;
+  skills: SkillSelection;
+};
+
+export function createEffectiveSkillSelection(input: EffectiveSkillSelection): EffectiveSkillSelection {
+  return {
+    ...(input.selectedProfileName === undefined
+      ? {}
+      : { selectedProfileName: normalizeSkillProfileName(input.selectedProfileName) }),
+    skills: createSkillSelection(input.skills),
+  };
+}
+
 export type RelaySessionSnapshot = {
   id: string;
   workspaceId: string;
@@ -35,6 +59,7 @@ export type RelaySessionSnapshot = {
   activeTurnId: string | null;
   protocolVersion: string | null;
   failureCount: number;
+  effectiveSkillSelection?: EffectiveSkillSelection;
   pendingInteractions: PendingInteraction[];
   createdAt: string;
   updatedAt: string;
@@ -51,6 +76,7 @@ export class RelaySession {
     workspaceId: string;
     workspacePath: string;
     profile: string;
+    effectiveSkillSelection: EffectiveSkillSelection;
     now: string;
   }): RelaySession {
     return new RelaySession({
@@ -58,6 +84,7 @@ export class RelaySession {
       workspaceId: workspaceId(input.workspaceId),
       workspacePath: workspacePath(input.workspacePath),
       profile: profileName(input.profile),
+      effectiveSkillSelection: createEffectiveSkillSelection(input.effectiveSkillSelection),
       threadId: null,
       state: 'starting',
       desiredState: 'active',
@@ -204,6 +231,9 @@ export class RelaySession {
 function copy(snapshot: RelaySessionSnapshot): RelaySessionSnapshot {
   return {
     ...snapshot,
+    ...(snapshot.effectiveSkillSelection === undefined
+      ? {}
+      : { effectiveSkillSelection: createEffectiveSkillSelection(snapshot.effectiveSkillSelection) }),
     pendingInteractions: snapshot.pendingInteractions.map((item) => ({ ...item })),
   };
 }

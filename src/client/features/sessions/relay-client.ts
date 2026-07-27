@@ -27,6 +27,7 @@ export type StartSessionSettings = {
   model?: string;
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
+  skillProfile?: string;
 };
 
 export type RelayHistoryItem = Record<string, unknown> & {

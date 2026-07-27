@@ -6,7 +6,10 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 
-import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
+import {
+  createEffectiveSkillSelection,
+  type RelaySessionSnapshot,
+} from '../../features/sessions/model/relay-session.js';
 
 type Row = {
   id: string;
@@ -19,6 +22,7 @@ type Row = {
   active_turn_id: string | null;
   protocol_version: string | null;
   failure_count: number;
+  effective_skill_selection_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -28,7 +32,7 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
@@ -41,6 +45,9 @@ export class SqliteSessionRepository {
         session.activeTurnId,
         session.protocolVersion,
         session.failureCount,
+        session.effectiveSkillSelection === undefined
+          ? null
+          : JSON.stringify(session.effectiveSkillSelection),
         session.createdAt,
         session.updatedAt,
       );
@@ -60,6 +67,12 @@ export class SqliteSessionRepository {
   }
 }
 function map(row: Row): RelaySessionSnapshot {
+  const effectiveSkillSelection = row.effective_skill_selection_json
+    ? createEffectiveSkillSelection(JSON.parse(row.effective_skill_selection_json) as {
+        selectedProfileName?: string;
+        skills: Array<{ name: string; path: string; enabled: boolean }>;
+      })
+    : undefined;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -71,6 +84,7 @@ function map(row: Row): RelaySessionSnapshot {
     activeTurnId: row.active_turn_id,
     protocolVersion: row.protocol_version,
     failureCount: row.failure_count,
+    ...(effectiveSkillSelection === undefined ? {} : { effectiveSkillSelection }),
     pendingInteractions: [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,

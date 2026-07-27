@@ -16,6 +16,7 @@ import { SqliteEventJournal } from './sqlite-event-journal.js';
 import { SqliteIdempotencyStore } from './sqlite-idempotency-store.js';
 import { SqliteSessionRepository } from './sqlite-session-repository.js';
 import { SqlitePendingInteractionStore } from './sqlite-pending-interaction-store.js';
+import { RelaySession } from '../../features/sessions/model/relay-session.js';
 
 describe('SQLite relay persistence', () => {
   const directories: string[] = [];
@@ -32,6 +33,33 @@ describe('SQLite relay persistence', () => {
     migrate(database);
 
     expect(database.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+    database.close();
+  });
+
+  it('round-trips a session-owned skill selection while preserving legacy rows without one', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    const sessions = new SqliteSessionRepository(database);
+    sessions.save(
+      RelaySession.create({
+        id: 'new', workspaceId: 'w', workspacePath: '/w', profile: 'default', now: 't',
+        effectiveSkillSelection: {
+          selectedProfileName: 'focused',
+          skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }],
+        },
+      }).snapshot,
+    );
+    database.prepare(
+      "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('old','w','/w','default','ready','active','t','t')",
+    ).run();
+
+    expect(sessions.find('new')?.effectiveSkillSelection).toEqual({
+      selectedProfileName: 'focused',
+      skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }],
+    });
+    expect(sessions.find('old')?.effectiveSkillSelection).toBeUndefined();
     database.close();
   });
 

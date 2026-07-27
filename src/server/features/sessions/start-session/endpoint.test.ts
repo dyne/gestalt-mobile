@@ -7,6 +7,17 @@
 import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { registerStartSession } from './endpoint.js';
+
+const skills = {
+  skillProfiles: {
+    readGlobalProfile: async () => undefined,
+    readWorkspaceDefault: async () => undefined,
+  },
+  skillCatalog: () => ({
+    list: async () => ({ skills: [{ name: 'Native', path: '/skills/native/SKILL.md', enabled: true }], errors: [] }),
+  }),
+};
+
 describe('POST /api/sessions', () => {
   it('accepts a new session', async () => {
     const app = fastify();
@@ -16,6 +27,7 @@ describe('POST /api/sessions', () => {
       save: () => {},
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
     });
     const response = await app.inject({
       method: 'POST',
@@ -34,6 +46,7 @@ describe('POST /api/sessions', () => {
       save: () => {},
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
     });
 
     const response = await app.inject({
@@ -62,6 +75,7 @@ describe('POST /api/sessions', () => {
       save: () => {},
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
       idempotency: {
         get: (_scope, key) =>
           results.has(key) ? { statusCode: 202, body: results.get(key)! } : null,
@@ -90,6 +104,7 @@ describe('POST /api/sessions', () => {
       save: () => {},
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
       activate: async () => {
         throw new Error('CODEX_START_FAILED');
       },
@@ -103,6 +118,23 @@ describe('POST /api/sessions', () => {
     });
     expect(response.statusCode).toBe(500);
     expect(failures).toEqual(['CODEX_START_FAILED']);
+    await app.close();
+  });
+
+  it('rejects an unknown named skill profile', async () => {
+    const app = fastify();
+    registerStartSession(app, {
+      createId: () => 's', now: () => 't', save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+    });
+    const response = await app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { workspaceId: 'w', profile: 'default', skillProfile: 'missing' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'UNKNOWN_SKILL_PROFILE' });
     await app.close();
   });
 });

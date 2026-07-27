@@ -7,7 +7,8 @@
 export type SkillProfileErrorCode =
   | 'INVALID_SKILL_PROFILE'
   | 'INVALID_SKILL_PROFILE_YAML'
-  | 'INVALID_SKILL_DISCOVERY';
+  | 'INVALID_SKILL_DISCOVERY'
+  | 'UNKNOWN_SKILL_PROFILE';
 
 /** A stable, transport-independent failure in the skill selection bounded context. */
 export class SkillProfileError extends Error {

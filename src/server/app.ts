@@ -39,6 +39,8 @@ import type { RelaySessionSnapshot } from './features/sessions/model/relay-sessi
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
+import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
+import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
 import { registerListAvailableSkills, type ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
 import { registerListSkillProfiles, type ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
@@ -58,6 +60,9 @@ export type AppDependencies = {
     list?(): RelaySessionSnapshot[];
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
+    skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
+    skillCatalog(profile: string): Pick<SkillCatalog, 'list'>;
+    defaultSkillProfile?: SkillProfile;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,

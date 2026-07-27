@@ -9,6 +9,7 @@ import { z } from 'zod';
 const schema = z.object({
   workspaceId: z.string().min(1),
   profile: z.string().min(1),
+  skillProfile: z.string().trim().min(1).optional(),
   model: z
     .string()
     .trim()
