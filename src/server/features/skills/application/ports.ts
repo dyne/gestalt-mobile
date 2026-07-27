@@ -12,6 +12,7 @@ export interface SkillProfileStore {
   listGlobalProfileNames(): Promise<string[]>;
   readGlobalProfile(name: string): Promise<SkillProfile | undefined>;
   replaceGlobalProfile(profile: SkillProfile): Promise<void>;
+  deleteGlobalProfile(name: string): Promise<boolean>;
   readWorkspaceDefault(workspace: string): Promise<SkillProfile | undefined>;
 }
 

@@ -57,4 +57,33 @@ describe('FilesystemSkillProfileStore', () => {
     await expect(new FilesystemSkillProfileStore(home).readGlobalProfile('work')).rejects.toBeInstanceOf(SkillProfileError);
     await chmod(join(home, 'target.yml'), 0o600);
   });
+
+  it('deletes only an existing normalized regular global profile', async () => {
+    const home = await sandbox();
+    const store = new FilesystemSkillProfileStore(home);
+    await store.replaceGlobalProfile(profile());
+    await store.replaceGlobalProfile(createSkillProfile({ name: 'keep', skills: [] }));
+
+    await expect(store.deleteGlobalProfile('WORK')).resolves.toBe(true);
+    await expect(store.deleteGlobalProfile('work')).resolves.toBe(false);
+    await expect(store.readGlobalProfile('keep')).resolves.toMatchObject({ name: 'keep' });
+    await expect(store.deleteGlobalProfile('../keep')).rejects.toBeInstanceOf(SkillProfileError);
+  });
+
+  it('does not follow profile or root symlinks when deleting', async () => {
+    const home = await sandbox();
+    const outside = await sandbox();
+    const root = join(home, '.gestalt', 'skill-profiles');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(outside, 'target.yml'), 'version: 1\nname: target\nskills: []\n');
+    await symlink(join(outside, 'target.yml'), join(root, 'work.yml'));
+    await expect(new FilesystemSkillProfileStore(home).deleteGlobalProfile('work')).rejects.toBeInstanceOf(SkillProfileError);
+    await expect((await import('node:fs/promises')).readFile(join(outside, 'target.yml'), 'utf8')).resolves.toContain('name: target');
+
+    const linkedHome = await sandbox();
+    await mkdir(join(linkedHome, '.gestalt'), { recursive: true });
+    await symlink(outside, join(linkedHome, '.gestalt', 'skill-profiles'));
+    await expect(new FilesystemSkillProfileStore(linkedHome).deleteGlobalProfile('target')).rejects.toBeInstanceOf(SkillProfileError);
+    await expect((await import('node:fs/promises')).readFile(join(outside, 'target.yml'), 'utf8')).resolves.toContain('name: target');
+  });
 });

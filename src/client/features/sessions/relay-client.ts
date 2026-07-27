@@ -132,6 +132,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     if (!response.ok) throw await failure(response);
     return response.json() as Promise<T>;
   }
+  async function remove(path: string): Promise<void> {
+    const response = await fetcher(path, { method: 'DELETE' });
+    if (!response.ok) throw await failure(response);
+  }
   async function get<T>(path: string): Promise<T> {
     const response = await fetcher(path);
     if (!response.ok) throw await failure(response);
@@ -209,6 +213,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         `/api/skill-profiles/${encodeURIComponent(name)}`,
         profile,
       ),
+    deleteSkillProfile: (name: string) =>
+      remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
     respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,

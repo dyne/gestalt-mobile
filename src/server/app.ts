@@ -45,6 +45,7 @@ import type { GitSummary, GitWorkspaceResolver } from './features/git/applicatio
 import { registerListAvailableSkills, type ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
 import { registerListSkillProfiles, type ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
 import { registerReplaceSkillProfile, type ReplaceSkillProfileDependencies } from './features/skills/replace-profile/endpoint.js';
+import { registerDeleteSkillProfile, type DeleteSkillProfileDependencies } from './features/skills/delete-profile/endpoint.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -109,7 +110,7 @@ export type AppDependencies = {
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
   };
-  skills?: ListAvailableSkillsDependencies & ListSkillProfilesDependencies & ReplaceSkillProfileDependencies;
+  skills?: ListAvailableSkillsDependencies & ListSkillProfilesDependencies & ReplaceSkillProfileDependencies & DeleteSkillProfileDependencies;
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -226,6 +227,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerListAvailableSkills(app, deps.skills);
     registerListSkillProfiles(app, deps.skills);
     registerReplaceSkillProfile(app, deps.skills);
+    registerDeleteSkillProfile(app, deps.skills);
   }
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;

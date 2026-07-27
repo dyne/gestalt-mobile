@@ -22,6 +22,7 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
     listAvailableSkills: vi.fn(async () => available),
     listSkillProfiles: vi.fn(async () => ({ profiles: [] })),
     replaceSkillProfile: vi.fn(async (_name, profile) => ({ ...profile, path: '/profiles/new.yml' })),
+    deleteSkillProfile: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -83,6 +84,47 @@ describe('SkillsState', () => {
     await Promise.all([first, second]);
 
     expect(state.status).toEqual({ kind: 'saved' });
+  });
+
+  it('deletes the selected profile once and returns to an unsaved selection', async () => {
+    let resolveDelete: (() => void) | undefined;
+    const deleteSkillProfile = vi.fn(
+      () => new Promise<void>((resolve) => { resolveDelete = resolve; }),
+    );
+    const state = new SkillsState(client({
+      listSkillProfiles: vi.fn(async () => ({
+        profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
+      })),
+      deleteSkillProfile,
+    }));
+    await state.load('workspace', 'default');
+    state.selectProfile('team');
+    const first = state.deleteSelectedProfile();
+    const second = state.deleteSelectedProfile();
+    resolveDelete?.();
+    await Promise.all([first, second]);
+
+    expect(deleteSkillProfile).toHaveBeenCalledTimes(1);
+    expect(state.profiles).toEqual([]);
+    expect(state.selectedProfileName).toBe('');
+    expect(state.saveAsName).toBe('');
+    expect(state.status).toEqual({ kind: 'deleted' });
+  });
+
+  it('keeps local profile choices when deletion fails', async () => {
+    const state = new SkillsState(client({
+      listSkillProfiles: vi.fn(async () => ({
+        profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
+      })),
+      deleteSkillProfile: vi.fn(async () => { throw new Error('Profile deletion failed.'); }),
+    }));
+    await state.load('workspace', 'default');
+    state.selectProfile('team');
+    await state.deleteSelectedProfile();
+
+    expect(state.profiles).toHaveLength(1);
+    expect(state.selectedProfileName).toBe('team');
+    expect(state.status).toEqual({ kind: 'delete-failed', message: 'Profile deletion failed.' });
   });
 
   it('keeps explicit toggles when discovery refreshes and reports warning and errors', async () => {

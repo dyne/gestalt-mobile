@@ -18,13 +18,15 @@ export type SkillsClient = {
     name: string,
     profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
   ): Promise<RelaySkillProfile>;
+  deleteSkillProfile(name: string): Promise<void>;
 };
 
 export type SkillsStatus =
-  | { kind: 'idle' | 'loading' | 'empty' | 'ready' | 'saving' | 'saved' }
+  | { kind: 'idle' | 'loading' | 'empty' | 'ready' | 'saving' | 'saved' | 'deleting' | 'deleted' }
   | { kind: 'warning'; message: string }
   | { kind: 'invalid-profile'; message: string }
   | { kind: 'save-failed'; message: string }
+  | { kind: 'delete-failed'; message: string }
   | { kind: 'error'; message: string };
 
 type EditableSkill = RelayAvailableSkill & { enabled: boolean };
@@ -41,6 +43,7 @@ export class SkillsState {
   status: SkillsStatus = { kind: 'idle' };
   private baseline = new Map<string, boolean>();
   private saving = false;
+  private deleting = false;
 
   constructor(private readonly client: SkillsClient) {}
 
@@ -106,7 +109,7 @@ export class SkillsState {
 
   async save(): Promise<void> {
     const name = this.saveAsName.trim();
-    if (this.saving) return;
+    if (this.saving || this.deleting) return;
     if (!name) {
       this.status = { kind: 'save-failed', message: 'Enter a profile name before saving.' };
       return;
@@ -128,6 +131,29 @@ export class SkillsState {
       this.status = { kind: 'save-failed', message: errorMessage(error) };
     } finally {
       this.saving = false;
+    }
+  }
+
+  async deleteSelectedProfile(): Promise<void> {
+    const name = this.selectedProfileName;
+    if (this.saving || this.deleting) return;
+    if (!name) {
+      this.status = { kind: 'delete-failed', message: 'Select a saved profile before deleting.' };
+      return;
+    }
+    this.deleting = true;
+    this.status = { kind: 'deleting' };
+    try {
+      await this.client.deleteSkillProfile(name);
+      this.profiles = this.profiles.filter((profile) => 'error' in profile || profile.name !== name);
+      this.selectedProfileName = '';
+      this.saveAsName = '';
+      this.captureBaseline();
+      this.status = { kind: 'deleted' };
+    } catch (error) {
+      this.status = { kind: 'delete-failed', message: errorMessage(error) };
+    } finally {
+      this.deleting = false;
     }
   }
 
