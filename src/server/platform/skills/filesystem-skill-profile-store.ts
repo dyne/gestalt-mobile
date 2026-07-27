@@ -65,6 +65,23 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
     }
   }
 
+  async deleteGlobalProfile(name: string): Promise<boolean> {
+    const normalizedName = normalizeSkillProfileName(name);
+    const root = await this.globalRoot();
+    const path = join(root, `${normalizedName}.yml`);
+    try {
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Profile must be a regular file.');
+      }
+      await rm(path);
+      return true;
+    } catch (error) {
+      if (missing(error)) return false;
+      throw error;
+    }
+  }
+
   async readWorkspaceDefault(workspace: string): Promise<SkillProfile | undefined> {
     const root = await realpath(workspace);
     const path = resolve(root, 'gestalt-skills.yml');
@@ -79,6 +96,14 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
     const root = resolve(home, '.gestalt', 'skill-profiles');
     if (!root.startsWith(`${home}/`)) {
       throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Global profile root escaped home.');
+    }
+    try {
+      const stat = await lstat(root);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Global profile root must be a directory.');
+      }
+    } catch (error) {
+      if (!missing(error)) throw error;
     }
     return root;
   }

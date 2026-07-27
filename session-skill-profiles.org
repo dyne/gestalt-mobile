@@ -59,7 +59,7 @@
   and legacy/imported sessions continue to operate under documented fallback
   behavior.
 
-* TODO [#A] Add safe deletion for editable global profiles
+* DONE [#A] Add safe deletion for editable global profiles
 :PROPERTIES:
 :ID: delete-editable-skill-profiles
 :SKILLS: $context-mode:context-mode $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $modern-javascript-patterns $gestalt:development-testing $gestalt:verification-before-completion
@@ -76,7 +76,7 @@
   foreign key owned by current sessions, so deletion needs no session cascade
   or reference check.
 
-** TODO [#A] Implement the delete profile API and client state transition
+** DONE [#A] Implement the delete profile API and client state transition
 :PROPERTIES:
 :ID: implement-delete-profile-use-case
 :END:

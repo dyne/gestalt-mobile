@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { registerListAvailableSkills } from './list-available/endpoint.js';
 import { registerListSkillProfiles } from './list-profiles/endpoint.js';
 import { registerReplaceSkillProfile } from './replace-profile/endpoint.js';
+import { registerDeleteSkillProfile } from './delete-profile/endpoint.js';
 
 describe('skills REPR endpoints', () => {
   it('maps a workspace catalog to documented effective state without contents', async () => {
@@ -40,6 +41,9 @@ describe('skills REPR endpoints', () => {
     profiles.set('work', { version: 1, name: 'work', skills: [] });
     registerListSkillProfiles(app, deps);
     registerReplaceSkillProfile(app, deps);
+    registerDeleteSkillProfile(app, {
+      deleteGlobalProfile: async (name) => profiles.delete(name),
+    });
     expect((await app.inject('/api/skill-profiles')).json()).toEqual({ profiles: [
       { name: 'broken', path: '/home/test/.gestalt/skill-profiles/broken.yml', error: { code: 'INVALID_SKILL_PROFILE', message: 'bad yaml' } },
       { name: 'work', version: 1, path: '/home/test/.gestalt/skill-profiles/work.yml', skills: [] },
@@ -47,6 +51,18 @@ describe('skills REPR endpoints', () => {
     const replaced = await app.inject({ method: 'PUT', url: '/api/skill-profiles/new', payload: { version: 1, name: 'new', skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true }] } });
     expect(replaced.statusCode).toBe(201);
     expect(replaced.json()).toMatchObject({ name: 'new', path: '/home/test/.gestalt/skill-profiles/new.yml' });
+    expect((await app.inject({ method: 'DELETE', url: '/api/skill-profiles/work' })).statusCode).toBe(204);
+    expect((await app.inject({ method: 'DELETE', url: '/api/skill-profiles/work' })).json()).toMatchObject({ code: 'SKILL_PROFILE_NOT_FOUND' });
+    await app.close();
+  });
+
+  it('maps unsafe names and storage failures without any session dependency', async () => {
+    const app = fastify();
+    registerDeleteSkillProfile(app, {
+      deleteGlobalProfile: async () => { throw new Error('disk offline'); },
+    });
+    expect((await app.inject({ method: 'DELETE', url: '/api/skill-profiles/work%2Fother' })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'DELETE', url: '/api/skill-profiles/work' })).json()).toMatchObject({ code: 'SKILL_PROFILE_PERSISTENCE_FAILED' });
     await app.close();
   });
 });

@@ -176,11 +176,13 @@ describe('relay client', () => {
     await client.listAvailableSkills('workspace/a', 'default profile');
     await client.listSkillProfiles();
     await client.replaceSkillProfile('team one', { version: 1, name: 'team one', skills: [] });
+    await client.deleteSkillProfile('team one');
 
     expect(requests).toEqual([
       { url: '/api/skills?workspaceId=workspace%2Fa&profile=default+profile' },
       { url: '/api/skill-profiles' },
       { url: '/api/skill-profiles/team%20one', method: 'PUT', body: JSON.stringify({ version: 1, name: 'team one', skills: [] }) },
+      { url: '/api/skill-profiles/team%20one', method: 'DELETE' },
     ]);
   });
 });

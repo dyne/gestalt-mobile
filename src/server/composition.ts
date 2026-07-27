@@ -204,6 +204,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       listGlobalProfileNames: () => skillProfiles.listGlobalProfileNames(),
       readGlobalProfile: (name) => skillProfiles.readGlobalProfile(name),
       replaceGlobalProfile: (profile) => skillProfiles.replaceGlobalProfile(profile),
+      deleteGlobalProfile: (name) => skillProfiles.deleteGlobalProfile(name),
       profilePath: (name) => skillProfiles.globalProfilePath(name),
     },
     logger: console,

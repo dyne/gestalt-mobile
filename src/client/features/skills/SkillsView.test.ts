@@ -18,6 +18,7 @@ const client: SkillsClient = {
   listAvailableSkills: vi.fn(),
   listSkillProfiles: vi.fn(),
   replaceSkillProfile: vi.fn(async (_name, profile) => ({ ...profile, path: '/profiles/team.yml' })),
+  deleteSkillProfile: vi.fn(async () => undefined),
 };
 
 async function rendered() {
