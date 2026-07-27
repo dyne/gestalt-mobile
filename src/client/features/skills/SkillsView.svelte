@@ -16,11 +16,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     skillsState: SkillsState;
     onworkspacechange: (workspaceId: string) => void;
     oncodexprofilechange: (profile: string) => void;
+    onprofileschange: () => void;
+    heading?: string;
   };
 
-  let { workspaceTree, codexProfiles, skillsState, onworkspacechange, oncodexprofilechange }: Props = $props();
+  let { workspaceTree, codexProfiles, skillsState, onworkspacechange, oncodexprofilechange, onprofileschange, heading = 'Manage skill profiles' }: Props = $props();
   let revision = $state(0);
   let saveError = $state<HTMLElement | null>(null);
+  let savedProfileSelect = $state<HTMLSelectElement | null>(null);
+  let deleteTrigger = $state<HTMLButtonElement | null>(null);
+  let deleteDialog = $state<HTMLDialogElement | null>(null);
   let snapshot = $derived.by(() => {
     revision;
     return skillsState;
@@ -50,10 +55,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     event.preventDefault();
     await snapshot.save();
     changed();
+    if (snapshot.status.kind === 'saved') onprofileschange();
     if (snapshot.status.kind === 'save-failed') {
       await tick();
       saveError?.focus();
     }
+  }
+
+  function requestDelete(): void {
+    deleteDialog?.showModal();
+  }
+
+  async function deleteProfile(): Promise<void> {
+    deleteDialog?.close();
+    await snapshot.deleteSelectedProfile();
+    changed();
+    if (snapshot.status.kind === 'deleted') onprofileschange();
+    await tick();
+    savedProfileSelect?.focus();
+  }
+
+  async function cancelDelete(): Promise<void> {
+    deleteDialog?.close();
+    await tick();
+    deleteTrigger?.focus();
   }
 
   function safeBrandColor(color: string | undefined): string | undefined {
@@ -72,7 +97,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <section class="skills-view" aria-labelledby="skills-title">
-  <h2 id="skills-title">Skills</h2>
+  <h2 id="skills-title">{heading}</h2>
   <p class="intro">Choose a workspace and profile, then save a complete skills selection.</p>
 
   <form onsubmit={save} aria-describedby="skills-status">
@@ -98,6 +123,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <label for="skills-existing-profile">Existing saved profile</label>
       <select
         id="skills-existing-profile"
+        bind:this={savedProfileSelect}
         value={snapshot.selectedProfileName}
         onchange={selectSavedProfile}
       >
@@ -126,7 +152,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <button type="submit" disabled={snapshot.status.kind === 'saving'}>
       {snapshot.status.kind === 'saving' ? 'Saving profile…' : 'Save profile'}
     </button>
+    <button
+      type="button"
+      bind:this={deleteTrigger}
+      disabled={!snapshot.selectedProfileName || snapshot.status.kind === 'deleting'}
+      onclick={requestDelete}
+    >Delete selected profile</button>
   </form>
+
+  <dialog bind:this={deleteDialog} aria-labelledby="delete-profile-title">
+    <h3 id="delete-profile-title">Delete skill profile?</h3>
+    <p>Delete {snapshot.selectedProfileName}? Existing sessions keep their saved skill set.</p>
+    <div class="dialog-actions">
+      <button type="button" onclick={() => void cancelDelete()}>Cancel</button>
+      <button type="button" onclick={() => void deleteProfile()}>Delete profile</button>
+    </div>
+  </dialog>
 
   {#if snapshot.status.kind === 'loading'}
     <p id="skills-status" aria-live="polite">Loading skills…</p>
@@ -140,6 +181,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <p id="skills-status" class="error" role="alert" tabindex="-1" bind:this={saveError}>{snapshot.status.message}</p>
   {:else if snapshot.status.kind === 'saved'}
     <p id="skills-status" role="status">Profile saved.</p>
+  {:else if snapshot.status.kind === 'deleted'}
+    <p id="skills-status" role="status">Profile deleted.</p>
+  {:else if snapshot.status.kind === 'delete-failed'}
+    <p id="skills-status" class="error" role="alert">{snapshot.status.message}</p>
   {/if}
 
   {#if snapshot.skills.length > 0}
@@ -188,6 +233,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .field-grid { grid-template-columns: minmax(0, 1fr); }
   label { font-weight: 650; }
   select, input, button { box-sizing: border-box; min-block-size: 3rem; inline-size: 100%; font: inherit; }
+  dialog { max-inline-size: min(100% - 2rem, 32rem); }
+  .dialog-actions { display: grid; gap: .65rem; }
   input, select { padding-inline: .7rem; font-size: 1rem; }
   button { padding-inline: 1rem; }
   .notice { border-inline-start: .3rem solid #976600; padding-inline-start: .7rem; }

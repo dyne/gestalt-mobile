@@ -7,7 +7,7 @@
 :PROPERTIES:
 :ID: persist-session-skill-selection
 :SKILLS: $context-mode:context-mode $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $gestalt:development-testing $gestalt:verification-before-completion
-:REVIEW_STATUS: UNREVIEWED
+:REVIEW_STATUS: REVIEWED
 :END:
 
 - Effort :: Large
@@ -63,7 +63,7 @@
 :PROPERTIES:
 :ID: delete-editable-skill-profiles
 :SKILLS: $context-mode:context-mode $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $modern-javascript-patterns $gestalt:development-testing $gestalt:verification-before-completion
-:REVIEW_STATUS: UNREVIEWED
+:REVIEW_STATUS: REVIEWED
 :END:
 
 - Effort :: Medium
@@ -103,7 +103,7 @@
   state, unsafe or failed deletion leaves neighboring profiles intact, and
   existing session snapshots remain unaffected by construction.
 
-* TODO [#A] Integrate profile selection and management into Sessions
+* DONE [#A] Integrate profile selection and management into Sessions
 :PROPERTIES:
 :ID: integrate-profiles-into-sessions
 :SKILLS: $context-mode:context-mode $vertical-slice-architecture $modern-web-guidance $svelte-code-writer $svelte-core-bestpractices $playwright $vite $gestalt:development-testing $gestalt:verification-before-completion
@@ -125,7 +125,7 @@
   rendering.  Run the modern-web guidance search before editing and the Svelte
   autofixer on every changed component.
 
-** TODO [#A] Replace the Skills tab with the Sessions profile workflow
+** DONE [#A] Replace the Skills tab with the Sessions profile workflow
 :PROPERTIES:
 :ID: implement-sessions-profile-workflow
 :END:

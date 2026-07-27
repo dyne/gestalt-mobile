@@ -99,6 +99,9 @@ async function openSessions(
   await page.route('**/api/sessions/recent-threads', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ profiles: [] }) }),
+  );
   await page.route('**/api/sessions', (route) => {
     if (route.request().method() === 'POST') {
       return route.fulfill({
@@ -158,7 +161,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
   });
   expect(navigationLayout.withinViewport, JSON.stringify(navigationLayout.buttons)).toBe(true);
   expect(navigationLayout.nonOverlapping, JSON.stringify(navigationLayout.buttons)).toBe(true);
-  expect(navigationLayout.buttons).toHaveLength(4);
+  expect(navigationLayout.buttons).toHaveLength(3);
   expect(
     Math.max(...navigationLayout.buttons.map(({ width }) => width)) -
       Math.min(...navigationLayout.buttons.map(({ width }) => width)),
@@ -167,6 +170,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
   const order = await page.evaluate(() => {
     const tree = document.querySelector('[role="tree"]');
     const sandbox = document.querySelector('#sandbox');
+    const skillsProfile = document.querySelector('#skills-profile');
     const approval = document.querySelector('#approval-policy');
     const start = document.querySelector('.new-session-button');
     const follows = (before: Element | null, after: Element | null) =>
@@ -175,13 +179,15 @@ async function expectUsableLayout(page: Page): Promise<void> {
       );
     return {
       treeThenSandbox: follows(tree, sandbox),
-      sandboxThenApproval: follows(sandbox, approval),
+      sandboxThenSkillsProfile: follows(sandbox, skillsProfile),
+      skillsProfileThenApproval: follows(skillsProfile, approval),
       approvalThenStart: follows(approval, start),
     };
   });
   expect(order).toEqual({
     treeThenSandbox: true,
-    sandboxThenApproval: true,
+    sandboxThenSkillsProfile: true,
+    skillsProfileThenApproval: true,
     approvalThenStart: true,
   });
 

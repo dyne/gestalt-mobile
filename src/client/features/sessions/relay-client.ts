@@ -16,6 +16,10 @@ export type RelaySession = {
   pendingInteractions?: Array<{ requestId: string; kind: string; payload: unknown }>;
   createdAt?: string;
   updatedAt?: string;
+  effectiveSkillSelection?: {
+    selectedProfileName?: string;
+    skills: Array<{ name: string; path: string; enabled: boolean }>;
+  };
 };
 export type RecentSession = {
   id: string;

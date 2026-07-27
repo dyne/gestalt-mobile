@@ -40,12 +40,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onclick={() => onselect('git')}>Git</button
   >
   <button
-    bind:this={buttons.skills}
-    aria-pressed={activeTab === 'skills'}
-    onkeydown={handleKeydown}
-    onclick={() => onselect('skills')}>Skills</button
-  >
-  <button
     bind:this={buttons.chat}
     aria-pressed={activeTab === 'chat'}
     disabled={!chatEnabled}

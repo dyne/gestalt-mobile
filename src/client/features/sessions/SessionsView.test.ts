@@ -39,6 +39,8 @@ function renderView(overrides: Record<string, unknown> = {}) {
   const onworkspacechange = vi.fn();
   const onexpandedchange = vi.fn();
   const onstart = vi.fn();
+  const onskillprofilechange = vi.fn();
+  const onmanageprofiles = vi.fn();
   const result = render(SessionsView, {
     sessions: [],
     recentSessions: [],
@@ -47,11 +49,16 @@ function renderView(overrides: Record<string, unknown> = {}) {
     expandedIds: new Set([root.id, intermediate.id]),
     sandbox: '',
     approvalPolicy: 'on-request',
+    skillProfiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
+    selectedSkillProfile: '',
+    skillProfileError: '',
     startingSession: false,
     onworkspacechange,
     onexpandedchange,
     onsandboxchange: vi.fn(),
     onapprovalpolicychange: vi.fn(),
+    onskillprofilechange,
+    onmanageprofiles,
     onopen: vi.fn(),
     onclose: vi.fn(),
     onopenrecent: vi.fn(),
@@ -60,7 +67,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
     onstart,
     ...overrides,
   });
-  return { ...result, onworkspacechange, onexpandedchange, onstart };
+  return { ...result, onworkspacechange, onexpandedchange, onskillprofilechange, onmanageprofiles, onstart };
 }
 
 describe('SessionsView session base tree', () => {
@@ -103,5 +110,29 @@ describe('SessionsView session base tree', () => {
     expect((screen.getByRole('button', { name: 'Starting…' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it('selects a named profile only for new sessions and opens its manager', async () => {
+    const { onskillprofilechange, onmanageprofiles } = renderView();
+    const select = screen.getByLabelText('Skills profile');
+    expect((select as HTMLSelectElement).value).toBe('');
+    expect(screen.getByText('The selected skill set is fixed after this session is created.')).toBeTruthy();
+    await fireEvent.change(select, { target: { value: 'focused' } });
+    expect(onskillprofilechange).toHaveBeenCalledWith('focused');
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));
+    expect(onmanageprofiles).toHaveBeenCalledOnce();
+  });
+
+  it('shows a badge only for managed sessions with a named profile snapshot', () => {
+    renderView({
+      sessions: [
+        { id: 'named', state: 'ready', workspacePath: '/named', effectiveSkillSelection: { selectedProfileName: 'focused', skills: [] } },
+        { id: 'saved-named', state: 'released', workspacePath: '/saved-named', effectiveSkillSelection: { selectedProfileName: 'team', skills: [] } },
+        { id: 'default', state: 'released', workspacePath: '/default', effectiveSkillSelection: { skills: [] } },
+      ],
+    });
+    expect(screen.getByText('Skills profile: focused')).toBeTruthy();
+    expect(screen.getByText('Skills profile: team')).toBeTruthy();
+    expect(screen.queryByText('Skills profile: default')).toBeNull();
   });
 });
