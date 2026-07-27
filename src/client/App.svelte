@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
@@ -49,6 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type RelayHistory,
     type RecentSession,
     type RelaySession,
+    type RelaySkillProfile,
     type StartSessionSettings,
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
@@ -72,6 +73,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
   let skillsState = $state<SkillsState | null>(null);
   let skillsLoaded = false;
+  let sessionSubview = $state<'list' | 'profile-manager'>('list');
+  let sessionSkillProfiles = $state.raw<RelaySkillProfile[]>([]);
+  let selectedSessionSkillProfile = $state('');
+  let sessionSkillProfileError = $state('');
+  let profileManagerHeading = $state<HTMLHeadingElement | null>(null);
   let sessionWorkspaceId = $state('');
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
@@ -146,6 +152,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
+      await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
       const remembered = await sessionCache.readSelectedSession();
@@ -206,6 +213,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {
           sandbox: sandbox || undefined,
           approvalPolicy,
+          skillProfile: selectedSessionSkillProfile || undefined,
         },
         startRequestKey,
       );
@@ -422,11 +430,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function selectTab(next: Tab): void {
     if (next === 'chat' && !chatEnabled) return;
     tab = next;
-    if (next === 'skills' && !skillsLoaded) {
-      const workspaceId = sessionWorkspaceId || workspaceTree[0]?.id || '';
-      const profile = codexProfiles.find((item) => item.state === 'ok')?.name ?? '';
-      if (workspaceId && profile) void loadSkills(workspaceId, profile);
-    }
     if (next === 'chat') {
       reconcileVisibleHistory();
       scrollChatToBottom();
@@ -440,6 +443,41 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     await next.load(workspaceId, profile);
     skillsState = next;
     skillsLoaded = true;
+  }
+
+  async function refreshSkillProfiles(): Promise<void> {
+    try {
+      const profiles = await relay.listSkillProfiles();
+      sessionSkillProfiles = profiles.profiles.filter(
+        (profile): profile is RelaySkillProfile => !('error' in profile),
+      );
+      const invalid = profiles.profiles.find((profile) => 'error' in profile);
+      sessionSkillProfileError = invalid && 'error' in invalid ? invalid.error.message : '';
+      if (!sessionSkillProfiles.some((profile) => profile.name === selectedSessionSkillProfile))
+        selectedSessionSkillProfile = '';
+    } catch (error) {
+      sessionSkillProfiles = [];
+      sessionSkillProfileError = error instanceof Error ? error.message : 'Unable to load saved skill profiles.';
+    }
+  }
+
+  async function openProfileManager(_trigger: HTMLButtonElement): Promise<void> {
+    const workspaceId = sessionWorkspaceId || workspaceTree[0]?.id || '';
+    const profile = codexProfiles.find((item) => item.state === 'ok')?.name ?? '';
+    if (!workspaceId || !profile) {
+      status = 'Choose a workspace and available Codex profile before managing skill profiles.';
+      return;
+    }
+    await loadSkills(workspaceId, profile);
+    sessionSubview = 'profile-manager';
+    await tick();
+    profileManagerHeading?.focus();
+  }
+
+  async function closeProfileManager(): Promise<void> {
+    sessionSubview = 'list';
+    await tick();
+    document.getElementById('manage-skill-profiles')?.focus();
   }
 
   function scrollChatToBottom(): void {
@@ -792,39 +830,52 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onexpandedchange={(value) => (gitExpandedIds = value)}
         onclone={(address) => void cloneGitRepository(address)}
       />
-    {:else if tab === 'skills'}
-      {#if skillsState}
-        <SkillsView
-          {workspaceTree}
-          {codexProfiles}
-          skillsState={skillsState}
-          onworkspacechange={(workspaceId) => void loadSkills(workspaceId, skillsState?.codexProfile ?? '')}
-          oncodexprofilechange={(profile) => void loadSkills(skillsState?.workspaceId ?? '', profile)}
-        />
-      {:else}
-        <p>Loading skills…</p>
-      {/if}
     {:else}
-      <SessionsView
-        {sessions}
-        {recentSessions}
-        {workspaceTree}
-        workspaceId={sessionWorkspaceId}
-        expandedIds={sessionExpandedIds}
-        {sandbox}
-        {approvalPolicy}
-        {startingSession}
-        onworkspacechange={(value) => (sessionWorkspaceId = value)}
-        onexpandedchange={(value) => (sessionExpandedIds = value)}
-        onsandboxchange={(value) => (sandbox = value)}
-        onapprovalpolicychange={(value) => (approvalPolicy = value)}
-        onopen={openSession}
-        onclose={(id) => void closeSession(id)}
-        onopenrecent={(session) => void openRecentSession(session)}
-        onforget={(id) => void forgetSession(id)}
-        oncopyresume={(command) => void copyResumeCommand(command)}
-        onstart={() => void startSession()}
-      />
+      {#if sessionSubview === 'profile-manager'}
+        <section class="session-profile-manager" aria-labelledby="session-profile-manager-title">
+          <button type="button" onclick={() => void closeProfileManager()}>Back to sessions</button>
+          <h2 id="session-profile-manager-title" tabindex="-1" bind:this={profileManagerHeading}>Manage skill profiles</h2>
+          {#if skillsState}
+            <SkillsView
+              {workspaceTree}
+              {codexProfiles}
+              skillsState={skillsState}
+              onworkspacechange={(workspaceId) => void loadSkills(workspaceId, skillsState?.codexProfile ?? '')}
+              oncodexprofilechange={(profile) => void loadSkills(skillsState?.workspaceId ?? '', profile)}
+              onprofileschange={() => void refreshSkillProfiles()}
+              heading="Skill profile editor"
+            />
+          {:else}
+            <p>Loading skill profiles…</p>
+          {/if}
+        </section>
+      {:else}
+        <SessionsView
+          {sessions}
+          {recentSessions}
+          {workspaceTree}
+          workspaceId={sessionWorkspaceId}
+          expandedIds={sessionExpandedIds}
+          {sandbox}
+          {approvalPolicy}
+          skillProfiles={sessionSkillProfiles}
+          selectedSkillProfile={selectedSessionSkillProfile}
+          skillProfileError={sessionSkillProfileError}
+          {startingSession}
+          onworkspacechange={(value) => (sessionWorkspaceId = value)}
+          onexpandedchange={(value) => (sessionExpandedIds = value)}
+          onsandboxchange={(value) => (sandbox = value)}
+          onapprovalpolicychange={(value) => (approvalPolicy = value)}
+          onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
+          onmanageprofiles={(trigger) => void openProfileManager(trigger)}
+          onopen={openSession}
+          onclose={(id) => void closeSession(id)}
+          onopenrecent={(session) => void openRecentSession(session)}
+          onforget={(id) => void forgetSession(id)}
+          oncopyresume={(command) => void copyResumeCommand(command)}
+          onstart={() => void startSession()}
+        />
+      {/if}
     {/if}
 
     <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />

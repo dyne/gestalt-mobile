@@ -93,6 +93,35 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });
 
+test('sends a selected named skill profile only when creating a new session', async ({ page }) => {
+  let requestBody: unknown;
+  await page.route('**/api/bootstrap', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [] }),
+  }));
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }] }),
+  }));
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() === 'POST') {
+      requestBody = route.request().postDataJSON();
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'session-1', state: 'ready' }) });
+    }
+    return route.fulfill({ contentType: 'application/json', body: '[]' });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Skills profile').selectOption('focused');
+  await page.getByRole('button', { name: 'New session' }).click();
+  await expect.poll(() => requestBody).toEqual({
+    workspaceId: 'workspace-1',
+    profile: 'default',
+    approvalPolicy: 'on-request',
+    skillProfile: 'focused',
+  });
+});
+
 test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
   const managedSession = {
     id: 'relay-session-1',
@@ -171,7 +200,6 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByLabel('Primary').getByRole('button')).toHaveText([
     'Sessions',
     'Git',
-    'Skills',
     'Chat',
   ]);
   await page.getByRole('button', { name: 'Sessions' }).click();
@@ -1451,10 +1479,6 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(git).toHaveCSS('font-weight', '700');
   await expect(git).toBeFocused();
   await git.press('ArrowRight');
-  const selectedSkills = page.getByRole('button', { name: 'Skills', pressed: true });
-  await expect(selectedSkills).toHaveCSS('font-weight', '700');
-  await expect(selectedSkills).toBeFocused();
-  await selectedSkills.press('ArrowRight');
   const selectedSessions = page.getByRole('button', { name: 'Sessions', pressed: true });
   await expect(selectedSessions).toHaveCSS('font-weight', '700');
   await expect(selectedSessions).toBeFocused();

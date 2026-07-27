@@ -8,7 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
   import { findTreeNode, treeNodePolicies } from '../filesystem-tree/tree-state.js';
-  import type { RecentSession, RelaySession, StartSessionSettings } from './relay-client.js';
+  import type { RecentSession, RelaySession, RelaySkillProfile, StartSessionSettings } from './relay-client.js';
   import { formatRelativeTime } from './relative-time.js';
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
 
@@ -20,11 +20,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     expandedIds: ReadonlySet<string>;
     sandbox: StartSessionSettings['sandbox'] | '';
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
+    skillProfiles: RelaySkillProfile[];
+    selectedSkillProfile: string;
+    skillProfileError: string;
     startingSession: boolean;
     onworkspacechange: (value: string) => void;
     onexpandedchange: (value: Set<string>) => void;
     onsandboxchange: (value: StartSessionSettings['sandbox'] | '') => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
+    onskillprofilechange: (value: string) => void;
+    onmanageprofiles: (trigger: HTMLButtonElement) => void;
     onopen: (id: string) => void;
     onclose: (id: string) => void;
     onopenrecent: (session: RecentSession) => void;
@@ -41,11 +46,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     expandedIds,
     sandbox,
     approvalPolicy,
+    skillProfiles,
+    selectedSkillProfile,
+    skillProfileError,
     startingSession,
     onworkspacechange,
     onexpandedchange,
     onsandboxchange,
     onapprovalpolicychange,
+    onskillprofilechange,
+    onmanageprofiles,
     onopen,
     onclose,
     onopenrecent,
@@ -89,6 +99,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <div>{formatRelativeTime(null)}</div>
               {/if}
               <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
+              {#if session.effectiveSkillSelection?.selectedProfileName}
+                <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
+              {/if}
             </div>
           </li>
         {/each}
@@ -113,6 +126,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <div>{formatRelativeTime(null)}</div>
             {/if}
             <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
+            {#if session.effectiveSkillSelection?.selectedProfileName}
+              <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
+            {/if}
           </div>
         </li>
       {/each}
@@ -157,6 +173,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <option value="workspace-write">workspace-write</option>
           <option value="danger-full-access">danger-full-access</option>
         </select>
+      </div>
+      <div class="form-field">
+        <label for="skills-profile">Skills profile</label>
+        <select
+          id="skills-profile"
+          value={selectedSkillProfile}
+          onchange={(event) => onskillprofilechange(event.currentTarget.value)}
+        >
+          <option value="">Current default</option>
+          {#each skillProfiles as profile (profile.name)}
+            <option value={profile.name}>{profile.name}</option>
+          {/each}
+        </select>
+        <p class="skills-profile-help">The selected skill set is fixed after this session is created.</p>
+        {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
+        <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
       </div>
       <div class="form-field">
         <label for="approval-policy">Approval policy</label>
@@ -247,6 +279,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-wrap: anywhere;
   }
 
+  .profile-badge {
+    display: inline-block;
+    margin-block-start: 0.35rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, Highlight 14%, Canvas);
+    color: CanvasText;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+  }
+
   .session-actions {
     display: flex;
     flex-wrap: wrap;
@@ -303,6 +346,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: grid;
     gap: 0.25rem;
     min-inline-size: 0;
+  }
+
+  .skills-profile-help,
+  .skills-profile-error {
+    margin: 0;
+    font-size: 0.875rem;
+  }
+
+  .skills-profile-error {
+    color: #8a1c14;
   }
 
   .new-session-button {

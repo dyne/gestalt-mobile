@@ -34,6 +34,7 @@ async function rendered() {
     skillsState: state,
     onworkspacechange: vi.fn(),
     oncodexprofilechange: vi.fn(),
+    onprofileschange: vi.fn(),
   });
   return state;
 }
@@ -62,5 +63,13 @@ describe('SkillsView', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     expect(client.replaceSkillProfile).toHaveBeenCalledWith('team', expect.objectContaining({ version: 1, name: 'team' }));
     expect(screen.getByText('Profile saved.')).toBeTruthy();
+  });
+
+  it('offers an explicit delete confirmation only for a selected saved profile', async () => {
+    await rendered();
+    const deleteButton = screen.getByRole('button', { name: 'Delete selected profile' }) as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(true);
+    await fireEvent.change(screen.getByLabelText('Existing saved profile'), { target: { value: 'team' } });
+    expect(deleteButton.disabled).toBe(false);
   });
 });
