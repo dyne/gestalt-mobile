@@ -39,11 +39,13 @@ function renderView(overrides: Record<string, unknown> = {}) {
   const onworkspacechange = vi.fn();
   const onexpandedchange = vi.fn();
   const onstart = vi.fn();
+  const onselectopen = vi.fn();
   const onskillprofilechange = vi.fn();
   const onmanageprofiles = vi.fn();
   const result = render(SessionsView, {
     sessions: [],
     recentSessions: [],
+    selectedSessionId: null,
     workspaceTree: [root],
     workspaceId: root.id,
     expandedIds: new Set([root.id, intermediate.id]),
@@ -60,6 +62,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
     onskillprofilechange,
     onmanageprofiles,
     onopen: vi.fn(),
+    onselectopen,
     onclose: vi.fn(),
     onopenrecent: vi.fn(),
     onforget: vi.fn(),
@@ -67,7 +70,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
     onstart,
     ...overrides,
   });
-  return { ...result, onworkspacechange, onexpandedchange, onskillprofilechange, onmanageprofiles, onstart };
+  return { ...result, onworkspacechange, onexpandedchange, onskillprofilechange, onmanageprofiles, onselectopen, onstart };
 }
 
 describe('SessionsView session base tree', () => {
@@ -137,5 +140,19 @@ describe('SessionsView session base tree', () => {
     expect(screen.getByText('Skills profile: focused')).toBeTruthy();
     expect(screen.getByText('Skills profile: team')).toBeTruthy();
     expect(screen.queryByText('Skills profile: default')).toBeNull();
+  });
+
+  it('selects another open session and marks only the Chat session as current', async () => {
+    const { onselectopen } = renderView({
+      selectedSessionId: 'open-a',
+      sessions: [
+        { id: 'open-a', state: 'ready', workspacePath: '/a' },
+        { id: 'open-b', state: 'turnActive', workspacePath: '/b' },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /\/a/ }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('button', { name: /\/b/ }).getAttribute('aria-current')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /\/b/ }));
+    expect(onselectopen).toHaveBeenCalledWith('open-b');
   });
 });

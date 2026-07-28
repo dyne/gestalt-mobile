@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     sessions: RelaySession[];
     recentSessions: RecentSession[];
+    selectedSessionId: string | null;
     workspaceTree: WorkspaceOption[];
     workspaceId: string;
     expandedIds: ReadonlySet<string>;
@@ -34,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onskillprofilechange: (value: string) => void;
     onmanageprofiles: (trigger: HTMLButtonElement) => void;
     onopen: (id: string) => void;
+    onselectopen: (id: string) => void;
     onclose: (id: string) => void;
     onopenrecent: (session: RecentSession) => void;
     onforget: (id: string) => void;
@@ -44,6 +46,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     sessions,
     recentSessions,
+    selectedSessionId,
     workspaceTree,
     workspaceId,
     expandedIds,
@@ -63,6 +66,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onskillprofilechange,
     onmanageprofiles,
     onopen,
+    onselectopen,
     onclose,
     onopenrecent,
     onforget,
@@ -92,11 +96,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ul class="session-list" aria-label="Open sessions">
         {#each openSessions as session (session.id)}
           {@const details = managedSessionDetails(session)}
-          <li class="managed-session open-session">
+          <li class:current-session={session.id === selectedSessionId} class="managed-session open-session">
             <div class="session-actions">
               <button type="button" onclick={() => onclose(session.id)}>Close</button>
             </div>
             <div class="session-details">
+              <button
+                class="session-select"
+                type="button"
+                aria-current={session.id === selectedSessionId ? 'page' : undefined}
+                onclick={() => onselectopen(session.id)}
+              >
               {#if details.updatedAt !== null}
                 <time datetime={new Date(details.updatedAt).toISOString()}>
                   {formatRelativeTime(details.updatedAt)}
@@ -112,6 +122,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {#if session.effectiveSkillSelection?.selectedProfileName}
                 <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
               {/if}
+              </button>
             </div>
           </li>
         {/each}
@@ -278,6 +289,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     inline-size: 100%;
     list-style: none;
   }
+
+  .current-session { outline: 2px solid var(--accent, #4f46e5); outline-offset: 2px; }
+  .session-select { display: block; inline-size: 100%; color: inherit; font: inherit; text-align: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
 
   .managed-session {
     display: grid;

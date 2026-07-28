@@ -3,7 +3,7 @@
 #+DATE: 2026-07-28
 #+KEYWORDS: sessions, codex, models, workspace, git, svelte
 
-* WIP [#A] Discover and persist selectable session models
+* DONE [#A] Discover and persist selectable session models
 :PROPERTIES:
 :ID: discover-persist-session-models
 :SKILLS: $gestalt:org-plan $vertical-slice-architecture $hexagonal-architecture $gestalt:development-testing
@@ -13,7 +13,7 @@
 - Goal :: Expose only models reported by the Codex app-server at relay bootstrap, validate user selection, and persist the selected model in each relay session and recent-thread record.
 - Notes :: Keep model discovery in a narrow platform Codex adapter behind an application port. The session aggregate remains the source of truth for the chosen model; an absent choice retains Codex's default behavior. Preserve compatibility with existing persisted records and Codex versions that do not report models.
 
-** WIP [#A] Add a model catalog port and bootstrap response
+** DONE [#A] Add a model catalog port and bootstrap response
 :PROPERTIES:
 :ID: model-catalog-bootstrap
 :END:
@@ -22,7 +22,7 @@
 - Tests :: Adapter protocol tests and bootstrap endpoint/use-case tests cover reported models, invalid payloads, ordering, and unavailable discovery.
 - Done when :: Bootstrap has a typed optional/empty-safe model catalog and no domain/application code imports child-process or protocol implementation types.
 
-** TODO [#A] Make model a durable session invariant
+** DONE [#A] Make model a durable session invariant
 :PROPERTIES:
 :ID: durable-session-model
 :END:
@@ -58,3 +58,22 @@
 - Change :: Add server-side workspace Git branch lookup through a narrow platform adapter/port, include nullable branch metadata in active and recent list responses, and render workspace, branch, and model as compact secondary metadata with resilient wrapping and omission rules.
 - Tests :: Workspace Git adapter and list endpoint tests cover a branch, detached/non-repository workspaces, and errors; component/list helper tests cover metadata ordering and omissions. Capture UI screenshots of active and recent entries at 375px and 1280px viewports with 100% and 200% font scale.
 - Done when :: Both session lists show model and current branch when present, omit absent branch/model cleanly, and remain readable at the named viewport and font-scale combinations.
+
+* DONE [#A] Select an open session from the Session tab
+:PROPERTIES:
+:ID: select-open-session
+:SKILLS: $gestalt:org-plan $svelte-code-writer $svelte-core-bestpractices $gestalt:development-testing
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Let the open-session list act as the selector for the session currently shown in Chat.
+- Notes :: The selected session is the sole highlighted entry. Selecting a different open session switches immediately to Chat, restores its local state, reconnects its event stream, and refreshes canonical history without altering session lifecycle state.
+
+** DONE [#A] Wire open-session selection and Chat refresh
+:PROPERTIES:
+:ID: open-session-selector-refresh
+:END:
+- Why :: Users need to move between active conversations without first closing or reopening a session.
+- Change :: Pass the current Chat session identity to the Session view, make each open-session item keyboard and pointer selectable, and reuse the existing session-selection flow to load the target's most recent history and connect its updates before showing Chat.
+- Tests :: Component and App/client-state tests cover active visual state, selecting a different open session, tab transition, and target-history refresh; run the Svelte autofixer on touched components.
+- Done when :: Exactly one open entry is highlighted when Chat has an open session, and activating another open entry moves Chat to that session with its current content.

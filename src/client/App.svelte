@@ -860,6 +860,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <SessionsView
           {sessions}
           {recentSessions}
+          selectedSessionId={sessionId}
           {workspaceTree}
           workspaceId={sessionWorkspaceId}
           expandedIds={sessionExpandedIds}
@@ -879,6 +880,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
           onmanageprofiles={(trigger) => void openProfileManager(trigger)}
           onopen={openSession}
+          onselectopen={openSession}
           onclose={(id) => void closeSession(id)}
           onopenrecent={(session) => void openRecentSession(session)}
           onforget={(id) => void forgetSession(id)}
