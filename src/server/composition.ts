@@ -43,6 +43,7 @@ import { isValidInteractionResponse } from './features/sessions/interaction/resp
 import { promoteRecentThread } from './features/sessions/promote-recent-thread/use-case.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
+import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
@@ -84,6 +85,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       profile,
       options.launchAppServer ?? launchCodexAppServer,
     );
+  const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
+    skillCatalog(profile).list(workspace),
+  );
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
@@ -199,7 +203,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     skills: {
       workspaces,
       profiles: options.profiles,
-      catalog: (profile) => new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer),
+      catalog: editorSkillCatalog,
       selections: skillProfiles,
       listGlobalProfileNames: () => skillProfiles.listGlobalProfileNames(),
       readGlobalProfile: (name) => skillProfiles.readGlobalProfile(name),
@@ -327,7 +331,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     );
   };
-  if (runtime) app.addHook('onListen', () => void restoreActiveSessions());
+  app.addHook('onListen', async () => {
+    const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
+    if (profile) await editorSkillCatalog.refresh(profile, root);
+    await restoreActiveSessions();
+  });
   app.addHook('onClose', async () => {
     runtime?.stopAll();
     database.close();

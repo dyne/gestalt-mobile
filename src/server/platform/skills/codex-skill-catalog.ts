@@ -13,11 +13,22 @@ import { launchCodexAppServer, type CodexProcess } from '../codex/codex-process-
 
 type AppServer = Pick<CodexProcess, 'close'> & { rpc: { request(method: string, params: unknown): Promise<unknown> } };
 type Launch = (input: { profile: string; cwd: string }) => AppServer;
+const optionalString = z.preprocess((value) => (value === null ? undefined : value), z.string().optional());
+const optionalObject = <Schema extends z.ZodType>(schema: Schema) =>
+  z.preprocess((value) => (value === null ? undefined : value), schema.optional());
+const toolSchema = z.object({
+  type: z.string(),
+  value: z.string(),
+  description: optionalString,
+  transport: optionalString,
+  command: optionalString,
+  url: optionalString,
+});
 const wireSkillSchema = z.object({
-  name: z.string(), description: z.string(), shortDescription: z.string().optional(),
-  interface: z.object({ displayName: z.string().optional(), shortDescription: z.string().optional(), iconSmall: z.string().optional(), iconLarge: z.string().optional(), brandColor: z.string().optional(), defaultPrompt: z.string().optional() }).optional(),
-  dependencies: z.object({ tools: z.array(z.object({ type: z.string(), value: z.string(), description: z.string().optional(), transport: z.string().optional(), command: z.string().optional(), url: z.string().optional() })).optional() }).optional(),
-  path: z.string(), scope: z.string().optional(), enabled: z.boolean(),
+  name: z.string(), description: z.string(), shortDescription: optionalString,
+  interface: optionalObject(z.object({ displayName: optionalString, shortDescription: optionalString, iconSmall: optionalString, iconLarge: optionalString, brandColor: optionalString, defaultPrompt: optionalString })),
+  dependencies: optionalObject(z.object({ tools: optionalObject(z.array(toolSchema)) })),
+  path: z.string(), scope: optionalString, enabled: z.boolean(),
 });
 const resultSchema = z.object({ data: z.array(z.object({ cwd: z.string(), skills: z.array(wireSkillSchema), errors: z.array(z.unknown()) })) });
 
@@ -33,7 +44,12 @@ export class CodexSkillCatalog implements SkillCatalog {
     const canonicalWorkspace = resolve(workspace);
     const server = this.launch({ profile: this.profile, cwd: canonicalWorkspace });
     try {
-      await this.withTimeout(server.rpc.request('initialize', { clientInfo: { name: 'gestalt-mobile' } }));
+      await this.withTimeout(
+        server.rpc.request('initialize', {
+          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+          capabilities: null,
+        }),
+      );
       const result = await this.withTimeout(server.rpc.request('skills/list', { cwds: [canonicalWorkspace], forceReload: true }));
       const parsed = resultSchema.safeParse(result);
       if (!parsed.success) throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill catalog response.');

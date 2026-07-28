@@ -8,17 +8,21 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
-import type { SkillCatalog, SkillProfileStore } from '../application/ports.js';
+import type { SkillProfileStore } from '../application/ports.js';
+import type { SkillCatalogResult } from '../model/skill-profile.js';
 import { applySkillSelectionSnapshot } from '../model/skill-profile.js';
 import { SkillProfileError } from '../model/errors.js';
 import { problem } from '../../../platform/http/problem.js';
 
-const querySchema = z.object({ workspaceId: z.string().min(1), profile: z.string().min(1) }).strict();
+const querySchema = z.object({ workspaceId: z.string().min(1), profile: z.string().min(1), refresh: z.enum(['true']).optional() }).strict();
 
 export type ListAvailableSkillsDependencies = {
   workspaces: Pick<WorkspaceCatalog, 'resolve'>;
   profiles: Pick<ProfileCatalog, 'require'>;
-  catalog(profile: string): SkillCatalog;
+  catalog: {
+    list(profile: string, workspace: string): Promise<SkillCatalogResult>;
+    refresh(profile: string, workspace: string): Promise<SkillCatalogResult>;
+  };
   selections: Pick<SkillProfileStore, 'readWorkspaceDefault'>;
 };
 
@@ -34,7 +38,9 @@ export function registerListAvailableSkills(app: FastifyInstance, deps: ListAvai
         deps.profiles.require(parsed.data.profile),
       ]);
       const [discovered, project] = await Promise.all([
-        deps.catalog(profile.name).list(workspace.realPath),
+        parsed.data.refresh
+          ? deps.catalog.refresh(profile.name, workspace.realPath)
+          : deps.catalog.list(profile.name, workspace.realPath),
         deps.selections.readWorkspaceDefault(workspace.realPath),
       ]);
       const skills = project

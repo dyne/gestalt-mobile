@@ -116,7 +116,8 @@ describe('SessionsView session base tree', () => {
     const { onskillprofilechange, onmanageprofiles } = renderView();
     const select = screen.getByLabelText('Skills profile');
     expect((select as HTMLSelectElement).value).toBe('');
-    expect(screen.getByText('The selected skill set is fixed after this session is created.')).toBeTruthy();
+    expect((select as HTMLSelectElement).options[0]?.text).toBe('Default');
+    expect(screen.queryByText('The selected skill set is fixed after this session is created.')).toBeNull();
     await fireEvent.change(select, { target: { value: 'focused' } });
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
     await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));

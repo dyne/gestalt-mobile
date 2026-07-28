@@ -17,7 +17,10 @@ describe('skills REPR endpoints', () => {
     registerListAvailableSkills(app, {
       workspaces: { resolve: async () => ({ id: 'opaque', name: 'work', realPath: '/workspace' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
-      catalog: () => ({ list: async () => ({ skills: [{ name: 'Same', path: '/skills/b/SKILL.md', enabled: true, description: 'b' }, { name: 'Same', path: '/skills/a/SKILL.md', enabled: false, description: 'a' }], errors: [{ message: 'manifest warning' }] }) }),
+      catalog: {
+        list: async () => ({ skills: [{ name: 'Same', path: '/skills/b/SKILL.md', enabled: true, description: 'b' }, { name: 'Same', path: '/skills/a/SKILL.md', enabled: false, description: 'a' }], errors: [{ message: 'manifest warning' }] }),
+        refresh: async () => ({ skills: [], errors: [] }),
+      },
       selections: { readWorkspaceDefault: async () => ({ version: 1, name: 'project', skills: [{ name: 'Same', path: '/skills/a/SKILL.md', enabled: true }] }) },
     });
     const response = await app.inject('/api/skills?workspaceId=opaque&profile=default');

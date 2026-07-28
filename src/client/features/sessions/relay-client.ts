@@ -204,9 +204,13 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         {},
         key ? { 'idempotency-key': key } : {},
       ),
-    listAvailableSkills: (workspaceId: string, profile: string) =>
+    listAvailableSkills: (workspaceId: string, profile: string, refresh = false) =>
       get<RelaySkillList>(
-        `/api/skills?${new URLSearchParams({ workspaceId, profile }).toString()}`,
+        `/api/skills?${new URLSearchParams({
+          workspaceId,
+          profile,
+          ...(refresh ? { refresh: 'true' } : {}),
+        }).toString()}`,
       ),
     listSkillProfiles: () => get<RelaySkillProfileList>('/api/skill-profiles'),
     replaceSkillProfile: (

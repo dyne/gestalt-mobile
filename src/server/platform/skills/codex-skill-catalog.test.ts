@@ -23,7 +23,10 @@ describe('CodexSkillCatalog', () => {
     const catalog = new CodexSkillCatalog('work', server.launch, 20);
     await expect(catalog.list('/workspace')).resolves.toEqual({ skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true, description: 'A', shortDescription: 'short', interface: { displayName: 'Alpha CLI', shortDescription: 'interface', iconSmall: '/small.svg', iconLarge: '/large.svg', brandColor: '#fff', defaultPrompt: 'go' }, dependencies: { tools: [{ type: 'stdio', value: 'git', description: 'Git', transport: 'stdio', command: 'git', url: 'https://example.test/git' }] }, scope: 'project' }], errors: [] });
     expect(server.calls).toEqual([
-      { method: 'initialize', params: { clientInfo: { name: 'gestalt-mobile' } } },
+      {
+        method: 'initialize',
+        params: { clientInfo: { name: 'gestalt-mobile', version: '0.1.0' }, capabilities: null },
+      },
       { method: 'skills/list', params: { cwds: ['/workspace'], forceReload: true } },
     ]);
     expect(server.closed()).toBe(1);
@@ -44,6 +47,14 @@ describe('CodexSkillCatalog', () => {
     await expect(new CodexSkillCatalog('work', server.launch, 20).list('/workspace')).resolves.toEqual({
       skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true, description: 'A' }],
       errors: [{ message: 'bad manifest' }],
+    });
+  });
+
+  it('normalizes null optional metadata returned by current Codex versions', async () => {
+    const server = fake({ data: [{ cwd: '/workspace', errors: [], skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true, description: 'A', interface: { displayName: 'Alpha CLI', shortDescription: null, iconSmall: null, iconLarge: null, brandColor: null, defaultPrompt: null } }] }] });
+    await expect(new CodexSkillCatalog('work', server.launch, 20).list('/workspace')).resolves.toEqual({
+      skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true, description: 'A', interface: { displayName: 'Alpha CLI' } }],
+      errors: [],
     });
   });
 

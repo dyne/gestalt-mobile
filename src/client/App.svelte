@@ -435,7 +435,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       scrollChatToBottom();
     }
     if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
-    if (next === 'sessions') void refreshSessionLists();
+    if (next === 'sessions') {
+      if (sessionSubview === 'profile-manager') void closeProfileManager(false);
+      void refreshSessionLists();
+    }
   }
 
   async function loadSkills(workspaceId: string, profile: string): Promise<void> {
@@ -474,10 +477,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     profileManagerHeading?.focus();
   }
 
-  async function closeProfileManager(): Promise<void> {
+  async function closeProfileManager(returnFocus = true): Promise<void> {
     sessionSubview = 'list';
     await tick();
-    document.getElementById('manage-skill-profiles')?.focus();
+    if (returnFocus) document.getElementById('manage-skill-profiles')?.focus();
   }
 
   function scrollChatToBottom(): void {
@@ -833,8 +836,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {:else}
       {#if sessionSubview === 'profile-manager'}
         <section class="session-profile-manager" aria-labelledby="session-profile-manager-title">
-          <button type="button" onclick={() => void closeProfileManager()}>Back to sessions</button>
-          <h2 id="session-profile-manager-title" tabindex="-1" bind:this={profileManagerHeading}>Manage skill profiles</h2>
+          <div class="session-profile-manager-header">
+            <h2 id="session-profile-manager-title" tabindex="-1" bind:this={profileManagerHeading}>Manage skill profiles</h2>
+            <button type="button" class="close-profile-manager" aria-label="Close skill profile editor" onclick={() => void closeProfileManager()}>×</button>
+          </div>
           {#if skillsState}
             <SkillsView
               {workspaceTree}
@@ -842,6 +847,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               skillsState={skillsState}
               onworkspacechange={(workspaceId) => void loadSkills(workspaceId, skillsState?.codexProfile ?? '')}
               oncodexprofilechange={(profile) => void loadSkills(skillsState?.workspaceId ?? '', profile)}
+              onrefresh={() => skillsState?.refresh() ?? Promise.resolve()}
               onprofileschange={() => void refreshSkillProfiles()}
               heading="Skill profile editor"
             />
@@ -895,5 +901,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     inline-size: 100%;
     min-inline-size: 0;
     padding: 0;
+  }
+
+  .session-profile-manager-header {
+    box-sizing: border-box;
+    display: flex;
+    align-items: safe center;
+    justify-content: space-between;
+    gap: 1rem;
+    inline-size: 100%;
+    min-inline-size: 0;
+    padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+  }
+
+  .session-profile-manager-header h2 {
+    margin: 0;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .close-profile-manager {
+    flex: 0 0 auto;
+    inline-size: 3rem;
+    min-block-size: 3rem;
+    padding: 0;
+    font-size: 1.5rem;
+    line-height: 1;
   }
 </style>

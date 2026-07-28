@@ -12,7 +12,7 @@ import type {
 } from '../sessions/relay-client.js';
 
 export type SkillsClient = {
-  listAvailableSkills(workspaceId: string, profile: string): Promise<RelaySkillList>;
+  listAvailableSkills(workspaceId: string, profile: string, refresh?: boolean): Promise<RelaySkillList>;
   listSkillProfiles(): Promise<RelaySkillProfileList>;
   replaceSkillProfile(
     name: string,
@@ -80,6 +80,25 @@ export class SkillsState {
       else if (available.errors.length)
         this.status = { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') };
       else this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
+    } catch (error) {
+      this.status = { kind: 'error', message: errorMessage(error) };
+    }
+  }
+
+  async refresh(): Promise<void> {
+    this.status = { kind: 'loading' };
+    try {
+      const available = await this.client.listAvailableSkills(
+        this.workspaceId,
+        this.codexProfile,
+        true,
+      );
+      this.applyAvailable(available);
+      this.status = available.errors.length
+        ? { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') }
+        : this.skills.length
+          ? { kind: 'ready' }
+          : { kind: 'empty' };
     } catch (error) {
       this.status = { kind: 'error', message: errorMessage(error) };
     }

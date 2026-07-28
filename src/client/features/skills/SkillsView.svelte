@@ -16,11 +16,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     skillsState: SkillsState;
     onworkspacechange: (workspaceId: string) => void;
     oncodexprofilechange: (profile: string) => void;
+    onrefresh: () => Promise<void>;
     onprofileschange: () => void;
     heading?: string;
   };
 
-  let { workspaceTree, codexProfiles, skillsState, onworkspacechange, oncodexprofilechange, onprofileschange, heading = 'Manage skill profiles' }: Props = $props();
+  let { workspaceTree, codexProfiles, skillsState, onworkspacechange, oncodexprofilechange, onrefresh, onprofileschange, heading = 'Manage skill profiles' }: Props = $props();
   let revision = $state(0);
   let saveError = $state<HTMLElement | null>(null);
   let savedProfileSelect = $state<HTMLSelectElement | null>(null);
@@ -44,6 +45,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function selectCodexProfile(event: Event): void {
     oncodexprofilechange((event.currentTarget as HTMLSelectElement).value);
+  }
+
+  async function refreshSkills(): Promise<void> {
+    await onrefresh();
+    changed();
   }
 
   function selectSavedProfile(event: Event): void {
@@ -99,6 +105,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <section class="skills-view" aria-labelledby="skills-title">
   <h2 id="skills-title">{heading}</h2>
   <p class="intro">Choose a workspace and profile, then save a complete skills selection.</p>
+
+  <button type="button" class="refresh-skills" onclick={() => void refreshSkills()}>Refresh skills</button>
 
   <form onsubmit={save} aria-describedby="skills-status">
     <div class="field-grid">
