@@ -95,6 +95,13 @@ use Left/Right while a tree item is focused. Up/Down, Home, and End move through
 visible items; Enter or Space selects the focused directory. The selected path
 remains highlighted when branches are folded or the catalog is refreshed.
 
+At startup, Gestalt Mobile asks the installed Codex app-server for its available
+models. New sessions use `gpt-5.6-terra` by default; choose another discovered
+model from the Session tab before creating the session. The default is defined
+centrally as `DEFAULT_SESSION_MODEL` in `src/server/features/sessions/application/start-settings.ts`
+so it can be changed in a future configuration surface. The selected model is
+stored with the relay session and shown in managed session entries.
+
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
 

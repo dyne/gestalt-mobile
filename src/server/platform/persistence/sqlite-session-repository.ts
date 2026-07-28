@@ -16,6 +16,8 @@ type Row = {
   workspace_id: string;
   workspace_path: string;
   profile: string;
+  model: string | null;
+  branch: string | null;
   thread_id: string | null;
   state: RelaySessionSnapshot['state'];
   desired_state: RelaySessionSnapshot['desiredState'];
@@ -32,13 +34,15 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
         session.workspaceId,
         session.workspacePath,
         session.profile,
+        session.model ?? null,
+        session.branch ?? null,
         session.threadId,
         session.state,
         session.desiredState,
@@ -78,6 +82,8 @@ function map(row: Row): RelaySessionSnapshot {
     workspaceId: row.workspace_id,
     workspacePath: row.workspace_path,
     profile: row.profile,
+    ...(row.model === null ? {} : { model: row.model }),
+    ...(row.branch === null ? {} : { branch: row.branch }),
     threadId: row.thread_id,
     state: row.state,
     desiredState: row.desired_state,

@@ -14,6 +14,7 @@ import type { ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
+import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
@@ -79,6 +80,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
   const workspaces = new FilesystemWorkspaceCatalog(root);
+  const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const skillCatalog = (profile: string) =>
     new CodexSkillCatalog(
@@ -217,6 +219,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     bootstrap: {
       workspaces,
       profiles: options.profiles,
+      models,
       sessions: {
         list: () => sessions.list().map((session) => withPendingInteractions(session)!),
       },

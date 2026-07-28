@@ -31,3 +31,8 @@ export interface ProfileCatalog {
   list(): Promise<ProfileOption[]>;
   require(name: string): Promise<ProfileOption>;
 }
+
+/** Models accepted by the installed Codex app-server for new threads. */
+export interface ModelCatalog {
+  list(): Promise<string[]>;
+}

@@ -6,10 +6,14 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 
-const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, resolved_at TEXT, PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (session_id, sequence)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key));`;
+const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, resolved_at TEXT, PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (session_id, sequence)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key));`;
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   const columns = database.prepare('PRAGMA table_info(relay_sessions)').all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === 'effective_skill_selection_json'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN effective_skill_selection_json TEXT');
+  if (!columns.some((column) => column.name === 'model'))
+    database.exec('ALTER TABLE relay_sessions ADD COLUMN model TEXT');
+  if (!columns.some((column) => column.name === 'branch'))
+    database.exec('ALTER TABLE relay_sessions ADD COLUMN branch TEXT');
 }

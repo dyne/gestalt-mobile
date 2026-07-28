@@ -17,6 +17,7 @@ export type WorkspaceOption = {
 export type Bootstrap = {
   workspaces: WorkspaceOption[];
   profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
+  models?: string[];
   sessions: RelaySession[];
   capabilities: {
     approvals: true;

@@ -1,0 +1,60 @@
+#+TITLE: Session model selection and metadata
+#+SUBTITLE: Discover selectable Codex models, persist the choice, and present compact session context
+#+DATE: 2026-07-28
+#+KEYWORDS: sessions, codex, models, workspace, git, svelte
+
+* WIP [#A] Discover and persist selectable session models
+:PROPERTIES:
+:ID: discover-persist-session-models
+:SKILLS: $gestalt:org-plan $vertical-slice-architecture $hexagonal-architecture $gestalt:development-testing
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Expose only models reported by the Codex app-server at relay bootstrap, validate user selection, and persist the selected model in each relay session and recent-thread record.
+- Notes :: Keep model discovery in a narrow platform Codex adapter behind an application port. The session aggregate remains the source of truth for the chosen model; an absent choice retains Codex's default behavior. Preserve compatibility with existing persisted records and Codex versions that do not report models.
+
+** WIP [#A] Add a model catalog port and bootstrap response
+:PROPERTIES:
+:ID: model-catalog-bootstrap
+:END:
+- Why :: The Session tab needs a trustworthy, startup-time list without coupling the client or session domain to JSON-RPC details.
+- Change :: Add a model-catalog outbound port and short-lived Codex adapter discovery; compose it into the bootstrap slice and return an ordered, de-duplicated model list. Gracefully return an empty list if the installed app-server cannot enumerate models.
+- Tests :: Adapter protocol tests and bootstrap endpoint/use-case tests cover reported models, invalid payloads, ordering, and unavailable discovery.
+- Done when :: Bootstrap has a typed optional/empty-safe model catalog and no domain/application code imports child-process or protocol implementation types.
+
+** TODO [#A] Make model a durable session invariant
+:PROPERTIES:
+:ID: durable-session-model
+:END:
+- Why :: A model chosen on session creation must survive active-session reloads and appear for both active and recent sessions.
+- Change :: Extend start settings, RelaySession snapshots/events, SQLite mappings/schema migration, list-session and recent-thread response mappers, and validation so an accepted catalog model is started and stored; omit legacy absent values cleanly.
+- Tests :: Domain, start-session, persistence migration/repository, and both list endpoint tests cover selected models, default models, restart/reload, and rejected unavailable models.
+- Done when :: The selected model is forwarded to thread start, retained in durable snapshots, and returned consistently by both session list APIs.
+
+* TODO [#A] Select and display compact session context
+:PROPERTIES:
+:ID: select-display-session-context
+:SKILLS: $gestalt:org-plan $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance $gestalt:development-testing
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Enable the Session-tab model selector from discovered options and show model plus Git branch in compact, readable active and recent session entries.
+- Notes :: Use the native labelled select, retaining Codex Default only when no model is chosen. Derive Git branch server-side from the workspace path and omit it for non-repositories or unavailable Git metadata. Do not implement Chat command handling in this change; ensure session update paths can later reuse the durable model contract.
+
+** TODO [#A] Bind the Session-tab selector to bootstrap models
+:PROPERTIES:
+:ID: session-tab-model-selector
+:END:
+- Why :: Users need an enabled creation-time control whose choices match what the installed Codex runtime can accept.
+- Change :: Add client catalog state, load it with bootstrap, present a labelled enabled native select when options exist, and include its selected value in start settings. Keep a clear disabled/unavailable explanation only when discovery returns no models.
+- Tests :: Relay client/start-form/component tests cover catalog rendering, valid submitted model, no-catalog fallback, accessible label, and selected value retention; run the Svelte autofixer on touched components.
+- Done when :: A discovered model can be selected in the Session tab and reaches the start request without exposing an arbitrary free-text model field.
+
+** TODO [#A] Render model and Git branch as session metadata
+:PROPERTIES:
+:ID: session-list-context-metadata
+:END:
+- Why :: Active and recent session lists should communicate where and how a session runs without becoming visually noisy.
+- Change :: Add server-side workspace Git branch lookup through a narrow platform adapter/port, include nullable branch metadata in active and recent list responses, and render workspace, branch, and model as compact secondary metadata with resilient wrapping and omission rules.
+- Tests :: Workspace Git adapter and list endpoint tests cover a branch, detached/non-repository workspaces, and errors; component/list helper tests cover metadata ordering and omissions. Capture UI screenshots of active and recent entries at 375px and 1280px viewports with 100% and 200% font scale.
+- Done when :: Both session lists show model and current branch when present, omit absent branch/model cleanly, and remain readable at the named viewport and font-scale combinations.

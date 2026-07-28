@@ -53,6 +53,8 @@ export type RelaySessionSnapshot = {
   workspaceId: string;
   workspacePath: string;
   profile: string;
+  model?: string;
+  branch?: string;
   threadId: string | null;
   state: SessionState;
   desiredState: DesiredState;
@@ -76,6 +78,8 @@ export class RelaySession {
     workspaceId: string;
     workspacePath: string;
     profile: string;
+    model?: string;
+    branch?: string;
     effectiveSkillSelection: EffectiveSkillSelection;
     now: string;
   }): RelaySession {
@@ -84,6 +88,8 @@ export class RelaySession {
       workspaceId: workspaceId(input.workspaceId),
       workspacePath: workspacePath(input.workspacePath),
       profile: profileName(input.profile),
+      ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.branch === undefined ? {} : { branch: input.branch }),
       effectiveSkillSelection: createEffectiveSkillSelection(input.effectiveSkillSelection),
       threadId: null,
       state: 'starting',
