@@ -10,6 +10,8 @@ export type RelaySession = {
   workspaceId?: string;
   workspacePath?: string;
   profile?: string;
+  model?: string;
+  branch?: string;
   threadId?: string | null;
   resumeCommand?: string | null;
   activeTurnId?: string | null;

@@ -70,6 +70,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
   let workspaceTree = $state<WorkspaceOption[]>([]);
+  const defaultSessionModel = 'gpt-5.6-terra';
+  let sessionModels = $state.raw<string[]>([defaultSessionModel]);
+  let sessionModel = $state(defaultSessionModel);
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
   let skillsState = $state<SkillsState | null>(null);
   let skillsLoaded = false;
@@ -152,6 +155,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
+      sessionModels = [...new Set([defaultSessionModel, ...(bootstrap.models ?? [])])];
       await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
@@ -213,6 +217,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {
           sandbox,
           approvalPolicy,
+          model: sessionModel,
           skillProfile: selectedSessionSkillProfile || undefined,
         },
         startRequestKey,
@@ -860,6 +865,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           expandedIds={sessionExpandedIds}
           {sandbox}
           {approvalPolicy}
+          models={sessionModels}
+          selectedModel={sessionModel}
           skillProfiles={sessionSkillProfiles}
           selectedSkillProfile={selectedSessionSkillProfile}
           skillProfileError={sessionSkillProfileError}
@@ -868,6 +875,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onexpandedchange={(value) => (sessionExpandedIds = value)}
           onsandboxchange={(value) => (sandbox = value)}
           onapprovalpolicychange={(value) => (approvalPolicy = value)}
+          onmodelchange={(value) => (sessionModel = value)}
           onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
           onmanageprofiles={(trigger) => void openProfileManager(trigger)}
           onopen={openSession}

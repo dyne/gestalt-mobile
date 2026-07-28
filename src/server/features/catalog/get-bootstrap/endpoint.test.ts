@@ -46,6 +46,7 @@ describe('GET /api/bootstrap', () => {
     const response = await app.inject('/api/bootstrap');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
+      models: [],
       workspaces: [
         {
           id: 'root',

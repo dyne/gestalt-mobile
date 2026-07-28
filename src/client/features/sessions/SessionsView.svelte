@@ -20,6 +20,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     expandedIds: ReadonlySet<string>;
     sandbox: NonNullable<StartSessionSettings['sandbox']>;
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
+    models?: string[];
+    selectedModel?: string;
     skillProfiles: RelaySkillProfile[];
     selectedSkillProfile: string;
     skillProfileError: string;
@@ -28,6 +30,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onexpandedchange: (value: Set<string>) => void;
     onsandboxchange: (value: NonNullable<StartSessionSettings['sandbox']>) => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
+    onmodelchange?: (value: string) => void;
     onskillprofilechange: (value: string) => void;
     onmanageprofiles: (trigger: HTMLButtonElement) => void;
     onopen: (id: string) => void;
@@ -46,6 +49,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     expandedIds,
     sandbox,
     approvalPolicy,
+    models = [],
+    selectedModel = '',
     skillProfiles,
     selectedSkillProfile,
     skillProfileError,
@@ -54,6 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onexpandedchange,
     onsandboxchange,
     onapprovalpolicychange,
+    onmodelchange = () => {},
     onskillprofilechange,
     onmanageprofiles,
     onopen,
@@ -99,6 +105,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <div>{formatRelativeTime(null)}</div>
               {/if}
               <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
+              {#if session.model}
+                <span class="profile-badge">Model: {session.model}</span>
+              {/if}
+              {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
               {#if session.effectiveSkillSelection?.selectedProfileName}
                 <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
               {/if}
@@ -126,6 +136,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <div>{formatRelativeTime(null)}</div>
             {/if}
             <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
+            {#if session.model}
+              <span class="profile-badge">Model: {session.model}</span>
+            {/if}
+            {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
             {#if session.effectiveSkillSelection?.selectedProfileName}
               <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
             {/if}
@@ -203,8 +217,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <div class="session-secondary-actions">
         <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
         <div class="model-control">
-          <span>Model:</span>
-          <button type="button" disabled>Codex default</button>
+          <label for="model">Model</label>
+          <select
+            id="model"
+            value={selectedModel}
+            disabled={models.length === 0}
+            onchange={(event) => onmodelchange(event.currentTarget.value)}
+          >
+            {#each models as model (model)}
+              <option value={model}>{model}</option>
+            {/each}
+          </select>
         </div>
         <button
           class="new-session-button"

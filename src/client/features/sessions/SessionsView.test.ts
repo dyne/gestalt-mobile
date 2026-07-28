@@ -123,7 +123,7 @@ describe('SessionsView session base tree', () => {
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
     await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));
     expect(onmanageprofiles).toHaveBeenCalledOnce();
-    expect((screen.getByRole('button', { name: 'Codex default' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).disabled).toBe(true);
   });
 
   it('shows a badge only for managed sessions with a named profile snapshot', () => {

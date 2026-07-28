@@ -6,7 +6,11 @@
 
 import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
-import type { StartSessionSettings } from '../application/start-settings.js';
+import type { ModelCatalog } from '../../catalog/application/ports.js';
+import {
+  DEFAULT_SESSION_MODEL,
+  type StartSessionSettings,
+} from '../application/start-settings.js';
 import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
 import {
   applySkillSelectionSnapshot,
@@ -22,6 +26,8 @@ export async function startSession(
     save(session: RelaySessionSnapshot): void;
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
+    models?: Pick<ModelCatalog, 'list'>;
+    gitBranch?(workspacePath: string): Promise<string | null>;
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
     skillCatalog(profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
@@ -31,10 +37,15 @@ export async function startSession(
     ): Promise<RelaySessionSnapshot>;
   },
 ): Promise<RelaySessionSnapshot> {
+  const model = input.model ?? DEFAULT_SESSION_MODEL;
   const [workspace] = await Promise.all([
     deps.workspaces.resolve(input.workspaceId),
     deps.profiles.require(input.profile),
   ]);
+  if (deps.models) {
+    const models = await deps.models.list();
+    if (!models.includes(model)) throw new Error('CODEX_MODEL_UNAVAILABLE');
+  }
   const selectedProfile = input.skillProfile
     ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
     : deps.defaultSkillProfile;
@@ -53,18 +64,21 @@ export async function startSession(
       enabled: skill.enabled,
     })),
   };
+  const branch = await deps.gitBranch?.(workspace.realPath);
   const session = RelaySession.create({
     id: deps.createId(),
     workspaceId: workspace.id,
     workspacePath: workspace.realPath,
     profile: input.profile,
+    model,
+    ...(branch ? { branch } : {}),
     effectiveSkillSelection,
     now: deps.now(),
   }).snapshot;
   deps.save(session);
   if (!deps.activate) return session;
   const active = await deps.activate(session, {
-    model: input.model,
+    model,
     sandbox: input.sandbox,
     approvalPolicy: input.approvalPolicy,
   });
