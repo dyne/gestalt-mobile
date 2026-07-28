@@ -85,7 +85,7 @@ describe('SessionsView session base tree', () => {
     expect(onworkspacechange).toHaveBeenNthCalledWith(1, intermediate.id);
     expect(onworkspacechange).toHaveBeenNthCalledWith(2, repository.id);
 
-    await fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
     expect(onstart).toHaveBeenCalledOnce();
   });
 
@@ -102,12 +102,12 @@ describe('SessionsView session base tree', () => {
   it('disables starting only while starting or without a valid selected node', () => {
     const { unmount } = renderView({ workspaceId: 'missing' });
     expect(
-      (screen.getByRole('button', { name: 'New session' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'Create session' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     unmount();
 
     renderView({ startingSession: true });
-    expect((screen.getByRole('button', { name: 'Starting…' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Creating…' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });
@@ -122,6 +122,7 @@ describe('SessionsView session base tree', () => {
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
     await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));
     expect(onmanageprofiles).toHaveBeenCalledOnce();
+    expect((screen.getByRole('button', { name: 'Codex default' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows a badge only for managed sessions with a named profile snapshot', () => {

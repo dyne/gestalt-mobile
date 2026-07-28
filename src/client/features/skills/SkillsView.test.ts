@@ -57,11 +57,16 @@ describe('SkillsView', () => {
     const checkbox = screen.getByRole('checkbox', { name: /Alpha tool/ });
     const card = checkbox.closest('.skill-card') as HTMLElement;
     const scrollIntoView = vi.fn();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
     Object.defineProperty(card, 'scrollIntoView', { value: scrollIntoView });
 
     await fireEvent.focus(checkbox);
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    vi.unstubAllGlobals();
   });
 
   it('makes create and replace intent visible and saves a full profile', async () => {
