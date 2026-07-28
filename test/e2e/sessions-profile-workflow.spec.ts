@@ -41,7 +41,10 @@ async function open(page: Page, theme: string, scale: number, state: (typeof sta
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${scale}% !important; }` });
   await expect(page.getByLabel('Primary').getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
-  await expect(page.getByLabel('Skills profile')).toBeVisible();
+  const skillProfile = page.getByLabel('Skills profile');
+  await expect(skillProfile).toBeVisible();
+  await expect(skillProfile.locator('option').first()).toHaveText('Default');
+  await expect(page.getByText('The selected skill set is fixed after this session is created.')).toHaveCount(0);
   if (state === 'session-form') return;
   const manager = page.getByRole('button', { name: 'Manage skill profiles' });
   await manager.click();
@@ -111,7 +114,7 @@ test('refreshes new-session profile choices after create, replace, and delete', 
   await page.getByLabel('Save as').fill('fresh');
   await page.getByRole('button', { name: 'Save profile' }).click();
   await page.getByRole('button', { name: 'Back to sessions' }).click();
-  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Current default', 'team', 'fresh']);
+  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Default', 'team', 'fresh']);
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
   await page.getByLabel('Existing saved profile').selectOption('team');
@@ -125,5 +128,5 @@ test('refreshes new-session profile choices after create, replace, and delete', 
   await page.getByRole('button', { name: 'Delete selected profile' }).click();
   await page.getByRole('button', { name: 'Delete profile' }).click();
   await page.getByRole('button', { name: 'Back to sessions' }).click();
-  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Current default', 'team']);
+  await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Default', 'team']);
 });
