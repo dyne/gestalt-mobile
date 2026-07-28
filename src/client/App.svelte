@@ -89,7 +89,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ),
   );
   let recentSessions = $state<RecentSession[]>([]);
-  let sandbox = $state<StartSessionSettings['sandbox'] | ''>('');
+  let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
   let startingSession = $state(false);
@@ -211,7 +211,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const session = await relay.startSession(
         sessionWorkspaceId,
         {
-          sandbox: sandbox || undefined,
+          sandbox,
           approvalPolicy,
           skillProfile: selectedSessionSkillProfile || undefined,
         },

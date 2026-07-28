@@ -18,7 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     workspaceTree: WorkspaceOption[];
     workspaceId: string;
     expandedIds: ReadonlySet<string>;
-    sandbox: StartSessionSettings['sandbox'] | '';
+    sandbox: NonNullable<StartSessionSettings['sandbox']>;
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
     skillProfiles: RelaySkillProfile[];
     selectedSkillProfile: string;
@@ -26,7 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     startingSession: boolean;
     onworkspacechange: (value: string) => void;
     onexpandedchange: (value: Set<string>) => void;
-    onsandboxchange: (value: StartSessionSettings['sandbox'] | '') => void;
+    onsandboxchange: (value: NonNullable<StartSessionSettings['sandbox']>) => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
     onskillprofilechange: (value: string) => void;
     onmanageprofiles: (trigger: HTMLButtonElement) => void;
@@ -180,11 +180,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           id="sandbox"
           value={sandbox}
           onchange={(event) =>
-            onsandboxchange(event.currentTarget.value as StartSessionSettings['sandbox'] | '')}
+            onsandboxchange(event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>)}
         >
-          <option value="">Codex default</option>
-          <option value="read-only">read-only</option>
           <option value="workspace-write">workspace-write</option>
+          <option value="read-only">read-only</option>
           <option value="danger-full-access">danger-full-access</option>
         </select>
         <select
