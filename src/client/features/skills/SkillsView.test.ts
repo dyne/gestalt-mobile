@@ -25,15 +25,11 @@ async function rendered() {
   const state = new SkillsState(client);
   state.workspaceId = 'workspace';
   state.codexProfile = 'default';
-  state.skills = [{ name: 'Alpha', description: '<strong>Plain text only</strong>', displayName: 'Alpha tool', path: '/very/long/skill/path/SKILL.md', scope: 'user', nativeEnabled: false, effectiveEnabled: true, enabled: true, dependencies: { tools: [{ type: 'mcp', value: 'filesystem' }] } }];
+  state.skills = [{ name: 'Alpha', description: '<strong>Plain text only</strong>', displayName: 'Alpha tool', path: '/home/gestalt/very/long/skill/path/SKILL.md', scope: 'user', nativeEnabled: false, effectiveEnabled: true, enabled: true, dependencies: { tools: [{ type: 'mcp', value: 'filesystem' }] } }];
   state.profiles = [{ version: 1, name: 'team', path: '/profiles/team.yml', skills: [] }];
   state.status = { kind: 'ready' };
   render(SkillsView, {
-    workspaceTree: [{ id: 'workspace', name: 'workspace', relativePath: '.', isGitRepository: false, children: [] }],
-    codexProfiles: [{ name: 'default', state: 'ok', status: 'ready' }],
     skillsState: state,
-    onworkspacechange: vi.fn(),
-    oncodexprofilechange: vi.fn(),
     onrefresh: vi.fn(async () => undefined),
     onprofileschange: vi.fn(),
   });
@@ -41,15 +37,17 @@ async function rendered() {
 }
 
 describe('SkillsView', () => {
-  it('uses labeled native controls, path-keyed checkboxes, and safe text details', async () => {
+  it('uses a profile selector, path-keyed checkboxes, and compact safe skill details', async () => {
     const state = await rendered();
-    expect(screen.getByLabelText('Workspace')).toBeTruthy();
-    expect(screen.getByLabelText('Codex profile')).toBeTruthy();
-    expect(screen.getByLabelText('Existing saved profile')).toBeTruthy();
+    expect(screen.getByLabelText('Skill profile')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Default' })).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Alpha tool/ })).toBeTruthy();
-    await fireEvent.click(screen.getByText('Skill details'));
     expect(screen.getByText('<strong>Plain text only</strong>')).toBeTruthy();
     expect(screen.queryByText('Plain text only', { selector: 'strong' })).toBeNull();
+    expect(screen.getByText('~/very/long/skill/path/SKILL.md')).toBeTruthy();
+    expect(screen.queryByText('Scope')).toBeNull();
+    expect(screen.queryByText('Native state')).toBeNull();
+    expect(screen.queryByText('Display metadata')).toBeNull();
     await fireEvent.click(screen.getByRole('checkbox', { name: /Alpha tool/ }));
     expect(state.skills[0]?.enabled).toBe(false);
   });
@@ -68,9 +66,9 @@ describe('SkillsView', () => {
 
   it('offers an explicit delete confirmation only for a selected saved profile', async () => {
     await rendered();
-    const deleteButton = screen.getByRole('button', { name: 'Delete selected profile' }) as HTMLButtonElement;
+    const deleteButton = screen.getByRole('button', { name: 'Delete profile' }) as HTMLButtonElement;
     expect(deleteButton.disabled).toBe(true);
-    await fireEvent.change(screen.getByLabelText('Existing saved profile'), { target: { value: 'team' } });
+    await fireEvent.change(screen.getByLabelText('Skill profile'), { target: { value: 'team' } });
     expect(deleteButton.disabled).toBe(false);
   });
 });
