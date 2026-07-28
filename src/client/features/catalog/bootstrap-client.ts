@@ -36,8 +36,31 @@ export function flattenWorkspaceTree(roots: WorkspaceOption[]): WorkspaceOption[
   return flattened;
 }
 
+const bootstrapRetryDelays = [150, 300, 600] as const;
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function shouldRetryBootstrap(response: Response): boolean {
+  return response.status === 502 || response.status === 503 || response.status === 504;
+}
+
 export async function loadBootstrap(fetcher: typeof fetch = fetch): Promise<Bootstrap> {
-  const response = await fetcher('/api/bootstrap');
-  if (!response.ok) throw new Error('BOOTSTRAP_FAILED');
-  return response.json() as Promise<Bootstrap>;
+  for (let attempt = 0; attempt <= bootstrapRetryDelays.length; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetcher('/api/bootstrap');
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      if (attempt === bootstrapRetryDelays.length) throw new Error('BOOTSTRAP_FAILED');
+      await wait(bootstrapRetryDelays[attempt]);
+      continue;
+    }
+    if (response.ok) return response.json() as Promise<Bootstrap>;
+    if (!shouldRetryBootstrap(response) || attempt === bootstrapRetryDelays.length)
+      throw new Error('BOOTSTRAP_FAILED');
+    await wait(bootstrapRetryDelays[attempt]);
+  }
+  throw new Error('BOOTSTRAP_FAILED');
 }
