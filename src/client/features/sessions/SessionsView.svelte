@@ -181,12 +181,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           value={selectedSkillProfile}
           onchange={(event) => onskillprofilechange(event.currentTarget.value)}
         >
-          <option value="">Current default</option>
+          <option value="">Default</option>
           {#each skillProfiles as profile (profile.name)}
             <option value={profile.name}>{profile.name}</option>
           {/each}
         </select>
-        <p class="skills-profile-help">The selected skill set is fixed after this session is created.</p>
         {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
         <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
       </div>
@@ -348,7 +347,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
   }
 
-  .skills-profile-help,
   .skills-profile-error {
     margin: 0;
     font-size: 0.875rem;
