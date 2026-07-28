@@ -130,7 +130,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </div>
 
     <p class="save-intent" aria-live="polite">
-      {snapshot.saveIntent === 'replace' ? 'Replacing the selected saved profile.' : 'Creating a new saved profile.'}
+      {snapshot.saveIntent === 'replace' ? 'Saved the selected profile.' : 'Creating a new saved profile.'}
     </p>
     <div class="profile-actions">
       <button
