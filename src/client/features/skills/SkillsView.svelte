@@ -92,7 +92,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function revealFocusedSkill(event: FocusEvent): void {
     const card = (event.currentTarget as HTMLElement).closest<HTMLElement>('.skill-card');
-    card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    requestAnimationFrame(() => card?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
   }
 </script>
 

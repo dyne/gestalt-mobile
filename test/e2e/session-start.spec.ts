@@ -83,7 +83,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByRole('button', { name: 'New session' }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
@@ -113,7 +113,7 @@ test('sends a selected named skill profile only when creating a new session', as
 
   await page.goto('/');
   await page.getByLabel('Skills profile').selectOption('focused');
-  await page.getByRole('button', { name: 'New session' }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
   await expect.poll(() => requestBody).toEqual({
     workspaceId: 'workspace-1',
     profile: 'default',
@@ -355,8 +355,9 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page.getByLabel('Sandbox').selectOption('workspace-write');
   await page.getByLabel('Approval policy').selectOption('never');
-  await expect(page.getByLabel('Model')).toHaveCount(0);
-  await page.getByRole('button', { name: 'New session' }).click();
+  await expect(page.getByText('Model:')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Codex default' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Create session' }).click();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
 
@@ -439,15 +440,15 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
   const repository = page.getByRole('treeitem', { name: /^repository/ });
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('button', { name: 'New session' }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
 
-  await expect(page.getByRole('button', { name: 'New session' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Create session' })).toBeEnabled();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
   const intermediate = page.getByRole('treeitem', { name: /^group/ });
   await intermediate.click();
   await expect(intermediate).toHaveAttribute('aria-selected', 'true');
   await expect(repository).toHaveAttribute('aria-selected', 'false');
-  await page.getByRole('button', { name: 'New session' }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
 
   await expect.poll(() => requestedWorkspaceIds).toEqual([repositoryId, intermediateId]);
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
@@ -508,7 +509,7 @@ test('keeps the session controls within a 320px viewport', async ({ page }) => {
   );
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(page.getByRole('button', { name: 'New session' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create session' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

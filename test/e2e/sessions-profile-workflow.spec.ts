@@ -124,7 +124,7 @@ test('refreshes new-session profile choices after create, replace, and delete', 
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
   await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
-  await expect(page.getByText('Replacing the selected saved profile.')).toBeVisible();
+  await expect(page.getByText('Saved the selected profile.')).toBeVisible();
   await page.getByRole('button', { name: 'Save profile' }).click();
   await page.getByRole('button', { name: 'Close skill profile editor' }).click();
   await expect(page.getByLabel('Skills profile').locator('option')).toHaveCount(3);

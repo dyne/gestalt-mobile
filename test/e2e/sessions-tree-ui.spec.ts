@@ -178,16 +178,16 @@ async function expectUsableLayout(page: Page): Promise<void> {
         before && after && before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
       );
     return {
-      treeThenSandbox: follows(tree, sandbox),
-      sandboxThenSkillsProfile: follows(sandbox, skillsProfile),
-      skillsProfileThenApproval: follows(skillsProfile, approval),
+      treeThenSkillsProfile: follows(tree, skillsProfile),
+      skillsProfileThenSandbox: follows(skillsProfile, sandbox),
+      sandboxThenApproval: follows(sandbox, approval),
       approvalThenStart: follows(approval, start),
     };
   });
   expect(order).toEqual({
-    treeThenSandbox: true,
-    sandboxThenSkillsProfile: true,
-    skillsProfileThenApproval: true,
+    treeThenSkillsProfile: true,
+    skillsProfileThenSandbox: true,
+    sandboxThenApproval: true,
     approvalThenStart: true,
   });
 
@@ -198,7 +198,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
   expect(sandboxBox).not.toBeNull();
   expect(treeBox!.y + treeBox!.height).toBeLessThanOrEqual(sandboxBox!.y);
 
-  const start = page.getByRole('button', { name: 'New session' });
+  const start = page.getByRole('button', { name: 'Create session' });
   await start.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await expect(start).toBeVisible();
   const [startBox, navigationBox] = await Promise.all([
@@ -274,14 +274,14 @@ test('keeps failure feedback readable without covering the selected path or cont
   await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
   const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
   await repository.click();
-  await page.getByRole('button', { name: 'New session' }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
 
   const toast = page.getByRole('alert');
   await expect(toast).toContainText('The session could not be started. Try again.');
   await expect(repository).toHaveAttribute('aria-selected', 'true');
   const [toastBox, startBox] = await Promise.all([
     toast.boundingBox(),
-    page.getByRole('button', { name: 'New session' }).boundingBox(),
+    page.getByRole('button', { name: 'Create session' }).boundingBox(),
   ]);
   expect(toastBox).not.toBeNull();
   expect(startBox).not.toBeNull();

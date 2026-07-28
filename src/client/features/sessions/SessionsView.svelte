@@ -159,9 +159,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         />
       </div>
     </section>
-    <div class="form-row session-settings-row">
-      <div class="form-field">
+    <section class="session-settings" aria-label="New session settings">
+      <div class="session-setting-labels">
+        <label for="skills-profile">Skills profile</label>
         <label for="sandbox">Sandbox</label>
+        <label for="approval-policy">Approval policy</label>
+      </div>
+      <div class="session-setting-controls">
+        <select
+          id="skills-profile"
+          value={selectedSkillProfile}
+          onchange={(event) => onskillprofilechange(event.currentTarget.value)}
+        >
+          <option value="">Default</option>
+          {#each skillProfiles as profile (profile.name)}
+            <option value={profile.name}>{profile.name}</option>
+          {/each}
+        </select>
         <select
           id="sandbox"
           value={sandbox}
@@ -173,24 +187,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <option value="workspace-write">workspace-write</option>
           <option value="danger-full-access">danger-full-access</option>
         </select>
-      </div>
-      <div class="form-field">
-        <label for="skills-profile">Skills profile</label>
-        <select
-          id="skills-profile"
-          value={selectedSkillProfile}
-          onchange={(event) => onskillprofilechange(event.currentTarget.value)}
-        >
-          <option value="">Default</option>
-          {#each skillProfiles as profile (profile.name)}
-            <option value={profile.name}>{profile.name}</option>
-          {/each}
-        </select>
-        {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
-        <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
-      </div>
-      <div class="form-field">
-        <label for="approval-policy">Approval policy</label>
         <select
           id="approval-policy"
           value={approvalPolicy}
@@ -204,14 +200,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <option value="never">never</option>
         </select>
       </div>
-      <button
-        class="new-session-button"
-        type="submit"
-        disabled={!selectedWorkspace || startingSession}
-      >
-        {startingSession ? 'Starting…' : 'New session'}
-      </button>
-    </div>
+      {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
+      <div class="session-secondary-actions">
+        <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
+        <div class="model-control">
+          <span>Model:</span>
+          <button type="button" disabled>Codex default</button>
+        </div>
+      </div>
+      <div class="session-submit-row">
+        <button
+          class="new-session-button"
+          type="submit"
+          disabled={!selectedWorkspace || startingSession}
+        >
+          {startingSession ? 'Creating…' : 'Create session'}
+        </button>
+      </div>
+    </section>
   </form>
   <section aria-labelledby="recent-sessions-title">
     <h3 id="recent-sessions-title">Recent sessions</h3>
@@ -302,12 +308,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     align-items: start;
   }
 
-  .form-row {
-    display: grid;
-    gap: 0.5rem;
-    margin-block-end: 0.75rem;
-  }
-
   .session-base {
     display: grid;
     gap: 0.65rem;
@@ -336,15 +336,49 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: 0.6rem;
   }
 
-  .session-settings-row {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-    align-items: end;
+  .session-settings {
+    display: grid;
+    gap: 0.5rem;
+    min-inline-size: 0;
+    margin-block-end: 0.75rem;
   }
 
-  .form-field {
+  .session-setting-labels,
+  .session-setting-controls {
     display: grid;
-    gap: 0.25rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
     min-inline-size: 0;
+  }
+
+  .session-setting-labels label {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .session-setting-controls select {
+    min-inline-size: 0;
+  }
+
+  .session-secondary-actions,
+  .model-control,
+  .session-submit-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-inline-size: 0;
+  }
+
+  .session-secondary-actions {
+    flex-wrap: wrap;
+  }
+
+  .model-control {
+    margin-inline-start: auto;
+  }
+
+  .session-submit-row {
+    justify-content: flex-end;
   }
 
   .skills-profile-error {
@@ -357,6 +391,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .new-session-button {
+    inline-size: auto;
     color: Canvas;
     font-weight: 700;
     background: CanvasText;
@@ -369,9 +404,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       padding: 0.2rem;
     }
 
-    .new-session-button {
-      grid-column: 1 / -1;
-      inline-size: 100%;
-    }
+    .model-control { margin-inline-start: 0; }
   }
 </style>
