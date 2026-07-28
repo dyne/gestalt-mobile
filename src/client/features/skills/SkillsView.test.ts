@@ -52,6 +52,18 @@ describe('SkillsView', () => {
     expect(state.skills[0]?.enabled).toBe(false);
   });
 
+  it('reveals the complete skill card when its checkbox receives keyboard focus', async () => {
+    await rendered();
+    const checkbox = screen.getByRole('checkbox', { name: /Alpha tool/ });
+    const card = checkbox.closest('.skill-card') as HTMLElement;
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(card, 'scrollIntoView', { value: scrollIntoView });
+
+    await fireEvent.focus(checkbox);
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+  });
+
   it('makes create and replace intent visible and saves a full profile', async () => {
     await rendered();
     const saveAs = screen.getByLabelText('Save as');

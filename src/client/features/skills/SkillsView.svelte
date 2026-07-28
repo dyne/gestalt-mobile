@@ -89,6 +89,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function displaySkillPath(path: string): string {
     return path.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, '~');
   }
+
+  function revealFocusedSkill(event: FocusEvent): void {
+    const card = (event.currentTarget as HTMLElement).closest<HTMLElement>('.skill-card');
+    card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 </script>
 
 <section class="skills-view" aria-labelledby="skills-title">
@@ -182,6 +187,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               id={`skill-${skill.path}`}
               type="checkbox"
               checked={skill.enabled}
+              onfocus={revealFocusedSkill}
               onchange={(event) => {
                 snapshot.toggle(skill.path, (event.currentTarget as HTMLInputElement).checked);
                 changed();
@@ -226,7 +232,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .notice { border-inline-start: .3rem solid #976600; padding-inline-start: .7rem; }
   .error { border-inline-start: .3rem solid #b42318; padding-inline-start: .7rem; color: #8a1c14; }
   .skill-list { display: grid; gap: .75rem; padding: 0; list-style: none; }
-  .skill-card { min-inline-size: 0; border: 1px solid color-mix(in srgb, var(--brand-color, currentColor) 35%, transparent); border-radius: .5rem; padding: .75rem; }
+  .skill-card { min-inline-size: 0; scroll-margin-block: 1rem; border: 1px solid color-mix(in srgb, var(--brand-color, currentColor) 35%, transparent); border-radius: .5rem; padding: .75rem; }
   .skill-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; min-block-size: 3rem; }
   .skill-toggle > span { min-inline-size: 0; overflow-wrap: anywhere; }
   .skill-toggle input { flex: 0 0 auto; inline-size: 1.25rem; min-block-size: 1.25rem; }
