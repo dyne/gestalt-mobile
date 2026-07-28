@@ -66,6 +66,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
         profile: 'default',
+        sandbox: 'workspace-write',
         approvalPolicy: 'on-request',
       });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
@@ -117,6 +118,7 @@ test('sends a selected named skill profile only when creating a new session', as
   await expect.poll(() => requestBody).toEqual({
     workspaceId: 'workspace-1',
     profile: 'default',
+    sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
     skillProfile: 'focused',
   });

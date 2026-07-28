@@ -47,7 +47,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
     workspaceTree: [root],
     workspaceId: root.id,
     expandedIds: new Set([root.id, intermediate.id]),
-    sandbox: '',
+    sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
     skillProfiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
     selectedSkillProfile: '',
@@ -117,6 +117,7 @@ describe('SessionsView session base tree', () => {
     const select = screen.getByLabelText('Skills profile');
     expect((select as HTMLSelectElement).value).toBe('');
     expect((select as HTMLSelectElement).options[0]?.text).toBe('Default');
+    expect((screen.getByLabelText('Sandbox') as HTMLSelectElement).value).toBe('workspace-write');
     expect(screen.queryByText('The selected skill set is fixed after this session is created.')).toBeNull();
     await fireEvent.change(select, { target: { value: 'focused' } });
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
