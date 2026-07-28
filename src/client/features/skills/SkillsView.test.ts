@@ -34,6 +34,7 @@ async function rendered() {
     skillsState: state,
     onworkspacechange: vi.fn(),
     oncodexprofilechange: vi.fn(),
+    onrefresh: vi.fn(async () => undefined),
     onprofileschange: vi.fn(),
   });
   return state;

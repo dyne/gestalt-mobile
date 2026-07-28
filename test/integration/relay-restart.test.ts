@@ -81,7 +81,7 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
   });
   await second.listen({ host: '127.0.0.1', port: 0 });
   await expect.poll(() => restoredCalls, { timeout: 1_000 }).toEqual([
-    'initialize', 'skills/list', 'initialize', 'thread/resume',
+    'initialize', 'skills/list', 'initialize', 'skills/list', 'initialize', 'thread/resume',
   ]);
   expect((await second.inject(`/api/sessions/${created.id}`)).json()).toMatchObject({
     threadId: 'thread-1',
