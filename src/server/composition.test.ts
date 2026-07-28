@@ -130,7 +130,8 @@ describe('production composition', () => {
     });
     expect(created.statusCode).toBe(202);
     expect(firstCalls).toEqual([
-      'initialize', 'skills/list', 'initialize', 'skills/list', 'initialize', 'thread/start',
+      'initialize', 'model/list', 'initialize', 'skills/list', 'initialize', 'skills/list',
+      'initialize', 'thread/start',
     ]);
     await first.close();
 
@@ -192,6 +193,7 @@ describe('production composition', () => {
 
     await app.close();
 
-    expect(closed).toBe(1);
+    // Bootstrap opens and closes a short-lived child to discover available models.
+    expect(closed).toBe(2);
   });
 });
