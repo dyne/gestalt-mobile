@@ -66,6 +66,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
         profile: 'default',
+        model: 'gpt-5.6-terra',
         sandbox: 'workspace-write',
         approvalPolicy: 'on-request',
       });
@@ -118,6 +119,7 @@ test('sends a selected named skill profile only when creating a new session', as
   await expect.poll(() => requestBody).toEqual({
     workspaceId: 'workspace-1',
     profile: 'default',
+    model: 'gpt-5.6-terra',
     sandbox: 'workspace-write',
     approvalPolicy: 'on-request',
     skillProfile: 'focused',
@@ -343,6 +345,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
     expect(route.request().postDataJSON()).toEqual({
       workspaceId: 'workspace-1',
       profile: 'default',
+      model: 'gpt-5.6-terra',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     });
@@ -357,8 +360,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page.getByLabel('Sandbox').selectOption('workspace-write');
   await page.getByLabel('Approval policy').selectOption('never');
-  await expect(page.getByText('Model:')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Codex default' })).toBeDisabled();
+  await expect(page.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
   await page.getByRole('button', { name: 'Create session' }).click();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
