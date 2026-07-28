@@ -118,6 +118,14 @@ export class SkillsState {
     this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
   }
 
+  selectDefaultProfile(): void {
+    this.selectedProfileName = '';
+    this.saveAsName = '';
+    this.skills = this.skills.map((skill) => ({ ...skill, enabled: skill.effectiveEnabled }));
+    this.captureBaseline();
+    this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
+  }
+
   toggle(path: string, enabled: boolean): void {
     this.skills = this.skills.map((skill) => (skill.path === path ? { ...skill, enabled } : skill));
   }

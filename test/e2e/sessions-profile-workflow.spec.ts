@@ -69,8 +69,8 @@ for (const viewport of viewports) for (const theme of themes) for (const scale o
         await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
       }
       if (state === 'confirmation') {
-        await page.getByLabel('Existing saved profile').selectOption('team');
-        await page.getByRole('button', { name: 'Delete selected profile' }).click();
+        await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
+        await page.getByRole('button', { name: 'Delete profile' }).click();
         await expect(page.getByRole('heading', { name: 'Delete skill profile?' })).toBeVisible();
       }
       if (state === 'saved') {
@@ -79,9 +79,9 @@ for (const viewport of viewports) for (const theme of themes) for (const scale o
         await expect(page.getByText('Profile saved.')).toBeVisible();
       }
       if (state === 'deleted') {
-        await page.getByLabel('Existing saved profile').selectOption('team');
-        await page.getByRole('button', { name: 'Delete selected profile' }).click();
+        await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
         await page.getByRole('button', { name: 'Delete profile' }).click();
+        await page.getByLabel('Delete skill profile?').getByRole('button', { name: 'Delete profile' }).click();
         await expect(page.getByText('Profile deleted.')).toBeVisible();
       }
       await expect(page.getByLabel('Primary')).toBeVisible();
@@ -123,16 +123,16 @@ test('refreshes new-session profile choices after create, replace, and delete', 
   await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Default', 'team', 'fresh']);
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
-  await page.getByLabel('Existing saved profile').selectOption('team');
+  await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
   await expect(page.getByText('Replacing the selected saved profile.')).toBeVisible();
   await page.getByRole('button', { name: 'Save profile' }).click();
   await page.getByRole('button', { name: 'Close skill profile editor' }).click();
   await expect(page.getByLabel('Skills profile').locator('option')).toHaveCount(3);
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
-  await page.getByLabel('Existing saved profile').selectOption('fresh');
-  await page.getByRole('button', { name: 'Delete selected profile' }).click();
+  await page.getByLabel('Skill profile', { exact: true }).selectOption('fresh');
   await page.getByRole('button', { name: 'Delete profile' }).click();
+  await page.getByLabel('Delete skill profile?').getByRole('button', { name: 'Delete profile' }).click();
   await page.getByRole('button', { name: 'Close skill profile editor' }).click();
   await expect(page.getByLabel('Skills profile').locator('option')).toHaveText(['Default', 'team']);
 });

@@ -842,11 +842,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </div>
           {#if skillsState}
             <SkillsView
-              {workspaceTree}
-              {codexProfiles}
               skillsState={skillsState}
-              onworkspacechange={(workspaceId) => void loadSkills(workspaceId, skillsState?.codexProfile ?? '')}
-              oncodexprofilechange={(profile) => void loadSkills(skillsState?.workspaceId ?? '', profile)}
               onrefresh={() => skillsState?.refresh() ?? Promise.resolve()}
               onprofileschange={() => void refreshSkillProfiles()}
               heading="Skill profile editor"
@@ -922,10 +918,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .close-profile-manager {
     flex: 0 0 auto;
-    inline-size: 3rem;
-    min-block-size: 3rem;
+    inline-size: 2.5rem;
+    min-block-size: 2.5rem;
     padding: 0;
-    font-size: 1.5rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: 2rem;
     line-height: 1;
   }
 </style>
