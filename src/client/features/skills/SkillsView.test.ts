@@ -67,10 +67,13 @@ describe('SkillsView', () => {
   it('makes create and replace intent visible and saves a full profile', async () => {
     await rendered();
     const saveAs = screen.getByLabelText('Save as');
+    await fireEvent.change(screen.getByLabelText('Skill profile'), { target: { value: 'team' } });
+    expect((saveAs as HTMLInputElement).value).toBe('team');
+    expect(screen.getByText('Saved the selected profile.')).toBeTruthy();
     await fireEvent.input(saveAs, { target: { value: 'new-team' } });
     expect(screen.getByText('Creating a new saved profile.')).toBeTruthy();
     await fireEvent.input(saveAs, { target: { value: 'team' } });
-    expect(screen.getByText('Replacing the selected saved profile.')).toBeTruthy();
+    expect(screen.getByText('Saved the selected profile.')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     expect(client.replaceSkillProfile).toHaveBeenCalledWith('team', expect.objectContaining({ version: 1, name: 'team' }));
     expect(screen.getByText('Profile saved.')).toBeTruthy();
