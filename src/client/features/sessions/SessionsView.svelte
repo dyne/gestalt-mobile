@@ -206,8 +206,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <span>Model:</span>
           <button type="button" disabled>Codex default</button>
         </div>
-      </div>
-      <div class="session-submit-row">
         <button
           class="new-session-button"
           type="submit"
@@ -360,8 +358,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .session-secondary-actions,
-  .model-control,
-  .session-submit-row {
+  .model-control {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -374,10 +371,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .model-control {
     margin-inline-start: auto;
-  }
-
-  .session-submit-row {
-    justify-content: flex-end;
   }
 
   .skills-profile-error {
