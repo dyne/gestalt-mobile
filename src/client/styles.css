@@ -65,8 +65,11 @@ main {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 1rem;
-  margin-block: calc(-1rem - env(safe-area-inset-top)) 1.5rem;
-  padding: calc(1rem + env(safe-area-inset-top)) 0 0.75rem;
+  /* Match the chat column's outer edge while keeping header controls aligned with page content. */
+  margin: calc(-1rem - env(safe-area-inset-top)) calc(0.25rem - var(--page-inline-padding))
+    1.5rem;
+  padding: calc(1rem + env(safe-area-inset-top))
+    calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
   background: color-mix(in srgb, Canvas 78%, transparent);
   backdrop-filter: blur(0.75rem);
 }
