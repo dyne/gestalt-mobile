@@ -72,6 +72,8 @@ Use these URLs and status codes exactly:
 | POST | /api/sessions/:sessionId/turns | 202 | start-turn |
 | POST | /api/sessions/:sessionId/turns/:turnId/interrupt | 200 | interrupt-turn |
 | POST | /api/sessions/:sessionId/interactions/:requestId | 202 | respond-interaction |
+| GET | /api/sessions/:sessionId/plan | 200 or 204 | get-plan |
+| DELETE | /api/sessions/:sessionId/plan | 204 | close-plan |
 | GET | /api/sessions/:sessionId/git | 200 | get-git-summary |
 | POST | /api/sessions/:sessionId/git/refresh | 202 | refresh-git |
 | POST | /api/sessions/:sessionId/git/push | 202 | push-upstream |
@@ -79,6 +81,12 @@ Use these URLs and status codes exactly:
 
 Session creation supports =Idempotency-Key= replay; additional mutation-route
 coverage remains TODO. =interrupt= has the natural key =(sessionId, turnId)=.
+The session plan read model is owner-scoped: =GET /plan= returns its complete
+replacement snapshot with =200=, =204= when that session retains no plan, and
+=404= for an unknown session. =DELETE /plan= is a durable, idempotent close only
+when =allDone=true=; it returns =204= when already absent and =409= with an RFC
+9457 problem document (=PLAN_INCOMPLETE=) when work remains. No plan path or
+source contents are exposed.
 All failures use =application/problem+json= and:
 
 #+begin_src typescript
@@ -104,6 +112,12 @@ export type SessionEvent<TType extends string = string, TPayload = unknown> = {
   payload: TPayload;
 };
 #+end_src
+
+Plan replacements append =plan.updated= with the complete =SupervisedPlan=
+snapshot as payload. A successful close appends =plan.closed= with an empty
+payload after the status file is removed and the retained snapshot is cleared.
+Both events use the owning session's journal sequence, replay through its
+existing WebSocket cursor, and are never delivered to another session.
 
 * DONE [#A] Create the buildable walking skeleton
 

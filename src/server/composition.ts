@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
 import type { ProfileCatalog } from './features/catalog/application/ports.js';
@@ -46,6 +46,8 @@ import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
+import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
+import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -56,7 +58,12 @@ export type ComposeRelayAppOptions = {
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   startAppServers?: boolean;
-  launchAppServer?: (input: { profile: string; cwd: string; skillsConfig?: readonly { path: string; enabled: boolean }[] }) => AppServer;
+  launchAppServer?: (input: {
+    profile: string;
+    cwd: string;
+    skillsConfig?: readonly { path: string; enabled: boolean }[];
+    environment?: Readonly<Record<string, string>>;
+  }) => AppServer;
   homeDirectory?: string;
   explicitSkillProfile?: SkillProfile;
 };
@@ -75,6 +82,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
+  const supervisedPlans = new SupervisedPlanRegistry();
+  const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const withPendingInteractions = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
@@ -83,10 +92,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const skillCatalog = (profile: string) =>
-    new CodexSkillCatalog(
-      profile,
-      options.launchAppServer ?? launchCodexAppServer,
-    );
+    new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
   const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
     skillCatalog(profile).list(workspace),
   );
@@ -159,6 +165,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         (sessionId) => recoverExitedSession(sessionId),
         resolveSkills,
+        planStatusSource,
+        (sessionId, update) => {
+          supervisedPlans.accept(sessionId, update);
+          if (update.kind === 'updated') {
+            const occurredAt = new Date().toISOString();
+            events.publish(journal.append(sessionId, 'plan.updated', update.plan, occurredAt));
+          }
+        },
       )
     : null;
   const saveSession = (
@@ -279,6 +293,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       since: (id, after) => journal.since(id, after),
       subscribe: (id, listener) => events.subscribe(id, listener),
     },
+    planRoutes: {
+      exists: (id) => sessions.find(id) !== null,
+      find: (id) => supervisedPlans.find(id),
+      removeStatus: (id) => planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
+      clear: (id) => supervisedPlans.clear(id),
+      closed: (id) => {
+        const occurredAt = new Date().toISOString();
+        events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
+      },
+    },
     interactions: {
       resolve: (sessionId, requestId, resolvedAt) =>
         interactions.resolve(sessionId, requestId, resolvedAt),
@@ -341,6 +365,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     runtime?.stopAll();
+    planStatusSource.closeAll();
     database.close();
   });
   return app;
