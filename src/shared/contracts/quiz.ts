@@ -29,11 +29,16 @@ export type QuizAnswer = {
   answer: string;
 };
 
+export type QuizResponse = {
+  answers: Record<string, string>;
+};
+
 /**
  * The app-server descriptor is intentionally plain JSON so the session adapter
  * can register the same stable contract for new and resumed threads.
  */
 export const gestaltQuizDynamicTool = {
+  type: 'function',
   name: GESTALT_QUIZ_TOOL_NAME,
   description:
     'Ask the user one to eight bounded-choice quiz questions. Use this instead of writing a numbered-choice request in chat whenever you need the user to choose among defined options. Each question must include two to five choices and explicitly state whether a custom answer is allowed.',
@@ -107,6 +112,39 @@ export function mapNativeUserInputToQuiz(value: unknown): Quiz | null {
   });
 }
 
+/** Converts a completed quiz into the app-server dynamic-tool response shape. */
+export function toQuizToolResponse(answers: QuizAnswer[]): {
+  contentItems: Array<{ type: 'input_text'; text: string }>;
+  success: true;
+} {
+  return {
+    contentItems: [
+      {
+        type: 'input_text',
+        text: JSON.stringify({
+          answers: Object.fromEntries(
+            answers.filter((answer) => answer.answer.trim()).map((answer) => [answer.id, answer.answer]),
+          ),
+        }),
+      },
+    ],
+    success: true,
+  };
+}
+
+export function isQuizToolResponseForQuiz(quiz: Quiz, value: unknown): boolean {
+  if (!isRecord(value) || value.success !== true || !Array.isArray(value.contentItems)) return false;
+  const item = value.contentItems[0];
+  if (value.contentItems.length !== 1 || !isRecord(item) || item.type !== 'input_text' || typeof item.text !== 'string')
+    return false;
+  try {
+    const response = parseQuizResponse(JSON.parse(item.text));
+    return response !== null && isCompleteQuizResponse(quiz, response);
+  } catch {
+    return false;
+  }
+}
+
 function parseQuestion(value: unknown): QuizQuestion | null {
   if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 5)
     return null;
@@ -128,6 +166,26 @@ function parseQuestion(value: unknown): QuizQuestion | null {
 function parseChoice(value: unknown): QuizChoice | null {
   if (!isRecord(value) || !isBoundedText(value.label, 160) || !isBoundedText(value.description, 600)) return null;
   return { label: value.label, description: value.description };
+}
+
+function parseQuizResponse(value: unknown): QuizResponse | null {
+  if (!isRecord(value) || !isRecord(value.answers)) return null;
+  const entries = Object.entries(value.answers);
+  if (entries.length === 0 || entries.some(([id, answer]) => !isQuestionId(id) || !isBoundedText(answer, 2_000))) return null;
+  return { answers: Object.fromEntries(entries) as Record<string, string> };
+}
+
+function isCompleteQuizResponse(quiz: Quiz, response: QuizResponse): boolean {
+  const ids = Object.keys(response.answers);
+  if (ids.length !== quiz.questions.length || ids.some((id) => !quiz.questions.some((question) => question.id === id)))
+    return false;
+  return quiz.questions.every((question) => {
+    const answer = response.answers[question.id];
+    return (
+      typeof answer === 'string' &&
+      (question.allowCustom || question.choices.some((choice) => choice.label === answer))
+    );
+  });
 }
 
 function isQuestionId(value: unknown): value is string {

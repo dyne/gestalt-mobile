@@ -11,6 +11,7 @@ import {
 import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
 import type { PlanStatusLease, PlanStatusSource } from '../../features/plans/application/ports.js';
+import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 
 export type AppServer = {
   rpc: {
@@ -72,11 +73,12 @@ export class CodexSessionRuntime {
       this.attachExitHandler(session.id, process);
       await process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-        capabilities: null,
+        capabilities: { experimentalApi: true },
       });
       const result = (await process.rpc.request('thread/start', {
         cwd: session.workspacePath,
         approvalPolicy: settings.approvalPolicy ?? 'on-request',
+        dynamicTools: [gestaltQuizDynamicTool],
         ...(settings.model ? { model: settings.model } : {}),
         ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
       })) as { thread?: { id?: string } };
@@ -193,11 +195,12 @@ export class CodexSessionRuntime {
       this.attachExitHandler(session.id, process);
       await process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-        capabilities: null,
+        capabilities: { experimentalApi: true },
       });
       await process.rpc.request('thread/resume', {
         threadId: session.threadId,
         cwd: session.workspacePath,
+        dynamicTools: [gestaltQuizDynamicTool],
       });
       this.processes.set(session.id, process);
       this.threadIds.set(session.id, session.threadId);

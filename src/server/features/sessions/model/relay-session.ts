@@ -26,7 +26,7 @@ export type SessionState =
 export type DesiredState = 'active' | 'stopped';
 export type PendingInteraction = {
   requestId: string;
-  kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput';
+  kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput' | 'quiz';
   payload: unknown;
 };
 
