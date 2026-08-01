@@ -40,7 +40,10 @@ import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { toPendingInteraction } from './platform/codex/server-request.js';
-import { isValidInteractionResponse } from './features/sessions/interaction/response-validator.js';
+import {
+  isValidInteractionResponse,
+  isValidQuizInteractionResponse,
+} from './features/sessions/interaction/response-validator.js';
 import { promoteRecentThread } from './features/sessions/promote-recent-thread/use-case.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
@@ -310,6 +313,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       validate: (sessionId, requestId, value) => {
         const interaction = interactions.find(sessionId, requestId);
         if (!interaction) return false;
+        if (interaction.kind === 'quiz') return isValidQuizInteractionResponse(interaction.payload, value);
         return isValidInteractionResponse(interaction.kind, value);
       },
     },

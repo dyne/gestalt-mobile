@@ -5,14 +5,22 @@
  */
 
 import type { RelayInteractionKind } from './kind.js';
+import { isQuizToolResponseForQuiz, parseQuiz } from '../../../../shared/contracts/quiz.js';
 
 /** Validates the relay-safe subset of Codex's generated server-request responses. */
 export function isValidInteractionResponse(kind: RelayInteractionKind, value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (kind === 'userInput') return isValidUserInputResponse(value);
+  if (kind === 'quiz') return false;
   if (kind === 'permissionsApproval')
     return isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session');
   return isValidApprovalDecision(kind, value.decision);
+}
+
+/** Validates a dynamic quiz reply against the quiz that created the interaction. */
+export function isValidQuizInteractionResponse(payload: unknown, value: unknown): boolean {
+  const quiz = parseQuiz(payload);
+  return quiz !== null && isQuizToolResponseForQuiz(quiz, value);
 }
 
 function isValidUserInputResponse(value: Record<string, unknown>): boolean {

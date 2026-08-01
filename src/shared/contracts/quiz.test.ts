@@ -9,8 +9,10 @@ import { describe, expect, it } from 'vitest';
 import {
   GESTALT_QUIZ_TOOL_NAME,
   gestaltQuizDynamicTool,
+  isQuizToolResponseForQuiz,
   mapNativeUserInputToQuiz,
   parseQuiz,
+  toQuizToolResponse,
 } from './quiz.js';
 
 const question = (id = 'mode') => ({
@@ -64,6 +66,7 @@ describe('quiz contract', () => {
 
   it('exposes the exact dynamic tool descriptor', () => {
     expect(gestaltQuizDynamicTool).toEqual({
+      type: 'function',
       name: GESTALT_QUIZ_TOOL_NAME,
       description: expect.stringContaining('numbered-choice request'),
       inputSchema: {
@@ -75,5 +78,18 @@ describe('quiz contract', () => {
         }),
       },
     });
+  });
+
+  it('adapts complete answers into the app-server dynamic-tool response', () => {
+    const quiz = parseQuiz({ questions: [question()] })!;
+    const response = toQuizToolResponse([{ id: 'mode', answer: 'Fast' }]);
+    expect(response).toEqual({
+      success: true,
+      contentItems: [{ type: 'input_text', text: '{"answers":{"mode":"Fast"}}' }],
+    });
+    expect(isQuizToolResponseForQuiz(quiz, response)).toBe(true);
+    expect(
+      isQuizToolResponseForQuiz(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Unexpected' }])),
+    ).toBe(false);
   });
 });

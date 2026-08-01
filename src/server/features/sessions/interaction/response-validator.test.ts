@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isValidInteractionResponse } from './response-validator.js';
+import { isValidInteractionResponse, isValidQuizInteractionResponse } from './response-validator.js';
+import { toQuizToolResponse } from '../../../../shared/contracts/quiz.js';
 
 describe('isValidInteractionResponse', () => {
   it('requires generated user-input answer arrays', () => {
@@ -36,5 +37,25 @@ describe('isValidInteractionResponse', () => {
     expect(
       isValidInteractionResponse('permissionsApproval', { permissions: {}, scope: 'session' }),
     ).toBe(true);
+  });
+
+  it('requires a complete dynamic-tool response for the originating quiz', () => {
+    const quiz = {
+      questions: [
+        {
+          id: 'mode',
+          header: 'Mode',
+          question: 'Which mode?',
+          choices: [
+            { label: 'Fast', description: 'Fast path' },
+            { label: 'Careful', description: 'Careful path' },
+          ],
+          allowCustom: false,
+        },
+      ],
+    };
+    expect(isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Fast' }]))).toBe(true);
+    expect(isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Other' }]))).toBe(false);
+    expect(isValidInteractionResponse('quiz', { success: true, contentItems: [] })).toBe(false);
   });
 });

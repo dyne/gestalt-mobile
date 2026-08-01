@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
+import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
@@ -271,6 +272,7 @@ describe('CodexSessionRuntime', () => {
       model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
+      dynamicTools: [gestaltQuizDynamicTool],
     });
   });
 
