@@ -236,7 +236,9 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByLabel('Open sessions').getByText('/projects/from-ssh')).toBeVisible();
 });
 
-test('separates open and saved sessions and closes without forgetting', async ({ page }) => {
+test('separates open and saved sessions and retains forgotten threads in recent history', async ({
+  page,
+}) => {
   const sessions = [
     {
       id: 'running-session',
@@ -256,6 +258,7 @@ test('separates open and saved sessions and closes without forgetting', async ({
     },
   ];
   let closed = false;
+  let forgotten = false;
   let reopened = false;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
@@ -270,6 +273,11 @@ test('separates open and saved sessions and closes without forgetting', async ({
   await page.route('**/api/sessions/recent-threads', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
+  await page.route('**/api/sessions/stopped-session', async (route) => {
+    expect(route.request().method()).toBe('DELETE');
+    forgotten = true;
+    await route.fulfill({ status: 204 });
+  });
   await page.route('**/api/sessions/running-session/release', async (route) => {
     expect(route.request().method()).toBe('POST');
     closed = true;
@@ -291,7 +299,9 @@ test('separates open and saved sessions and closes without forgetting', async ({
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(
-        closed && !reopened ? [{ ...sessions[0], state: 'released' }, sessions[1]] : sessions,
+        (closed && !reopened ? [{ ...sessions[0], state: 'released' }, sessions[1]] : sessions).filter(
+          (session) => !forgotten || session.id !== 'stopped-session',
+        ),
       ),
     }),
   );
@@ -310,10 +320,15 @@ test('separates open and saved sessions and closes without forgetting', async ({
   await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(1);
 
+  await savedSessions.getByRole('button', { name: 'Forget' }).click();
+  await expect.poll(() => forgotten).toBe(true);
+  await expect(savedSessions.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByLabel('Recent sessions').getByText('/projects/stopped')).toBeVisible();
+
   await openSessions.getByRole('button', { name: 'Close' }).click();
   await expect.poll(() => closed).toBe(true);
   await expect(page.getByRole('heading', { name: 'Open sessions' })).toHaveCount(0);
-  await expect(savedSessions.getByRole('listitem')).toHaveCount(2);
+  await expect(savedSessions.getByRole('listitem')).toHaveCount(1);
 
   await savedSessions
     .getByRole('listitem')

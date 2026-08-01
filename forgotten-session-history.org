@@ -1,0 +1,23 @@
+#+TITLE: Preserve Forgotten Sessions in Recent History
+#+SUBTITLE: Keep detached Codex threads visible after removing relay ownership
+#+DATE: 2026-08-01
+#+KEYWORDS: sessions history forget svelte regression
+
+* DONE [#A] Preserve forgotten sessions in recent history
+:PROPERTIES:
+:ID: preserve-forgotten-session-history
+:SKILLS: $gestalt:systematic-debugging $gestalt:development-testing $gestalt:verification-before-completion $modern-web-guidance $svelte-code-writer $svelte-core-bestpractices $playwright
+:REVIEW_STATUS: REVIEWED
+:END:
+- Effort :: Small
+- Goal :: After forgetting a relay-managed session, remove it from the managed/open session lists while keeping its underlying Codex thread visible in Recent sessions.
+- Notes :: Keep the existing VSA/REPR/Hex boundaries intact. The server already detaches relay ownership without deleting the Codex thread; implement the smallest client-side fallback around the existing refresh, deduplicate by thread ID, and avoid new dependencies or unrelated refactors. Preserve all unrelated working-tree changes.
+
+** DONE [#A] Retain and verify the forgotten thread
+:PROPERTIES:
+:ID: retain-forgotten-thread
+:END:
+- Why :: The successful DELETE removes the only immediately available managed-session metadata, while the subsequent Codex recent-thread refresh may not yet return that thread, causing it to disappear from both UI lists.
+- Change :: Add a focused session-list helper that converts a managed session with a thread ID into a recent-session fallback and merges it with refreshed recent threads by thread ID. Capture the target before DELETE and apply the fallback only after DELETE and refresh succeed. Add an end-to-end regression covering the user-visible transition from a managed session to Recent sessions, plus focused unit coverage for deduplication and missing-thread behavior if the helper warrants it.
+- Tests :: Run the focused client/unit and session-start end-to-end tests; run the Svelte autofixer on every touched .svelte file; then run `npm run check`, `npm test`, `npm run lint`, `npm run build`, and `npm run test:e2e` as required for browser-visible completion.
+- Done when :: Forgetting removes the relay-managed entry, the same underlying thread appears once under Recent sessions even when the immediate recent-thread API response omits it, existing Codex recent results remain ordered/deduplicated, all required checks pass, and the L2 has one conventional commit.
