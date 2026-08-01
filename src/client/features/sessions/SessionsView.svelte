@@ -335,6 +335,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.5rem;
   }
 
+  @media (max-width: 30rem) {
+    .managed-session {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
   .recent-session {
     display: grid;
     grid-template-columns: minmax(0, 1fr) max-content;
@@ -391,7 +397,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .session-setting-controls select {
+    inline-size: 100%;
+    max-inline-size: 100%;
     min-inline-size: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .session-secondary-actions,

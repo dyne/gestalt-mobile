@@ -15,7 +15,14 @@ describe('nextTab', () => {
   });
 
   it('skips Chat when no session is open', () => {
-    expect(nextTab('sessions', 1, false)).toBe('git');
-    expect(nextTab('git', 1, false)).toBe('sessions');
+    expect(nextTab('sessions', 1, { chatEnabled: false, planEnabled: false })).toBe('git');
+    expect(nextTab('git', 1, { chatEnabled: false, planEnabled: false })).toBe('sessions');
+  });
+
+  it('places Plan immediately after Chat when it is available', () => {
+    const capabilities = { chatEnabled: true, planEnabled: true };
+    expect(nextTab('chat', 1, capabilities)).toBe('plan');
+    expect(nextTab('plan', 1, capabilities)).toBe('sessions');
+    expect(nextTab('sessions', -1, capabilities)).toBe('plan');
   });
 });

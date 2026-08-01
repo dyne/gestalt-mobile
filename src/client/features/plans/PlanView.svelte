@@ -1,0 +1,211 @@
+<!--
+Copyright (C) 2026 Dyne.org foundation
+Designed by Denis Roio <jaromil@dyne.org>
+SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
+<script lang="ts">
+  import { tick } from 'svelte';
+
+  import type { PlanStep, SupervisedPlan } from './contracts.js';
+  import type { PlanState } from './plan-controller.js';
+
+  type Props = { state: PlanState; onclose: () => void };
+  type DescriptionKey = keyof PlanStep['description'];
+
+  const descriptionLabels: Readonly<Record<DescriptionKey, string>> = {
+    effort: 'Effort',
+    goal: 'Goal',
+    notes: 'Notes',
+    why: 'Why',
+    change: 'Change',
+    tests: 'Tests',
+    doneWhen: 'Done when',
+  };
+
+  let { state: viewState, onclose }: Props = $props();
+  let opened = $state<Set<string>>(new Set());
+  let detailsById = $state<Partial<Record<string, HTMLDetailsElement>>>({});
+  let lastCurrentStepId: string | null = null;
+  let scrollGeneration = 0;
+  let plan = $derived(
+    viewState.kind === 'ready' || viewState.kind === 'closing'
+      ? viewState.plan
+      : viewState.kind === 'error'
+        ? viewState.plan
+        : undefined,
+  );
+  let currentStep = $derived(plan ? findStep(plan.steps, plan.currentStepId) : undefined);
+  let automaticOpenIds = $derived(plan ? currentPath(plan.steps, plan.currentStepId) : new Set<string>());
+  let announcement = $derived.by(() => {
+    if (viewState.kind === 'loading') return 'Loading plan.';
+    if (viewState.kind === 'unavailable') return 'No retained plan for this session.';
+    if (viewState.kind === 'error' && !plan) return viewState.error;
+    if (viewState.kind === 'closing') return 'Closing completed plan.';
+    if (!plan) return '';
+    if (!currentStep) return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.`;
+    return `Current step: ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
+  });
+
+  $effect(() => {
+    const currentStepId = plan?.currentStepId || null;
+    if (!currentStepId) return;
+    if (lastCurrentStepId === currentStepId) return;
+    lastCurrentStepId = currentStepId;
+    const generation = ++scrollGeneration;
+    void tick().then(() => {
+      if (generation !== scrollGeneration || plan?.currentStepId !== currentStepId) return;
+      detailsById[currentStepId]?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+    });
+  });
+
+  function findStep(steps: readonly PlanStep[], id: string): PlanStep | undefined {
+    for (const step of steps) {
+      if (step.id === id) return step;
+      const child = findStep(step.children, id);
+      if (child) return child;
+    }
+    return undefined;
+  }
+
+  function currentPath(steps: readonly PlanStep[], id: string, ancestors: readonly string[] = []): Set<string> {
+    for (const step of steps) {
+      if (step.id === id) return new Set([...ancestors, step.id]);
+      const path = currentPath(step.children, id, [...ancestors, step.id]);
+      if (path.size) return path;
+    }
+    return new Set();
+  }
+
+  function isOpen(id: string): boolean {
+    return opened.has(id) || automaticOpenIds.has(id);
+  }
+
+  function toggle(id: string, open: boolean): void {
+    opened = open ? new Set([...opened, id]) : new Set([...opened].filter((value) => value !== id));
+  }
+
+  function summary(step: PlanStep): string {
+    return step.description.goal ?? step.description.why ?? step.title;
+  }
+
+  function descriptionEntries(step: PlanStep): Array<readonly [string, string]> {
+    return (Object.keys(descriptionLabels) as DescriptionKey[]).flatMap((key) => {
+      const value = step.description[key];
+      return value ? [[descriptionLabels[key], value] as const] : [];
+    });
+  }
+
+  function progressMax(value: SupervisedPlan): number {
+    return Math.max(value.totalSteps, 1);
+  }
+</script>
+
+<p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
+
+{#if viewState.kind === 'loading'}
+  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>Loading plan…</p></section>
+{:else if viewState.kind === 'unavailable'}
+  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>No retained plan for this session.</p></section>
+{:else if viewState.kind === 'error' && !plan}
+  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>{viewState.error}</p></section>
+{:else if plan}
+  <section class="plan" aria-labelledby="plan-title">
+    <header>
+      <div>
+        <h2 id="plan-title">{plan.title}</h2>
+        <p>{plan.doneSteps} / {plan.totalSteps} complete</p>
+      </div>
+      {#if plan.allDone}
+        <button
+          class="close"
+          aria-label="Close completed plan"
+          disabled={viewState.kind === 'closing'}
+          onclick={onclose}>×</button
+        >
+      {/if}
+    </header>
+    <progress aria-label="Plan progress" value={plan.doneSteps} max={progressMax(plan)}>
+      {plan.doneSteps} of {plan.totalSteps} complete
+    </progress>
+    <p>Current: {currentStep ? `${currentStep.title} (${currentStep.state})` : 'No current step'}</p>
+    {#if viewState.kind === 'closing'}
+      <p>Closing completed plan…</p>
+    {:else if viewState.kind === 'error'}
+      <p>{viewState.error}</p>
+    {/if}
+    {#if plan.subtitle || plan.date || plan.keywords}
+      <dl class="metadata">
+        {#if plan.subtitle}<div><dt>Subtitle</dt><dd>{plan.subtitle}</dd></div>{/if}
+        {#if plan.date}<div><dt>Date</dt><dd>{plan.date}</dd></div>{/if}
+        {#if plan.keywords}<div><dt>Keywords</dt><dd>{plan.keywords}</dd></div>{/if}
+      </dl>
+    {/if}
+    {#if plan.steps.length === 0}
+      <p>No plan steps have been retained yet.</p>
+    {:else}
+      <ol class="plan-steps">
+        {#each plan.steps as step (step.id)}
+          <li>
+            <details
+              bind:this={detailsById[step.id]}
+              data-step-id={step.id}
+              open={isOpen(step.id)}
+              ontoggle={(event) => toggle(step.id, event.currentTarget.open)}
+            >
+              <summary>
+                <strong>{step.title}</strong>
+                <span>{step.state} · Priority {step.priority}{step.reviewStatus ? ` · ${step.reviewStatus}` : ''}</span>
+                <span>{summary(step)}</span>
+              </summary>
+              {#each descriptionEntries(step) as [label, value] (label)}
+                <p><strong>{label}:</strong> {value}</p>
+              {/each}
+              {#if step.skills?.length}<p><strong>Skills:</strong> {step.skills.join(', ')}</p>{/if}
+              {#if step.children.length}
+                <ol>
+                  {#each step.children as child (child.id)}
+                    <li>
+                      <details
+                        bind:this={detailsById[child.id]}
+                        data-step-id={child.id}
+                        open={isOpen(child.id)}
+                        ontoggle={(event) => toggle(child.id, event.currentTarget.open)}
+                      >
+                        <summary>
+                          <strong>{child.title}</strong>
+                          <span>{child.state} · Priority {child.priority}{child.reviewStatus ? ` · ${child.reviewStatus}` : ''}</span>
+                          <span>{summary(child)}</span>
+                        </summary>
+                        {#each descriptionEntries(child) as [label, value] (label)}
+                          <p><strong>{label}:</strong> {value}</p>
+                        {/each}
+                        {#if child.skills?.length}<p><strong>Skills:</strong> {child.skills.join(', ')}</p>{/if}
+                      </details>
+                    </li>
+                  {/each}
+                </ol>
+              {/if}
+            </details>
+          </li>
+        {/each}
+      </ol>
+    {/if}
+  </section>
+{/if}
+
+<style>
+  .plan { min-inline-size: 0; overflow-wrap: anywhere; }
+  header { display: flex; gap: 1rem; justify-content: space-between; align-items: start; }
+  h2, p { margin-block: .4rem; }
+  progress { inline-size: 100%; }
+  ol { padding-inline-start: 1.25rem; }
+  details { margin-block: .5rem; }
+  summary { cursor: pointer; display: grid; gap: .2rem; }
+  .metadata { display: grid; gap: .25rem; }
+  .metadata div { display: flex; gap: .5rem; }
+  .metadata dd { margin: 0; }
+  .close { inline-size: 2.75rem; block-size: 2.75rem; flex: 0 0 auto; font-size: 1.5rem; }
+  button:focus-visible, summary:focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
