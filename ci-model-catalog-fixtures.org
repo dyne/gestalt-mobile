@@ -1,0 +1,32 @@
+#+TITLE: Restore model catalog test fixtures
+#+SUBTITLE: Repair PR #5 session startup CI regression
+#+DATE: 2026-08-01
+#+KEYWORDS: ci, sessions, model-catalog, regression
+
+* DONE [#A] Restore deterministic session startup fixtures
+:PROPERTIES:
+:ID: restore-model-catalog-fixtures
+:SKILLS: $gestalt:systematic-debugging $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: REVIEWED
+:END:
+- Effort :: Small
+- Goal :: Ensure production-composition and relay-restart test doubles support the model-catalog request introduced by session model controls, so their existing session lifecycle assertions execute normally.
+- Notes :: Root cause: the `models` port is now wired into `composeRelayApp`, which starts a model catalog that calls `initialize` then `model/list`. The fake app servers only answer `skills/list` and `thread/start`, therefore their empty model response produces `CODEX_MODEL_UNAVAILABLE`; downstream status-path errors are consequential.
+
+** DONE [#A] Extend the app-server test doubles for model discovery
+:PROPERTIES:
+:ID: extend-model-discovery-doubles
+:END:
+- Why :: The affected composition and restart tests exercise a real composition root but currently omit the newly required outbound adapter interaction.
+- Change :: Make their fake app servers return one valid model for `model/list`, while preserving `initialize`, `skills/list`, and `thread/start` behavior. Update exact RPC-call expectations to include the model catalog startup calls where those expectations intentionally describe protocol sequencing.
+- Tests :: Run the two affected test files, then the full test suite.
+- Done when :: Each affected session creation returns 202, restart restores its thread, and the tests assert the complete expected adapter protocol.
+
+** DONE [#B] Verify the CI repair scope
+:PROPERTIES:
+:ID: verify-ci-repair-scope
+:END:
+- Why :: The CI failure needs current evidence that the repaired fixtures do not regress project checks.
+- Change :: Run required check, test, lint, build, and the browser-visible end-to-end suite if the repair changes browser-visible behavior (it is not expected to). Remove the already-present unused test binding that blocks lint after the test repair.
+- Tests :: `npm run check`, `npm test`, `npm run lint`, `npm run build`.
+- Done when :: All relevant checks pass, unrelated pre-existing lint failures are explicitly distinguished if still present, and the intended diff is cleanly scoped to the regression.
