@@ -55,11 +55,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
+  import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
+  import PlanView from './features/plans/PlanView.svelte';
   import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
-  import type { Tab } from './features/sessions/tab-state.js';
+  import { nextTab, type Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
   import { displayWorkspacePath } from './features/sessions/session-list.js';
   import SkillsView from './features/skills/SkillsView.svelte';
@@ -102,6 +104,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let messages = $state<ChatMessage[]>([]);
   let activities = $state<HistoryActivity[]>([]);
   let cursor = $state(0);
+  let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
+  let navigationFocus = $state<Tab | null>(null);
+  let planEnabled = $derived(
+    (planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error') &&
+      !!planState.plan,
+  );
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,6 +132,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient();
+  const planController = createPlanController(
+    { getPlan: relay.getPlan, closePlan: relay.closePlan },
+    (next) => (planState = next),
+  );
   const messageCache = createMessageCache();
   const sessionCache = createSessionCache();
   const toastQueue = createToastQueue();
@@ -172,6 +184,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       void refreshRecentSessions();
       activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
       status = sessionId ? turnReadiness(activeTurnId) : 'Choose a workspace and start a session.';
+      planController.select(sessionId);
       if (sessionId) {
         await resyncHistory(sessionId);
         connectSession(sessionId);
@@ -195,6 +208,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     document.removeEventListener('visibilitychange', reconcileVisibleHistory);
     window.removeEventListener('focus', reconcileVisibleHistory);
     socket?.close();
+    planController.dispose();
   });
 
   async function startSession() {
@@ -224,6 +238,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       );
       startRequestKey = null;
       sessionId = session.id;
+      planController.select(session.id);
       activeTurnId = null;
       void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();
@@ -272,6 +287,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         sessions = sessions.map((session) => (session.id === id ? restored : session));
       }
       sessionId = id;
+      planController.select(id);
       void sessionCache.saveSelectedSession(id);
       messages = await messageCache.read(id);
       activities = [];
@@ -413,6 +429,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
     void sessionCache.saveCursor(id, cursor);
+    if (fallbackSequence) planController.refresh(id);
     status = turnReadiness(activeTurnId);
   }
 
@@ -434,6 +451,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function selectTab(next: Tab): void {
     if (next === 'chat' && !chatEnabled) return;
+    if (next === 'plan' && !planEnabled) return;
     tab = next;
     if (next === 'chat') {
       reconcileVisibleHistory();
@@ -443,6 +461,46 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
       void refreshSessionLists();
+    }
+  }
+
+  function focusNavigationTab(next: Tab): void {
+    navigationFocus = next;
+    queueMicrotask(() => (navigationFocus = null));
+  }
+
+  let swipeStart: Readonly<{ pointerId: number; x: number; y: number }> | null = null;
+
+  function isInteractiveTarget(target: EventTarget | null): boolean {
+    return (
+      target instanceof Element &&
+      target.closest('button, input, textarea, select, a, summary, [contenteditable]') !== null
+    );
+  }
+
+  function beginTabSwipe(event: PointerEvent): void {
+    if (event.pointerType !== 'touch' || isInteractiveTarget(event.target)) return;
+    swipeStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+  }
+
+  function completeTabSwipe(event: PointerEvent): void {
+    if (!swipeStart || event.pointerId !== swipeStart.pointerId) return;
+    const start = swipeStart;
+    swipeStart = null;
+    const horizontal = event.clientX - start.x;
+    const vertical = event.clientY - start.y;
+    if (Math.abs(horizontal) < 48 || Math.abs(horizontal) <= Math.abs(vertical)) return;
+    selectTab(nextTab(tab, horizontal < 0 ? 1 : -1, { chatEnabled, planEnabled }));
+  }
+
+  function cancelTabSwipe(event: PointerEvent): void {
+    if (swipeStart?.pointerId === event.pointerId) swipeStart = null;
+  }
+
+  async function closePlan(): Promise<void> {
+    if ((await planController.close()) === 'chat') {
+      selectTab('chat');
+      focusNavigationTab('chat');
     }
   }
 
@@ -754,6 +812,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         () => {
           void resyncHistory(id);
         },
+        (event) => planController.applyEvent(id, event),
       );
       void sessionCache.saveCursor(id, cursor);
     };
@@ -777,7 +836,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <FilesystemTreeEvidence context={evidenceContext} />
   </main>
 {:else}
-  <main>
+  <main
+    class="swipe-surface"
+    onpointerdown={beginTabSwipe}
+    onpointerup={completeTabSwipe}
+    onpointercancel={cancelTabSwipe}
+  >
     <AppHeader
       {theme}
       sessionPath={tab === 'chat'
@@ -815,6 +879,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <p>Start a session from the Sessions tab to chat with Codex.</p>
         {/if}
       </section>
+    {:else if tab === 'plan'}
+      <PlanView state={planState} onclose={() => void closePlan()} />
     {:else if tab === 'git'}
       <GitView
         {workspaceTree}
@@ -890,7 +956,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/if}
     {/if}
 
-    <BottomNavigation activeTab={tab} {chatEnabled} onselect={selectTab} />
+    <BottomNavigation
+      activeTab={tab}
+      {chatEnabled}
+      {planEnabled}
+      focusTab={navigationFocus}
+      onselect={selectTab}
+    />
   </main>
 {/if}
 {#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}
@@ -900,6 +972,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   .chat-view {
     margin-inline: calc(0.25rem - var(--page-inline-padding));
+  }
+
+  .swipe-surface {
+    touch-action: pan-y;
   }
 
   .evidence-mode {

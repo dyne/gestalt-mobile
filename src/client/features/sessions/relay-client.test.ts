@@ -99,6 +99,20 @@ describe('relay client', () => {
     expect(requests).toEqual(['GET /api/sessions']);
   });
 
+  it('gets an optional plan and closes it through its session-scoped routes', async () => {
+    const requests: string[] = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      return new Response(null, { status: init?.method === 'DELETE' ? 204 : 204 });
+    });
+    await expect(client.getPlan('session/1', new AbortController().signal)).resolves.toBeNull();
+    await client.closePlan('session/1');
+    expect(requests).toEqual([
+      'GET /api/sessions/session%2F1/plan',
+      'DELETE /api/sessions/session%2F1/plan',
+    ]);
+  });
+
   it('releases a session without forgetting it', async () => {
     const requests: Array<{ url: string; method?: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {

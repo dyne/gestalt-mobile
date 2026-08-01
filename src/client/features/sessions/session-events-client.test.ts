@@ -47,4 +47,23 @@ describe('relay session events', () => {
 
     expect({ cursor, gaps }).toEqual({ cursor: 3, gaps: [5] });
   });
+
+  it('forwards each accepted relay event once for feature-local projections', () => {
+    const events: string[] = [];
+    let cursor = applyRelayEvent(
+      0,
+      { type: 'relay.event', event: { sequence: 1, type: 'plan.updated', payload: {} } },
+      () => undefined,
+      () => undefined,
+      (event) => events.push(event.type),
+    );
+    cursor = applyRelayEvent(
+      cursor,
+      { type: 'relay.event', event: { sequence: 1, type: 'plan.updated', payload: {} } },
+      () => undefined,
+      () => undefined,
+      (event) => events.push(event.type),
+    );
+    expect({ cursor, events }).toEqual({ cursor: 1, events: ['plan.updated'] });
+  });
 });

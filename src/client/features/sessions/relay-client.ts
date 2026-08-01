@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { SupervisedPlan } from '../plans/contracts.js';
+
 export type RelaySession = {
   id: string;
   state: string;
@@ -142,8 +144,14 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     const response = await fetcher(path, { method: 'DELETE' });
     if (!response.ok) throw await failure(response);
   }
-  async function get<T>(path: string): Promise<T> {
-    const response = await fetcher(path);
+  async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const response = await fetcher(path, signal ? { signal } : undefined);
+    if (!response.ok) throw await failure(response);
+    return response.json() as Promise<T>;
+  }
+  async function getOptional<T>(path: string, signal: AbortSignal): Promise<T | null> {
+    const response = await fetcher(path, { signal });
+    if (response.status === 204) return null;
     if (!response.ok) throw await failure(response);
     return response.json() as Promise<T>;
   }
@@ -180,6 +188,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       ),
     getHistory: (sessionId: string) =>
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
+    getPlan: (sessionId: string, signal: AbortSignal) =>
+      getOptional<SupervisedPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/plan`, signal),
+    closePlan: (sessionId: string) =>
+      remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),
     getGitSummary: (workspaceId: string) =>
       get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`),
     cloneGitRepository: (workspaceId: string, address: string) =>

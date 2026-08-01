@@ -1,0 +1,190 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+import { expect, test, type Page } from '@playwright/test';
+
+const session = (id: string, workspacePath: string) => ({
+  id,
+  state: 'ready',
+  threadId: `${id}-thread`,
+  workspaceId: 'workspace-1',
+  workspacePath,
+  profile: 'default',
+  activeTurnId: null,
+});
+
+const completedPlan = {
+  title: 'Responsive plan',
+  subtitle: 'A retained plan for mobile navigation',
+  steps: [
+    {
+      id: 'finish',
+      title: 'Finish navigation',
+      level: 1,
+      state: 'DONE',
+      priority: 'A',
+      reviewStatus: 'UNREVIEWED',
+      description: { goal: 'Keep every input path consistent.' },
+      children: [],
+    },
+  ],
+  totalSteps: 1,
+  doneSteps: 1,
+  allDone: true,
+  currentStepId: 'finish',
+};
+
+const activePlan = { ...completedPlan, allDone: false, doneSteps: 0 };
+
+async function routeSessionHistory(page: Page, id: string): Promise<void> {
+  await page.route(`**/api/sessions/${id}/history`, (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [], currentSequence: 0 }) }),
+  );
+}
+
+test('keeps the completed Plan tab reachable and overflow-free at 320px with 200% root font', async ({ page }) => {
+  const selected = session('session-1', '/projects/one');
+  let closed = false;
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [selected] }),
+    }),
+  );
+  await routeSessionHistory(page, selected.id);
+  await page.route(`**/api/sessions/${selected.id}/plan`, (route) => {
+    if (route.request().method() === 'DELETE') {
+      closed = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(completedPlan) });
+  });
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.routeWebSocket(/ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/, () => {});
+
+  await page.goto('/');
+  await page.addStyleTag({ content: 'html { font-size: 200% !important; }' });
+
+  const navigation = page.getByLabel('Primary');
+  await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
+  const horizontalLayout = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    overflow: [...document.querySelectorAll<HTMLElement>('*')]
+      .filter(
+        (element) =>
+          element.getBoundingClientRect().right > window.innerWidth + 1 ||
+          element.getBoundingClientRect().left < -1,
+      )
+      .map((element) => ({
+        name: element.tagName,
+        className: element.className,
+        left: Math.round(element.getBoundingClientRect().left),
+        right: Math.round(element.getBoundingClientRect().right),
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      })),
+  }));
+  expect(horizontalLayout.overflow).toEqual([]);
+  expect(horizontalLayout.scrollWidth).toBeLessThanOrEqual(horizontalLayout.clientWidth);
+
+  const chat = navigation.getByRole('button', { name: 'Chat' });
+  const plan = navigation.getByRole('button', { name: 'Plan' });
+  await chat.click();
+  const prompt = page.getByRole('textbox', { name: 'Prompt' });
+  await prompt.fill('Keep this chat draft');
+
+  await chat.focus();
+  await chat.press('Tab');
+  await expect(plan).toBeFocused();
+  await plan.press('Enter');
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('heading', { name: 'Responsive plan' })).toBeVisible();
+
+  await chat.click();
+  await chat.focus();
+  await chat.press(' ');
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(prompt).toHaveValue('Keep this chat draft');
+
+  await chat.press('ArrowRight');
+  await expect(plan).toBeFocused();
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
+  await plan.press('ArrowRight');
+  await expect(navigation.getByRole('button', { name: 'Sessions' })).toBeFocused();
+
+  await chat.click();
+  const main = page.locator('main');
+  await main.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 4, clientX: 240, clientY: 240 });
+  await main.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 4, clientX: 100, clientY: 242 });
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Close completed plan' }).click();
+  await expect.poll(() => closed).toBe(true);
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(chat).toBeFocused();
+  await expect(plan).toHaveCount(0);
+});
+
+test('adds and removes Plan from live events without stealing focus, then isolates a session without a plan', async ({ page }) => {
+  const first = session('session-1', '/projects/one');
+  const second = session('session-2', '/projects/two');
+  let emitPlanEvent: ((event: object) => void) | undefined;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [first, second] }),
+    }),
+  );
+  await Promise.all([routeSessionHistory(page, first.id), routeSessionHistory(page, second.id)]);
+  await page.route('**/api/sessions/session-1/plan', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/sessions/session-2/plan', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) => {
+      emitPlanEvent = (event) => socket.send(JSON.stringify({ type: 'relay.event', event }));
+    },
+  );
+  await page.routeWebSocket(/ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-2\/events\?after=\d+/, () => {});
+
+  await page.goto('/');
+  const navigation = page.getByLabel('Primary');
+  const chat = navigation.getByRole('button', { name: 'Chat' });
+  await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+  await chat.focus();
+  await expect.poll(() => typeof emitPlanEvent).toBe('function');
+  emitPlanEvent!({ sequence: 1, type: 'plan.updated', payload: activePlan });
+
+  const plan = navigation.getByRole('button', { name: 'Plan' });
+  await expect(plan).toBeVisible();
+  await expect(chat).toBeFocused();
+  await chat.press('Tab');
+  await expect(plan).toBeFocused();
+  await plan.press('Enter');
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
+
+  emitPlanEvent!({ sequence: 2, type: 'plan.closed', payload: {} });
+  await expect(plan).toHaveCount(0);
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(chat).toBeFocused();
+
+  await navigation.getByRole('button', { name: 'Sessions' }).click();
+  await page
+    .getByLabel('Open sessions')
+    .getByRole('listitem')
+    .filter({ hasText: '/projects/two' })
+    .getByRole('button', { name: /\/projects\/two/ })
+    .click();
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+});

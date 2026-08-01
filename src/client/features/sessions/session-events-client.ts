@@ -4,9 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+export type RelayEvent = {
+  sequence: number;
+  type: string;
+  payload: unknown;
+};
+
 type RelayEnvelope = {
   type: string;
-  event?: { sequence: number; type: string; payload: unknown };
+  event?: RelayEvent;
 };
 
 export function applyRelayEvent(
@@ -14,6 +20,7 @@ export function applyRelayEvent(
   envelope: RelayEnvelope,
   onDelta: (text: string) => void,
   onGap: (sequence: number) => void = () => {},
+  onEvent: (event: RelayEvent) => void = () => {},
 ): number {
   if (envelope.type !== 'relay.event' || !envelope.event || envelope.event.sequence <= cursor)
     return cursor;
@@ -21,6 +28,7 @@ export function applyRelayEvent(
     onGap(envelope.event.sequence);
     return cursor;
   }
+  onEvent(envelope.event);
   if (envelope.event.type === 'agentMessageDelta') {
     const text = (envelope.event.payload as { text?: string }).text;
     if (text) onDelta(text);
