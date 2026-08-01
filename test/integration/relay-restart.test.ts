@@ -24,6 +24,7 @@ function fakeAppServer(calls: string[]) {
     rpc: {
       request: async (method: string, params: unknown) => {
         calls.push(method);
+        if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
         if (method === 'skills/list')
           return { data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }] };
         return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
@@ -119,6 +120,7 @@ test('restores the original snapshot after profile removal and fresh catalog cha
     return {
       rpc: {
         request: async (method: string, params: unknown) => {
+          if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
           if (method === 'skills/list')
             return { data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: discovered, errors: [] }] };
           return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};

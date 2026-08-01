@@ -16,7 +16,7 @@ afterEach(cleanup);
 describe('InteractionList', () => {
   it('shows the command above spaced approval controls', async () => {
     const ondecision = vi.fn();
-    const { container } = render(InteractionList, {
+    render(InteractionList, {
       interactions: [{ requestId: 'request-1', kind: 'commandApproval', payload: { command: 'git status' } }],
       answers: {}, onanswer: () => {}, onuserinput: () => {}, onpermission: () => {}, ondecision,
     });

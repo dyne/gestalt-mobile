@@ -24,6 +24,7 @@ function fakeAppServer(calls: string[]) {
       request: async (method: string, params: unknown) => {
         calls.push(method);
         if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+        if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
         if (method === 'skills/list')
           return { data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }] };
         return {};
@@ -272,8 +273,8 @@ describe('production composition', () => {
     });
     expect(created.statusCode).toBe(202);
     expect(firstCalls).toEqual([
-      'initialize', 'model/list', 'initialize', 'skills/list', 'initialize', 'skills/list',
-      'initialize', 'thread/start',
+      'initialize', 'model/list', 'initialize', 'model/list', 'initialize', 'skills/list',
+      'initialize', 'skills/list', 'initialize', 'thread/start',
     ]);
     await first.close();
 
@@ -313,8 +314,12 @@ describe('production composition', () => {
       startAppServers: true,
       launchAppServer: () => ({
         rpc: {
-          request: async (method: string) =>
-            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          request: async (method: string, params: unknown) => {
+            if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
+            if (method === 'skills/list')
+              return { data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }] };
+            return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+          },
           onNotification: () => () => {},
           onServerRequest: () => () => {},
         },
@@ -335,7 +340,7 @@ describe('production composition', () => {
 
     await app.close();
 
-    // Bootstrap opens and closes a short-lived child to discover available models.
-    expect(closed).toBe(2);
+    // Model and skill catalogs run for bootstrap and session start; the active child closes with the relay.
+    expect(closed).toBe(5);
   });
 });
