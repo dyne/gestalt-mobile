@@ -63,7 +63,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { validateStartForm } from './features/sessions/start-form.js';
   import { nextTab, type Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
-  import { displayWorkspacePath } from './features/sessions/session-list.js';
+  import {
+    displayWorkspacePath,
+    retainForgottenSession,
+  } from './features/sessions/session-list.js';
   import SkillsView from './features/skills/SkillsView.svelte';
   import { SkillsState } from './features/skills/skills-state.js';
 
@@ -338,6 +341,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function forgetSession(id: string) {
+    const forgottenSession = sessions.find((session) => session.id === id);
     try {
       await relay.forgetSession(id);
       if (sessionId === id) {
@@ -347,6 +351,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         void sessionCache.saveSelectedSession(null);
       }
       await refreshSessionLists();
+      recentSessions = retainForgottenSession(recentSessions, forgottenSession);
     } catch (error) {
       status = `Could not forget session: ${errorMessage(error)}`;
     }
