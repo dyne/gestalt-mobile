@@ -12,7 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     chatEnabled: boolean;
     planEnabled?: boolean;
     focusTab?: Tab | null;
-    onselect: (tab: Tab) => void;
+    onselect: (tab: Tab, focusChatPrompt?: boolean) => void;
   };
 
   let { activeTab, chatEnabled, planEnabled = false, focusTab = null, onselect }: Props = $props();
@@ -58,7 +58,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     aria-pressed={activeTab === 'chat'}
     disabled={!chatEnabled}
     onkeydown={handleKeydown}
-    onclick={() => onselect('chat')}>Chat</button
+    onclick={() => onselect('chat', true)}>Chat</button
   >
   {#if planEnabled}
     <button

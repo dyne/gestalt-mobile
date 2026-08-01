@@ -16,6 +16,38 @@ const sessions = Array.from({ length: 24 }, (_, index) => ({
   activeTurnId: null,
 }));
 
+test('focuses the prompt when Chat is selected on desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [sessions[0]] }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/plan', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ profiles: [] }) }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    () => {},
+  );
+
+  await page.goto('/');
+  const navigation = page.getByRole('navigation', { name: 'Primary' });
+  await navigation.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeFocused();
+});
+
 test('opens Chat at the bottom and every other tab at the top', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 640 });
   await page.route('**/api/bootstrap', (route) =>
@@ -52,7 +84,9 @@ test('opens Chat at the bottom and every other tab at the top', async ({ page })
 
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: 'Primary' });
-  await navigation.getByRole('button', { name: 'Chat' }).click();
+  const chat = navigation.getByRole('button', { name: 'Chat' });
+  await chat.click();
+  await expect(chat).toBeFocused();
   await expect
     .poll(() =>
       page.evaluate(
