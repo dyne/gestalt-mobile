@@ -1,0 +1,362 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+
+import { expect, test, type WebSocketRoute } from '@playwright/test';
+
+import { composeRelayApp } from '../../src/server/composition.js';
+import type {
+  AppServer,
+  AppServerLaunchInput,
+} from '../../src/server/platform/codex/session-runtime.js';
+
+const runFile = promisify(execFile);
+const helper = resolve('../gestalt-agents/plugins/gestalt/skills/org-plan/scripts/org-plan');
+const fixturePlan = `#+TITLE: Supervised browser lifecycle
+#+SUBTITLE: Helper to relay to phone
+#+DATE: 2026-08-01
+#+KEYWORDS: supervised plan mobile
+
+* TODO [#A] Deliver the supervised lifecycle
+:PROPERTIES:
+:ID: deliver-lifecycle
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Prove the reviewed producer and consumer together.
+- Notes :: Keep the retained state available through reconnect.
+
+** TODO [#A] Publish the first status
+:PROPERTIES:
+:ID: publish-first-status
+:END:
+- Why :: The browser must see the producer output.
+- Change :: Publish a deterministic status through the reviewed helper.
+- Tests :: Observe the real public endpoint and WebSocket.
+- Done when :: The first step is visible and current.
+
+** TODO [#A] Finish after reconnect
+:PROPERTIES:
+:ID: finish-after-reconnect
+:END:
+- Why :: Retained progress must survive relay restart.
+- Change :: Resume the lifecycle and finish the plan after reconnect.
+- Tests :: Observe replacement, review, completion, close, and reload.
+- Done when :: The completed plan can be permanently dismissed.
+`;
+
+type RelayApp = Awaited<ReturnType<typeof composeRelayApp>>;
+type StartedSession = { id: string };
+
+function fakeAppServer(input: AppServerLaunchInput, launches: AppServerLaunchInput[]): AppServer {
+  launches.push(input);
+  const threadId = `thread-${launches.length}`;
+  return {
+    rpc: {
+      request: async (method: string, params: unknown) => {
+        if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
+        if (method === 'skills/list') {
+          const cwd = (params as { cwds: string[] }).cwds[0];
+          return { data: [{ cwd, skills: [], errors: [] }] };
+        }
+        if (method === 'thread/start') return { thread: { id: threadId } };
+        if (method === 'thread/read') return { thread: { turns: [] } };
+        return {};
+      },
+      onNotification: () => () => {},
+      onServerRequest: () => () => {},
+    },
+    close: () => {},
+    onExit: () => () => {},
+  };
+}
+
+test('runs the reviewed helper through the real relay and selected mobile session lifecycle', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-root-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-state-'));
+  const workspace = join(root, 'workspace');
+  const planPath = join(workspace, 'lifecycle.org');
+  const launches: AppServerLaunchInput[] = [];
+  const errors: string[] = [];
+  const relayEvents: Array<{ sequence: number; type: string; payload: unknown }> = [];
+  const socketUrls: string[] = [];
+  const connectedSockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
+  let blockSockets = false;
+  let app: RelayApp | undefined;
+  let relayPort = 0;
+  let owningStatusFile = '';
+
+  const profiles = {
+    list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+    require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+  };
+  const startRelay = async (port = 0) => {
+    app = await composeRelayApp({
+      root,
+      dataDir,
+      staticDir: resolve('dist/client'),
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: (input) => fakeAppServer(input, launches),
+    });
+    await app.listen({ host: '127.0.0.1', port });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+    relayPort = address.port;
+    return `http://127.0.0.1:${relayPort}`;
+  };
+  const invokeHelper = async (...args: string[]) => {
+    expect(owningStatusFile, 'the relay injects a session-owned helper status path').toBeTruthy();
+    const [command, ...rest] = args;
+    await runFile(helper, [command!, planPath, ...rest], {
+      cwd: workspace,
+      env: { ...process.env, GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: owningStatusFile },
+    });
+  };
+
+  try {
+    await mkdir(workspace);
+    await writeFile(planPath, fixturePlan);
+    let relayUrl = await startRelay();
+    const bootstrap = (await fetch(`${relayUrl}/api/bootstrap`).then((response) =>
+      response.json(),
+    )) as {
+      workspaces: Array<{ children: Array<{ id: string; name: string }> }>;
+    };
+    const workspaceId = bootstrap.workspaces[0]?.children.find(
+      (item) => item.name === 'workspace',
+    )?.id;
+    expect(workspaceId).toBeTruthy();
+    const createSession = async (): Promise<StartedSession> => {
+      const response = await fetch(`${relayUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, profile: 'default', model: 'gpt-5.6-terra' }),
+      });
+      expect(response.status).toBe(202);
+      return response.json() as Promise<StartedSession>;
+    };
+    const isolatedSession = await createSession();
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    const owningSession = await createSession();
+    const sessionLaunches = launches.filter((launch) => launch.environment);
+    expect(sessionLaunches).toHaveLength(2);
+    owningStatusFile = sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE!;
+    expect(sessionLaunches[0]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE).not.toBe(
+      sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE,
+    );
+
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(`console: ${message.text()}`);
+    });
+    page.on('pageerror', (error) => errors.push(`page: ${error.message}`));
+    await page.routeWebSocket('**/api/sessions/**/events?after=*', (client) => {
+      socketUrls.push(client.url());
+      if (blockSockets) {
+        void client.close();
+        return;
+      }
+      const server = client.connectToServer();
+      connectedSockets.push({ client, server });
+      server.onMessage((message) => {
+        try {
+          const envelope = JSON.parse(String(message)) as {
+            type?: string;
+            event?: { sequence: number; type: string; payload: unknown };
+          };
+          if (envelope.type === 'relay.event' && envelope.event) relayEvents.push(envelope.event);
+        } catch {
+          // Only relay JSON frames are relevant to this lifecycle assertion.
+        }
+        client.send(message);
+      });
+      client.onMessage((message) => server.send(message));
+    });
+    const planRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/plan')) planRequests.push(request.url());
+    });
+    await page.goto(relayUrl);
+    const navigation = page.getByLabel('Primary');
+    const planTab = navigation.getByRole('button', { name: 'Plan' });
+    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+
+    await invokeHelper('signal', 'first-publication');
+    await expect(planTab).toBeVisible();
+    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
+    await planTab.click();
+    await expect(page.getByRole('heading', { name: 'Supervised browser lifecycle' })).toBeVisible();
+    await expect(page.locator('details[data-step-id="deliver-lifecycle"]')).toHaveAttribute(
+      'open',
+      '',
+    );
+
+    await invokeHelper('set', 'deliver-lifecycle', 'WIP');
+    await invokeHelper('l2', 'publish-first-status', 'WIP');
+    await expect(page.getByText('Current: Publish the first status (WIP)')).toBeVisible();
+    await expect(page.locator('details[data-step-id="publish-first-status"]')).toHaveAttribute(
+      'open',
+      '',
+    );
+    await page.locator('details[data-step-id="publish-first-status"] summary').click();
+    await expect(page.locator('details[data-step-id="publish-first-status"]')).not.toHaveAttribute(
+      'open',
+      '',
+    );
+
+    await invokeHelper('l2', 'publish-first-status', 'DONE');
+    await invokeHelper('l2', 'finish-after-reconnect', 'WIP');
+    await expect(page.getByText('Current: Finish after reconnect (WIP)')).toBeVisible();
+    await expect(page.locator('details[data-step-id="finish-after-reconnect"]')).toHaveAttribute(
+      'open',
+      '',
+    );
+    await expect(page.locator('details[data-step-id="publish-first-status"]')).not.toHaveAttribute(
+      'open',
+      '',
+    );
+
+    const requestsBeforeStableWait = planRequests.length;
+    await page.waitForTimeout(350);
+    expect(planRequests).toHaveLength(requestsBeforeStableWait);
+
+    const cursorBeforeOffline = Math.max(0, ...relayEvents.map((event) => event.sequence));
+    blockSockets = true;
+    await Promise.allSettled(
+      connectedSockets.splice(0).flatMap(({ client, server }) => [client.close(), server.close()]),
+    );
+    await app.close();
+    app = undefined;
+    relayUrl = await startRelay(relayPort);
+    await expect
+      .poll(() => launches.filter((launch) => launch.environment).length)
+      .toBeGreaterThanOrEqual(4);
+    expect(
+      launches
+        .filter((launch) => launch.environment)
+        .map((launch) => launch.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE),
+    ).toContain(owningStatusFile);
+    const retained = await fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`);
+    expect(retained.status).toBe(200);
+    expect(await retained.json()).toMatchObject({
+      doneSteps: 1,
+      allDone: false,
+      currentStepId: 'finish-after-reconnect',
+    });
+
+    await invokeHelper('l2', 'finish-after-reconnect', 'DONE');
+    await expect
+      .poll(async () =>
+        fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
+          .then((response) => response.json())
+          .then((plan: { doneSteps: number }) => plan.doneSteps),
+      )
+      .toBe(2);
+    blockSockets = false;
+    await expect
+      .poll(() =>
+        relayEvents.find(
+          (event) =>
+            event.sequence > cursorBeforeOffline &&
+            event.type === 'plan.updated' &&
+            (event.payload as { currentStepId?: string }).currentStepId === 'deliver-lifecycle' &&
+            (event.payload as { doneSteps?: number }).doneSteps === 2,
+        ),
+      )
+      .toBeTruthy();
+    expect(socketUrls.at(-1)).toContain(`after=${cursorBeforeOffline}`);
+    await expect(page.getByText('Current: Deliver the supervised lifecycle (WIP)')).toBeVisible();
+    await expect(planTab).toHaveAttribute('aria-pressed', 'true');
+
+    await invokeHelper('set', 'deliver-lifecycle', 'DONE');
+    await expect(page.getByText('1 / 3 complete')).not.toBeVisible();
+    await expect(page.getByText('3 / 3 complete')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Close completed plan' })).toBeVisible();
+    await expect(page.getByText('DONE · Priority A · UNREVIEWED').first()).toBeVisible();
+    await invokeHelper('review', 'deliver-lifecycle', 'REVIEWED');
+    await expect(page.getByText('DONE · Priority A · REVIEWED')).toBeVisible();
+
+    await navigation.getByRole('button', { name: 'Sessions' }).click();
+    await page.evaluate(() => {
+      (
+        window as typeof window & { __planSeenDuringIsolation?: boolean }
+      ).__planSeenDuringIsolation = false;
+      new MutationObserver(() => {
+        const plan = [...document.querySelectorAll('nav button')].some(
+          (button) => button.textContent === 'Plan',
+        );
+        if (plan)
+          (
+            window as typeof window & { __planSeenDuringIsolation?: boolean }
+          ).__planSeenDuringIsolation = true;
+      }).observe(document.querySelector('nav')!, { childList: true, subtree: true });
+    });
+    const sessionItems = page.getByLabel('Open sessions').getByRole('listitem');
+    await expect(sessionItems).toHaveCount(2);
+    const listedSessions = (await fetch(`${relayUrl}/api/bootstrap`).then((response) =>
+      response.json(),
+    )) as {
+      sessions: Array<{ id: string }>;
+    };
+    const isolatedIndex = listedSessions.sessions.findIndex(
+      (session) => session.id === isolatedSession.id,
+    );
+    const owningIndex = listedSessions.sessions.findIndex(
+      (session) => session.id === owningSession.id,
+    );
+    expect(isolatedIndex).toBeGreaterThanOrEqual(0);
+    expect(owningIndex).toBeGreaterThanOrEqual(0);
+    await sessionItems.nth(isolatedIndex).locator('button.session-select').click();
+    await expect(planTab).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as typeof window & { __planSeenDuringIsolation?: boolean })
+            .__planSeenDuringIsolation,
+      ),
+    ).toBe(false);
+    const isolatedPlan = await fetch(`${relayUrl}/api/sessions/${isolatedSession.id}/plan`);
+    expect(isolatedPlan.status).toBe(204);
+
+    await navigation.getByRole('button', { name: 'Sessions' }).click();
+    await sessionItems.nth(owningIndex).locator('button.session-select').click();
+    await expect(planTab).toBeVisible();
+    await planTab.click();
+    await page.getByRole('button', { name: 'Close completed plan' }).click();
+    await expect(planTab).toHaveCount(0);
+    await expect(navigation.getByRole('button', { name: 'Chat' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(navigation.getByRole('button', { name: 'Chat' })).toBeFocused();
+    expect(
+      await fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`).then(
+        (response) => response.status,
+      ),
+    ).toBe(204);
+    await page.reload();
+    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+    await expect(planTab).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await page.close().catch(() => {});
+    await app?.close();
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(dataDir, { recursive: true, force: true }),
+    ]);
+  }
+});

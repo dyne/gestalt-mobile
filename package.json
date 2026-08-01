@@ -48,6 +48,8 @@
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:plan-lifecycle": "npm run build:client && playwright test test/e2e/plan-lifecycle.spec.ts",
+    "test:e2e:plan-evidence": "playwright test test/e2e/plan-ui-evidence.spec.ts",
     "license:check": "node scripts/check-license-headers.mjs",
     "license:apply": "node scripts/apply-license-headers.mjs"
   },
