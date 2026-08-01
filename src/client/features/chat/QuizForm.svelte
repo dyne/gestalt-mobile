@@ -16,7 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onsubmit(): void;
   };
   let { requestId, quiz, answers, onanswer, onsubmit }: Props = $props();
-  let customInput = $state<HTMLInputElement>();
+  let customInputs = $state<Record<string, HTMLInputElement | undefined>>({});
   let customSelected = $state<Record<string, boolean>>({});
   let complete = $derived(quiz.questions.every((question) => Boolean(answers[question.id]?.trim())));
 
@@ -24,7 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     customSelected[id] = true;
     onanswer(id, answers[id] ?? '');
     await tick();
-    customInput?.focus();
+    customInputs[id]?.focus();
   }
 </script>
 
@@ -41,11 +41,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <label for={choiceId}><strong>{choice.label}</strong><span>{choice.description}</span></label>
         {/each}
         {#if question.allowCustom}
-          <input id={inputId} name={`${requestId}-${question.id}`} type="radio" checked={customSelected[question.id] || (Boolean(answers[question.id]) && !selectedChoice)} onchange={() => chooseCustom(question.id)} />
+          <input id={inputId} name={`${requestId}-${question.id}`} type="radio" checked={customSelected[question.id] || (Boolean(answers[question.id]) && !selectedChoice)} onchange={() => chooseCustom(question.id)} onclick={() => { if (customSelected[question.id]) void chooseCustom(question.id); }} />
           <label for={inputId}><strong>Custom answer</strong><span>Provide your own response.</span></label>
           {#if customSelected[question.id] || (Boolean(answers[question.id]) && !selectedChoice)}
             <label class="custom" for={`${inputId}-text`}>Your custom answer
-              <input bind:this={customInput} id={`${inputId}-text`} type={question.isSecret ? 'password' : 'text'} value={answers[question.id]} required oninput={(event) => onanswer(question.id, event.currentTarget.value)} />
+              <input bind:this={customInputs[question.id]} id={`${inputId}-text`} type={question.isSecret ? 'password' : 'text'} value={answers[question.id]} required oninput={(event) => onanswer(question.id, event.currentTarget.value)} />
             </label>
           {/if}
         {/if}

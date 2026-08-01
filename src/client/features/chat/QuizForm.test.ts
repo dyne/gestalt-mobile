@@ -33,4 +33,14 @@ describe('QuizForm', () => {
     await fireEvent.click(screen.getByRole('radio', { name: /Custom answer/ }));
     expect(document.activeElement).toBe(screen.getByLabelText('Your custom answer'));
   });
+
+  it('refocuses the custom input for the question that was selected', async () => {
+    const twoQuestionQuiz = { questions: [quiz.questions[0]!, { ...quiz.questions[0]!, id: 'style', header: 'Style' }] };
+    render(QuizForm, { requestId: 'request-1', quiz: twoQuestionQuiz, answers: {}, onanswer: () => {}, onsubmit: () => {} });
+    const customRadios = screen.getAllByRole('radio', { name: /Custom answer/ });
+    await fireEvent.click(customRadios[0]!);
+    await fireEvent.click(customRadios[1]!);
+    await fireEvent.click(customRadios[0]!);
+    expect(document.activeElement).toBe(document.getElementById('request-1-mode-custom-text'));
+  });
 });
