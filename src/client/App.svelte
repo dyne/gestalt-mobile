@@ -731,8 +731,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
       }));
     const response = interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
-    await relay.respondInteraction(sessionId, interaction.requestId, response);
-    interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+    try {
+      await relay.respondInteraction(sessionId, interaction.requestId, response);
+      interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+    } catch {
+      status = 'Could not send quiz answers. Please try again.';
+    }
   }
 
   async function resolvePermissions(interaction: { requestId: string; payload: unknown }) {
