@@ -13,6 +13,7 @@ import type {
   PlanReviewStatus,
   PlanStep,
   PlanStepDescription,
+  PlanStepMeasurement,
   PlanTodoState,
   SupervisedPlan,
 } from '../domain/supervised-plan.js';
@@ -170,7 +171,8 @@ function buildSteps(headings: readonly ParsedHeading[]): readonly PlanStep[] | n
 
 function makeStep(heading: ParsedHeading): PlanStep | null {
   const description = descriptionFor(heading);
-  if (!description) return null;
+  const measurement = measurementFor(heading);
+  if (!description || measurement === null) return null;
   if (heading.level === 1) {
     const reviewStatus = heading.properties.get('REVIEW_STATUS');
     const skills = heading.properties.get('SKILLS');
@@ -185,6 +187,7 @@ function makeStep(heading: ParsedHeading): PlanStep | null {
       reviewStatus: reviewStatus as PlanReviewStatus,
       skills: skills.split(/\s+/).filter(Boolean),
       description,
+      ...(measurement ? { measurement } : {}),
       children: [],
     };
   }
@@ -196,8 +199,50 @@ function makeStep(heading: ParsedHeading): PlanStep | null {
     state: heading.state,
     priority: heading.priority,
     description,
+    ...(measurement ? { measurement } : {}),
     children: [],
   };
+}
+
+const measurementProperties = {
+  STARTED_AT: 'startedAt',
+  UPDATED_AT: 'updatedAt',
+  COMPLETED_AT: 'completedAt',
+  ELAPSED_SECONDS: 'elapsedSeconds',
+  WEEKLY_REMAINING_START: 'weeklyRemainingStart',
+  WEEKLY_REMAINING_CURRENT: 'weeklyRemainingCurrent',
+  WEEKLY_REMAINING_END: 'weeklyRemainingEnd',
+  WEEKLY_PERCENT_USED: 'weeklyPercentUsed',
+  TOKENS_START: 'tokensStart',
+  TOKENS_CURRENT: 'tokensCurrent',
+  TOKENS_END: 'tokensEnd',
+  TOKENS_USED: 'tokensUsed',
+} as const;
+
+function measurementFor(heading: ParsedHeading): PlanStepMeasurement | null | undefined {
+  const measurement: Record<string, number | string> = {};
+  for (const [property, field] of Object.entries(measurementProperties)) {
+    const value = heading.properties.get(property);
+    if (value === undefined) continue;
+    if (property.endsWith('_AT')) {
+      if (!isUtcIsoInstant(value)) return null;
+      measurement[field] = value;
+      continue;
+    }
+    if (!/^\d+$/.test(value)) return null;
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || (property.startsWith('WEEKLY_') && number > 100)) return null;
+    measurement[field] = number;
+  }
+  return Object.keys(measurement).length === 0 ? undefined : (measurement as PlanStepMeasurement);
+}
+
+function isUtcIsoInstant(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return false;
+  const canonical = instant.toISOString();
+  return value === canonical || value === canonical.replace('.000Z', 'Z');
 }
 
 function descriptionFor(heading: ParsedHeading): PlanStepDescription | null {
