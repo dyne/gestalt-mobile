@@ -8,6 +8,12 @@ import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
+import { randomUUID } from 'node:crypto';
+import {
+  createPlanMeasurementSnapshot,
+  type RateLimitWindow,
+  type ThreadTokenBreakdown,
+} from '../../features/plans/application/measurement-snapshot.js';
 import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
 import type { PlanStatusLease, PlanStatusSource } from '../../features/plans/application/ports.js';
@@ -55,11 +61,13 @@ export class CodexSessionRuntime {
       sessionId: string,
       update: import('../../features/plans/application/ports.js').PlanStatusUpdate,
     ) => void,
+    private readonly planMeasurementBaseUrl?: string,
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
   private readonly exitUnsubscribers = new Map<string, () => void>();
   private readonly threadIds = new Map<string, string>();
   private readonly planStatusLeases = new Map<string, PlanStatusLease>();
+  private readonly planMeasurementTokens = new Map<string, string>();
 
   async start(
     session: RelaySessionSnapshot,
@@ -152,6 +160,25 @@ export class CodexSessionRuntime {
     await process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
   }
 
+  async readPlanMeasurement(session: RelaySessionSnapshot) {
+    const process = this.processes.get(session.id);
+    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const [rateLimits, thread] = await Promise.all([
+      process.rpc.request('account/rateLimits/read', {}),
+      process.rpc.request('thread/read', { threadId: session.threadId, includeTurns: true }),
+    ]);
+    return createPlanMeasurementSnapshot({
+      capturedAt: new Date().toISOString(),
+      rateLimits: rateLimitWindows(rateLimits),
+      tokenUsage: threadTokenUsage(thread),
+    });
+  }
+
+  authorizePlanMeasurement(sessionId: string, authorization: string | undefined): boolean {
+    const token = this.planMeasurementTokens.get(sessionId);
+    return Boolean(token && authorization === `Bearer ${token}`);
+  }
+
   async readHistory(session: RelaySessionSnapshot): Promise<{
     turns: HistoryTurn[];
     activeTurnId: string | null;
@@ -229,7 +256,8 @@ export class CodexSessionRuntime {
       sessionId,
       process.onExit?.(() => {
         this.processes.delete(sessionId);
-        this.threadIds.delete(sessionId);
+    this.threadIds.delete(sessionId);
+    this.planMeasurementTokens.delete(sessionId);
         this.exitUnsubscribers.delete(sessionId);
         this.releasePlanStatus(sessionId);
         this.onProcessExit?.(sessionId);
@@ -246,14 +274,25 @@ export class CodexSessionRuntime {
       : undefined;
     if (lease) this.planStatusLeases.set(session.id, lease);
     try {
+      const token = randomUUID();
+      this.planMeasurementTokens.set(session.id, token);
       return this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
         skillsConfig: await this.resolveSkills?.(session),
-        ...(lease
+        ...((lease || this.planMeasurementBaseUrl)
           ? {
               environment: {
-                GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory,
+                ...(lease
+                  ? { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory }
+                  : {}),
+                ...(this.planMeasurementBaseUrl
+                  ? {
+                      GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL:
+                        `${this.planMeasurementBaseUrl}/api/sessions/${session.id}/plan-measurement`,
+                      GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_TOKEN: token,
+                    }
+                  : {}),
               },
             }
           : {}),
@@ -268,4 +307,42 @@ export class CodexSessionRuntime {
     this.planStatusLeases.get(sessionId)?.close();
     this.planStatusLeases.delete(sessionId);
   }
+}
+
+function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefined {
+  const limits = asRecord(value)?.rateLimits;
+  if (!Array.isArray(limits)) return undefined;
+  return limits.flatMap((limit) => {
+    const record = asRecord(limit);
+    const durationMinutes = record?.windowDurationMins;
+    const usedPercent = record?.usedPercent;
+    return typeof durationMinutes === 'number' && typeof usedPercent === 'number'
+      ? [{ durationSeconds: durationMinutes * 60, usedPercent }]
+      : [];
+  });
+}
+
+function threadTokenUsage(value: unknown): ThreadTokenBreakdown | undefined {
+  const turns = asRecord(asRecord(value)?.thread)?.turns;
+  if (!Array.isArray(turns)) return undefined;
+  let inputTokens = 0;
+  let cachedInputTokens = 0;
+  let outputTokens = 0;
+  for (const turn of turns) {
+    const usage = asRecord(asRecord(turn)?.tokenUsage);
+    if (!usage) return undefined;
+    const input = usage.inputTokens;
+    const cached = usage.cachedInputTokens;
+    const output = usage.outputTokens;
+    if (typeof input !== 'number' || typeof cached !== 'number' || typeof output !== 'number')
+      return undefined;
+    inputTokens += input;
+    cachedInputTokens += cached;
+    outputTokens += output;
+  }
+  return { inputTokens, cachedInputTokens, outputTokens };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
 }

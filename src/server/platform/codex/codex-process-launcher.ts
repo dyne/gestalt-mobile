@@ -48,5 +48,7 @@ export function codexChildEnvironment(
   const inherited = { ...process.env };
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL;
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_TOKEN;
   return { ...inherited, ...environment };
 }

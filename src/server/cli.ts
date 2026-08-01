@@ -185,6 +185,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     startAppServers: true,
     homeDirectory: dependencies.homeDirectory,
     explicitSkillProfile,
+    planMeasurementBaseUrl: `http://${config.host}:${config.port}`,
   });
   installShutdownHandlers(app, dependencies.signalSource);
   let address: string;
