@@ -115,7 +115,7 @@ describe('PlanView', () => {
   });
 
   it('renders measured values and keeps unavailable measurements explicit', () => {
-    render(PlanView, {
+    const { rerender } = render(PlanView, {
       state: ready({
         steps: [{
           ...l1,
@@ -126,6 +126,7 @@ describe('PlanView', () => {
       onclose: vi.fn(),
     });
     expect(screen.getByText('1m 5s elapsed · 0% observed account-wide usage · 1,200 tokens used')).toBeTruthy();
+    rerender({ state: ready({ steps: [{ ...l1, children: [] }] }), onclose: vi.fn() });
     expect(screen.getByText('Measurements unavailable')).toBeTruthy();
   });
 
