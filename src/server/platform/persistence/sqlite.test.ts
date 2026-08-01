@@ -83,6 +83,43 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it('journals ordered plan replacement and close events per owning session', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    for (const id of ['session-a', 'session-b']) {
+      database
+        .prepare(
+          'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,?,?,\'default\',\'ready\',\'active\',\'t\',\'t\')',
+        )
+        .run(id, 'w', '/w');
+    }
+    const journal = new SqliteEventJournal(database);
+    journal.append(
+      'session-a',
+      'plan.updated',
+      { title: 'Complete replacement', allDone: true, currentStepId: 'done' },
+      't1',
+    );
+    journal.append('session-b', 'plan.updated', { title: 'Other session' }, 't2');
+    journal.append('session-a', 'plan.closed', {}, 't3');
+
+    expect(journal.since('session-a', 0)).toMatchObject([
+      {
+        sessionId: 'session-a',
+        sequence: 1,
+        type: 'plan.updated',
+        payload: { title: 'Complete replacement', allDone: true, currentStepId: 'done' },
+      },
+      { sessionId: 'session-a', sequence: 2, type: 'plan.closed', payload: {} },
+    ]);
+    expect(journal.since('session-b', 0)).toMatchObject([
+      { sessionId: 'session-b', sequence: 1, type: 'plan.updated', payload: { title: 'Other session' } },
+    ]);
+    database.close();
+  });
+
   it('replays idempotent response bytes exactly', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);

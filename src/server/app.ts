@@ -35,6 +35,9 @@ import { registerForgetSession } from './features/sessions/forget-session/endpoi
 import { registerRespondInteraction } from './features/sessions/respond-interaction/endpoint.js';
 import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
+import { registerGetPlan } from './features/plans/get-plan/endpoint.js';
+import { registerClosePlan } from './features/plans/close-plan/endpoint.js';
+import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
@@ -42,10 +45,22 @@ import type { StartSessionSettings } from './features/sessions/application/start
 import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
 import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
-import { registerListAvailableSkills, type ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
-import { registerListSkillProfiles, type ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
-import { registerReplaceSkillProfile, type ReplaceSkillProfileDependencies } from './features/skills/replace-profile/endpoint.js';
-import { registerDeleteSkillProfile, type DeleteSkillProfileDependencies } from './features/skills/delete-profile/endpoint.js';
+import {
+  registerListAvailableSkills,
+  type ListAvailableSkillsDependencies,
+} from './features/skills/list-available/endpoint.js';
+import {
+  registerListSkillProfiles,
+  type ListSkillProfilesDependencies,
+} from './features/skills/list-profiles/endpoint.js';
+import {
+  registerReplaceSkillProfile,
+  type ReplaceSkillProfileDependencies,
+} from './features/skills/replace-profile/endpoint.js';
+import {
+  registerDeleteSkillProfile,
+  type DeleteSkillProfileDependencies,
+} from './features/skills/delete-profile/endpoint.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -92,6 +107,13 @@ export type AppDependencies = {
     since(id: string, after: number): SessionEvent[];
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   };
+  planRoutes?: {
+    exists(id: string): boolean;
+    find(id: string): SupervisedPlan | null;
+    removeStatus(id: string): Promise<void>;
+    clear(id: string): void;
+    closed(id: string): void;
+  };
   interactions?: {
     resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
     validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
@@ -110,7 +132,10 @@ export type AppDependencies = {
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
   };
-  skills?: ListAvailableSkillsDependencies & ListSkillProfilesDependencies & ReplaceSkillProfileDependencies & DeleteSkillProfileDependencies;
+  skills?: ListAvailableSkillsDependencies &
+    ListSkillProfilesDependencies &
+    ReplaceSkillProfileDependencies &
+    DeleteSkillProfileDependencies;
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -190,6 +215,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       });
   }
   if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
+  if (deps.planRoutes) {
+    registerGetPlan(app, deps.planRoutes);
+    registerClosePlan(app, deps.planRoutes);
+  }
   if (deps.gitSummary)
     registerGetGitSummary(app, {
       workspaces: deps.gitSummary.workspaces,

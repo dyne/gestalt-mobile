@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
@@ -53,25 +54,179 @@ describe('CodexSessionRuntime', () => {
         launches.push(input);
         return {
           rpc: {
-            request: async (method) => (method === 'thread/start' ? { thread: { id: 'thread-1' } } : {}),
-            onNotification: () => () => {}, onServerRequest: () => () => {},
-          }, close: () => {},
+            request: async (method) =>
+              method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+            onNotification: () => () => {},
+            onServerRequest: () => () => {},
+          },
+          close: () => {},
         };
       },
-      undefined, undefined, undefined, undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
       async (session) => {
         resolvedSelections.push(session.effectiveSkillSelection);
         return override;
       },
     );
-    const base = { id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', state: 'starting' as const, desiredState: 'active' as const, activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before', effectiveSkillSelection: { selectedProfileName: 'focused', skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }] } };
+    const base = {
+      id: 'session-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+      effectiveSkillSelection: {
+        selectedProfileName: 'focused',
+        skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }],
+      },
+    };
     await runtime.start({ ...base, threadId: null }, 'after');
     await runtime.restore({ ...base, threadId: 'thread-1' }, 'after');
     expect(launches).toEqual([
       { profile: 'default', cwd: '/workspace', skillsConfig: override },
       { profile: 'default', cwd: '/workspace', skillsConfig: override },
     ]);
-    expect(resolvedSelections).toEqual([base.effectiveSkillSelection, base.effectiveSkillSelection]);
+    expect(resolvedSelections).toEqual([
+      base.effectiveSkillSelection,
+      base.effectiveSkillSelection,
+    ]);
+  });
+
+  it('injects one private plan-status path only into the session-owned app-server child', async () => {
+    const launches: unknown[] = [];
+    const closed: string[] = [];
+    const source = {
+      open: async ({ id }: { id: string; workspacePath: string }) => ({
+        statusPath: `/private/${id}.json`,
+        close: () => {
+          closed.push(id);
+        },
+        remove: async () => {},
+      }),
+      remove: async () => {},
+      closeAll: () => {},
+    };
+    const runtime = new CodexSessionRuntime(
+      (input) => {
+        launches.push(input);
+        return {
+          rpc: {
+            request: async (method) =>
+              method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+            onNotification: () => () => {},
+            onServerRequest: () => () => {},
+          },
+          close: () => {},
+        };
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    expect(launches).toEqual([
+      {
+        profile: 'default',
+        cwd: '/workspace',
+        skillsConfig: undefined,
+        environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: '/private/session-1.json' },
+      },
+    ]);
+    runtime.stop('session-1');
+    expect(closed).toEqual(['session-1']);
+  });
+
+  it('releases a plan-status lease when skill resolution or synchronous launch fails', async () => {
+    const closed: string[] = [];
+    const source = {
+      open: async ({ id }: { id: string; workspacePath: string }) => ({
+        statusPath: `/private/${id}.json`,
+        close: () => {
+          closed.push(id);
+        },
+        remove: async () => {},
+      }),
+      remove: async () => {},
+      closeAll: () => {},
+    };
+    const session = {
+      id: 'session-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: null,
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    const resolverFailure = new CodexSessionRuntime(
+      () => {
+        throw new Error('launch should not run');
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        throw new Error('skill failure');
+      },
+      source,
+    );
+    await expect(resolverFailure.start(session, 'after')).rejects.toThrow('skill failure');
+    resolverFailure.stop('session-1');
+    resolverFailure.stopAll();
+    expect(closed).toEqual(['session-1']);
+
+    const launchFailure = new CodexSessionRuntime(
+      () => {
+        throw new Error('launch failure');
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
+    );
+    await expect(
+      launchFailure.restore({ ...session, threadId: 'thread-1', state: 'recovering' }, 'after'),
+    ).rejects.toThrow('launch failure');
+    launchFailure.stopAll();
+    expect(closed).toEqual(['session-1', 'session-1']);
   });
 
   it('passes requested Codex settings through to thread start', async () => {
@@ -283,6 +438,141 @@ describe('CodexSessionRuntime', () => {
       threadId: 'thread-1',
       updatedAt: 'after',
     });
+  });
+
+  it('disposes each status lease once on child exit and graceful stopAll shutdown', async () => {
+    const closeCounts = new Map<string, number>();
+    const exitListeners = new Map<string, () => void>();
+    const sessions = ['session-a', 'session-b'];
+    let launched = 0;
+    const source: PlanStatusSource = {
+      open: async (session) => ({
+        statusPath: `/private/${session.id}.json`,
+        close: () => closeCounts.set(session.id, (closeCounts.get(session.id) ?? 0) + 1),
+        remove: async () => {},
+      }),
+      remove: async () => {},
+      closeAll: () => {},
+    };
+    const runtime = new CodexSessionRuntime(
+      () => {
+        const sessionId = sessions[launched++]!;
+        return {
+          rpc: {
+            request: async (method) =>
+              method === 'thread/start' ? { thread: { id: `thread-${sessionId}` } } : {},
+            onNotification: () => () => {},
+            onServerRequest: () => () => {},
+          },
+          close: () => {},
+          onExit: (listener) => {
+            exitListeners.set(sessionId, listener);
+            return () => exitListeners.delete(sessionId);
+          },
+        };
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
+    );
+    const session = (id: string) => ({
+      id,
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: null,
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    });
+    await runtime.start(session('session-a'), 'after');
+    await runtime.start(session('session-b'), 'after');
+    exitListeners.get('session-a')?.();
+    runtime.stopAll();
+    runtime.stop('session-b');
+    expect([...closeCounts.entries()]).toEqual([
+      ['session-a', 1],
+      ['session-b', 1],
+    ]);
+  });
+
+  it('opens an initial status read for restored sessions without sending another session update', async () => {
+    const opened: string[] = [];
+    const updates: Array<{ sessionId: string; update: PlanStatusUpdate }> = [];
+    const source: PlanStatusSource = {
+      open: async (session, listener) => {
+        opened.push(session.id);
+        listener({
+          kind: 'updated',
+          identity: 'restored-plan',
+          plan: {
+            title: `Plan for ${session.id}`,
+            steps: [],
+            totalSteps: 1,
+            doneSteps: 0,
+            allDone: false,
+            currentStepId: 'current',
+          },
+        });
+        return { statusPath: `/private/${session.id}.json`, close: () => {}, remove: async () => {} };
+      },
+      remove: async () => {},
+      closeAll: () => {},
+    };
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async () => ({}),
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
+      (sessionId, update) => updates.push({ sessionId, update }),
+    );
+    await runtime.restore(
+      {
+        id: 'session-a',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace-a',
+        profile: 'default',
+        threadId: 'thread-a',
+        state: 'recovering',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    expect(opened).toEqual(['session-a']);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        sessionId: 'session-a',
+        update: expect.objectContaining({
+          kind: 'updated',
+          plan: expect.objectContaining({ title: 'Plan for session-a' }),
+        }),
+      }),
+    ]);
+    runtime.stopAll();
   });
 
   it('keeps a Codex approval request pending until the relay resolves it', async () => {

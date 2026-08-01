@@ -10,6 +10,7 @@ import {
 } from '../../features/sessions/model/relay-session.js';
 import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
+import type { PlanStatusLease, PlanStatusSource } from '../../features/plans/application/ports.js';
 
 export type AppServer = {
   rpc: {
@@ -25,9 +26,16 @@ export type AppServer = {
   onExit?(listener: () => void): () => void;
 };
 
+export type AppServerLaunchInput = {
+  profile: string;
+  cwd: string;
+  skillsConfig?: readonly { path: string; enabled: boolean }[];
+  environment?: Readonly<Record<string, string>>;
+};
+
 export class CodexSessionRuntime {
   constructor(
-    private readonly launch: (input: { profile: string; cwd: string; skillsConfig?: readonly { path: string; enabled: boolean }[] }) => AppServer,
+    private readonly launch: (input: AppServerLaunchInput) => AppServer,
     private readonly processes = new Map<string, AppServer>(),
     private readonly onNotification?: (
       sessionId: string,
@@ -41,17 +49,23 @@ export class CodexSessionRuntime {
     private readonly resolveSkills?: (
       session: RelaySessionSnapshot,
     ) => Promise<readonly { path: string; enabled: boolean }[] | undefined>,
+    private readonly planStatusSource?: PlanStatusSource,
+    private readonly onPlanStatus?: (
+      sessionId: string,
+      update: import('../../features/plans/application/ports.js').PlanStatusUpdate,
+    ) => void,
   ) {}
   private readonly pendingRequests = new Map<string, (result: unknown) => void>();
   private readonly exitUnsubscribers = new Map<string, () => void>();
   private readonly threadIds = new Map<string, string>();
+  private readonly planStatusLeases = new Map<string, PlanStatusLease>();
 
   async start(
     session: RelaySessionSnapshot,
     now: string,
     settings: StartSessionSettings = {},
   ): Promise<RelaySessionSnapshot> {
-    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session) });
+    const process = await this.launchForSession(session);
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
@@ -72,6 +86,7 @@ export class CodexSessionRuntime {
       return RelaySession.rehydrate(session).bindThread(result.thread.id, now).snapshot;
     } catch (error) {
       process.close();
+      this.releasePlanStatus(session.id);
       throw error;
     }
   }
@@ -82,6 +97,7 @@ export class CodexSessionRuntime {
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
     this.threadIds.delete(sessionId);
+    this.releasePlanStatus(sessionId);
   }
 
   async release(sessionId: string): Promise<void> {
@@ -100,6 +116,7 @@ export class CodexSessionRuntime {
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
     for (const sessionId of [...this.processes.keys()]) this.stop(sessionId);
+    for (const sessionId of [...this.planStatusLeases.keys()]) this.releasePlanStatus(sessionId);
   }
 
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
@@ -168,7 +185,7 @@ export class CodexSessionRuntime {
 
   async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
-    const process = this.launch({ profile: session.profile, cwd: session.workspacePath, skillsConfig: await this.resolveSkills?.(session) });
+    const process = await this.launchForSession(session);
     try {
       process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
       process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
@@ -186,6 +203,7 @@ export class CodexSessionRuntime {
       return RelaySession.rehydrate(session).restore(now).snapshot;
     } catch (error) {
       process.close();
+      this.releasePlanStatus(session.id);
       throw error;
     }
   }
@@ -209,8 +227,37 @@ export class CodexSessionRuntime {
         this.processes.delete(sessionId);
         this.threadIds.delete(sessionId);
         this.exitUnsubscribers.delete(sessionId);
+        this.releasePlanStatus(sessionId);
         this.onProcessExit?.(sessionId);
       }) ?? (() => {}),
     );
+  }
+
+  private async launchForSession(session: RelaySessionSnapshot): Promise<AppServer> {
+    const lease = this.planStatusSource
+      ? await this.planStatusSource.open(
+          { id: session.id, workspacePath: session.workspacePath },
+          (update) => this.onPlanStatus?.(session.id, update),
+        )
+      : undefined;
+    if (lease) this.planStatusLeases.set(session.id, lease);
+    try {
+      return this.launch({
+        profile: session.profile,
+        cwd: session.workspacePath,
+        skillsConfig: await this.resolveSkills?.(session),
+        ...(lease
+          ? { environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: lease.statusPath } }
+          : {}),
+      });
+    } catch (error) {
+      this.releasePlanStatus(session.id);
+      throw error;
+    }
+  }
+
+  private releasePlanStatus(sessionId: string): void {
+    this.planStatusLeases.get(sessionId)?.close();
+    this.planStatusLeases.delete(sessionId);
   }
 }

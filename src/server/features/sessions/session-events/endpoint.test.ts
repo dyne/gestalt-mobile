@@ -5,7 +5,7 @@
  */
 
 import { once } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { buildApp } from '../../../app.js';
@@ -87,6 +87,95 @@ describe('session event WebSocket', () => {
     const message = once(socket, 'message').then(([data]) => JSON.parse(String(data)));
     expect(await message).toEqual({ type: 'relay.resyncRequired', currentSequence: 4 });
     socket.close();
+    await app.close();
+  });
+
+  it('replays ordered full plan replacements and close events only to their owning session', async () => {
+    const events = [
+      {
+        sessionId: 'session-a',
+        sequence: 1,
+        type: 'plan.updated',
+        occurredAt: 't1',
+        payload: {
+          title: 'A complete replacement',
+          steps: [],
+          totalSteps: 1,
+          doneSteps: 1,
+          allDone: true,
+          currentStepId: 'done',
+        },
+      },
+      { sessionId: 'session-a', sequence: 2, type: 'plan.closed', occurredAt: 't2', payload: {} },
+      {
+        sessionId: 'session-b',
+        sequence: 1,
+        type: 'plan.updated',
+        occurredAt: 't3',
+        payload: {
+          title: 'Other session plan',
+          steps: [],
+          totalSteps: 1,
+          doneSteps: 0,
+          allDone: false,
+          currentStepId: 'current',
+        },
+      },
+    ];
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
+    registerSessionEvents(app, {
+      exists: (id) => id === 'session-a' || id === 'session-b',
+      since: (id, after) => events.filter((event) => event.sessionId === id && event.sequence > after),
+      subscribe: () => () => {},
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const receive = async (sessionId: string, after: number, expected: number) => {
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=${after}`,
+      );
+      const messages: Array<{ type: string; event: { type: string; sequence: number; payload: unknown } }> = [];
+      socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+      await once(socket, 'open');
+      await vi.waitFor(() => expect(messages).toHaveLength(expected));
+      socket.close();
+      return messages;
+    };
+    const replay = await receive('session-a', 0, 2);
+    expect(replay).toEqual([
+      expect.objectContaining({
+        type: 'relay.event',
+        event: expect.objectContaining({
+          sequence: 1,
+          type: 'plan.updated',
+          payload: expect.objectContaining({
+            title: 'A complete replacement',
+            allDone: true,
+            currentStepId: 'done',
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        type: 'relay.event',
+        event: expect.objectContaining({ sequence: 2, type: 'plan.closed', payload: {} }),
+      }),
+    ]);
+    expect(await receive('session-a', 1, 1)).toMatchObject([
+      { event: { sequence: 2, type: 'plan.closed' } },
+    ]);
+    expect(await receive('session-b', 0, 1)).toMatchObject([
+      { event: { sequence: 1, type: 'plan.updated', payload: { title: 'Other session plan' } } },
+    ]);
     await app.close();
   });
 });

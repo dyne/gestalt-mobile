@@ -15,10 +15,16 @@ export type CodexProcess = {
   onExit(listener: () => void): () => void;
 };
 
-export function launchCodexAppServer(input: { profile: string; cwd: string; skillsConfig?: readonly { path: string; enabled: boolean }[] }): CodexProcess {
+export function launchCodexAppServer(input: {
+  profile: string;
+  cwd: string;
+  skillsConfig?: readonly { path: string; enabled: boolean }[];
+  environment?: Readonly<Record<string, string>>;
+}): CodexProcess {
   const launch = profileAppServerCommand(input.profile, undefined, input.skillsConfig);
   const child = spawn(launch.command, launch.args, {
     cwd: input.cwd,
+    env: codexChildEnvironment(input.environment),
     shell: false,
     stdio: 'pipe',
   });
@@ -33,4 +39,13 @@ export function launchCodexAppServer(input: { profile: string; cwd: string; skil
       return () => child.off('exit', listener);
     },
   };
+}
+
+/** Prevents a relay's own ambient status path from reaching discovery-only children. */
+export function codexChildEnvironment(
+  environment?: Readonly<Record<string, string>>,
+): NodeJS.ProcessEnv {
+  const inherited = { ...process.env };
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
+  return { ...inherited, ...environment };
 }

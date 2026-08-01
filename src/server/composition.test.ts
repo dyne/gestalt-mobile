@@ -4,13 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import WebSocket from 'ws';
 
 import { composeRelayApp } from './composition.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
+import { planStatusFilePath } from './platform/plans/filesystem-plan-status-source.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -99,6 +102,142 @@ describe('production composition', () => {
       workspacePath: join(root, 'workspace'),
     });
     await app.close();
+  });
+
+  it('journals and replays a session-owned plan replacement before streaming its close event', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath);
+    const planPath = join(workspacePath, 'plan.org');
+    await writeFile(
+      planPath,
+      `#+TITLE: Completed plan
+* DONE [#A] Closeable work
+:PROPERTIES:
+:ID: closeable-work
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Exercise session event composition.
+- Notes :: Complete.
+`,
+    );
+    const profiles = {
+      list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+      require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+    };
+    const app = await composeRelayApp({
+      root,
+      dataDir,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => fakeAppServer([]),
+    });
+    const workspace = (await app.inject('/api/bootstrap'))
+      .json()
+      .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspace.id, profile: 'default' },
+    });
+    const sessionId = created.json().id as string;
+    await writeFile(
+      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      JSON.stringify({
+        schemaVersion: 1,
+        planPath,
+        reason: 'test',
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      }),
+    );
+    await expect.poll(async () => (await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode).toBe(
+      200,
+    );
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+    );
+    const messages: Array<{ type: string; event: { type: string; sequence: number; payload: unknown } }> = [];
+    socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+    await once(socket, 'open');
+    await vi.waitFor(() => expect(messages.some((message) => message.event.type === 'plan.updated')).toBe(true));
+    const updatedIndex = messages.findIndex((message) => message.event.type === 'plan.updated');
+    expect(messages[updatedIndex]).toMatchObject({
+      type: 'relay.event',
+      event: { type: 'plan.updated', payload: { title: 'Completed plan', allDone: true } },
+    });
+    expect((await app.inject({ method: 'DELETE', url: `/api/sessions/${sessionId}/plan` })).statusCode).toBe(
+      204,
+    );
+    await vi.waitFor(() => expect(messages.some((message) => message.event.type === 'plan.closed')).toBe(true));
+    const closedIndex = messages.findIndex((message) => message.event.type === 'plan.closed');
+    expect(messages[closedIndex]).toMatchObject({
+      type: 'relay.event',
+      event: { type: 'plan.closed', payload: {} },
+    });
+    expect(closedIndex).toBeGreaterThan(updatedIndex);
+    const updatesBeforeResync = messages.filter((message) => message.event.type === 'plan.updated').length;
+    await writeFile(
+      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      JSON.stringify({
+        schemaVersion: 1,
+        planPath,
+        reason: 'same-plan-resync',
+        updatedAt: '2026-08-01T00:00:01.000Z',
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(messages.filter((message) => message.event.type === 'plan.updated')).toHaveLength(
+      updatesBeforeResync,
+    );
+    socket.close();
+    await app.close();
+    const restarted = await composeRelayApp({
+      root,
+      dataDir,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => fakeAppServer([]),
+    });
+    await restarted.listen({ host: '127.0.0.1', port: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await restarted.inject(`/api/sessions/${sessionId}/plan`)).statusCode).toBe(204);
+    const nextPlanPath = join(workspacePath, 'next-plan.org');
+    await writeFile(
+      nextPlanPath,
+      `#+TITLE: Different plan
+* DONE [#A] Different work
+:PROPERTIES:
+:ID: different-work
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Prove a different plan can replace a dismissed one.
+- Notes :: Complete.
+`,
+    );
+    await writeFile(
+      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      JSON.stringify({
+        schemaVersion: 1,
+        planPath: nextPlanPath,
+        reason: 'different-plan',
+        updatedAt: '2026-08-01T00:00:02.000Z',
+      }),
+    );
+    await expect.poll(async () => (await restarted.inject(`/api/sessions/${sessionId}/plan`)).json().title).toBe(
+      'Different plan',
+    );
+    await restarted.close();
   });
 
   it('restores active persisted threads when the relay restarts', async () => {
