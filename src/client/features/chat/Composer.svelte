@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import { commandQuery, matchingCommands } from './command-completion.js';
+  import { argumentPickerFor, commandQuery, matchingCommands, sortModelsNewestFirst } from './command-completion.js';
   import { submitsOnEnter } from './keyboard.js';
   type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; models?: string[]; onchange(value: string): void; onmodelselect?(model: string): void; onsend(): void; oninterrupt(): void };
   let { status, message, activeTurnId, starting, models = [], onchange, onmodelselect = () => {}, onsend, oninterrupt }: Props = $props();
@@ -19,8 +19,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       currentCommandQuery !== dismissedCommandQuery &&
       commandMatches.length > 0,
   );
-  let modelMenuOpen = $derived(message === '/model');
-  let reasoningMenuOpen = $derived(message === '/reasoning');
+  let argumentPicker = $derived(argumentPickerFor(message));
+  let modelMenuOpen = $derived(argumentPicker === 'models');
+  let sortedModels = $derived(sortModelsNewestFirst(models));
+  let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
 
   function updateMessage(value: string): void {
     dismissedCommandQuery = null;
@@ -84,7 +86,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {/if}
   {#if modelMenuOpen}
     <ul class="command-menu" aria-label="Available models">
-      {#each models as model (model)}
+      {#each sortedModels as model (model)}
         <li><button type="button" onclick={() => onmodelselect(model)}><code>{model}</code></button></li>
       {/each}
     </ul>

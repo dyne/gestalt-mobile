@@ -50,14 +50,24 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
-  it('shows clickable available models after /model', async () => {
+  it('keeps models visible after command completion and sorts newest first', async () => {
     const onmodelselect = vi.fn();
     render(Composer, {
-      status: 'Ready.', message: '/model', activeTurnId: null, starting: false,
-      models: ['gpt-5.6-terra'], onchange: () => {}, onmodelselect, onsend: () => {}, oninterrupt: () => {},
+      status: 'Ready.', message: '/model ', activeTurnId: null, starting: false,
+      models: ['gpt-5.4', 'gpt-5.6-terra'], onchange: () => {}, onmodelselect, onsend: () => {}, oninterrupt: () => {},
     });
 
+    expect(screen.getByLabelText('Available models').textContent).toMatch(/^gpt-5\.6-terragpt-5\.4$/);
     await fireEvent.click(screen.getByRole('button', { name: 'gpt-5.6-terra' }));
     expect(onmodelselect).toHaveBeenCalledWith('gpt-5.6-terra');
+  });
+
+  it('keeps reasoning choices visible after command completion adds a space', () => {
+    render(Composer, {
+      status: 'Ready.', message: '/reasoning ', activeTurnId: null, starting: false,
+      onchange: () => {}, onsend: () => {}, oninterrupt: () => {},
+    });
+
+    expect(screen.getByLabelText('Reasoning efforts').textContent).toBe('lowmediumhigh');
   });
 });
