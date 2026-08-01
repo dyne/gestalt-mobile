@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { readCommandApproval } from './command-approval.js';
+  import { readFileChangeApproval } from './file-change-approval.js';
   import QuizForm from './QuizForm.svelte';
   import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
   type Interaction = { requestId: string; kind: string; payload: unknown };
@@ -36,6 +37,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button>
             <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
           </div>
+        {:else if interaction.kind === 'fileChangeApproval'}
+          {@const paths = readFileChangeApproval(interaction.payload)}
+          <p>Approve changes to these files?</p>
+          {#if paths}
+            <ul class="file-change-approval-targets" aria-label="Files to change">
+              {#each paths as path (path)}
+                <li><code>{path}</code></li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="file-change-approval-missing">File details were not provided.</p>
+          {/if}
+          <div class="approval-actions">
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button>
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
+          </div>
         {:else}
           <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button><button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
         {/if}
@@ -55,5 +72,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: 0.375rem;
   }
   .command-approval-missing { margin-block: 0.5rem 0.75rem; }
+  .file-change-approval-targets { margin-block: 0.5rem 0.75rem; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
+  .file-change-approval-missing { margin-block: 0.5rem 0.75rem; }
   .approval-actions { display: flex; flex-wrap: wrap; gap: clamp(0.5rem, 2vw, 1rem); }
 </style>
