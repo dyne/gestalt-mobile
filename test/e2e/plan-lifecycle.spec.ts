@@ -96,7 +96,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
   let blockSockets = false;
   let app: RelayApp | undefined;
   let relayPort = 0;
-  let owningStatusFile = '';
+  let owningStatusDirectory = '';
 
   const profiles = {
     list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
@@ -119,11 +119,11 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     return `http://127.0.0.1:${relayPort}`;
   };
   const invokeHelper = async (...args: string[]) => {
-    expect(owningStatusFile, 'the relay injects a session-owned helper status path').toBeTruthy();
+    expect(owningStatusDirectory, 'the relay injects a session-owned helper status path').toBeTruthy();
     const [command, ...rest] = args;
     await runFile(helper, [command!, planPath, ...rest], {
       cwd: workspace,
-      env: { ...process.env, GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: owningStatusFile },
+      env: { ...process.env, GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: owningStatusDirectory },
     });
   };
 
@@ -154,9 +154,9 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     const owningSession = await createSession();
     const sessionLaunches = launches.filter((launch) => launch.environment);
     expect(sessionLaunches).toHaveLength(2);
-    owningStatusFile = sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE!;
-    expect(sessionLaunches[0]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE).not.toBe(
-      sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE,
+    owningStatusDirectory = sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY!;
+    expect(sessionLaunches[0]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY).not.toBe(
+      sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY,
     );
 
     page.on('console', (message) => {
@@ -247,8 +247,8 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     expect(
       launches
         .filter((launch) => launch.environment)
-        .map((launch) => launch.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE),
-    ).toContain(owningStatusFile);
+        .map((launch) => launch.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY),
+    ).toContain(owningStatusDirectory);
     const retained = await fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`);
     expect(retained.status).toBe(200);
     expect(await retained.json()).toMatchObject({

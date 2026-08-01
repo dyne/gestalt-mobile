@@ -11,12 +11,12 @@ export type PlanStatusUpdate =
   | Readonly<{ kind: 'unavailable'; code: 'PLAN_STATUS_UNAVAILABLE' }>;
 
 export type PlanStatusLease = Readonly<{
-  statusPath: string;
+  statusDirectory: string;
   close(): void;
   remove(): Promise<void>;
 }>;
 
-/** Watches one session-private helper status file without exposing filesystem details to use cases. */
+/** Watches one session-private helper status directory without exposing filesystem details to use cases. */
 export interface PlanStatusSource {
   open(
     session: Readonly<{ id: string; workspacePath: string }>,

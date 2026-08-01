@@ -247,7 +247,11 @@ export class CodexSessionRuntime {
         cwd: session.workspacePath,
         skillsConfig: await this.resolveSkills?.(session),
         ...(lease
-          ? { environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: lease.statusPath } }
+          ? {
+              environment: {
+                GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory,
+              },
+            }
           : {}),
       });
     } catch (error) {

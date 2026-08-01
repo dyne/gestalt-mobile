@@ -4,9 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { chmod, mkdir, readFile, rename, rm, watch, writeFile, realpath } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  watch,
+  writeFile,
+  realpath,
+} from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import type {
   PlanStatusLease,
@@ -25,9 +36,10 @@ type StatusRemovalFilesystem = Readonly<{ rm: typeof rm }>;
 
 export class FilesystemPlanStatusSource implements PlanStatusSource {
   private readonly leases = new Map<string, ActiveLease>();
+  private readonly activeStatusPaths = new Map<string, string>();
 
   constructor(
-    private readonly stateDirectory: string,
+    private readonly dismissalDirectory: string,
     private readonly dismissalFilesystem: DismissalFilesystem = { writeFile, rename },
     private readonly planReadFilesystem: PlanReadFilesystem = { readFile, realpath },
     private readonly statusRemovalFilesystem: StatusRemovalFilesystem = { rm },
@@ -38,19 +50,27 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     listener: (update: PlanStatusUpdate) => void,
   ): Promise<PlanStatusLease> {
     this.leases.get(session.id)?.close();
-    await mkdir(this.stateDirectory, { recursive: true, mode: 0o700 });
-    if (process.platform !== 'win32') await chmod(this.stateDirectory, 0o700);
+    const statusDirectory = planStatusDirectoryPath(session.workspacePath, session.id);
+    await mkdir(this.dismissalDirectory, { recursive: true, mode: 0o700 });
+    await mkdir(statusDirectory, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') {
+      await Promise.all([
+        chmod(this.dismissalDirectory, 0o700),
+        chmod(statusDirectory, 0o700),
+      ]);
+    }
 
-    const statusPath = planStatusFilePath(this.stateDirectory, session.id);
     const lease = new ActiveLease(
-      statusPath,
+      statusDirectory,
       session.id,
       session.workspacePath,
       listener,
       this.planReadFilesystem,
       (identity) => this.isDismissed(session.id, identity),
+      (statusPath) => this.activeStatusPaths.set(session.id, statusPath),
       () => {
         this.leases.delete(session.id);
+        this.activeStatusPaths.delete(session.id);
       },
     );
     this.leases.set(session.id, lease);
@@ -64,13 +84,13 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   }
 
   async remove(sessionId: string, identity?: string): Promise<void> {
-    const statusPath = planStatusFilePath(this.stateDirectory, sessionId);
-    const signal = await this.readStatusForRollback(statusPath);
-    await this.statusRemovalFilesystem.rm(statusPath, { force: true });
+    const statusPath = this.activeStatusPaths.get(sessionId);
+    const signal = statusPath ? await this.readStatusForRollback(statusPath) : undefined;
+    if (statusPath) await this.statusRemovalFilesystem.rm(statusPath, { force: true });
     try {
       if (identity) await this.dismiss(sessionId, identity);
     } catch (error) {
-      if (signal !== undefined) await this.restoreStatus(statusPath, signal);
+      if (signal !== undefined && statusPath) await this.restoreStatus(statusPath, signal);
       throw error;
     }
   }
@@ -85,7 +105,7 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   }
 
   private async restoreStatus(statusPath: string, signal: string): Promise<void> {
-    const candidate = join(this.stateDirectory, `.${randomUUID()}.status.tmp`);
+    const candidate = join(dirname(statusPath), `.${randomUUID()}.status.tmp`);
     try {
       await writeFile(candidate, signal, { mode: 0o600 });
       await rename(candidate, statusPath);
@@ -99,7 +119,7 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     const path = this.dismissalPath(sessionId);
     const dismissed = await this.dismissed(sessionId);
     const next = new Set(dismissed).add(identity);
-    const candidate = join(this.stateDirectory, `.${randomUUID()}.dismissals.tmp`);
+    const candidate = join(this.dismissalDirectory, `.${randomUUID()}.dismissals.tmp`);
     try {
       await this.dismissalFilesystem.writeFile(candidate, JSON.stringify([...next]), { mode: 0o600 });
       await this.dismissalFilesystem.rename(candidate, path);
@@ -136,34 +156,41 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   }
 
   private dismissalPath(sessionId: string): string {
-    return join(this.stateDirectory, `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`);
+    return join(this.dismissalDirectory, `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`);
   }
 }
 
-export function planStatusFilePath(stateDirectory: string, sessionId: string): string {
-  const opaqueId = createHash('sha256').update(sessionId).digest('hex');
-  return join(stateDirectory, `${opaqueId}${statusFileSuffix}`);
+export function planStatusDirectoryPath(workspacePath: string, sessionId: string): string {
+  const opaqueSessionId = createHash('sha256').update(sessionId).digest('hex');
+  return join(workspacePath, '.gestalt', 'status', opaqueSessionId);
+}
+
+export function planStatusFilePath(statusDirectory: string, canonicalPlanPath: string): string {
+  const opaquePlanId = createHash('sha256').update(canonicalPlanPath).digest('hex');
+  return join(statusDirectory, `${opaquePlanId}${statusFileSuffix}`);
 }
 
 class ActiveLease implements PlanStatusLease {
   private watcher: Watcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
+  private activeStatusPath: string | undefined;
 
   constructor(
-    readonly statusPath: string,
+    readonly statusDirectory: string,
     private readonly sessionId: string,
     private readonly workspacePath: string,
     private readonly listener: (update: PlanStatusUpdate) => void,
     private readonly planReadFilesystem: PlanReadFilesystem,
     private readonly isDismissed: (identity: string) => Promise<boolean>,
+    private readonly onActiveStatusPath: (statusPath: string) => void,
     private readonly onClose: () => void,
   ) {}
 
   async start(): Promise<void> {
-    await this.refresh();
+    await this.refreshLatest();
     try {
-      this.watcher = watch(join(this.statusPath, '..'), { persistent: false });
+      this.watcher = watch(this.statusDirectory, { persistent: false });
       void this.consumeChanges();
     } catch {
       this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
@@ -179,33 +206,75 @@ class ActiveLease implements PlanStatusLease {
   }
 
   async remove(): Promise<void> {
-    await rm(this.statusPath, { force: true });
+    if (this.activeStatusPath) await rm(this.activeStatusPath, { force: true });
   }
 
   private async consumeChanges(): Promise<void> {
     try {
       for await (const event of this.watcher!) {
         if (this.closed) return;
-        if (event.filename && basename(String(event.filename)) !== basename(this.statusPath))
+        if (!event.filename) {
+          this.scheduleRefresh();
           continue;
-        this.scheduleRefresh();
+        }
+        const filename = basename(String(event.filename));
+        if (!filename.endsWith(statusFileSuffix)) continue;
+        this.scheduleRefresh(join(this.statusDirectory, filename));
       }
     } catch {
       if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
     }
   }
 
-  private scheduleRefresh(): void {
+  private pendingStatusPath: string | undefined;
+
+  private scheduleRefresh(statusPath?: string): void {
+    this.pendingStatusPath = statusPath;
     if (this.debounce) clearTimeout(this.debounce);
     this.debounce = setTimeout(() => {
       this.debounce = undefined;
-      void this.refresh();
+      const pendingStatusPath = this.pendingStatusPath;
+      this.pendingStatusPath = undefined;
+      void (pendingStatusPath ? this.refresh(pendingStatusPath) : this.refreshLatest());
     }, 25);
   }
 
-  private async refresh(): Promise<void> {
+  private async refreshLatest(): Promise<void> {
     try {
-      const signal = parseSignal(await this.planReadFilesystem.readFile(this.statusPath, 'utf8'));
+      const candidates = (await readdir(this.statusDirectory))
+        .filter((filename) => filename.endsWith(statusFileSuffix))
+        .map((filename) => join(this.statusDirectory, filename));
+      const signals = await Promise.all(
+        candidates.map(async (statusPath) => {
+          const [source, metadata] = await Promise.all([
+            this.planReadFilesystem.readFile(statusPath, 'utf8').catch(() => ''),
+            stat(statusPath).catch(() => undefined),
+          ]);
+          return { statusPath, signal: parseSignal(source), modifiedAt: metadata?.mtimeMs ?? 0 };
+        }),
+      );
+      const latest = signals
+        .filter(
+          (
+            candidate,
+          ): candidate is { statusPath: string; signal: PlanStatusSignal; modifiedAt: number } =>
+            candidate.signal !== null,
+        )
+        .sort(
+          (left, right) =>
+            right.signal.updatedAt.localeCompare(left.signal.updatedAt) ||
+            right.modifiedAt - left.modifiedAt,
+        )[0];
+      if (latest) await this.refresh(latest.statusPath, latest.signal);
+    } catch {
+      if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+    }
+  }
+
+  private async refresh(statusPath: string, parsedSignal?: PlanStatusSignal): Promise<void> {
+    try {
+      const signal =
+        parsedSignal ?? parseSignal(await this.planReadFilesystem.readFile(statusPath, 'utf8'));
       if (!signal) throw new Error('INVALID_PLAN_STATUS');
       const [planPath, workspacePath] = await Promise.all([
         this.planReadFilesystem.realpath(signal.planPath),
@@ -220,25 +289,39 @@ class ActiveLease implements PlanStatusLease {
         workspacePath,
       });
       if (result.kind === 'available') {
-        if (!this.closed && !(await this.isDismissed(identity)) && !this.closed)
+        if (!this.closed && !(await this.isDismissed(identity)) && !this.closed) {
+          const previousStatusPath = this.activeStatusPath;
+          this.activeStatusPath = statusPath;
+          this.onActiveStatusPath(statusPath);
           this.listener({ kind: 'updated', plan: result.plan, identity });
+          if (previousStatusPath && previousStatusPath !== statusPath)
+            await rm(previousStatusPath, { force: true }).catch(() => {});
+        }
       } else if (!this.closed) {
         this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
       }
-    } catch {
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+        this.activeStatusPath !== undefined &&
+        statusPath !== this.activeStatusPath
+      )
+        return;
       if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
     }
   }
 }
 
-function parseSignal(source: string): { planPath: string } | null {
+type PlanStatusSignal = Readonly<{ planPath: string; updatedAt: string }>;
+
+function parseSignal(source: string): PlanStatusSignal | null {
   try {
     const value: unknown = JSON.parse(source);
     if (!value || typeof value !== 'object') return null;
     const signal = value as Record<string, unknown>;
     if (signal.schemaVersion !== 1 || typeof signal.planPath !== 'string') return null;
     if (typeof signal.reason !== 'string' || !isRfc3339Utc(signal.updatedAt)) return null;
-    return { planPath: signal.planPath };
+    return { planPath: signal.planPath, updatedAt: signal.updatedAt as string };
   } catch {
     return null;
   }

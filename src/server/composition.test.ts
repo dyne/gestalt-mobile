@@ -13,7 +13,10 @@ import WebSocket from 'ws';
 
 import { composeRelayApp } from './composition.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
-import { planStatusFilePath } from './platform/plans/filesystem-plan-status-source.js';
+import {
+  planStatusDirectoryPath,
+  planStatusFilePath,
+} from './platform/plans/filesystem-plan-status-source.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -147,7 +150,7 @@ describe('production composition', () => {
     });
     const sessionId = created.json().id as string;
     await writeFile(
-      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
       JSON.stringify({
         schemaVersion: 1,
         planPath,
@@ -185,7 +188,7 @@ describe('production composition', () => {
     expect(closedIndex).toBeGreaterThan(updatedIndex);
     const updatesBeforeResync = messages.filter((message) => message.event.type === 'plan.updated').length;
     await writeFile(
-      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
       JSON.stringify({
         schemaVersion: 1,
         planPath,
@@ -226,7 +229,7 @@ describe('production composition', () => {
 `,
     );
     await writeFile(
-      planStatusFilePath(join(dataDir, 'plans'), sessionId),
+      planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), nextPlanPath),
       JSON.stringify({
         schemaVersion: 1,
         planPath: nextPlanPath,

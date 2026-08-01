@@ -47,5 +47,6 @@ export function codexChildEnvironment(
 ): NodeJS.ProcessEnv {
   const inherited = { ...process.env };
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
   return { ...inherited, ...environment };
 }

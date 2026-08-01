@@ -106,7 +106,7 @@ describe('CodexSessionRuntime', () => {
     const closed: string[] = [];
     const source = {
       open: async ({ id }: { id: string; workspacePath: string }) => ({
-        statusPath: `/private/${id}.json`,
+        statusDirectory: `/private/${id}.json`,
         close: () => {
           closed.push(id);
         },
@@ -158,7 +158,7 @@ describe('CodexSessionRuntime', () => {
         profile: 'default',
         cwd: '/workspace',
         skillsConfig: undefined,
-        environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_FILE: '/private/session-1.json' },
+        environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json' },
       },
     ]);
     runtime.stop('session-1');
@@ -169,7 +169,7 @@ describe('CodexSessionRuntime', () => {
     const closed: string[] = [];
     const source = {
       open: async ({ id }: { id: string; workspacePath: string }) => ({
-        statusPath: `/private/${id}.json`,
+        statusDirectory: `/private/${id}.json`,
         close: () => {
           closed.push(id);
         },
@@ -447,7 +447,7 @@ describe('CodexSessionRuntime', () => {
     let launched = 0;
     const source: PlanStatusSource = {
       open: async (session) => ({
-        statusPath: `/private/${session.id}.json`,
+        statusDirectory: `/private/${session.id}.json`,
         close: () => closeCounts.set(session.id, (closeCounts.get(session.id) ?? 0) + 1),
         remove: async () => {},
       }),
@@ -522,7 +522,7 @@ describe('CodexSessionRuntime', () => {
             currentStepId: 'current',
           },
         });
-        return { statusPath: `/private/${session.id}.json`, close: () => {}, remove: async () => {} };
+        return { statusDirectory: `/private/${session.id}.json`, close: () => {}, remove: async () => {} };
       },
       remove: async () => {},
       closeAll: () => {},
