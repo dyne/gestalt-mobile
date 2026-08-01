@@ -7,8 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { argumentPickerFor, commandQuery, matchingCommands, sortModelsNewestFirst } from './command-completion.js';
   import { submitsOnEnter } from './keyboard.js';
-  type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; models?: string[]; onchange(value: string): void; onmodelselect?(model: string): void; onsend(): void; oninterrupt(): void };
-  let { status, message, activeTurnId, starting, models = [], onchange, onmodelselect = () => {}, onsend, oninterrupt }: Props = $props();
+  type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; models?: string[]; onchange(value: string): void; onscrollbottom?(): void; onmodelselect?(model: string): void; onsend(): void; oninterrupt(): void };
+  let { status, message, activeTurnId, starting, models = [], onchange, onscrollbottom = () => {}, onmodelselect = () => {}, onsend, oninterrupt }: Props = $props();
 
   let selectedCommandIndex = $state(0);
   let dismissedCommandQuery = $state<string | null>(null);
@@ -28,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     dismissedCommandQuery = null;
     selectedCommandIndex = 0;
     onchange(value);
+    onscrollbottom();
   }
 
   function chooseCommand(index = selectedCommandIndex): void {
