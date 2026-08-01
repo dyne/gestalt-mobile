@@ -38,6 +38,7 @@ import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import { registerGetPlan } from './features/plans/get-plan/endpoint.js';
 import { registerClosePlan } from './features/plans/close-plan/endpoint.js';
+import { registerGetPlanMeasurement } from './features/plans/get-measurement/endpoint.js';
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
@@ -115,6 +116,11 @@ export type AppDependencies = {
     removeStatus(id: string): Promise<void>;
     clear(id: string): void;
     closed(id: string): void;
+  };
+  planMeasurementRoutes?: {
+    exists(id: string): boolean;
+    authorize(id: string, authorization: string | undefined): boolean;
+    read(id: string): Promise<import('./features/plans/application/measurement-snapshot.js').PlanMeasurementSnapshot>;
   };
   interactions?: {
     resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
@@ -228,6 +234,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);
   }
+  if (deps.planMeasurementRoutes) registerGetPlanMeasurement(app, deps.planMeasurementRoutes);
   if (deps.gitSummary)
     registerGetGitSummary(app, {
       workspaces: deps.gitSummary.workspaces,

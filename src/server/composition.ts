@@ -69,6 +69,7 @@ export type ComposeRelayAppOptions = {
   }) => AppServer;
   homeDirectory?: string;
   explicitSkillProfile?: SkillProfile;
+  planMeasurementBaseUrl?: string;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -176,6 +177,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             events.publish(journal.append(sessionId, 'plan.updated', update.plan, occurredAt));
           }
         },
+        options.planMeasurementBaseUrl,
       )
     : null;
   const saveSession = (
@@ -307,6 +309,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
       },
     },
+    ...(runtime
+      ? {
+          planMeasurementRoutes: {
+            exists: (id: string) => sessions.find(id) !== null,
+            authorize: (id: string, authorization: string | undefined) =>
+              runtime.authorizePlanMeasurement(id, authorization),
+            read: async (id: string) => {
+              const session = sessions.find(id);
+              if (!session) throw new Error('CODEX_SESSION_NOT_RUNNING');
+              return runtime.readPlanMeasurement(session);
+            },
+          },
+        }
+      : {}),
     interactions: {
       resolve: (sessionId, requestId, resolvedAt) =>
         interactions.resolve(sessionId, requestId, resolvedAt),
