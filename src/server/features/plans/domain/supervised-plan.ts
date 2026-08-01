@@ -19,6 +19,22 @@ export type PlanStepDescription = Readonly<{
   doneWhen?: string;
 }>;
 
+/** Optional telemetry recorded by the org-plan lifecycle for either plan level. */
+export type PlanStepMeasurement = Readonly<{
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  elapsedSeconds?: number;
+  weeklyRemainingStart?: number;
+  weeklyRemainingCurrent?: number;
+  weeklyRemainingEnd?: number;
+  weeklyPercentUsed?: number;
+  tokensStart?: number;
+  tokensCurrent?: number;
+  tokensEnd?: number;
+  tokensUsed?: number;
+}>;
+
 /** An immutable execution step from the strict supervised org-plan dialect. */
 export type PlanStep = Readonly<{
   id: string;
@@ -29,6 +45,7 @@ export type PlanStep = Readonly<{
   reviewStatus?: PlanReviewStatus;
   skills?: readonly string[];
   description: PlanStepDescription;
+  measurement?: PlanStepMeasurement;
   children: readonly PlanStep[];
 }>;
 
