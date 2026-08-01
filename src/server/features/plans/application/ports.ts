@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../domain/supervised-plan.js';
+import type { PlanMeasurementSnapshot } from './measurement-snapshot.js';
 
 export type PlanStatusUpdate =
   | Readonly<{ kind: 'updated'; plan: SupervisedPlan; identity: string }>
@@ -24,4 +25,9 @@ export interface PlanStatusSource {
   ): Promise<PlanStatusLease>;
   remove(sessionId: string, identity?: string): Promise<void>;
   closeAll(): void;
+}
+
+/** Supplies one session's measurement data without exposing Codex wire types. */
+export interface PlanMeasurementSnapshotSource {
+  read(sessionId: string): Promise<PlanMeasurementSnapshot>;
 }
