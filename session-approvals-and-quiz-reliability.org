@@ -1,0 +1,61 @@
+#+TITLE: Session approvals and quiz reliability
+#+SUBTITLE: Clear approval labels, informative file approvals, and reliable structured answers
+#+DATE: 2026-08-02
+#+KEYWORDS: sessions, approvals, quiz, chat, svelte
+
+* DONE [#A] Make approval-policy selection understandable
+:PROPERTIES:
+:ID: clarify-approval-policy-selector
+:SKILLS: $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Let a user choose the existing Codex approval policies by their consequence rather than by internal policy names.
+- Notes :: The wire values must remain =untrusted=, =on-request=, and =never=; only the Session-tab presentation changes. Keep the labelled native select and its existing start-session request contract. Planning baseline: =npm test -- --reporter=dot= has one unrelated failure in =src/server/composition.test.ts= for a plan-update event assertion; do not repair it in this plan without a separate root-cause investigation.
+
+** DONE [#A] Replace policy jargon with the agreed labels
+:PROPERTIES:
+:ID: label-session-approval-policies
+:END:
+- Why :: The current raw values do not tell a user when Codex will stop for approval.
+- Change :: In =SessionsView.svelte=, retain each option's existing value while showing exactly: “Ask on all commands” (=untrusted=), “Ask out of workspace” (=on-request=), and “Approve everything” (=never=). Add concise help text that makes clear the choice does not expand the sandbox's technical permissions.
+- Tests :: Update =SessionsView.test.ts= and the session-start Playwright assertion to select by clear label and verify the unchanged serialized policy value. Run the Svelte autofixer on the touched component.
+- Done when :: The Session tab contains no raw approval-policy values in user-facing option text, and the selected clear label still starts a session with the matching Codex value.
+
+* DONE [#A] Render file-change approvals as complete, touch-safe decisions
+:PROPERTIES:
+:ID: render-file-change-approvals
+:SKILLS: $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Make every file-change approval name its target files and give its approval controls the same spacing and accessibility as command approvals.
+- Notes :: Keep the server's =fileChangeApproval= interaction kind and decision payload untouched. Treat all incoming request details as untrusted display data; never render HTML from them.
+
+** DONE [#A] Extract and display approved file targets
+:PROPERTIES:
+:ID: display-file-change-approval-details
+:END:
+- Why :: The generic fallback exposes neither the affected file nor consistent action layout, leaving a user unable to judge a requested change.
+- Change :: Add a narrow client-side parser for the app-server file-change request shape, preserving all supported target paths in safe text form. Give =fileChangeApproval= its own =InteractionList= branch with a plain-language prompt, a readable file list (and explicit unavailable-details fallback), then reuse the existing spaced =approval-actions= container for Approve and Deny.
+- Tests :: Add parser and =InteractionList= component tests for single and multiple paths, malformed/missing payloads, escaped-looking path text, and both action buttons inside the shared spaced control group. Add a focused browser assertion at 390x844 for visible targets and separately tappable controls. Run the Svelte autofixer.
+- Done when :: A pending file-change request visibly identifies every supplied file, and its buttons wrap with the same gap as command approvals without changing the approval response sent to Codex.
+
+* DONE [#A] Deliver quiz selections back to the waiting Codex tool call
+:PROPERTIES:
+:ID: deliver-quiz-tool-responses
+:SKILLS: $vertical-slice-architecture $hexagonal-architecture $svelte-code-writer $svelte-core-bestpractices $gestalt:systematic-debugging $gestalt:development-testing $gestalt:verification-before-completion
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Ensure a submitted structured quiz response is accepted by the relay and delivered exactly once to the corresponding app-server request.
+- Notes :: The existing client already retains answer state by request/question and creates the dynamic-tool response. The plan must preserve native =userInput= behavior and avoid logging prompts, model output, or answers. The suspected boundary is the response-validation/relay forwarding path; confirm the actual request ID and app-server response envelope before changing it.
+
+** DONE [#A] Reproduce and trace the end-to-end quiz response boundary
+:PROPERTIES:
+:ID: characterize-quiz-response-delivery
+:END:
+- Why :: UI selection can succeed while Codex remains waiting if either relay validation, ID correlation, or the app-server JSON-RPC response shape is wrong.
+- Change :: Add a focused characterization test spanning an =item/tool/call= quiz request, choice selection, =POST /interactions/:requestId=, validation, and the exact reply observed by the Codex adapter. Identify whether the failure is validation, response-envelope shape, or request-ID correlation; implement the smallest slice-local correction in the shared quiz contract, respond-interaction endpoint/composition adapter, or client submission code as evidence requires.
+- Tests :: Cover an accepted “solo” and “supervised multi-agent” choice, all answers in a multi-question quiz, rejection/retention on a malformed or stale reply, retry after a relay failure, and exactly-once forwarding. Retain native =userInput= contract tests. Add a Playwright flow proving that clicking a choice and “Send answers” removes the interaction only after the relay accepts it and resumes the mocked Codex request.
+- Done when :: A quiz choice is delivered once in the protocol shape expected by the originating dynamic tool, the waiting turn resumes, and failed delivery leaves the quiz visible with a retryable error.
