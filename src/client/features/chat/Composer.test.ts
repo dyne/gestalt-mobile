@@ -6,8 +6,8 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Composer from './Composer.svelte';
 
 afterEach(cleanup);
@@ -26,5 +26,27 @@ describe('Composer', () => {
 
     const status = screen.getByRole('status', { name: 'Ready.' });
     expect(status.firstChild?.textContent).toBe('Ready ');
+  });
+
+  it('shows and accepts compact command completion above the prompt', async () => {
+    const onchange = vi.fn();
+    const onsend = vi.fn();
+    const { rerender } = render(Composer, {
+      status: 'Ready.', message: '', activeTurnId: null, starting: false, onchange, onsend,
+      oninterrupt: () => {},
+    });
+
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+    await fireEvent.input(prompt, { target: { value: '/' } });
+    expect(onchange).toHaveBeenLastCalledWith('/');
+    rerender({
+      status: 'Ready.', message: '/', activeTurnId: null, starting: false, onchange, onsend,
+      oninterrupt: () => {},
+    });
+    expect(screen.getByLabelText('Chat commands').textContent).toContain('/model');
+
+    await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: false });
+    expect(onchange).toHaveBeenLastCalledWith('/model ');
+    expect(onsend).not.toHaveBeenCalled();
   });
 });
