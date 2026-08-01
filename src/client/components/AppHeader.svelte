@@ -52,6 +52,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     white-space: nowrap;
   }
   .session-model { margin-inline-start: clamp(0.75rem, 3vw, 2rem); }
+
+  @media (max-width: 34rem) {
+    .session-model { display: none; }
+  }
 </style>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">

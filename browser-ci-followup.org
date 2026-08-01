@@ -1,0 +1,41 @@
+#+TITLE: Repair browser CI follow-up
+#+SUBTITLE: Make PR #5 browser coverage self-contained and current
+#+DATE: 2026-08-01
+#+KEYWORDS: ci, playwright, responsive, plans, chat
+
+* DONE [#A] Restore self-contained responsive browser verification
+:PROPERTIES:
+:ID: restore-browser-ci-verification
+:SKILLS: $gestalt:org-plan $gestalt:systematic-debugging $gestalt:development-testing $gestalt:verification-before-completion $playwright $modern-web-guidance $svelte-code-writer $svelte-core-bestpractices
+:REVIEW_STATUS: REVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Make the PR #5 browser suite pass in a clean GitHub checkout while preserving plan lifecycle, chat activity, and responsive-header coverage.
+- Notes :: CI failure has four direct causes: a test resolves an untracked sibling plugin helper; the newly displayed session model overflows a narrow header; a chat heading now includes the intended activity disclosure; and an activity socket fixture uses the obsolete label/detail payload instead of the current activity contract.
+
+** DONE [#A] Remove the browser fixture's external helper dependency
+:PROPERTIES:
+:ID: self-contain-plan-lifecycle-fixture
+:END:
+- Why :: GitHub Actions checks out only this repository, so the sibling `gestalt-agents` path cannot exist.
+- Change :: Replace the hard-coded helper invocation with a test-owned, deterministic status-file fixture that exercises the same relay plan-status protocol and lifecycle transitions.
+- Tests :: Run the plan lifecycle Playwright spec in a clean local checkout context.
+- Done when :: The lifecycle test needs no path outside this repository and still verifies plan status updates, review, completion, and close through the real relay.
+
+** DONE [#A] Preserve narrow-header containment and current chat contracts
+:PROPERTIES:
+:ID: align-responsive-chat-browser-contracts
+:END:
+- Why :: The new selected-model label introduces visible header overflow, while two browser tests describe pre-change chat DOM and event payloads.
+- Change :: Constrain or adapt the model label at narrow widths without hiding session controls, and update E2E fixtures/assertions to the current activity disclosure and `{ kind, status, content }` event contract.
+- Tests :: Run the Plan UI evidence and affected session-start Playwright specs across their configured viewports.
+- Done when :: The overflow assertion has no out-of-bounds descendants, the activity update is rendered and expandable, and the canonical-history test asserts its intentional disclosure structure.
+
+** DONE [#B] Verify the complete CI surface
+:PROPERTIES:
+:ID: verify-browser-ci-surface
+:END:
+- Why :: Browser-only changes must be checked with both targeted evidence and the repository's required CI commands.
+- Change :: Run check, test, lint, build, and the full browser suite; inspect the final diff and retain only planned paths.
+- Tests :: `npm run check`, `npm test`, `npm run lint`, `npm run build`, `npm run test:e2e`.
+- Done when :: Every command is green and the resulting commit contains only the self-contained browser fixtures, responsive style correction, and associated plan.
