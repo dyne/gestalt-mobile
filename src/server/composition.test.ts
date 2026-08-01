@@ -175,7 +175,10 @@ describe('production composition', () => {
     const updatedIndex = messages.findIndex((message) => message.event.type === 'plan.updated');
     expect(messages[updatedIndex]).toMatchObject({
       type: 'relay.event',
-      event: { type: 'plan.updated', payload: { title: 'Completed plan', allDone: true } },
+      event: {
+        type: 'plan.updated',
+        payload: { plan: { title: 'Completed plan', allDone: true }, reason: null },
+      },
     });
     expect((await app.inject({ method: 'DELETE', url: `/api/sessions/${sessionId}/plan` })).statusCode).toBe(
       204,
