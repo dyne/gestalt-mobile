@@ -39,6 +39,12 @@ export type EffectiveSkillSelection = {
   skills: SkillSelection;
 };
 
+/** The user-facing identity of the most recent supervised Org Plan for a session. */
+export type LastOrgPlan = {
+  filename: string;
+  title: string;
+};
+
 export function createEffectiveSkillSelection(input: EffectiveSkillSelection): EffectiveSkillSelection {
   return {
     ...(input.selectedProfileName === undefined
@@ -62,6 +68,7 @@ export type RelaySessionSnapshot = {
   protocolVersion: string | null;
   failureCount: number;
   effectiveSkillSelection?: EffectiveSkillSelection;
+  lastOrgPlan?: LastOrgPlan;
   pendingInteractions: PendingInteraction[];
   createdAt: string;
   updatedAt: string;

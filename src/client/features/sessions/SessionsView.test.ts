@@ -142,6 +142,39 @@ describe('SessionsView session base tree', () => {
     expect(screen.queryByText('Skills profile: default')).toBeNull();
   });
 
+  it('shows an open session’s latest Org Plan filename and title', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'planned',
+          state: 'ready',
+          workspacePath: '/planned',
+          lastOrgPlan: { filename: 'session-summary.org', title: 'Show session context' },
+        },
+      ],
+    });
+    expect(screen.getByText('Org plan: session-summary.org — Show session context')).toBeTruthy();
+  });
+
+  it('shows available metadata for a recent session', () => {
+    renderView({
+      recentSessions: [
+        {
+          id: 'recent',
+          cwd: '/recent',
+          recencyAt: 0,
+          resumeCommand: 'codex resume recent',
+          model: 'gpt-5.4',
+          skillProfile: 'focused',
+          orgPlanFilename: 'recent-context.org',
+        },
+      ],
+    });
+    expect(screen.getByText('Model: gpt-5.4')).toBeTruthy();
+    expect(screen.getByText('Skills profile: focused')).toBeTruthy();
+    expect(screen.getByText('Org plan: recent-context.org')).toBeTruthy();
+  });
+
   it('selects another open session and marks only the Chat session as current', async () => {
     const { onselectopen } = renderView({
       selectedSessionId: 'open-a',

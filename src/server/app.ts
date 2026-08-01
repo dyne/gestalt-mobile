@@ -151,7 +151,21 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
   registerGetHealth(app, deps.health);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
-  if (deps.recentThreads) registerListRecentThreads(app, deps.recentThreads);
+  if (deps.recentThreads)
+    registerListRecentThreads(app, {
+      ...deps.recentThreads,
+      metadata: (threadId) => {
+        const session = deps.sessionRoutes?.list?.().find((candidate) => candidate.threadId === threadId);
+        if (!session) return null;
+        return {
+          ...(session.model === undefined ? {} : { model: session.model }),
+          ...(session.effectiveSkillSelection?.selectedProfileName === undefined
+            ? {}
+            : { skillProfile: session.effectiveSkillSelection.selectedProfileName }),
+          ...(session.lastOrgPlan === undefined ? {} : { orgPlanFilename: session.lastOrgPlan.filename }),
+        };
+      },
+    });
   if (deps.sessionRoutes) {
     registerStartSession(app, {
       ...deps.sessionRoutes,

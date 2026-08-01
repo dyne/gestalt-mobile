@@ -15,17 +15,29 @@ export type RecentThread = {
   recencyAt: number | null;
 };
 
+type RecentThreadMetadata = {
+  model?: string;
+  skillProfile?: string;
+  orgPlanFilename?: string;
+};
+
 export function registerListRecentThreads(
   app: FastifyInstance,
-  deps: { list(): Promise<RecentThread[]> },
+  deps: { list(): Promise<RecentThread[]>; metadata?(threadId: string): RecentThreadMetadata | null },
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
-    return threads.map(({ id, cwd, profile, recencyAt }) => ({
-      id,
-      cwd,
-      recencyAt,
-      resumeCommand: buildResumeCommand({ profile, threadId: id, workspacePath: cwd }),
-    }));
+    return threads.map(({ id, cwd, profile, recencyAt }) => {
+      const metadata = deps.metadata?.(id);
+      return {
+        id,
+        cwd,
+        recencyAt,
+        ...(metadata?.model === undefined ? {} : { model: metadata.model }),
+        ...(metadata?.skillProfile === undefined ? {} : { skillProfile: metadata.skillProfile }),
+        ...(metadata?.orgPlanFilename === undefined ? {} : { orgPlanFilename: metadata.orgPlanFilename }),
+        resumeCommand: buildResumeCommand({ profile, threadId: id, workspacePath: cwd }),
+      };
+    });
   });
 }

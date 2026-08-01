@@ -40,6 +40,13 @@ export function retainForgottenSession(
     cwd: forgottenSession.workspacePath,
     recencyAt: Number.isFinite(updatedAt) ? updatedAt : null,
     resumeCommand: forgottenSession.resumeCommand,
+    ...(forgottenSession.model === undefined ? {} : { model: forgottenSession.model }),
+    ...(forgottenSession.effectiveSkillSelection?.selectedProfileName === undefined
+      ? {}
+      : { skillProfile: forgottenSession.effectiveSkillSelection.selectedProfileName }),
+    ...(forgottenSession.lastOrgPlan === undefined
+      ? {}
+      : { orgPlanFilename: forgottenSession.lastOrgPlan.filename }),
   };
 
   return [...recentSessions, fallback].sort(

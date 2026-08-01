@@ -25,6 +25,7 @@ type Row = {
   protocol_version: string | null;
   failure_count: number;
   effective_skill_selection_json: string | null;
+  last_org_plan_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -34,7 +35,7 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
@@ -52,6 +53,7 @@ export class SqliteSessionRepository {
         session.effectiveSkillSelection === undefined
           ? null
           : JSON.stringify(session.effectiveSkillSelection),
+        session.lastOrgPlan === undefined ? null : JSON.stringify(session.lastOrgPlan),
         session.createdAt,
         session.updatedAt,
       );
@@ -77,6 +79,9 @@ function map(row: Row): RelaySessionSnapshot {
         skills: Array<{ name: string; path: string; enabled: boolean }>;
       })
     : undefined;
+  const lastOrgPlan = row.last_org_plan_json
+    ? (JSON.parse(row.last_org_plan_json) as RelaySessionSnapshot['lastOrgPlan'])
+    : undefined;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -91,6 +96,7 @@ function map(row: Row): RelaySessionSnapshot {
     protocolVersion: row.protocol_version,
     failureCount: row.failure_count,
     ...(effectiveSkillSelection === undefined ? {} : { effectiveSkillSelection }),
+    ...(lastOrgPlan === undefined ? {} : { lastOrgPlan }),
     pendingInteractions: [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,

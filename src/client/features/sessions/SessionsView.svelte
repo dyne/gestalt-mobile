@@ -122,6 +122,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {#if session.effectiveSkillSelection?.selectedProfileName}
                 <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
               {/if}
+              {#if session.lastOrgPlan}
+                <span class="profile-badge">Org plan: {session.lastOrgPlan.filename} — {session.lastOrgPlan.title}</span>
+              {/if}
               </button>
             </div>
           </li>
@@ -265,6 +268,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <div>{formatRelativeTime(null)}</div>
               {/if}
               <div class="workspace-path">{displayWorkspacePath(session.cwd)}</div>
+              {#if session.model}<span class="profile-badge">Model: {session.model}</span>{/if}
+              {#if session.skillProfile}<span class="profile-badge">Skills profile: {session.skillProfile}</span>{/if}
+              {#if session.orgPlanFilename}<span class="profile-badge">Org plan: {session.orgPlanFilename}</span>{/if}
             </div>
             <div class="session-actions">
               <button type="button" onclick={() => onopenrecent(session)}>Open</button>

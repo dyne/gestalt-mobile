@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
 import type { ProfileCatalog } from './features/catalog/application/ports.js';
@@ -182,6 +182,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planMeasurementRefresh?.accept(sessionId, update);
           if (update.kind === 'updated') {
             const occurredAt = new Date().toISOString();
+            const session = sessions.find(sessionId);
+            if (session) {
+              const updated = {
+                ...session,
+                lastOrgPlan: { filename: basename(update.planPath), title: update.plan.title },
+                updatedAt: occurredAt,
+              };
+              sessions.save(updated);
+              events.publish(journal.append(sessionId, 'session.updated', updated, occurredAt));
+            }
             events.publish(
               journal.append(
                 sessionId,

@@ -24,12 +24,16 @@ export type RelaySession = {
     selectedProfileName?: string;
     skills: Array<{ name: string; path: string; enabled: boolean }>;
   };
+  lastOrgPlan?: { filename: string; title: string };
 };
 export type RecentSession = {
   id: string;
   cwd: string;
   recencyAt: number | null;
   resumeCommand: string;
+  model?: string;
+  skillProfile?: string;
+  orgPlanFilename?: string;
 };
 export type StartSessionSettings = {
   model?: string;

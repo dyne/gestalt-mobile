@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
 import { buildApp, type AppDependencies } from '../../../app.js';
+import { registerListRecentThreads } from './endpoint.js';
 
 describe('GET /api/sessions/recent-threads', () => {
   it('returns recent Codex sessions, including sessions not managed by the relay', async () => {
@@ -44,6 +46,30 @@ describe('GET /api/sessions/recent-threads', () => {
         recencyAt: 100,
         resumeCommand:
           "'codex-profile' 'cli' 'default' 'resume' 'thread-old' '-C' '/projects/old' '--include-non-interactive'",
+      },
+    ]);
+    await app.close();
+  });
+
+  it('adds managed-session metadata when it is available', async () => {
+    const app = fastify();
+    registerListRecentThreads(app, {
+      list: async () => [{ id: 'thread-1', cwd: '/projects/work', profile: 'work', recencyAt: 200 }],
+      metadata: () => ({
+        model: 'gpt-5.4',
+        skillProfile: 'focused',
+        orgPlanFilename: 'session-summary.org',
+      }),
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/sessions/recent-threads' });
+
+    expect(response.json()).toMatchObject([
+      {
+        id: 'thread-1',
+        model: 'gpt-5.4',
+        skillProfile: 'focused',
+        orgPlanFilename: 'session-summary.org',
       },
     ]);
     await app.close();
