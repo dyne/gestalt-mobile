@@ -293,7 +293,7 @@ class ActiveLease implements PlanStatusLease {
           const previousStatusPath = this.activeStatusPath;
           this.activeStatusPath = statusPath;
           this.onActiveStatusPath(statusPath);
-          this.listener({ kind: 'updated', plan: result.plan, identity });
+          this.listener({ kind: 'updated', plan: result.plan, identity, planPath });
           if (previousStatusPath && previousStatusPath !== statusPath)
             await rm(previousStatusPath, { force: true }).catch(() => {});
         }
