@@ -10,9 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { PlanStatusUpdate } from '../../features/plans/application/ports.js';
+import type { PlanStatusLease, PlanStatusUpdate } from '../../features/plans/application/ports.js';
 import { SupervisedPlanRegistry } from '../../features/plans/application/supervised-plan-registry.js';
-import { FilesystemPlanStatusSource, planStatusFilePath } from './filesystem-plan-status-source.js';
+import {
+  FilesystemPlanStatusSource,
+  planStatusDirectoryPath,
+  planStatusFilePath,
+} from './filesystem-plan-status-source.js';
 
 const temporaryPaths: string[] = [];
 
@@ -45,6 +49,10 @@ function signal(planPath: string): string {
   });
 }
 
+function leaseStatusPath(lease: PlanStatusLease, planPath: string): string {
+  return planStatusFilePath(lease.statusDirectory, planPath);
+}
+
 describe('FilesystemPlanStatusSource', () => {
   it('isolates two session-private signals and refreshes an atomic replacement', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
@@ -60,8 +68,9 @@ describe('FilesystemPlanStatusSource', () => {
     const source = new FilesystemPlanStatusSource(stateDirectory);
     const updatesA: PlanStatusUpdate[] = [];
     const updatesB: PlanStatusUpdate[] = [];
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(planStatusFilePath(stateDirectory, 'session-a'), signal(planA), {
+    const statusDirectoryA = planStatusDirectoryPath(workspaceA, 'session-a');
+    await mkdir(statusDirectoryA, { recursive: true });
+    await writeFile(planStatusFilePath(statusDirectoryA, planA), signal(planA), {
       mode: 0o600,
     });
 
@@ -71,22 +80,25 @@ describe('FilesystemPlanStatusSource', () => {
     const leaseB = await source.open({ id: 'session-b', workspacePath: workspaceB }, (update) =>
       updatesB.push(update),
     );
+    expect(leaseA.statusDirectory).toBe(statusDirectoryA);
+    expect(leaseB.statusDirectory).toBe(planStatusDirectoryPath(workspaceB, 'session-b'));
     expect(updatesA).toMatchObject([{ kind: 'updated', plan: { title: 'Plan A' } }]);
-    expect(updatesB).toEqual([{ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }]);
-    expect(leaseA.statusPath).not.toContain('session-a');
-    expect(leaseB.statusPath).not.toBe(leaseA.statusPath);
+    expect(updatesB).toEqual([]);
+    expect(leaseA.statusDirectory).not.toContain('session-a');
+    expect(leaseB.statusDirectory).not.toBe(leaseA.statusDirectory);
 
     await writeFile(planA, org('Plan A refreshed'));
-    const replacement = `${leaseA.statusPath}.next`;
+    const statusPathA = leaseStatusPath(leaseA, planA);
+    const replacement = `${statusPathA}.next`;
     await writeFile(replacement, signal(planA), { mode: 0o600 });
-    await rename(replacement, leaseA.statusPath);
+    await rename(replacement, statusPathA);
     await vi.waitFor(() =>
       expect(updatesA.at(-1)).toMatchObject({
         kind: 'updated',
         plan: { title: 'Plan A refreshed' },
       }),
     );
-    expect(updatesB).toHaveLength(1);
+    expect(updatesB).toHaveLength(0);
 
     if (process.platform !== 'win32') expect((await stat(stateDirectory)).mode & 0o777).toBe(0o700);
     leaseA.close();
@@ -106,23 +118,23 @@ describe('FilesystemPlanStatusSource', () => {
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
     );
-    await writeFile(lease.statusPath, signal(planPath), { mode: 0o600 });
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath), { mode: 0o600 });
     await vi.waitFor(() =>
       expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Valid plan' } }),
     );
-    await writeFile(lease.statusPath, '{not json', { mode: 0o600 });
+    await writeFile(leaseStatusPath(lease, planPath), '{not json', { mode: 0o600 });
     await vi.waitFor(() =>
       expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }),
     );
     expect(
       updates.some((update) => update.kind === 'updated' && update.plan.title === 'Valid plan'),
     ).toBe(true);
-    await writeFile(lease.statusPath, signal(planPath), { mode: 0o600 });
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath), { mode: 0o600 });
     await vi.waitFor(() =>
       expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Valid plan' } }),
     );
     await rm(planPath);
-    await writeFile(lease.statusPath, signal(planPath), { mode: 0o600 });
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath), { mode: 0o600 });
     await vi.waitFor(() =>
       expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }),
     );
@@ -147,16 +159,17 @@ describe('FilesystemPlanStatusSource', () => {
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
     );
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() =>
       expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Before burst' } }),
     );
     const beforeBurst = updates.length;
     await writeFile(planPath, org('After burst'));
     for (let replacement = 0; replacement < 3; replacement += 1) {
-      const next = `${lease.statusPath}.${replacement}`;
+      const statusPath = leaseStatusPath(lease, planPath);
+      const next = `${statusPath}.${replacement}`;
       await writeFile(next, signal(planPath));
-      await rename(next, lease.statusPath);
+      await rename(next, statusPath);
     }
     await vi.waitFor(() =>
       expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'After burst' } }),
@@ -183,12 +196,12 @@ describe('FilesystemPlanStatusSource', () => {
       updates.push(update);
       registry.accept('session-a', update);
     });
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() =>
       expect(registry.find('session-a')).toMatchObject({ title: 'Last good plan' }),
     );
     await writeFile(planPath, '#+TITLE: malformed\n* WIP [#A] Missing properties\n');
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() =>
       expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }),
     );
@@ -210,7 +223,10 @@ describe('FilesystemPlanStatusSource', () => {
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
     );
-    await writeFile(lease.statusPath, signal(join(workspace, 'link', 'outside.org')));
+    await writeFile(
+      leaseStatusPath(lease, join(workspace, 'link', 'outside.org')),
+      signal(join(workspace, 'link', 'outside.org')),
+    );
     await vi.waitFor(() =>
       expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }),
     );
@@ -234,12 +250,15 @@ describe('FilesystemPlanStatusSource', () => {
     const firstLease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => {
       if (update.kind === 'updated') identity = update.identity;
     });
-    await writeFile(firstLease.statusPath, signal(firstPlan));
+    await writeFile(leaseStatusPath(firstLease, firstPlan), signal(firstPlan));
     await vi.waitFor(() => expect(identity).toBeTypeOf('string'));
     await source.remove('session-a', identity);
     source.closeAll();
 
-    await writeFile(planStatusFilePath(stateDirectory, 'session-a'), signal(firstPlan));
+    await writeFile(
+      planStatusFilePath(planStatusDirectoryPath(workspace, 'session-a'), firstPlan),
+      signal(firstPlan),
+    );
     const resumedUpdates: PlanStatusUpdate[] = [];
     const resumed = new FilesystemPlanStatusSource(stateDirectory);
     const resumedLease = await resumed.open({ id: 'session-a', workspacePath: workspace }, (update) =>
@@ -247,7 +266,7 @@ describe('FilesystemPlanStatusSource', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(resumedUpdates).toEqual([]);
-    await writeFile(resumedLease.statusPath, signal(secondPlan));
+    await writeFile(leaseStatusPath(resumedLease, secondPlan), signal(secondPlan));
     await vi.waitFor(() =>
       expect(resumedUpdates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Next plan' } }),
     );
@@ -274,13 +293,13 @@ describe('FilesystemPlanStatusSource', () => {
       updates.push(update);
       registry.accept('session-a', update);
     });
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.at(-1)?.kind).toBe('updated'));
     const identity = (updates.at(-1) as Extract<PlanStatusUpdate, { kind: 'updated' }>).identity;
     await expect(source.remove('session-a', identity)).rejects.toThrow('candidate write failed');
     expect(registry.find('session-a')).toMatchObject({ title: 'Still active after failed close' });
     const updatesBeforeRetry = updates.length;
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.length).toBeGreaterThan(updatesBeforeRetry));
     expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Still active after failed close' } });
     lease.close();
@@ -304,12 +323,12 @@ describe('FilesystemPlanStatusSource', () => {
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
     );
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.at(-1)?.kind).toBe('updated'));
     const identity = (updates.at(-1) as Extract<PlanStatusUpdate, { kind: 'updated' }>).identity;
     await expect(source.remove('session-a', identity)).rejects.toThrow('atomic replacement failed');
     const updatesBeforeRetry = updates.length;
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.length).toBeGreaterThan(updatesBeforeRetry));
     lease.close();
   });
@@ -333,13 +352,13 @@ describe('FilesystemPlanStatusSource', () => {
       updates.push(update);
       registry.accept('session-a', update);
     });
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.at(-1)?.kind).toBe('updated'));
     const identity = (updates.at(-1) as Extract<PlanStatusUpdate, { kind: 'updated' }>).identity;
     await expect(source.remove('session-a', identity)).rejects.toThrow('status unlink failed');
     expect(registry.find('session-a')).toMatchObject({ title: 'Still active after unlink failure' });
     const updatesBeforeRetry = updates.length;
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.length).toBeGreaterThan(updatesBeforeRetry));
     source.closeAll();
 
@@ -364,7 +383,11 @@ describe('FilesystemPlanStatusSource', () => {
     const planPath = join(workspace, 'plan.org');
     await writeFile(planPath, org('Must not be exposed through malformed dismissal state'));
     const sessionId = 'session-a';
-    await writeFile(planStatusFilePath(stateDirectory, sessionId), signal(planPath));
+    await mkdir(planStatusDirectoryPath(workspace, sessionId), { recursive: true });
+    await writeFile(
+      planStatusFilePath(planStatusDirectoryPath(workspace, sessionId), planPath),
+      signal(planPath),
+    );
     await writeFile(
       join(stateDirectory, `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`),
       '{interrupted',
@@ -406,13 +429,13 @@ describe('FilesystemPlanStatusSource', () => {
       updates.push(update),
     );
     delayPlanRead = true;
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
     await source.remove('session-a', createHash('sha256').update(planPath).digest('hex'));
     releaseRead?.();
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(updates).not.toContainEqual(expect.objectContaining({ kind: 'updated' }));
-    expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+    expect(updates).toEqual([]);
     lease.close();
   });
 
@@ -443,7 +466,7 @@ describe('FilesystemPlanStatusSource', () => {
       updates.push(update),
     );
     delayPlanRead = true;
-    await writeFile(lease.statusPath, signal(planPath));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
     lease.close();
     releaseRead?.();
