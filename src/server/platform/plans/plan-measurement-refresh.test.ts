@@ -16,6 +16,7 @@ const active = (stepId = 'l2', planPath = '/work/plan.org'): PlanStatusUpdate =>
   kind: 'updated',
   identity: planPath,
   planPath,
+  reason: null,
   plan: {
     title: 'Plan',
     steps: [{ id: 'l1', title: 'L1', level: 1, state: 'WIP', priority: 'A', description: {}, children: [

@@ -182,7 +182,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planMeasurementRefresh?.accept(sessionId, update);
           if (update.kind === 'updated') {
             const occurredAt = new Date().toISOString();
-            events.publish(journal.append(sessionId, 'plan.updated', update.plan, occurredAt));
+            events.publish(
+              journal.append(
+                sessionId,
+                'plan.updated',
+                { plan: update.plan, reason: update.reason },
+                occurredAt,
+              ),
+            );
           }
         },
         options.planMeasurementBaseUrl,

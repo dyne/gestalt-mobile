@@ -6,6 +6,7 @@
 
 import {
   isSupervisedPlan,
+  isRelayPlanUpdate,
   type RelayPlanEvent,
   type SupervisedPlan,
 } from './contracts.js';
@@ -108,9 +109,10 @@ export function createPlanController(
     },
     applyEvent(sessionId, event) {
       if (selectedSessionId !== sessionId || event.sequence <= lastPlanSequence) return;
-      if (event.type === 'plan.updated' && isSupervisedPlan(event.payload)) {
-        lastPlanSequence = event.sequence;
-        publish({ kind: 'ready', sessionId, plan: clonePlan(event.payload) });
+    if (event.type === 'plan.updated' && (isSupervisedPlan(event.payload) || isRelayPlanUpdate(event.payload))) {
+      const plan = isRelayPlanUpdate(event.payload) ? event.payload.plan : event.payload;
+      lastPlanSequence = event.sequence;
+      publish({ kind: 'ready', sessionId, plan: clonePlan(plan) });
       }
       if (event.type === 'plan.closed') {
         lastPlanSequence = event.sequence;

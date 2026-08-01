@@ -293,7 +293,7 @@ class ActiveLease implements PlanStatusLease {
           const previousStatusPath = this.activeStatusPath;
           this.activeStatusPath = statusPath;
           this.onActiveStatusPath(statusPath);
-          this.listener({ kind: 'updated', plan: result.plan, identity, planPath });
+          this.listener({ kind: 'updated', plan: result.plan, identity, planPath, reason: signal.reason });
           if (previousStatusPath && previousStatusPath !== statusPath)
             await rm(previousStatusPath, { force: true }).catch(() => {});
         }
@@ -312,7 +312,11 @@ class ActiveLease implements PlanStatusLease {
   }
 }
 
-type PlanStatusSignal = Readonly<{ planPath: string; updatedAt: string }>;
+type PlanStatusSignal = Readonly<{
+  planPath: string;
+  updatedAt: string;
+  reason: import('../../features/plans/application/ports.js').PlanSignalReason | null;
+}>;
 
 function parseSignal(source: string): PlanStatusSignal | null {
   try {
@@ -321,10 +325,20 @@ function parseSignal(source: string): PlanStatusSignal | null {
     const signal = value as Record<string, unknown>;
     if (signal.schemaVersion !== 1 || typeof signal.planPath !== 'string') return null;
     if (typeof signal.reason !== 'string' || !isRfc3339Utc(signal.updatedAt)) return null;
-    return { planPath: signal.planPath, updatedAt: signal.updatedAt as string };
+    return {
+      planPath: signal.planPath,
+      updatedAt: signal.updatedAt as string,
+      reason: isPlanSignalReason(signal.reason) ? signal.reason : null,
+    };
   } catch {
     return null;
   }
+}
+
+function isPlanSignalReason(
+  value: string,
+): value is import('../../features/plans/application/ports.js').PlanSignalReason {
+  return value === 'authoring-start' || value === 'work-start' || value === 'checkpoint' || value === 'update';
 }
 
 function isRfc3339Utc(value: unknown): boolean {

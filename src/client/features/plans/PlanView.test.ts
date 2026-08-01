@@ -114,6 +114,21 @@ describe('PlanView', () => {
     expect(progress.getAttribute('max')).toBe('3');
   });
 
+  it('renders measured values and keeps unavailable measurements explicit', () => {
+    render(PlanView, {
+      state: ready({
+        steps: [{
+          ...l1,
+          measurement: { elapsedSeconds: 65, weeklyPercentUsed: 0, tokensUsed: 1200 },
+          children: [{ ...l2, measurement: undefined }],
+        }],
+      }),
+      onclose: vi.fn(),
+    });
+    expect(screen.getByText('1m 5s elapsed · 0% observed account-wide usage · 1,200 tokens used')).toBeTruthy();
+    expect(screen.getByText('Measurements unavailable')).toBeTruthy();
+  });
+
   it('auto-opens and scrolls the initial nested current path without stealing focus', async () => {
     const focusProbe = document.createElement('button');
     document.body.append(focusProbe);

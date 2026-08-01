@@ -56,7 +56,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
-  import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
+  import {
+    createPlanController,
+    type PlanState,
+  } from './features/plans/plan-controller.js';
+  import { isRelayPlanUpdate } from './features/plans/contracts.js';
   import PlanView from './features/plans/PlanView.svelte';
   import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
@@ -110,6 +114,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let cursor = $state(0);
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
   let navigationFocus = $state<Tab | null>(null);
+  let lastPlanOpenSignal = $state('');
   let planEnabled = $derived(
     (planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error') &&
       !!planState.plan,
@@ -858,7 +863,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         () => {
           void resyncHistory(id);
         },
-        (event) => planController.applyEvent(id, event),
+        (event) => {
+          planController.applyEvent(id, event);
+          if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
+          if (event.payload.reason !== 'authoring-start' && event.payload.reason !== 'work-start') return;
+          const signal = `${id}:${event.sequence}`;
+          if (signal === lastPlanOpenSignal) return;
+          lastPlanOpenSignal = signal;
+          tab = 'plan';
+          scrollTabIntoInitialPosition('plan');
+        },
       );
       void sessionCache.saveCursor(id, cursor);
     };

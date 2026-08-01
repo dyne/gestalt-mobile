@@ -516,6 +516,7 @@ describe('CodexSessionRuntime', () => {
           kind: 'updated',
           identity: 'restored-plan',
           planPath: `/workspace/${session.id}/plan.org`,
+          reason: null,
           plan: {
             title: `Plan for ${session.id}`,
             steps: [],
