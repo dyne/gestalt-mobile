@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 
 import { expect, test, type WebSocketRoute } from '@playwright/test';
 
@@ -18,8 +17,6 @@ import type {
   AppServerLaunchInput,
 } from '../../src/server/platform/codex/session-runtime.js';
 
-const runFile = promisify(execFile);
-const helper = resolve('../gestalt-agents/plugins/gestalt/skills/org-plan/scripts/org-plan');
 const fixturePlan = `#+TITLE: Supervised browser lifecycle
 #+SUBTITLE: Helper to relay to phone
 #+DATE: 2026-08-01
@@ -56,6 +53,48 @@ const fixturePlan = `#+TITLE: Supervised browser lifecycle
 
 type RelayApp = Awaited<ReturnType<typeof composeRelayApp>>;
 type StartedSession = { id: string };
+
+async function updateFixturePlan(
+  statusDirectory: string,
+  planPath: string,
+  command: string,
+  id?: string,
+  value?: string,
+): Promise<void> {
+  if ((command === 'set' || command === 'l2') && id && value) {
+    const level = command === 'set' ? 1 : 2;
+    const source = await readFile(planPath, 'utf8');
+    const heading = new RegExp(
+      `^(\\*{${level}}) (?:TODO|WIP|DONE)( \\[#.\\][^\\n]*\\n:PROPERTIES:\\n:ID: ${id}\\n)`,
+      'm',
+    );
+    await writeFile(planPath, source.replace(heading, `$1 ${value}$2`));
+  }
+  if (command === 'review' && id && value) {
+    const source = await readFile(planPath, 'utf8');
+    await writeFile(
+      planPath,
+      source.replace(
+        new RegExp(`(:ID: ${id}\\n:SKILLS: [^\\n]+\\n:REVIEW_STATUS: )(?:UNREVIEWED|REVIEWED)`),
+        `$1${value}`,
+      ),
+    );
+  }
+  const canonicalPlanPath = await realpath(planPath);
+  const statusFile = join(
+    statusDirectory,
+    `${createHash('sha256').update(canonicalPlanPath).digest('hex')}.plan-status.json`,
+  );
+  await writeFile(
+    statusFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      planPath: canonicalPlanPath,
+      reason: command,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+}
 
 function fakeAppServer(input: AppServerLaunchInput, launches: AppServerLaunchInput[]): AppServer {
   launches.push(input);
@@ -120,11 +159,8 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
   };
   const invokeHelper = async (...args: string[]) => {
     expect(owningStatusDirectory, 'the relay injects a session-owned helper status path').toBeTruthy();
-    const [command, ...rest] = args;
-    await runFile(helper, [command!, planPath, ...rest], {
-      cwd: workspace,
-      env: { ...process.env, GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: owningStatusDirectory },
-    });
+    const [command, id, value] = args;
+    await updateFixturePlan(owningStatusDirectory!, planPath, command!, id, value);
   };
 
   try {

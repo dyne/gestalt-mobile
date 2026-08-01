@@ -895,7 +895,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     await answerHeading
       .locator(':scope > *')
       .evaluateAll((elements) => elements.map((element) => element.tagName)),
-  ).toEqual(['STRONG', 'BUTTON', 'TIME']);
+  ).toEqual(['STRONG', 'BUTTON', 'DETAILS', 'TIME']);
   const commentaryToggle = answerHeading.getByRole('button', { name: 'commentary' });
   await expect(commentaryToggle).toHaveText('>commentary');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
@@ -903,6 +903,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(commentaryToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
   await expect(commentary.getByText('The branch is clean.')).toBeVisible();
+  await page.locator('#chat-activity summary').click();
   await expect(page.getByText('Command · completed')).toBeVisible();
 });
 
@@ -1192,23 +1193,34 @@ test('projects a live activity update from the relay socket', async ({ page }) =
       body: JSON.stringify({ items: [], currentSequence: 0 }),
     }),
   );
-  await page.routeWebSocket('ws://127.0.0.1:4173/api/sessions/session-1/events?after=0', (socket) =>
+  await page.routeWebSocket('ws://127.0.0.1:4173/api/sessions/session-1/events?after=0', (socket) => {
     socket.send(
       JSON.stringify({
         type: 'relay.event',
         event: {
           sequence: 1,
+          type: 'agentMessageDelta',
+          payload: { text: 'Inspecting the repository.' },
+        },
+      }),
+    );
+    socket.send(
+      JSON.stringify({
+        type: 'relay.event',
+        event: {
+          sequence: 2,
           type: 'activity.updated',
           payload: { id: 'item-1', label: 'Command · completed', detail: 'git status' },
         },
       }),
-    ),
-  );
+    );
+  });
 
   await page.goto('/');
   await openChat(page);
-  await expect(page.getByText('Command · completed')).toBeVisible();
-  await page.getByText('Command · completed').click();
+  const activity = page.locator('#chat-activity');
+  await activity.locator('summary').click();
+  await expect(activity.getByText('Command · completed')).toBeVisible();
   await expect(page.getByText('git status')).toBeVisible();
 });
 
