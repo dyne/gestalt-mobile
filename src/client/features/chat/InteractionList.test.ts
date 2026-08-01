@@ -18,7 +18,7 @@ describe('InteractionList', () => {
     const ondecision = vi.fn();
     render(InteractionList, {
       interactions: [{ requestId: 'request-1', kind: 'commandApproval', payload: { command: 'git status' } }],
-      answers: {}, onanswer: () => {}, onuserinput: () => {}, onpermission: () => {}, ondecision,
+      answers: {}, onanswer: () => {}, onquiz: () => {}, onpermission: () => {}, ondecision,
     });
 
     expect(screen.getByText('git status').closest('.command-approval-command')).not.toBeNull();
