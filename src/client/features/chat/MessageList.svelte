@@ -5,14 +5,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import ActivityList from './ActivityList.svelte';
+  import type { HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
   import { groupMessages } from './message-groups.js';
   import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
 
-  let { messages }: { messages: ChatMessage[] } = $props();
+  let { messages, activities }: { messages: ChatMessage[]; activities: HistoryActivity[] } = $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
+  let latestAnswerId = $derived(
+    groups.findLast((group) => group.kind === 'assistant' && group.answer)?.id,
+  );
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
@@ -91,6 +96,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 >commentary
               </button>
             {/if}
+            {#if group.id === latestAnswerId}
+              <ActivityList {activities} />
+            {/if}
             {#if group.occurredAt}
               <time datetime={new Date(group.occurredAt).toISOString()}>
                 {formatMessageTime(group.occurredAt)}
@@ -108,10 +116,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <div class="entry-content">{@render content(group.answer)}</div>
         </section>
       {:else if group.commentary}
-        <details>
-          <summary>commentary</summary>
-          {@render content(group.commentary)}
-        </details>
+        <section class="commentary-turn">
+          <div class="entry-heading">
+            <details>
+              <summary>commentary</summary>
+              {@render content(group.commentary)}
+            </details>
+            <ActivityList {activities} />
+          </div>
+        </section>
       {/if}
     </li>
   {/each}

@@ -15,11 +15,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       return presentation ? [{ id: activity.id, ...presentation }] : [];
     }),
   );
+  let hasInProgressActivity = $derived(
+    visibleActivities.some(
+      (activity) => activity.status !== 'completed' && activity.status !== 'failed',
+    ),
+  );
 </script>
 
 {#if visibleActivities.length}
-  <section id="chat-activity" aria-labelledby="activities-title">
-    <h3 id="activities-title">Activity</h3>
+  <details id="chat-activity" open={hasInProgressActivity}>
+    <summary>activity</summary>
     <ul class="activity-list">
     {#each visibleActivities as activity (activity.id)}
       <li
@@ -32,7 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </li>
     {/each}
     </ul>
-  </section>
+  </details>
 {/if}
 
 <style>
@@ -41,10 +46,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     --activity-type-color: var(--muted-text, currentColor);
   }
 
+  #chat-activity > summary {
+    color: var(--activity-type-color);
+    font-size: 0.875em;
+    cursor: pointer;
+  }
+
   .activity-list {
     display: grid;
     gap: var(--activity-gap);
-    margin: 0;
+    margin-block: 0.25rem 0;
+    margin-inline: 0;
     padding: 0;
     list-style: none;
   }

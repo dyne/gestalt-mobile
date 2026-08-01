@@ -868,8 +868,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <section class="chat-view" aria-labelledby="chat-title">
         <h2 id="chat-title" class="visually-hidden">Chat</h2>
         {#if sessionId}
-          <MessageList {messages} />
-          <ActivityList {activities} />
+          <MessageList {messages} {activities} />
           <InteractionList
             {interactions}
             answers={userInputAnswers}
