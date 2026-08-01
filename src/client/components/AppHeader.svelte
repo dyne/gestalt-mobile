@@ -10,10 +10,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     theme,
     sessionPath = null,
+    sessionModel = null,
     onthemechange,
   }: {
     theme: ThemePreference;
     sessionPath?: string | null;
+    sessionModel?: string | null;
     onthemechange: (theme: ThemePreference) => void;
   } = $props();
 </script>
@@ -26,7 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
   </a>
   {#if sessionPath}
-    <p class="session-path" title={sessionPath}>{sessionPath}</p>
+    <p class="session-path" title={sessionPath}>{sessionPath}{#if sessionModel} <small>· {sessionModel}</small>{/if}</p>
   {/if}
   <button
     class="menu-trigger"

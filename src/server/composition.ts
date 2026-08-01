@@ -256,6 +256,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       startTurn: runtime
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
         : undefined,
+      models,
       readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
       currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
       interruptTurn: runtime

@@ -171,6 +171,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request<{ activeTurnId?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, {
         text,
       }),
+    selectModel: (sessionId: string, model: string) =>
+      request<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { model }),
     interruptTurn: (sessionId: string, turnId: string) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/interrupt`,
