@@ -249,7 +249,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       message = await sessionCache.readDraft(session.id);
       connectSession(session.id);
       tab = 'chat';
-      scrollChatToBottom();
+      scrollTabIntoInitialPosition('chat');
       status = 'Session started.';
     } catch (error) {
       status = reportRelayError(error, 'SESSION_START_FAILED');
@@ -296,7 +296,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
       interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
       tab = 'chat';
-      scrollChatToBottom();
+      scrollTabIntoInitialPosition('chat');
       await resyncHistory(id);
       connectSession(id);
     } catch (error) {
@@ -453,9 +453,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (next === 'chat' && !chatEnabled) return;
     if (next === 'plan' && !planEnabled) return;
     tab = next;
+    scrollTabIntoInitialPosition(next);
     if (next === 'chat') {
       reconcileVisibleHistory();
-      scrollChatToBottom();
     }
     if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
     if (next === 'sessions') {
@@ -546,8 +546,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (returnFocus) document.getElementById('manage-skill-profiles')?.focus();
   }
 
-  function scrollChatToBottom(): void {
-    requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight }));
+  function scrollTabIntoInitialPosition(target: Tab): void {
+    requestAnimationFrame(() => {
+      if (tab !== target) return;
+      window.scrollTo({ top: target === 'chat' ? document.documentElement.scrollHeight : 0 });
+    });
   }
 
   async function loadGitSummary(workspaceId = gitWorkspaceId) {
