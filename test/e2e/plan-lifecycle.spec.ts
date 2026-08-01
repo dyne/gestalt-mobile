@@ -308,8 +308,9 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           (event) =>
             event.sequence > cursorBeforeOffline &&
             event.type === 'plan.updated' &&
-            (event.payload as { currentStepId?: string }).currentStepId === 'deliver-lifecycle' &&
-            (event.payload as { doneSteps?: number }).doneSteps === 2,
+            (event.payload as { plan?: { currentStepId?: string } }).plan?.currentStepId ===
+              'deliver-lifecycle' &&
+            (event.payload as { plan?: { doneSteps?: number } }).plan?.doneSteps === 2,
         ),
       )
       .toBeTruthy();
