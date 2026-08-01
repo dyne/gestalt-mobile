@@ -51,6 +51,8 @@ import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
+import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
+import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -70,6 +72,8 @@ export type ComposeRelayAppOptions = {
   homeDirectory?: string;
   explicitSkillProfile?: SkillProfile;
   planMeasurementBaseUrl?: string;
+  /** Absolute path to the trusted Org Plan helper permitted to checkpoint plans. */
+  planMeasurementHelperPath?: string;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -88,6 +92,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const idempotency = new SqliteIdempotencyStore(database);
   const supervisedPlans = new SupervisedPlanRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
+  const planMeasurementHelperPath =
+    options.planMeasurementHelperPath ?? process.env.GESTALT_MOBILE_ORG_PLAN_HELPER;
   const withPendingInteractions = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
@@ -126,6 +132,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
+  let planMeasurementRefresh: PlanMeasurementRefresh | undefined;
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
         options.launchAppServer ?? launchCodexAppServer,
@@ -172,6 +179,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         planStatusSource,
         (sessionId, update) => {
           supervisedPlans.accept(sessionId, update);
+          planMeasurementRefresh?.accept(sessionId, update);
           if (update.kind === 'updated') {
             const occurredAt = new Date().toISOString();
             events.publish(journal.append(sessionId, 'plan.updated', update.plan, occurredAt));
@@ -180,6 +188,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         options.planMeasurementBaseUrl,
       )
     : null;
+  if (runtime && planMeasurementHelperPath) {
+    planMeasurementRefresh = new PlanMeasurementRefresh(
+      async (sessionId) => {
+        const session = sessions.find(sessionId);
+        if (!session) throw new Error('CODEX_SESSION_NOT_RUNNING');
+        return runtime.readPlanMeasurement(session);
+      },
+      (planPath, stepId, snapshot) =>
+        checkpointPlanMeasurement(planMeasurementHelperPath, planPath, stepId, snapshot),
+    );
+  }
   const saveSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
@@ -284,7 +303,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
       remove: (id) => sessions.remove(id),
       idempotency,
-      close: runtime ? (id) => runtime.release(id) : undefined,
+      close: runtime
+        ? (id) => {
+            planMeasurementRefresh?.stop(id);
+            return runtime.release(id);
+          }
+        : undefined,
       replyInteraction: runtime
         ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)
         : undefined,
@@ -305,6 +329,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       removeStatus: (id) => planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
       clear: (id) => supervisedPlans.clear(id),
       closed: (id) => {
+        planMeasurementRefresh?.stop(id);
         const occurredAt = new Date().toISOString();
         events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
       },
@@ -385,6 +410,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     await restoreActiveSessions();
   });
   app.addHook('onClose', async () => {
+    planMeasurementRefresh?.stopAll();
     runtime?.stopAll();
     planStatusSource.closeAll();
     database.close();

@@ -515,6 +515,7 @@ describe('CodexSessionRuntime', () => {
         listener({
           kind: 'updated',
           identity: 'restored-plan',
+          planPath: `/workspace/${session.id}/plan.org`,
           plan: {
             title: `Plan for ${session.id}`,
             steps: [],

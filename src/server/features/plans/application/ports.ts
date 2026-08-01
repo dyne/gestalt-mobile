@@ -8,7 +8,7 @@ import type { SupervisedPlan } from '../domain/supervised-plan.js';
 import type { PlanMeasurementSnapshot } from './measurement-snapshot.js';
 
 export type PlanStatusUpdate =
-  | Readonly<{ kind: 'updated'; plan: SupervisedPlan; identity: string }>
+  | Readonly<{ kind: 'updated'; plan: SupervisedPlan; identity: string; planPath: string }>
   | Readonly<{ kind: 'unavailable'; code: 'PLAN_STATUS_UNAVAILABLE' }>;
 
 export type PlanStatusLease = Readonly<{
