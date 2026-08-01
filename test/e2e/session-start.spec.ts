@@ -85,6 +85,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByLabel('Approval policy').selectOption({ label: 'Ask out of workspace' });
   await page.getByRole('button', { name: 'Create session' }).click();
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();

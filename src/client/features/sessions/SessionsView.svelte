@@ -217,16 +217,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <select
           id="approval-policy"
           value={approvalPolicy}
+          aria-describedby="approval-policy-help"
           onchange={(event) =>
             onapprovalpolicychange(
               event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>,
             )}
         >
-          <option value="untrusted">untrusted</option>
-          <option value="on-request">on-request</option>
-          <option value="never">never</option>
+          <option value="untrusted">Ask on all commands</option>
+          <option value="on-request">Ask out of workspace</option>
+          <option value="never">Approve everything</option>
         </select>
       </div>
+      <p id="approval-policy-help">This controls when Codex asks; it does not expand the sandbox's technical permissions.</p>
       {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
       <div class="session-secondary-actions">
         <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>

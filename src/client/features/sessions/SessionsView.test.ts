@@ -74,6 +74,19 @@ function renderView(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionsView session base tree', () => {
+  it('uses clear approval labels while emitting the Codex policy value', async () => {
+    const onapprovalpolicychange = vi.fn();
+    renderView({ onapprovalpolicychange });
+
+    const policy = screen.getByLabelText('Approval policy') as HTMLSelectElement;
+    expect(policy.textContent).toContain('Ask on all commands');
+    expect(policy.textContent).toContain('Ask out of workspace');
+    expect(policy.textContent).toContain('Approve everything');
+    expect(screen.getByText(/does not expand the sandbox's technical permissions/i)).toBeTruthy();
+    await fireEvent.change(policy, { target: { value: 'never' } });
+    expect(onapprovalpolicychange).toHaveBeenCalledWith('never');
+  });
+
   it('replaces the workspace select and emits exact IDs for every node depth', async () => {
     const { onworkspacechange, onstart } = renderView();
 
