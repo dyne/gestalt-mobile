@@ -8,6 +8,7 @@ export type RelaySessionEvent = {
   type:
     | 'ThreadBound'
     | 'TurnStarted'
+    | 'ModelSelected'
     | 'TurnCompleted'
     | 'InteractionRequested'
     | 'InteractionResolved'

@@ -138,6 +138,10 @@ export class RelaySession {
   bindThread(value: string, now: string): RelaySession {
     return this.transition({ threadId: threadId(value), state: 'ready' }, 'ThreadBound', now);
   }
+  selectModel(value: string, now: string): RelaySession {
+    if (this.value.state !== 'ready') throw new DomainError('SESSION_NOT_READY');
+    return this.transition({ model: value }, 'ModelSelected', now);
+  }
   startTurn(value: string, now: string): RelaySession {
     if (this.value.state === 'turnActive') throw new DomainError('SESSION_TURN_ACTIVE');
     if (this.value.state !== 'ready') throw new DomainError('SESSION_NOT_READY');

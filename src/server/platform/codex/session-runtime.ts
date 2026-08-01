@@ -138,6 +138,7 @@ export class CodexSessionRuntime {
     const result = (await process.rpc.request('turn/start', {
       threadId: session.threadId,
       input: [{ type: 'text', text, text_elements: [] }],
+      ...(session.model ? { model: session.model } : {}),
     })) as { turn?: { id?: string } };
     if (!result.turn?.id) throw new Error('CODEX_TURN_ID_MISSING');
     return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;

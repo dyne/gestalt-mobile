@@ -16,7 +16,7 @@ import { registerPullRebase } from './features/git/pull-rebase/endpoint.js';
 import { registerCheckoutBranch } from './features/git/checkout-branch/endpoint.js';
 import { registerCloneRepository } from './features/git/clone-repository/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
-import type { ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
+import type { ModelCatalog, ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerListSessions } from './features/sessions/list-sessions/endpoint.js';
 import {
@@ -27,6 +27,7 @@ import { registerPromoteRecentThread } from './features/sessions/promote-recent-
 import { registerGetHistory } from './features/sessions/get-history/endpoint.js';
 import { registerStartSession } from './features/sessions/start-session/endpoint.js';
 import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
+import { registerSelectModel } from './features/sessions/select-model/endpoint.js';
 import { registerInterruptTurn } from './features/sessions/interrupt-turn/endpoint.js';
 import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
 import { registerRestoreSession } from './features/sessions/restore-session/endpoint.js';
@@ -84,6 +85,7 @@ export type AppDependencies = {
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
+    models?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;
     remove?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
@@ -162,6 +164,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       registerStartTurn(app, {
         find: deps.sessionRoutes.find,
         start: deps.sessionRoutes.startTurn,
+        save: deps.sessionRoutes.save,
+      });
+    if (deps.sessionRoutes.models)
+      registerSelectModel(app, {
+        find: deps.sessionRoutes.find,
+        models: () => deps.sessionRoutes!.models!.list(),
+        now: deps.sessionRoutes.now,
         save: deps.sessionRoutes.save,
       });
     if (deps.sessionRoutes.interruptTurn)

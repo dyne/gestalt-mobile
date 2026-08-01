@@ -7,8 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { commandQuery, matchingCommands } from './command-completion.js';
   import { submitsOnEnter } from './keyboard.js';
-  type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; onchange(value: string): void; onsend(): void; oninterrupt(): void };
-  let { status, message, activeTurnId, starting, onchange, onsend, oninterrupt }: Props = $props();
+  type Props = { status: string; message: string; activeTurnId: string | null; starting: boolean; models?: string[]; onchange(value: string): void; onmodelselect?(model: string): void; onsend(): void; oninterrupt(): void };
+  let { status, message, activeTurnId, starting, models = [], onchange, onmodelselect = () => {}, onsend, oninterrupt }: Props = $props();
 
   let selectedCommandIndex = $state(0);
   let dismissedCommandQuery = $state<string | null>(null);
@@ -19,6 +19,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       currentCommandQuery !== dismissedCommandQuery &&
       commandMatches.length > 0,
   );
+  let modelMenuOpen = $derived(message === '/model');
+  let reasoningMenuOpen = $derived(message === '/reasoning');
 
   function updateMessage(value: string): void {
     dismissedCommandQuery = null;
@@ -77,6 +79,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <small>{command.description}</small>
           </button>
         </li>
+      {/each}
+    </ul>
+  {/if}
+  {#if modelMenuOpen}
+    <ul class="command-menu" aria-label="Available models">
+      {#each models as model (model)}
+        <li><button type="button" onclick={() => onmodelselect(model)}><code>{model}</code></button></li>
+      {/each}
+    </ul>
+  {/if}
+  {#if reasoningMenuOpen}
+    <ul class="command-menu" aria-label="Reasoning efforts">
+      {#each ['low', 'medium', 'high'] as effort (effort)}
+        <li><button type="button" onclick={() => updateMessage(`/reasoning ${effort} `)}><code>{effort}</code></button></li>
       {/each}
     </ul>
   {/if}

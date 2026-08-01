@@ -10,7 +10,7 @@ import { commandQuery, matchingCommands } from './command-completion.js';
 
 describe('command completion', () => {
   it('lists all registered commands after a slash and narrows them as the name is typed', () => {
-    expect(matchingCommands('/').map((command) => command.name)).toEqual(['model']);
+    expect(matchingCommands('/').map((command) => command.name)).toEqual(['model', 'reasoning']);
     expect(matchingCommands('/mo').map((command) => command.name)).toEqual(['model']);
     expect(matchingCommands('/x')).toEqual([]);
   });

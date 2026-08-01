@@ -11,6 +11,7 @@ export type ChatCommand = {
 
 export const CHAT_COMMANDS: readonly ChatCommand[] = [
   { name: 'model', description: 'Choose the model for the next turn' },
+  { name: 'reasoning', description: 'Choose reasoning effort for the next turn' },
 ];
 
 export function commandQuery(message: string): string | null {

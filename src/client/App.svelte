@@ -358,6 +358,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       : 'Could not copy the resume command.';
   }
 
+  async function selectSessionModel(model: string): Promise<void> {
+    if (!sessionId || activeTurnId) return;
+    try {
+      const updated = await relay.selectModel(sessionId, model);
+      sessions = sessions.map((session) => (session.id === updated.id ? { ...session, ...updated } : session));
+      message = '';
+      status = `Model changed to ${model}; it applies to the next turn.`;
+    } catch (error) {
+      status = `Could not change model: ${errorMessage(error)}`;
+    }
+  }
+
   async function sendMessage() {
     if (!sessionId || !message.trim() || activeTurnId || startingTurn) return;
     const prompt = message.trim();
@@ -861,6 +873,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
           )
         : null}
+      sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
       onthemechange={setTheme}
     />
 
@@ -882,7 +895,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {message}
             {activeTurnId}
             starting={startingTurn}
+            models={sessionModels}
             onchange={updateDraft}
+            onmodelselect={(model) => void selectSessionModel(model)}
             onsend={() => void sendMessage()}
             oninterrupt={() => void interruptTurn()}
           />

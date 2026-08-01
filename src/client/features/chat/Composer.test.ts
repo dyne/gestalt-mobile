@@ -49,4 +49,15 @@ describe('Composer', () => {
     expect(onchange).toHaveBeenLastCalledWith('/model ');
     expect(onsend).not.toHaveBeenCalled();
   });
+
+  it('shows clickable available models after /model', async () => {
+    const onmodelselect = vi.fn();
+    render(Composer, {
+      status: 'Ready.', message: '/model', activeTurnId: null, starting: false,
+      models: ['gpt-5.6-terra'], onchange: () => {}, onmodelselect, onsend: () => {}, oninterrupt: () => {},
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'gpt-5.6-terra' }));
+    expect(onmodelselect).toHaveBeenCalledWith('gpt-5.6-terra');
+  });
 });
