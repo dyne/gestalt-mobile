@@ -83,11 +83,11 @@ export const gestaltQuizDynamicTool = {
 } as const;
 
 /** Parses the bounded payload that is safe to persist and render as a quiz. */
-export function parseQuiz(value: unknown): Quiz | null {
+export function parseQuiz(value: unknown, minimumChoices = 2): Quiz | null {
   if (!isRecord(value) || !Array.isArray(value.questions)) return null;
   if (value.questions.length < 1 || value.questions.length > 8) return null;
 
-  const questions = value.questions.map(parseQuestion);
+  const questions = value.questions.map((question) => parseQuestion(question, minimumChoices));
   if (questions.some((question) => question === null)) return null;
   const parsed = questions as QuizQuestion[];
   return new Set(parsed.map((question) => question.id)).size === parsed.length ? { questions: parsed } : null;
@@ -109,7 +109,7 @@ export function mapNativeUserInputToQuiz(value: unknown): Quiz | null {
           }
         : question,
     ),
-  });
+  }, 1);
 }
 
 /** Converts a completed quiz into the app-server dynamic-tool response shape. */
@@ -145,8 +145,8 @@ export function isQuizToolResponseForQuiz(quiz: Quiz, value: unknown): boolean {
   }
 }
 
-function parseQuestion(value: unknown): QuizQuestion | null {
-  if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length < 2 || value.choices.length > 5)
+function parseQuestion(value: unknown, minimumChoices: number): QuizQuestion | null {
+  if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length < minimumChoices || value.choices.length > 5)
     return null;
   if (!isQuestionId(value.id) || !isBoundedText(value.header, 120) || !isBoundedText(value.question, 600)) return null;
   if (typeof value.allowCustom !== 'boolean') return null;
