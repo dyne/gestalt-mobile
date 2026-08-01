@@ -58,4 +58,36 @@ describe('isValidInteractionResponse', () => {
     expect(isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Other' }]))).toBe(false);
     expect(isValidInteractionResponse('quiz', { success: true, contentItems: [] })).toBe(false);
   });
+
+  it('accepts the complete Solo and Supervised multi-agent selection exactly as the quiz requested', () => {
+    const quiz = {
+      questions: [
+        {
+          id: 'execution_mode',
+          header: 'Execution mode',
+          question: 'How should this plan run?',
+          choices: [
+            { label: 'Solo', description: 'One agent executes the plan.' },
+            { label: 'Supervised multi-agent', description: 'A supervisor coordinates parallel agents.' },
+          ],
+          allowCustom: false,
+        },
+        {
+          id: 'review_mode',
+          header: 'Review mode',
+          question: 'Who reviews the work?',
+          choices: [
+            { label: 'Solo', description: 'The executor reviews its work.' },
+            { label: 'Supervised multi-agent', description: 'The supervisor reviews agent work.' },
+          ],
+          allowCustom: false,
+        },
+      ],
+    };
+    const response = toQuizToolResponse([
+      { id: 'execution_mode', answer: 'Solo' },
+      { id: 'review_mode', answer: 'Supervised multi-agent' },
+    ]);
+    expect(isValidQuizInteractionResponse(quiz, response)).toBe(true);
+  });
 });

@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
-import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
+import { GESTALT_QUIZ_TOOL_NAME, gestaltQuizDynamicTool, toQuizToolResponse } from '../../../shared/contracts/quiz.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
@@ -579,7 +579,7 @@ describe('CodexSessionRuntime', () => {
     runtime.stopAll();
   });
 
-  it('keeps a Codex approval request pending until the relay resolves it', async () => {
+  it('keeps a Codex quiz request pending until the relay resolves it with the dynamic-tool result', async () => {
     let requestListener:
       ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
     const pending: unknown[] = [];
@@ -623,17 +623,35 @@ describe('CodexSessionRuntime', () => {
     );
     const result = requestListener?.({
       id: 7,
-      method: 'item/commandExecution/requestApproval',
-      params: {},
+      method: 'item/tool/call',
+      params: {
+        tool: GESTALT_QUIZ_TOOL_NAME,
+        arguments: {
+          questions: [
+            {
+              id: 'execution_mode',
+              header: 'Execution mode',
+              question: 'How should this plan run?',
+              choices: [
+                { label: 'Solo', description: 'One agent executes the plan.' },
+                { label: 'Supervised multi-agent', description: 'A supervisor coordinates agents.' },
+              ],
+              allowCustom: false,
+            },
+          ],
+        },
+      },
     });
     expect(pending).toEqual([
       {
         sessionId: 'session-1',
-        request: { id: 7, method: 'item/commandExecution/requestApproval', params: {} },
+        request: expect.objectContaining({ id: 7, method: 'item/tool/call' }),
       },
     ]);
-    runtime.resolveServerRequest('session-1', '7', { decision: 'approved' });
-    await expect(result).resolves.toEqual({ decision: 'approved' });
+    const response = toQuizToolResponse([{ id: 'execution_mode', answer: 'Supervised multi-agent' }]);
+    expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(true);
+    expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(false);
+    await expect(result).resolves.toEqual(response);
   });
 
   it('reads canonical items from a bound Codex thread', async () => {
