@@ -43,6 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     readUserInputQuestions,
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
+  import { mapNativeUserInputToQuiz, parseQuiz, toQuizToolResponse } from '../shared/contracts/quiz.js';
   import {
     createRelayClient,
     type RelayGitSummary,
@@ -721,14 +722,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
   }
 
-  async function resolveUserInput(interaction: { requestId: string; payload: unknown }) {
+  async function resolveUserInput(interaction: { requestId: string; kind: string; payload: unknown }) {
     if (!sessionId) return;
-    const response = toUserInputResponse(
-      readUserInputQuestions(interaction.payload).map((question) => ({
+    const quiz = interaction.kind === 'quiz' ? parseQuiz(interaction.payload) : mapNativeUserInputToQuiz(interaction.payload);
+    if (!quiz) return;
+    const answers = quiz.questions.map((question) => ({
         id: question.id,
-        answer: userInputAnswers[question.id] ?? '',
-      })),
-    );
+        answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
+      }));
+    const response = interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
     await relay.respondInteraction(sessionId, interaction.requestId, response);
     interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
   }
@@ -744,8 +746,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
   }
 
-  function setUserInputAnswer(questionId: string, answer: string) {
-    userInputAnswers[questionId] = answer;
+  function setUserInputAnswer(requestId: string, questionId: string, answer: string) {
+    userInputAnswers[`${requestId}:${questionId}`] = answer;
   }
 
   function updateDraft(value: string) {
@@ -902,7 +904,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {interactions}
             answers={userInputAnswers}
             onanswer={setUserInputAnswer}
-            onuserinput={(interaction) => void resolveUserInput(interaction)}
+            onquiz={(interaction) => void resolveUserInput(interaction)}
             onpermission={(interaction) => void resolvePermissions(interaction)}
             ondecision={(id, decision) => void resolveInteraction(id, decision)}
           />

@@ -6,25 +6,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { readCommandApproval } from './command-approval.js';
-  import { readUserInputQuestions } from './user-input-request.js';
+  import QuizForm from './QuizForm.svelte';
+  import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
   type Interaction = { requestId: string; kind: string; payload: unknown };
-  type Props = { interactions: Interaction[]; answers: Record<string, string>; onanswer(id: string, value: string): void; onuserinput(interaction: Interaction): void; onpermission(interaction: Interaction): void; ondecision(id: string, decision: 'accept' | 'decline'): void };
-  let { interactions, answers, onanswer, onuserinput, onpermission, ondecision }: Props = $props();
+  type Props = { interactions: Interaction[]; answers: Record<string, string>; onanswer(requestId: string, id: string, value: string): void; onquiz(interaction: Interaction): void; onpermission(interaction: Interaction): void; ondecision(id: string, decision: 'accept' | 'decline'): void };
+  let { interactions, answers, onanswer, onquiz, onpermission, ondecision }: Props = $props();
+  const scopedAnswers = (requestId: string) => Object.fromEntries(Object.entries(answers).filter(([key]) => key.startsWith(`${requestId}:`)).map(([key, value]) => [key.slice(requestId.length + 1), value]));
 </script>
 {#if interactions.length}
   <section aria-labelledby="interactions-title"><h3 id="interactions-title">Codex needs your decision</h3>
     {#each interactions as interaction (interaction.requestId)}
       <article><p>{interaction.kind}</p>
-        {#if interaction.kind === 'userInput'}
-          {@const questions = readUserInputQuestions(interaction.payload)}
-          <form onsubmit={(event) => { event.preventDefault(); onuserinput(interaction); }}>
-            {#each questions as question (question.id)}
-              <label for={`${interaction.requestId}-${question.id}`}>{question.header}: {question.question}</label>
-              <input id={`${interaction.requestId}-${question.id}`} type={question.isSecret ? 'password' : 'text'} value={answers[question.id] ?? ''} oninput={(event) => onanswer(question.id, event.currentTarget.value)} />
-              {#each question.options as option (option.label)}<button type="button" onclick={() => onanswer(question.id, option.label)}>{option.label}</button>{/each}
-            {/each}
-            <button type="submit" disabled={!questions.length}>Send answers</button>
-          </form>
+        {#if interaction.kind === 'userInput' || interaction.kind === 'quiz'}
+          {@const quiz = interaction.kind === 'quiz' ? parseQuiz(interaction.payload) : mapNativeUserInputToQuiz(interaction.payload)}
+          {#if quiz}
+            <QuizForm requestId={interaction.requestId} {quiz} answers={scopedAnswers(interaction.requestId)} onanswer={(id, value) => onanswer(interaction.requestId, id, value)} onsubmit={() => onquiz(interaction)} />
+          {:else}<p>Codex sent an invalid quiz request.</p>{/if}
         {:else if interaction.kind === 'permissionsApproval'}
           <p>Grant the requested permissions for this turn only.</p><button type="button" onclick={() => onpermission(interaction)}>Approve</button>
         {:else if interaction.kind === 'commandApproval'}
