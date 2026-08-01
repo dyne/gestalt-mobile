@@ -28,7 +28,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
   </a>
   {#if sessionPath}
-    <p class="session-path" title={sessionPath}>{sessionPath}{#if sessionModel} <small>· {sessionModel}</small>{/if}</p>
+    <p class="session-path" title={sessionPath}>
+      {sessionPath}{#if sessionModel}<span class="session-model"><small>· {sessionModel}</small></span>{/if}
+    </p>
   {/if}
   <button
     class="menu-trigger"
@@ -49,6 +51,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .session-model { margin-inline-start: clamp(0.75rem, 3vw, 2rem); }
 </style>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">

@@ -567,6 +567,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
   }
 
+  let chatScrollPending = false;
+
+  function scrollChatToBottom(): void {
+    if (chatScrollPending) return;
+    chatScrollPending = true;
+    requestAnimationFrame(() => {
+      chatScrollPending = false;
+      if (tab === 'chat') window.scrollTo({ top: document.documentElement.scrollHeight });
+    });
+  }
+
   function focusChatPromptOnDesktop(): void {
     if (!window.matchMedia('(min-width: 48rem)').matches) return;
     void tick().then(() => {
@@ -897,6 +908,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             starting={startingTurn}
             models={sessionModels}
             onchange={updateDraft}
+            onscrollbottom={scrollChatToBottom}
             onmodelselect={(model) => void selectSessionModel(model)}
             onsend={() => void sendMessage()}
             oninterrupt={() => void interruptTurn()}

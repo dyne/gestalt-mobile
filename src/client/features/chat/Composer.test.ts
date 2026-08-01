@@ -50,6 +50,26 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
+  it('requests a bottom scroll while typing and after accepting a completion', async () => {
+    const onchange = vi.fn();
+    const onscrollbottom = vi.fn();
+    const { rerender } = render(Composer, {
+      status: 'Ready.', message: '', activeTurnId: null, starting: false, onchange, onscrollbottom,
+      onsend: () => {}, oninterrupt: () => {},
+    });
+
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+    await fireEvent.input(prompt, { target: { value: '/' } });
+    expect(onscrollbottom).toHaveBeenCalledTimes(1);
+    rerender({
+      status: 'Ready.', message: '/', activeTurnId: null, starting: false, onchange, onscrollbottom,
+      onsend: () => {}, oninterrupt: () => {},
+    });
+
+    await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: false });
+    expect(onscrollbottom).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps models visible after command completion and sorts newest first', async () => {
     const onmodelselect = vi.fn();
     render(Composer, {
