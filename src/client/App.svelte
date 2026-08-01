@@ -449,13 +449,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       });
   }
 
-  function selectTab(next: Tab): void {
+  function selectTab(next: Tab, focusChatPrompt = false): void {
     if (next === 'chat' && !chatEnabled) return;
     if (next === 'plan' && !planEnabled) return;
+    const changedTab = tab !== next;
     tab = next;
     scrollTabIntoInitialPosition(next);
     if (next === 'chat') {
       reconcileVisibleHistory();
+      if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
     if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
     if (next === 'sessions') {
@@ -550,6 +552,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     requestAnimationFrame(() => {
       if (tab !== target) return;
       window.scrollTo({ top: target === 'chat' ? document.documentElement.scrollHeight : 0 });
+    });
+  }
+
+  function focusChatPromptOnDesktop(): void {
+    if (!window.matchMedia('(min-width: 48rem)').matches) return;
+    void tick().then(() => {
+      if (tab === 'chat') document.getElementById('message')?.focus();
     });
   }
 
