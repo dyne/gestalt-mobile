@@ -89,6 +89,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return step.description.goal ?? step.description.why ?? step.title;
   }
 
+  function measurementSummary(step: PlanStep): string {
+    const measurement = step.measurement;
+    if (!measurement) return 'Measurements unavailable';
+    const values: string[] = [];
+    if (measurement.elapsedSeconds !== undefined)
+      values.push(`${Math.floor(measurement.elapsedSeconds / 60)}m ${measurement.elapsedSeconds % 60}s elapsed`);
+    if (measurement.weeklyPercentUsed !== undefined)
+      values.push(`${measurement.weeklyPercentUsed}% observed account-wide usage`);
+    if (measurement.tokensUsed !== undefined)
+      values.push(`${measurement.tokensUsed.toLocaleString()} tokens used`);
+    return values.join(' · ') || 'Measurements unavailable';
+  }
+
   function descriptionEntries(step: PlanStep): Array<readonly [string, string]> {
     return (Object.keys(descriptionLabels) as DescriptionKey[]).flatMap((key) => {
       const value = step.description[key];
@@ -157,6 +170,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <strong>{step.title}</strong>
                 <span>{step.state} · Priority {step.priority}{step.reviewStatus ? ` · ${step.reviewStatus}` : ''}</span>
                 <span>{summary(step)}</span>
+                <span class="measurement">{measurementSummary(step)}</span>
               </summary>
               {#each descriptionEntries(step) as [label, value] (label)}
                 <p><strong>{label}:</strong> {value}</p>
@@ -202,6 +216,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   ol { padding-inline-start: 1.25rem; }
   details { margin-block: .5rem; }
   summary { cursor: pointer; display: grid; gap: .2rem; }
+  .measurement { color: var(--muted, currentColor); font-variant-numeric: tabular-nums; }
   .metadata { display: grid; gap: .25rem; }
   .metadata div { display: flex; gap: .5rem; }
   .metadata dd { margin: 0; }

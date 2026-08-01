@@ -7,6 +7,7 @@
 export type PlanTodoState = 'TODO' | 'WIP' | 'DONE';
 export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
+export type PlanSignalReason = 'authoring-start' | 'work-start' | 'checkpoint' | 'update';
 
 export type PlanStepDescription = Readonly<{
   effort?: string;
@@ -65,6 +66,18 @@ export type RelayPlanEvent = Readonly<{
   type: string;
   payload: unknown;
 }>;
+
+export type RelayPlanUpdate = Readonly<{ plan: SupervisedPlan; reason: PlanSignalReason | null }>;
+
+export function isRelayPlanUpdate(value: unknown): value is RelayPlanUpdate {
+  if (!value || typeof value !== 'object') return false;
+  const update = value as Partial<RelayPlanUpdate>;
+  return isSupervisedPlan(update.plan) && (update.reason === null || isPlanSignalReason(update.reason));
+}
+
+function isPlanSignalReason(value: unknown): value is PlanSignalReason {
+  return value === 'authoring-start' || value === 'work-start' || value === 'checkpoint' || value === 'update';
+}
 
 export function isSupervisedPlan(value: unknown): value is SupervisedPlan {
   if (!value || typeof value !== 'object') return false;
