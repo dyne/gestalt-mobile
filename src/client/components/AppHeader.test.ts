@@ -6,8 +6,8 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import AppHeader from './AppHeader.svelte';
 
@@ -40,5 +40,14 @@ describe('AppHeader', () => {
     const { container } = render(AppHeader, { theme: 'system', onthemechange: () => {} });
 
     expect(container.querySelector('.weekly-quota')).toBeNull();
+  });
+
+  it('offers the exact named lock action in the configuration popover', async () => {
+    const onlock = vi.fn();
+    render(AppHeader, { theme: 'system', onthemechange: () => {}, onlock });
+    const action = screen.getByRole('button', { name: 'Lock Gestalt Mobile', hidden: true });
+    expect(action.getAttribute('popovertargetaction')).toBe('hide');
+    await fireEvent.click(action);
+    expect(onlock).toHaveBeenCalledOnce();
   });
 });

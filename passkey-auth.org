@@ -97,37 +97,53 @@
 - Tests :: Add a table-driven application test over every registered API route classifying public versus protected behavior, including =/api/bootstrap=. Test valid/expired/revoked/malformed cookies, exact and wrong/missing origins on unsafe methods, and that protected handlers are not called on failure. Extend WebSocket tests for missing/wrong-origin cookies, valid shared sessions, expiry/revocation, and absence of session-existence leakage. Retain existing health/static tests and all relay behavior behind a valid injected session.
 - Done when :: No HTTP or WebSocket path capable of reading relay state or controlling Codex/Git can be reached without a live shared authorization session, and the only anonymous mutation possible is the explicitly eligible first-device ceremony.
 
-* TODO [#A] Gate the client with first-run enrollment and returning-device login
+* DONE [#A] Gate the client with first-run enrollment and returning-device login
 :PROPERTIES:
 :ID: add-authentication-client-gate
 :SKILLS: $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance
-:REVIEW_STATUS: UNREVIEWED
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-08-02T12:00:00Z
+:UPDATED_AT: 2026-08-02T22:02:10Z
+:COMPLETED_AT: 2026-08-02T22:02:10Z
+:ELAPSED_SECONDS: 36130
 :END:
 - Effort :: Medium
 - Goal :: Present a focused first-run enrollment splash or returning-device passkey login before any relay bootstrap, cached session selection, event socket, or Codex-facing UI is initialized.
 - Notes :: Depends on the public status/registration/login contract from =implement-passkey-auth-boundary=. Keep authentication explicit: do not add conditional autofill or auto-trigger a browser WebAuthn prompt. Feature-detect =window.PublicKeyCredential= and =window.isSecureContext=; do not assume newer capability/signal methods exist and do not add WebAuthn polyfills. Use =@simplewebauthn/browser= for binary conversion and browser ceremony calls. The first-run QR is deliberately only a machine-readable link to the same canonical splash, because bootstrap is already trust-on-first-use; text must warn the operator to enroll before exposing an empty instance. A scanned phone still confirms and names the new device before invoking WebAuthn.
 
-** TODO [#A] Introduce an auth client and explicit state machine
+** DONE [#A] Introduce an auth client and explicit state machine
 :PROPERTIES:
 :ID: create-client-auth-state-machine
+:STARTED_AT: 2026-08-02T12:00:01Z
+:UPDATED_AT: 2026-08-02T12:04:00Z
+:COMPLETED_AT: 2026-08-02T12:04:00Z
+:ELAPSED_SECONDS: 239
 :END:
 - Why :: =App.svelte= currently starts =/api/bootstrap= and relay timers immediately, so merely rendering a login overlay would still leak data and create protected network activity underneath it.
 - Change :: Add typed client functions for status, registration options/verification, login options/verification, and logout, with a small state machine: =checking=, =bootstrap=, =locked=, =authenticated=, =unsupported=, and retryable =error=. Map expected WebAuthn =NotAllowedError=, =InvalidStateError=, =AbortError=, and =SecurityError= to calm actionable messages while retaining unknown failures for safe generic reporting. Move the current relay implementation mechanically into a =RelayApp.svelte= shell and make =App.svelte= the small authorization composition boundary; instantiate =RelayApp= only in =authenticated=. Ensure status checks use =credentials: 'same-origin'=. Add one shared authorized-fetch boundary used by existing relay API clients so a later =401 AUTH_REQUIRED= tears down sockets/timers and returns to =locked= instead of leaving stale privileged UI. Do not monkey-patch global =fetch=.
 - Tests :: Add state-machine and API-client tests for every state/transition, malformed response, retry, successful session establishment, logout, and a 401 emitted during an existing relay call. Add a characterization test proving no =/api/bootstrap=, recent-session, skills, Git, plan, or WebSocket request occurs before =authenticated=. Retain the existing =App.svelte= evidence modes and relay tests after the mechanical shell extraction.
 - Done when :: The browser performs only the public auth-status flow while locked, initializes the current relay exactly once after authentication, and returns safely to login if the shared session ends.
 
-** TODO [#A] Build the first-device enrollment splash
+** DONE [#A] Build the first-device enrollment splash
 :PROPERTIES:
 :ID: build-first-device-splash
+:STARTED_AT: 2026-08-02T12:10:00Z
+:UPDATED_AT: 2026-08-02T12:24:00Z
+:COMPLETED_AT: 2026-08-02T12:24:00Z
+:ELAPSED_SECONDS: 840
 :END:
 - Why :: An empty installation needs an understandable single action that binds the first named device without introducing an account-creation form or hidden security assumptions.
 - Change :: Add a mobile-first =FirstDeviceEnrollment.svelte= with Gestalt/Dyne branding, a concise trust-on-first-use warning, a required “Device nickname” input, “Authorize this device” action, and a QR plus copyable canonical link for continuing on a phone. Add a small QR encoder dependency only if it is maintained, browser-safe, and substantially smaller/safer than hand-implementing QR encoding; isolate it behind a client adapter so a visible text link remains the fallback. The QR must encode only the configured canonical origin plus an SPA bootstrap hint—no challenge, cookie, credential material, or reusable secret. On submission, request options, call =startRegistration({ optionsJSON })= from the click handler, verify with nickname, then transition directly to =authenticated=. While a desktop splash is open, poll public status only when visible at a modest interval; if another device wins, stop registration/polling and move to the locked login explanation. Disable duplicate submissions and keep user-entered nickname after cancellation or a retryable failure.
 - Tests :: Component tests cover support detection, required/trimmed nickname, duplicate-click suppression, cancellation, =InvalidStateError=, server race loss, QR/link equivalence, polling cleanup, and successful transition. Add Playwright route-mocked flows at 375×812 and 1280×800 with 100% and 200% font scale; capture =test-results/auth/first-run-mobile.png= and =test-results/auth/first-run-desktop-200.png=. Assert visible focus, 44px controls, no horizontal overflow, useful non-QR link text, and reduced-motion behavior. Run the Svelte autofixer on every touched component.
 - Done when :: A user on an empty installation can name and authorize the current device—or scan a non-secret link on a phone—without any protected relay request, and a concurrent winner is handled without ambiguous or unsafe retry behavior.
 
-** TODO [#A] Build returning-device login and lock controls
+** DONE [#A] Build returning-device login and lock controls
 :PROPERTIES:
 :ID: build-returning-device-login
+:STARTED_AT: 2026-08-02T12:30:00Z
+:UPDATED_AT: 2026-08-02T22:02:10Z
+:COMPLETED_AT: 2026-08-02T22:02:10Z
+:ELAPSED_SECONDS: 34330
 :END:
 - Why :: Once the first device exists, every new or expired browser context must show a clear usernameless passkey action rather than a broken bootstrap screen.
 - Change :: Add =PasskeyLogin.svelte= with one explicit “Sign in with a passkey” button, unsupported/insecure-context guidance, retryable error area, and no username field. Invoke =startAuthentication({ optionsJSON })= only from the button handler, submit verification, then mount =RelayApp=. Add “Lock Gestalt Mobile” to the existing burger popover; it calls logout, closes relay sockets/timers, clears only in-memory privileged state (not durable relay history), and returns to login. If login reports an unknown credential, give a non-enumerating explanation and allow retry; use WebAuthn signal methods only behind feature detection if the server contract later supplies the exact safe inputs, never as a prerequisite.
