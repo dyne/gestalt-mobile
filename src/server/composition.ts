@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -20,6 +20,7 @@ import { CodexSessionRuntime, type AppServer } from './platform/codex/session-ru
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
+import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
@@ -53,12 +54,18 @@ import { SupervisedPlanRegistry } from './features/plans/application/supervised-
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
+import {
+  createRelyingPartyConfig,
+  type RelyingPartyConfig,
+} from './config.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
 export type ComposeRelayAppOptions = {
   root: string;
   dataDir?: string;
+  /** Canonical, configuration-derived WebAuthn contract; never request-derived. */
+  relyingParty: RelyingPartyConfig;
   staticDir?: string;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
@@ -70,6 +77,8 @@ export type ComposeRelayAppOptions = {
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
   homeDirectory?: string;
+  /** Testable source for the one durable opaque WebAuthn user handle. */
+  authorizationRandomBytes?: (length: number) => Uint8Array;
   explicitSkillProfile?: SkillProfile;
   planMeasurementBaseUrl?: string;
   /** Absolute path to the trusted Org Plan helper permitted to checkpoint plans. */
@@ -77,6 +86,14 @@ export type ComposeRelayAppOptions = {
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
+  const relyingParty = createRelyingPartyConfig(options.relyingParty.publicOrigin);
+  if (
+    relyingParty.rpId !== options.relyingParty.rpId ||
+    relyingParty.rpName !== options.relyingParty.rpName
+  )
+    throw new Error('Invalid WebAuthn relying-party configuration');
+  const ownerHandle = (options.authorizationRandomBytes ?? randomBytes)(32);
+  if (ownerHandle.length !== 32) throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
@@ -85,7 +102,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),
       );
   const database = openRelayDatabase(databasePath);
-  migrate(database);
+  try {
+    migrate(database);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   const sessions = new SqliteSessionRepository(database);
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
@@ -244,7 +266,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
     recoverExitedSession = (sessionId) => supervisor.recover(sessionId);
   }
-  const app = await buildApp({
+  let authorization: SqliteAuthorizationStore;
+  try {
+    authorization = new SqliteAuthorizationStore(options.homeDirectory ?? homedir(), relyingParty);
+    authorization.initializeOwner(ownerHandle);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+  let app;
+  try {
+    app = await buildApp({
     health: {
       async read() {
         return {
@@ -404,7 +436,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       clone: cloneRepository,
       idempotency,
     },
-  });
+    });
+  } catch (error) {
+    authorization.close();
+    database.close();
+    throw error;
+  }
   const restoreActiveSessions = async () => {
     if (!runtime) return;
     await mapWithConcurrency(
@@ -433,6 +470,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     runtime?.stopAll();
     planStatusSource.closeAll();
     database.close();
+    authorization.close();
   });
   return app;
 }

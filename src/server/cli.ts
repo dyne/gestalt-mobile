@@ -25,6 +25,7 @@ Options:
   --cwd <path>       Workspace root (default: current directory)
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
+  --public-origin <origin> Canonical browser origin for passkeys
   --data-dir <path>  Directory for persistent application data
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server
@@ -179,6 +180,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
   const app = await (dependencies.compose ?? composeRelayApp)({
     root: config.root,
     dataDir: config.dataDir,
+    relyingParty: config.relyingParty,
     staticDir: packagedClientDir(moduleUrl),
     profiles: new CodexProfileCatalog(),
     installedCodexVersion: await (dependencies.probeCodexVersion ?? probeCodexVersion)(),

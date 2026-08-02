@@ -9,6 +9,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { composeRelayApp } from '../../src/server/composition.js';
+
+const relyingParty = {
+  publicOrigin: 'http://localhost:3000',
+  rpId: 'localhost',
+  rpName: 'Gestalt Mobile' as const,
+};
 import type { WorkspaceOption } from '../../src/server/features/catalog/application/ports.js';
 import {
   createSkillProfile,
@@ -48,6 +54,7 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
   const first = await composeRelayApp({
     root,
     dataDir,
+    relyingParty,
     profiles,
     installedCodexVersion: 'codex-cli 0.144.3',
     startAppServers: true,
@@ -75,6 +82,7 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
   const second = await composeRelayApp({
     root,
     dataDir,
+    relyingParty,
     profiles,
     installedCodexVersion: 'codex-cli 0.144.3',
     startAppServers: true,
@@ -131,7 +139,7 @@ test('restores the original snapshot after profile removal and fresh catalog cha
     };
   };
   const first = await composeRelayApp({
-    root, dataDir, homeDirectory, profiles, installedCodexVersion: 'codex-cli 0.144.3',
+    root, dataDir, relyingParty, homeDirectory, profiles, installedCodexVersion: 'codex-cli 0.144.3',
     startAppServers: true, launchAppServer,
   });
   const workspace = (await first.inject('/api/bootstrap')).json().workspaces[0]?.children[0];
@@ -162,7 +170,7 @@ test('restores the original snapshot after profile removal and fresh catalog cha
   ];
   launches.splice(0);
   const second = await composeRelayApp({
-    root, dataDir, homeDirectory, profiles, installedCodexVersion: 'codex-cli 0.144.3',
+    root, dataDir, relyingParty, homeDirectory, profiles, installedCodexVersion: 'codex-cli 0.144.3',
     startAppServers: true, launchAppServer,
   });
   await second.listen({ host: '127.0.0.1', port: 0 });

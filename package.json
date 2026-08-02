@@ -33,7 +33,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:server": "tsx watch src/server/main.ts -- --cwd ..",
+    "dev:server": "tsx watch src/server/main.ts -- --cwd .. --public-origin http://localhost:5173",
     "start": "node dist/server/server/main.js",
     "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
@@ -55,7 +55,10 @@
     "license:apply": "node scripts/apply-license-headers.mjs"
   },
   "dependencies": {
+    "@fastify/cookie": "11.1.2",
     "@fastify/static": "^10.1.0",
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.2",
     "fastify": "^5.10.0",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
