@@ -28,6 +28,7 @@ const completedPlan = {
       priority: 'A',
       reviewStatus: 'UNREVIEWED',
       description: { goal: 'Keep every input path consistent.' },
+      measurement: { weeklyRemainingCurrent: 63 },
       children: [],
     },
   ],
@@ -37,15 +38,24 @@ const completedPlan = {
   currentStepId: 'finish',
 };
 
-const activePlan = { ...completedPlan, allDone: false, doneSteps: 0 };
+const activePlan = {
+  ...completedPlan,
+  allDone: false,
+  doneSteps: 0,
+};
 
 async function routeSessionHistory(page: Page, id: string): Promise<void> {
   await page.route(`**/api/sessions/${id}/history`, (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [], currentSequence: 0 }) }),
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0 }),
+    }),
   );
 }
 
-test('keeps the completed Plan tab reachable and overflow-free at 320px with 200% root font', async ({ page }) => {
+test('keeps the completed Plan tab reachable and overflow-free at 320px with 200% root font', async ({
+  page,
+}) => {
   const selected = session('session-1', '/projects/one');
   let closed = false;
   await page.setViewportSize({ width: 320, height: 568 });
@@ -66,12 +76,18 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
   await page.route('**/api/sessions/recent-threads', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
-  await page.routeWebSocket(/ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/, () => {});
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    () => {},
+  );
 
   await page.goto('/');
   await page.addStyleTag({ content: 'html { font-size: 200% !important; }' });
 
   const navigation = page.getByLabel('Primary');
+  const weeklyQuota = page.getByLabel('Weekly quota remaining');
+  await expect(weeklyQuota).toHaveText('63% left');
+  await expect(weeklyQuota.locator('+ .menu-trigger')).toHaveCount(1);
   await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
   const horizontalLayout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -96,6 +112,10 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
 
   const chat = navigation.getByRole('button', { name: 'Chat' });
   const plan = navigation.getByRole('button', { name: 'Plan' });
+  for (const tab of ['Sessions', 'Git', 'Chat', 'Plan']) {
+    await navigation.getByRole('button', { name: tab }).click();
+    await expect(weeklyQuota).toHaveText('63% left');
+  }
   await chat.click();
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.fill('Keep this chat draft');
@@ -121,8 +141,18 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
 
   await chat.click();
   const main = page.locator('main');
-  await main.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 4, clientX: 240, clientY: 240 });
-  await main.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 4, clientX: 100, clientY: 242 });
+  await main.dispatchEvent('pointerdown', {
+    pointerType: 'touch',
+    pointerId: 4,
+    clientX: 240,
+    clientY: 240,
+  });
+  await main.dispatchEvent('pointerup', {
+    pointerType: 'touch',
+    pointerId: 4,
+    clientX: 100,
+    clientY: 242,
+  });
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: 'Close completed plan' }).click();
@@ -132,7 +162,9 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
   await expect(plan).toHaveCount(0);
 });
 
-test('adds and removes Plan from live events without stealing focus, then isolates a session without a plan', async ({ page }) => {
+test('adds and removes Plan from live events without stealing focus, then isolates a session without a plan', async ({
+  page,
+}) => {
   const first = session('session-1', '/projects/one');
   const second = session('session-2', '/projects/two');
   let emitPlanEvent: ((event: object) => void) | undefined;
@@ -154,7 +186,10 @@ test('adds and removes Plan from live events without stealing focus, then isolat
       emitPlanEvent = (event) => socket.send(JSON.stringify({ type: 'relay.event', event }));
     },
   );
-  await page.routeWebSocket(/ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-2\/events\?after=\d+/, () => {});
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-2\/events\?after=\d+/,
+    () => {},
+  );
 
   await page.goto('/');
   const navigation = page.getByLabel('Primary');

@@ -25,14 +25,20 @@ describe('AppHeader', () => {
     expect(container.querySelector('.session-model')?.textContent).toBe('· gpt-5.6-terra');
   });
 
-  it('places the available weekly quota usage immediately before the menu trigger', () => {
+  it('places the available weekly quota remaining immediately before the menu trigger', () => {
     const { container } = render(AppHeader, {
       theme: 'system',
-      weeklyQuotaUsed: 37,
+      weeklyQuotaRemaining: 63,
       onthemechange: () => {},
     });
 
-    expect(container.querySelector('.weekly-quota')?.textContent).toBe('37% used');
+    expect(container.querySelector('.weekly-quota')?.textContent).toBe('63% left');
     expect(container.querySelector('.weekly-quota + .menu-trigger')).toBeTruthy();
+  });
+
+  it('omits the weekly quota when the relay has no current value', () => {
+    const { container } = render(AppHeader, { theme: 'system', onthemechange: () => {} });
+
+    expect(container.querySelector('.weekly-quota')).toBeNull();
   });
 });
