@@ -17,6 +17,11 @@ import {
 import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
 import type { PlanStatusLease, PlanStatusSource } from '../../features/plans/application/ports.js';
+import {
+  canRebindMissingRollout,
+  rebindMissingRollout,
+  type MissingRolloutRecovery,
+} from '../../features/sessions/restore-session/use-case.js';
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 
 export type AppServer = {
@@ -39,6 +44,10 @@ export type AppServerLaunchInput = {
   skillsConfig?: readonly { path: string; enabled: boolean }[];
   environment?: Readonly<Record<string, string>>;
 };
+
+export type RestoreSessionResult =
+  | { session: RelaySessionSnapshot; historyUnavailable: false; replacementCreated: false }
+  | MissingRolloutRecovery;
 
 export class CodexSessionRuntime {
   constructor(
@@ -83,20 +92,12 @@ export class CodexSessionRuntime {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
-      const result = (await process.rpc.request('thread/start', {
-        cwd: session.workspacePath,
-        approvalPolicy: settings.approvalPolicy ?? 'on-request',
-        dynamicTools: [gestaltQuizDynamicTool],
-        ...(settings.model ? { model: settings.model } : {}),
-        ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
-      })) as { thread?: { id?: string } };
-      if (!result.thread?.id) throw new Error('CODEX_THREAD_ID_MISSING');
+      const startedThreadId = await this.startThread(process, session, settings);
       this.processes.set(session.id, process);
-      this.threadIds.set(session.id, result.thread.id);
-      return RelaySession.rehydrate(session).bindThread(result.thread.id, now).snapshot;
+      this.threadIds.set(session.id, startedThreadId);
+      return RelaySession.rehydrate(session).bindThread(startedThreadId, now).snapshot;
     } catch (error) {
-      process.close();
-      this.releasePlanStatus(session.id);
+      this.discardProcess(session.id, process);
       throw error;
     }
   }
@@ -107,6 +108,8 @@ export class CodexSessionRuntime {
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
     this.threadIds.delete(sessionId);
+    this.clearPendingRequests(sessionId);
+    this.planMeasurementTokens.delete(sessionId);
     this.releasePlanStatus(sessionId);
   }
 
@@ -214,6 +217,10 @@ export class CodexSessionRuntime {
   }
 
   async restore(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    return (await this.restoreWithOutcome(session, now)).session;
+  }
+
+  async restoreWithOutcome(session: RelaySessionSnapshot, now: string): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const process = await this.launchForSession(session);
     try {
@@ -224,17 +231,28 @@ export class CodexSessionRuntime {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
-      await process.rpc.request('thread/resume', {
-        threadId: session.threadId,
-        cwd: session.workspacePath,
-        dynamicTools: [gestaltQuizDynamicTool],
-      });
+      let result: RestoreSessionResult;
+      try {
+        await process.rpc.request('thread/resume', {
+          threadId: session.threadId,
+          cwd: session.workspacePath,
+          dynamicTools: [gestaltQuizDynamicTool],
+        });
+        result = {
+          session: RelaySession.rehydrate(session).restore(now).snapshot,
+          historyUnavailable: false,
+          replacementCreated: false,
+        };
+      } catch (error) {
+        if (!canRebindMissingRollout(session, error)) throw error;
+        const replacementThreadId = await this.startThread(process, session, { model: session.model });
+        result = rebindMissingRollout(session, error, replacementThreadId, now);
+      }
       this.processes.set(session.id, process);
-      this.threadIds.set(session.id, session.threadId);
-      return RelaySession.rehydrate(session).restore(now).snapshot;
+      this.threadIds.set(session.id, result.session.threadId!);
+      return result;
     } catch (error) {
-      process.close();
-      this.releasePlanStatus(session.id);
+      this.discardProcess(session.id, process);
       throw error;
     }
   }
@@ -256,13 +274,54 @@ export class CodexSessionRuntime {
       sessionId,
       process.onExit?.(() => {
         this.processes.delete(sessionId);
-    this.threadIds.delete(sessionId);
-    this.planMeasurementTokens.delete(sessionId);
+        this.threadIds.delete(sessionId);
+        this.clearPendingRequests(sessionId);
+        this.planMeasurementTokens.delete(sessionId);
         this.exitUnsubscribers.delete(sessionId);
         this.releasePlanStatus(sessionId);
         this.onProcessExit?.(sessionId);
       }) ?? (() => {}),
     );
+  }
+
+  private async startThread(
+    process: AppServer,
+    session: RelaySessionSnapshot,
+    settings: StartSessionSettings = {},
+  ): Promise<string> {
+    const result = (await process.rpc.request('thread/start', this.threadStartParams(session, settings))) as {
+      thread?: { id?: unknown };
+    };
+    if (typeof result.thread?.id !== 'string' || !result.thread.id) {
+      throw new Error('CODEX_THREAD_ID_MISSING');
+    }
+    return result.thread.id;
+  }
+
+  private threadStartParams(session: RelaySessionSnapshot, settings: StartSessionSettings): Record<string, unknown> {
+    return {
+      cwd: session.workspacePath,
+      approvalPolicy: settings.approvalPolicy ?? 'on-request',
+      dynamicTools: [gestaltQuizDynamicTool],
+      ...(settings.model ? { model: settings.model } : {}),
+      ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
+    };
+  }
+
+  private discardProcess(sessionId: string, process: AppServer): void {
+    this.exitUnsubscribers.get(sessionId)?.();
+    this.exitUnsubscribers.delete(sessionId);
+    process.close();
+    this.clearPendingRequests(sessionId);
+    this.planMeasurementTokens.delete(sessionId);
+    this.releasePlanStatus(sessionId);
+  }
+
+  private clearPendingRequests(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+    for (const key of this.pendingRequests.keys()) {
+      if (key.startsWith(prefix)) this.pendingRequests.delete(key);
+    }
   }
 
   private async launchForSession(session: RelaySessionSnapshot): Promise<AppServer> {

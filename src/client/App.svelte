@@ -107,6 +107,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
   let startingSession = $state(false);
+  let openingSessionId = $state<string | null>(null);
+  let recoveryNotice = $state<string | null>(null);
   let message = $state('');
   let activeTurnId = $state<string | null>(null);
   let startingTurn = $state(false);
@@ -297,11 +299,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function openSession(id: string) {
     status = 'Opening session…';
+    openingSessionId = id;
     try {
       const existing = sessions.find((session) => session.id === id);
       if (existing && existing.state !== 'ready' && existing.state !== 'turnActive') {
         const restored = await relay.restoreSession(id);
         sessions = sessions.map((session) => (session.id === id ? restored : session));
+        if (restored.recovery?.replacementCreated) {
+          recoveryNotice = 'Open created a replacement session because the prior Codex history was unavailable.';
+        }
       }
       sessionId = id;
       planController.select(id);
@@ -318,6 +324,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       connectSession(id);
     } catch (error) {
       status = `Could not open session: ${errorMessage(error)}`;
+    } finally {
+      openingSessionId = null;
     }
   }
 
@@ -921,6 +929,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       weeklyQuotaUsed={weeklyQuotaUsage}
       onthemechange={setTheme}
     />
+    {#if recoveryNotice}
+      <div class="recovery-notice" role="status" aria-live="polite" aria-atomic="true">
+        <span>{recoveryNotice}</span>
+        <button type="button" onclick={() => (recoveryNotice = null)}>Dismiss</button>
+      </div>
+    {/if}
 
     {#if tab === 'chat'}
       <section class="chat-view" aria-labelledby="chat-title">
@@ -1010,6 +1024,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           selectedSkillProfile={selectedSessionSkillProfile}
           skillProfileError={sessionSkillProfileError}
           {startingSession}
+          {openingSessionId}
           onworkspacechange={(value) => (sessionWorkspaceId = value)}
           onexpandedchange={(value) => (sessionExpandedIds = value)}
           onsandboxchange={(value) => (sandbox = value)}

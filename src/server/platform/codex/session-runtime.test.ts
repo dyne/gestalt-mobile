@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
 import { GESTALT_QUIZ_TOOL_NAME, gestaltQuizDynamicTool, toQuizToolResponse } from '../../../shared/contracts/quiz.js';
+import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
@@ -440,6 +441,101 @@ describe('CodexSessionRuntime', () => {
       threadId: 'thread-1',
       updatedAt: 'after',
     });
+  });
+
+  it.each(['stopped', 'released', 'attentionRequired'] as const)(
+    'creates and binds a replacement for a missing rollout from %s',
+    async (state) => {
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const runtime = new CodexSessionRuntime(() => ({
+        rpc: {
+          request: async (method, params) => {
+            calls.push({ method, params });
+            if (method === 'thread/resume')
+              throw new CodexJsonRpcError(-32600, 'no rollout found for thread id old-thread');
+            if (method === 'thread/start') return { thread: { id: 'replacement-thread' } };
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }));
+      const outcome = await runtime.restoreWithOutcome(
+        {
+          id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
+          model: 'gpt-5.4', threadId: 'old-thread', state, desiredState: 'stopped', activeTurnId: null,
+          protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+          effectiveSkillSelection: { selectedProfileName: 'focused', skills: [] },
+          lastOrgPlan: { filename: 'plan.org', title: 'Plan' },
+        },
+        'after',
+      );
+
+      expect(outcome).toMatchObject({
+        historyUnavailable: true,
+        replacementCreated: true,
+        session: { state: 'ready', threadId: 'replacement-thread', model: 'gpt-5.4' },
+      });
+      expect(calls.map((call) => call.method)).toEqual(['initialize', 'thread/resume', 'thread/start']);
+      expect(calls.at(-1)?.params).toEqual({
+        cwd: '/workspace', approvalPolicy: 'on-request', model: 'gpt-5.4', dynamicTools: [gestaltQuizDynamicTool],
+      });
+    },
+  );
+
+  it('does not create or bind a replacement for an unrelated resume failure', async () => {
+    const calls: string[] = [];
+    let closed = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          calls.push(method);
+          if (method === 'thread/resume') throw new CodexJsonRpcError(-32600, 'invalid parameters');
+          return {};
+        },
+        onNotification: () => () => {}, onServerRequest: () => () => {},
+      },
+      close: () => { closed += 1; },
+    }));
+    const original = {
+      id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
+      threadId: 'old-thread', state: 'released' as const, desiredState: 'stopped' as const, activeTurnId: null,
+      protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+    };
+
+    await expect(runtime.restoreWithOutcome(original, 'after')).rejects.toThrow('invalid parameters');
+    expect(calls).toEqual(['initialize', 'thread/resume']);
+    expect(closed).toBe(1);
+    expect(original.threadId).toBe('old-thread');
+  });
+
+  it('cleans a failed replacement child and its status lease', async () => {
+    const closed: string[] = [];
+    const source: PlanStatusSource = {
+      open: async () => ({ statusDirectory: '/private/session-1', close: () => closed.push('lease'), remove: async () => {} }),
+      remove: async () => {}, closeAll: () => {},
+    };
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) => {
+            if (method === 'thread/resume') throw new CodexJsonRpcError(-32600, 'no rollout found for thread id old-thread');
+            if (method === 'thread/start') throw new Error('replacement failed');
+            return {};
+          },
+          onNotification: () => () => {}, onServerRequest: () => () => {},
+        },
+        close: () => closed.push('process'),
+      }),
+      undefined, undefined, undefined, undefined, undefined, source,
+    );
+    await expect(runtime.restoreWithOutcome({
+      id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
+      threadId: 'old-thread', state: 'attentionRequired', desiredState: 'stopped', activeTurnId: null,
+      protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+    }, 'after')).rejects.toThrow('replacement failed');
+    expect(closed).toEqual(['process', 'lease']);
   });
 
   it('disposes each status lease once on child exit and graceful stopAll shutdown', async () => {
