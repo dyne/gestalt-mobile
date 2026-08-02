@@ -6,7 +6,13 @@
 
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { CodexJsonRpcError, isMissingCodexThreadRollout, JsonRpcClient } from './json-rpc-client.js';
+import {
+  CODEX_JSON_RPC_ERROR,
+  CODEX_THREAD_NOT_FOUND,
+  CodexJsonRpcError,
+  isMissingCodexThreadRollout,
+  JsonRpcClient,
+} from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
   it('correlates a JSONL response to its request', async () => {
@@ -81,6 +87,8 @@ describe('JsonRpcClient', () => {
 
     await expect(response).rejects.toSatisfy((error: unknown) => {
       expect(error).toBeInstanceOf(CodexJsonRpcError);
+      expect((error as CodexJsonRpcError).code).toBe(-32600);
+      expect((error as CodexJsonRpcError).kind).toBe(CODEX_THREAD_NOT_FOUND);
       expect(isMissingCodexThreadRollout(error)).toBe(true);
       return true;
     });
@@ -89,5 +97,30 @@ describe('JsonRpcClient', () => {
         new CodexJsonRpcError(-32600, 'invalid parameters for thread/resume'),
       ),
     ).toBe(false);
+  });
+
+  it('keeps generic and authentication failures as bounded ordinary RPC errors', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const response = client.request('thread/resume', { threadId: 'thread-1' });
+    output.once('data', (line) =>
+      input.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: JSON.parse(line.toString()).id,
+          error: { code: -32600, message: `authentication failed: ${'secret-token-'.repeat(40)}` },
+        })}\n`,
+      ),
+    );
+
+    await expect(response).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(CodexJsonRpcError);
+      expect((error as CodexJsonRpcError).kind).toBe(CODEX_JSON_RPC_ERROR);
+      expect((error as Error).message).toBe('authentication failed: [REDACTED]');
+      expect((error as Error).message).not.toContain('secret-token');
+      expect(isMissingCodexThreadRollout(error)).toBe(false);
+      return true;
+    });
   });
 });

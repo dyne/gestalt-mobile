@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile: string;
     skillProfileError: string;
     startingSession: boolean;
+    openingSessionId: string | null;
     onworkspacechange: (value: string) => void;
     onexpandedchange: (value: Set<string>) => void;
     onsandboxchange: (value: NonNullable<StartSessionSettings['sandbox']>) => void;
@@ -58,6 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedSkillProfile,
     skillProfileError,
     startingSession,
+    openingSessionId,
     onworkspacechange,
     onexpandedchange,
     onsandboxchange,
@@ -141,7 +143,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {@const details = managedSessionDetails(session)}
         <li class="managed-session">
           <div class="session-actions">
-            <button type="button" onclick={() => onopen(session.id)}>Open</button>
+            <button type="button" disabled={openingSessionId === session.id} onclick={() => onopen(session.id)}>
+              {openingSessionId === session.id ? 'Opening…' : 'Open'}
+            </button>
             <button type="button" onclick={() => onforget(session.id)}>Forget</button>
           </div>
           <div class="session-details">

@@ -55,6 +55,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
     selectedSkillProfile: '',
     skillProfileError: '',
     startingSession: false,
+    openingSessionId: null,
     onworkspacechange,
     onexpandedchange,
     onsandboxchange: vi.fn(),
@@ -126,6 +127,18 @@ describe('SessionsView session base tree', () => {
     expect((screen.getByRole('button', { name: 'Creating…' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it('disables only the Open button whose session is recovering', () => {
+    renderView({
+      sessions: [
+        { id: 'opening', state: 'released', workspacePath: '/workspace' },
+        { id: 'other', state: 'stopped', workspacePath: '/other' },
+      ],
+      openingSessionId: 'opening',
+    });
+    expect((screen.getByRole('button', { name: 'Opening…' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('selects a named profile only for new sessions and opens its manager', async () => {

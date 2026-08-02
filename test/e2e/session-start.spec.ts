@@ -342,6 +342,79 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(openSessions.getByText('/projects/running')).toBeVisible();
 });
 
+test('Open announces replacement history loss while selecting the ready session at mobile and desktop sizes', async ({ page }) => {
+  const saved = {
+    id: 'saved-session', state: 'released', threadId: 'missing-thread', workspacePath: '/projects/saved',
+    workspaceId: 'workspace-1', profile: 'work', activeTurnId: null,
+  };
+  const replacement = {
+    ...saved, state: 'ready', threadId: 'replacement-thread',
+    recovery: { historyUnavailable: true, replacementCreated: true },
+  };
+  let restored = false;
+  await page.route('**/api/bootstrap', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [saved] }),
+  }));
+  await page.route('**/api/sessions/recent-threads', (route) => route.fulfill({ contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/sessions', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(restored ? [replacement] : [saved]),
+  }));
+  await page.route('**/api/sessions/saved-session/restore', async (route) => {
+    restored = true;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(replacement) });
+  });
+  await page.route('**/api/sessions/saved-session/history', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+  }));
+
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+    restored = false;
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Sessions' }).click();
+    await page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' }).click();
+    await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+    const recoveryNotice = page.getByRole('status').filter({ hasText: 'prior Codex history was unavailable' });
+    await expect(recoveryNotice).toContainText('prior Codex history was unavailable');
+    await expect(recoveryNotice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+  }
+});
+
+test('Open re-enables retry after a bounded restore failure', async ({ page }) => {
+  const saved = {
+    id: 'retry-session', state: 'released', threadId: 'old-thread', workspacePath: '/projects/retry',
+    workspaceId: 'workspace-1', profile: 'work', activeTurnId: null,
+  };
+  let attempts = 0;
+  await page.route('**/api/bootstrap', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [saved] }),
+  }));
+  await page.route('**/api/sessions/recent-threads', (route) => route.fulfill({ contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/sessions', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify([saved]) }));
+  await page.route('**/api/sessions/retry-session/restore', async (route) => {
+    attempts += 1;
+    if (attempts === 1) {
+      await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ code: 'RESTORE_FAILED' }) });
+      return;
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...saved, state: 'ready' }) });
+  });
+  await page.route('**/api/sessions/retry-session/history', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+  }));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  const open = page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' });
+  await open.click();
+  await expect(open).toBeEnabled();
+  await open.click();
+  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+  expect(attempts).toBe(2);
+});
+
 test('starts a session with sandbox and approval settings', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({

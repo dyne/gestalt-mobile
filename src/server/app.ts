@@ -44,6 +44,7 @@ import type { RelaySessionSnapshot } from './features/sessions/model/relay-sessi
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
+import type { RestoreSessionResult } from './platform/codex/session-runtime.js';
 import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
 import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
@@ -97,7 +98,7 @@ export type AppDependencies = {
     }>;
     currentSequence?(sessionId: string): number;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
-    restore?(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    restore?(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     promoteRecent?(thread: RecentThread): Promise<RelaySessionSnapshot>;
     release?(session: RelaySessionSnapshot): RelaySessionSnapshot;
     idempotency?: {

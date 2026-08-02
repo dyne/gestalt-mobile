@@ -7,6 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
+import { RelaySession } from '../model/relay-session.js';
+import type { RestoreSessionResult } from '../../../platform/codex/session-runtime.js';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { canRestore } from './use-case.js';
 
@@ -14,7 +16,7 @@ export function registerRestoreSession(
   app: FastifyInstance,
   deps: {
     find(id: string): RelaySessionSnapshot | null;
-    restore(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
+    restore(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     save(session: RelaySessionSnapshot): void;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
@@ -31,9 +33,27 @@ export function registerRestoreSession(
     const session = deps.find(id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     if (!canRestore(session)) return reply.code(409).send({ code: 'SESSION_CANNOT_RESTORE' });
-    const restored = await deps.restore(session);
-    deps.save(restored);
-    if (key) deps.idempotency?.put(scope, key, 200, JSON.stringify(restored));
-    return reply.send(restored);
+    const recovering = RelaySession.rehydrate(session).beginRecovery(new Date().toISOString()).snapshot;
+    deps.save(recovering);
+    let restored: RestoreSessionResult | RelaySessionSnapshot;
+    try {
+      restored = await deps.restore(session);
+    } catch {
+      // The pre-I/O recovery marker must never strand a saved session: keep
+      // its original thread and inactive state available for a later Open.
+      deps.save(session);
+      return reply.code(502).send({ code: 'RESTORE_FAILED' });
+    }
+    const response = 'session' in restored
+      ? {
+          ...restored.session,
+          ...(restored.replacementCreated
+            ? { recovery: { historyUnavailable: true, replacementCreated: true } }
+            : {}),
+        }
+      : restored;
+    deps.save(response);
+    if (key) deps.idempotency?.put(scope, key, 200, JSON.stringify(response));
+    return reply.send(response);
   });
 }

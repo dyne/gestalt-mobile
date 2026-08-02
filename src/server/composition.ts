@@ -306,7 +306,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ? (session, turnId) => runtime.interruptTurn(session, turnId)
         : undefined,
       restore: runtime
-        ? (session) => runtime.restore(session, new Date().toISOString())
+        ? (session) => runtime.restoreWithOutcome(session, new Date().toISOString())
         : undefined,
       promoteRecent: runtime
         ? (thread) =>

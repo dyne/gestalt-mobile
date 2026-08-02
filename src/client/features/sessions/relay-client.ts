@@ -26,6 +26,9 @@ export type RelaySession = {
   };
   lastOrgPlan?: { filename: string; title: string };
 };
+export type RestoreSessionResult = RelaySession & {
+  recovery?: { historyUnavailable: true; replacementCreated: true };
+};
 export type RecentSession = {
   id: string;
   cwd: string;
@@ -183,7 +186,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         {},
       ),
     restoreSession: (sessionId: string) =>
-      request<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
+      request<RestoreSessionResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
     releaseSession: (sessionId: string) =>
       request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/release`, {}),
     forgetSession: (sessionId: string) =>

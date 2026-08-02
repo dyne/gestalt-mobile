@@ -135,6 +135,22 @@ describe('relay client', () => {
     ]);
   });
 
+  it('preserves the bounded replacement recovery outcome from Open', async () => {
+    const client = createRelayClient(async () =>
+      new Response(
+        JSON.stringify({
+          id: 'session-1', state: 'ready', threadId: 'replacement-thread',
+          recovery: { historyUnavailable: true, replacementCreated: true },
+        }),
+        { status: 200 },
+      ),
+    );
+    await expect(client.restoreSession('session-1')).resolves.toMatchObject({
+      state: 'ready', threadId: 'replacement-thread',
+      recovery: { historyUnavailable: true, replacementCreated: true },
+    });
+  });
+
   it('promotes a recent Codex thread into a managed session', async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {

@@ -7,13 +7,21 @@
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 
+export const CODEX_THREAD_NOT_FOUND = 'CODEX_THREAD_NOT_FOUND';
+export const CODEX_JSON_RPC_ERROR = 'CODEX_JSON_RPC_ERROR';
+
+type CodexJsonRpcErrorKind =
+  | typeof CODEX_THREAD_NOT_FOUND
+  | typeof CODEX_JSON_RPC_ERROR;
+
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
   constructor(
     readonly code: number | undefined,
     message: string,
+    readonly kind: CodexJsonRpcErrorKind = classifyCodexJsonRpcError(code, message),
   ) {
-    super(message);
+    super(boundMessage(message));
     this.name = 'CodexJsonRpcError';
   }
 }
@@ -24,11 +32,23 @@ export class CodexJsonRpcError extends Error {
  * be treated as permission to replace a durable thread.
  */
 export function isMissingCodexThreadRollout(error: unknown): boolean {
-  return (
-    error instanceof CodexJsonRpcError &&
-    error.code === -32600 &&
-    /^no rollout found for thread id\b/i.test(error.message)
-  );
+  return error instanceof CodexJsonRpcError && error.kind === CODEX_THREAD_NOT_FOUND;
+}
+
+function classifyCodexJsonRpcError(
+  code: number | undefined,
+  message: string,
+): CodexJsonRpcErrorKind {
+  return code === -32600 && /^no rollout found for thread id\b/i.test(message)
+    ? CODEX_THREAD_NOT_FOUND
+    : CODEX_JSON_RPC_ERROR;
+}
+
+function boundMessage(message: string): string {
+  return message
+    .replace(/((?:authorization|token|api[_ -]?key|password)\s*[:=]\s*)\S+/gi, '$1[REDACTED]')
+    .replace(/(authentication failed:\s*).*/i, '$1[REDACTED]')
+    .slice(0, 256);
 }
 
 export class JsonRpcClient {
