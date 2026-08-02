@@ -12,6 +12,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { composeRelayApp } from './composition.js';
+import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
+import { authorizedDeviceId, localOwnerId, webAuthnCredentialId } from './features/auth/domain/identifiers.js';
+import { deviceNickname } from './features/auth/domain/device-nickname.js';
 import { workspaceId } from './platform/catalog/workspace-id.js';
 import {
   planStatusDirectoryPath,
@@ -38,6 +41,11 @@ function fakeAppServer(calls: string[]) {
 }
 
 const temporaryPaths: string[] = [];
+const relyingParty = {
+  publicOrigin: 'http://localhost:3000',
+  rpId: 'localhost',
+  rpName: 'Gestalt Mobile' as const,
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -46,6 +54,55 @@ afterEach(async () => {
 });
 
 describe('production composition', () => {
+  it('shares one authorization owner across independently composed relay databases and closes handles independently', async () => {
+    const rootOne = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const rootTwo = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataOne = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    const dataTwo = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    const sharedHome = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-'));
+    temporaryPaths.push(rootOne, rootTwo, dataOne, dataTwo, sharedHome);
+    const profiles = { list: async () => [], require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }) };
+    const firstHandle = new Uint8Array(32).fill(1); const secondHandle = new Uint8Array(32).fill(9);
+    const first = await composeRelayApp({ root: rootOne, dataDir: dataOne, homeDirectory: sharedHome, relyingParty, profiles, installedCodexVersion: null, authorizationRandomBytes: () => firstHandle });
+    const second = await composeRelayApp({ root: rootTwo, dataDir: dataTwo, homeDirectory: sharedHome, relyingParty, profiles, installedCodexVersion: null, authorizationRandomBytes: () => secondHandle });
+    await first.close();
+    expect((await second.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    const store = new SqliteAuthorizationStore(sharedHome, relyingParty);
+    expect(store.readOwner()?.userHandle).toEqual(firstHandle);
+    store.close(); await second.close();
+  });
+
+  it('rejects malformed authorization randomness before opening a durable auth handle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-')); const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-')); const home = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-')); temporaryPaths.push(root, dataDir, home);
+    await expect(composeRelayApp({ root, dataDir, homeDirectory: home, relyingParty, profiles: { list: async () => [], require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }) }, installedCodexVersion: null, authorizationRandomBytes: () => new Uint8Array(31) })).rejects.toThrow('exactly 32');
+    const store = new SqliteAuthorizationStore(home, relyingParty); expect(store.readOwner()).toBeNull(); store.close();
+  });
+
+  it('closes authorization and relay handles when app construction fails after owner initialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-')); const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-')); const home = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-')); const notDirectory = join(root, 'not-a-directory'); temporaryPaths.push(root, dataDir, home); await writeFile(notDirectory, 'x');
+    await expect(composeRelayApp({ root, dataDir, homeDirectory: home, staticDir: notDirectory, relyingParty, profiles: { list: async () => [], require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }) }, installedCodexVersion: null, authorizationRandomBytes: () => new Uint8Array(32).fill(7) })).rejects.toThrow();
+    const store = new SqliteAuthorizationStore(home, relyingParty); expect(store.readOwner()?.userHandle).toEqual(new Uint8Array(32).fill(7)); store.close();
+  });
+
+  it('closes the relay handle when authorization initialization rejects an RP migration', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-')); const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-')); const home = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-')); temporaryPaths.push(root, dataDir, home);
+    const seeded = new SqliteAuthorizationStore(home, relyingParty); const owner = { id: localOwnerId('local-owner'), userHandle: new Uint8Array(32).fill(1) }; seeded.initializeOwner(owner.userHandle); seeded.claimFirstDevice(owner, { id: authorizedDeviceId('device'), credentialId: webAuthnCredentialId('credential'), publicKey: new Uint8Array([1]), counter: 0, transports: ['internal'], deviceType: 'singleDevice', backedUp: false, nickname: deviceNickname('Device'), createdAt: '2026-08-02T00:00:00.000Z' }); seeded.close();
+    const migrated = { publicOrigin: 'https://other.example', rpId: 'other.example', rpName: 'Gestalt Mobile' as const };
+    await expect(composeRelayApp({ root, dataDir, homeDirectory: home, relyingParty: migrated, profiles: { list: async () => [], require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }) }, installedCodexVersion: null, authorizationRandomBytes: () => new Uint8Array(32).fill(2) })).rejects.toThrow('hostname changed');
+    const reopened = new SqliteAuthorizationStore(home, relyingParty); expect(reopened.listAuthorizedDevices()).toHaveLength(1); reopened.close();
+  });
+
+  it('rejects a relying-party identity that does not match its canonical origin', async () => {
+    await expect(
+      composeRelayApp({
+        root: '/unused',
+        relyingParty: { ...relyingParty, rpId: 'other.example' },
+        profiles: { list: async () => [], require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        installedCodexVersion: null,
+      }),
+    ).rejects.toThrow('Invalid WebAuthn relying-party configuration');
+  });
+
   it('does not resolve a Git operation target outside the configured root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const outside = await mkdtemp(join(tmpdir(), 'gestalt-mobile-outside-'));
@@ -56,6 +113,7 @@ describe('production composition', () => {
     const app = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles: {
         list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
         require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
@@ -81,6 +139,7 @@ describe('production composition', () => {
     const app = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles: {
         list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
         require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
@@ -136,6 +195,7 @@ describe('production composition', () => {
     const app = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles,
       installedCodexVersion: 'codex-cli 0.144.3',
       startAppServers: true,
@@ -209,6 +269,7 @@ describe('production composition', () => {
     const restarted = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles,
       installedCodexVersion: 'codex-cli 0.144.3',
       startAppServers: true,
@@ -260,6 +321,7 @@ describe('production composition', () => {
     const first = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles,
       installedCodexVersion: 'codex-cli 0.144.3',
       startAppServers: true,
@@ -285,6 +347,7 @@ describe('production composition', () => {
     const second = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles,
       installedCodexVersion: 'codex-cli 0.144.3',
       startAppServers: true,
@@ -309,6 +372,7 @@ describe('production composition', () => {
     const app = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       profiles: {
         list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
         require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),

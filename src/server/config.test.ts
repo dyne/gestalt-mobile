@@ -8,13 +8,18 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { CliUsageError, parseConfig } from './config.js';
+import { CliUsageError, normalizePublicOrigin, parseConfig } from './config.js';
 
 describe('parseConfig', () => {
   it('uses safe production defaults', () => {
     expect(parseConfig([], '/caller')).toEqual({
       host: '127.0.0.1',
       port: 3000,
+      relyingParty: {
+        publicOrigin: 'http://localhost:3000',
+        rpId: 'localhost',
+        rpName: 'Gestalt Mobile',
+      },
       root: resolve('/caller'),
       dataDir: undefined,
     });
@@ -23,15 +28,46 @@ describe('parseConfig', () => {
   it('parses every supported option and resolves a relative workspace from the caller', () => {
     expect(
       parseConfig(
-        ['--cwd', '../work', '--host', '0.0.0.0', '--port', '4242', '--data-dir', './state'],
+        [
+          '--cwd',
+          '../work',
+          '--host',
+          '0.0.0.0',
+          '--port',
+          '4242',
+          '--public-origin',
+          'https://gestalt.example:8443',
+          '--data-dir',
+          './state',
+        ],
         '/caller/subdirectory',
       ),
     ).toEqual({
       host: '0.0.0.0',
       port: 4242,
+      relyingParty: {
+        publicOrigin: 'https://gestalt.example:8443',
+        rpId: 'gestalt.example',
+        rpName: 'Gestalt Mobile',
+      },
       root: resolve('/caller/work'),
       dataDir: './state',
     });
+  });
+
+  it('uses localhost as the browser origin for every loopback listen address', () => {
+    expect(parseConfig(['--host', 'localhost', '--port', '4242'], '/caller')).toMatchObject({
+      relyingParty: { publicOrigin: 'http://localhost:4242', rpId: 'localhost' },
+    });
+    expect(parseConfig(['--host', '::1'], '/caller').relyingParty.publicOrigin).toBe(
+      'http://localhost:3000',
+    );
+  });
+
+  it('requires an explicit canonical origin for non-loopback listeners', () => {
+    expect(() => parseConfig(['--host', '0.0.0.0'], '/caller')).toThrow(
+      new CliUsageError('--public-origin is required when --host is not a loopback address'),
+    );
   });
 
   it('preserves an absolute workspace path', () => {
@@ -49,6 +85,36 @@ describe('parseConfig', () => {
     [['--cwd', '.', '--cwd', '..'], 'Duplicate option: --cwd'],
   ])('rejects invalid arguments %#', (args, message) => {
     expect(() => parseConfig(args, '/caller')).toThrow(new CliUsageError(message));
+  });
+});
+
+describe('normalizePublicOrigin', () => {
+  it.each([
+    ['http://localhost', 'http://localhost'],
+    ['http://localhost:4173', 'http://localhost:4173'],
+    ['https://GESTALT.example:8443', 'https://gestalt.example:8443'],
+    ['https://gestalt.example:443', 'https://gestalt.example'],
+  ])('normalizes supported origins', (value, expected) => {
+    expect(normalizePublicOrigin(value)).toBe(expected);
+  });
+
+  it.each([
+    ['https://user@gestalt.example', 'credentials'],
+    ['https://gestalt.example/auth', 'bare origin'],
+    ['https://gestalt.example/?next=1', 'bare origin'],
+    ['https://gestalt.example/#login', 'bare origin'],
+    ['https://gestalt.example?', 'bare origin'],
+    ['https://gestalt.example#', 'bare origin'],
+    ['https://gestalt.example/.', 'bare origin'],
+    ['https://gestalt.example/section/..', 'bare origin'],
+    ['https://gestalt.example ', 'bare origin'],
+    ['https://gestalt.example\\', 'bare origin'],
+    ['http://gestalt.example', 'must use HTTPS'],
+    ['http://127.0.0.1:3000', 'must use a hostname'],
+    ['https://192.0.2.1', 'must use a hostname'],
+    ['not an origin', 'bare origin'],
+  ])('rejects insecure or non-origin input', (value, message) => {
+    expect(() => normalizePublicOrigin(value)).toThrow(message);
   });
 });
 

@@ -44,4 +44,12 @@ describe('publishable package manifest', () => {
     expect(manifest.dependencies.svelte).toBeUndefined();
     expect(manifest.devDependencies.svelte).toMatch(/^\^5\./);
   });
+
+  it('pins the compatible passkey runtime dependencies', () => {
+    expect(manifest.dependencies).toMatchObject({
+      '@fastify/cookie': '11.1.2',
+      '@simplewebauthn/browser': '13.3.0',
+      '@simplewebauthn/server': '13.3.2',
+    });
+  });
 });

@@ -141,10 +141,16 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
     require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
   };
+  const relyingParty = {
+    publicOrigin: 'http://localhost:3000',
+    rpId: 'localhost',
+    rpName: 'Gestalt Mobile' as const,
+  };
   const startRelay = async (port = 0) => {
     app = await composeRelayApp({
       root,
       dataDir,
+      relyingParty,
       staticDir: resolve('dist/client'),
       profiles,
       installedCodexVersion: 'codex-cli 0.144.3',

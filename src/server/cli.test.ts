@@ -129,6 +129,11 @@ describe('runCli', () => {
         root: resolve('/caller/workspace'),
         staticDir: resolve(root, 'dist/client'),
         installedCodexVersion: 'codex-cli 1.2.3',
+        relyingParty: {
+          publicOrigin: 'http://localhost:43210',
+          rpId: 'localhost',
+          rpName: 'Gestalt Mobile',
+        },
       }),
     );
     expect(listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 43210 });

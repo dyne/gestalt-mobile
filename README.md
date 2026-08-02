@@ -59,6 +59,7 @@ configuration or skill files.
 | `--cwd <path>`      | Current directory   | Root containing selectable workspaces        |
 | `--host <address>`  | `127.0.0.1`         | HTTP listen address                          |
 | `--port <number>`   | `3000`              | HTTP listen port, from 1 through 65535       |
+| `--public-origin <origin>` | Loopback Vite origin | Canonical WebAuthn public origin; required for non-loopback hosts |
 | `--data-dir <path>` | XDG state directory | Directory containing `relay.sqlite`          |
 | `--skills <profile>` |                     | Apply a saved global profile to every session |
 | `--skills list`     |                     | List global profiles without starting the server |
@@ -77,6 +78,12 @@ Gestalt Mobile has no built-in authentication or TLS. The loopback default is
 safe for use on the same computer. `--host 0.0.0.0` exposes the relay and its
 Codex controls on every network interface; use it only behind a trusted private
 VPN or an authenticated, encrypted reverse proxy.
+
+Passkey ceremonies use `--public-origin` as their fixed, canonical browser
+origin. It defaults only for loopback development; non-loopback listening
+requires an explicit HTTPS public origin. The hostname is the WebAuthn RP ID,
+so changing ports is compatible while changing the hostname is refused after
+credentials exist.
 
 ## Persistent state
 
