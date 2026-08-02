@@ -8,6 +8,8 @@ import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
 import { registerRestoreSession } from './endpoint.js';
+import { CodexJsonRpcError, isMissingCodexThreadRollout } from '../../../platform/codex/json-rpc-client.js';
+import { CodexSessionRuntime } from '../../../platform/codex/session-runtime.js';
 
 describe('POST /api/sessions/:id/restore', () => {
   it('restores a resumable session and persists its ready state', async () => {
@@ -72,6 +74,37 @@ describe('POST /api/sessions/:id/restore', () => {
     await app.inject(request);
 
     expect(restores).toBe(1);
+    await app.close();
+  });
+
+  it('reproduces missing-rollout resume through Open without classifying other RPC errors', async () => {
+    const app = fastify();
+    const calls: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          calls.push(method);
+          if (method === 'thread/resume')
+            throw new CodexJsonRpcError(-32600, 'no rollout found for thread id old-thread');
+          return {};
+        },
+        onNotification: () => () => {}, onServerRequest: () => () => {},
+      }, close: () => {},
+    }));
+    let classified = false;
+    app.setErrorHandler((error, _request, reply) => {
+      classified = isMissingCodexThreadRollout(error);
+      return reply.code(502).send({ code: 'RESTORE_FAILED' });
+    });
+    registerRestoreSession(app, {
+      find: () => ({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: 'old-thread', state: 'released', desiredState: 'stopped', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }),
+      restore: (session) => runtime.restore(session, 'after'), save: () => {},
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/sessions/session-1/restore' });
+    expect(response.statusCode).toBe(502);
+    expect(calls).toEqual(['initialize', 'thread/resume']);
+    expect(classified).toBe(true);
+    expect(isMissingCodexThreadRollout(new CodexJsonRpcError(-32600, 'invalid parameters'))).toBe(false);
     await app.close();
   });
 });
