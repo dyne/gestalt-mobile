@@ -155,7 +155,7 @@ describe('production composition', () => {
       JSON.stringify({
         schemaVersion: 1,
         planPath,
-        reason: 'test',
+        reason: 'supervision-start',
         updatedAt: '2026-08-01T00:00:00.000Z',
       }),
     );
@@ -177,7 +177,7 @@ describe('production composition', () => {
       type: 'relay.event',
       event: {
         type: 'plan.updated',
-        payload: { plan: { title: 'Completed plan', allDone: true }, reason: null },
+        payload: { plan: { title: 'Completed plan', allDone: true }, reason: 'supervision-start' },
       },
     });
     expect((await app.inject({ method: 'DELETE', url: `/api/sessions/${sessionId}/plan` })).statusCode).toBe(

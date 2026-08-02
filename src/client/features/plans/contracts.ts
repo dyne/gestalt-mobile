@@ -7,7 +7,7 @@
 export type PlanTodoState = 'TODO' | 'WIP' | 'DONE';
 export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
-export type PlanSignalReason = 'authoring-start' | 'work-start' | 'checkpoint' | 'update';
+export type { PlanSignalReason } from '../../../shared/contracts/plan-signal.js';
 
 export type PlanStepDescription = Readonly<{
   effort?: string;
@@ -75,10 +75,6 @@ export function isRelayPlanUpdate(value: unknown): value is RelayPlanUpdate {
   return isSupervisedPlan(update.plan) && (update.reason === null || isPlanSignalReason(update.reason));
 }
 
-function isPlanSignalReason(value: unknown): value is PlanSignalReason {
-  return value === 'authoring-start' || value === 'work-start' || value === 'checkpoint' || value === 'update';
-}
-
 export function isSupervisedPlan(value: unknown): value is SupervisedPlan {
   if (!value || typeof value !== 'object') return false;
   const plan = value as Partial<SupervisedPlan>;
@@ -91,3 +87,7 @@ export function isSupervisedPlan(value: unknown): value is SupervisedPlan {
     typeof plan.currentStepId === 'string'
   );
 }
+import {
+  isPlanSignalReason,
+  type PlanSignalReason,
+} from '../../../shared/contracts/plan-signal.js';

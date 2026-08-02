@@ -17,6 +17,7 @@ import {
   realpath,
 } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
+import { isPlanSignalReason } from '../../../shared/contracts/plan-signal.js';
 import { basename, dirname, join } from 'node:path';
 
 import type {
@@ -333,12 +334,6 @@ function parseSignal(source: string): PlanStatusSignal | null {
   } catch {
     return null;
   }
-}
-
-function isPlanSignalReason(
-  value: string,
-): value is import('../../features/plans/application/ports.js').PlanSignalReason {
-  return value === 'authoring-start' || value === 'work-start' || value === 'checkpoint' || value === 'update';
 }
 
 function isRfc3339Utc(value: unknown): boolean {

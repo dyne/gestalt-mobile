@@ -105,6 +105,11 @@ stored with the relay session and shown in managed session entries.
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
 
+If an upgrade has removed the Codex rollout for a saved session, **Open** keeps
+the relay session and its settings but creates and binds a replacement Codex
+thread. The client shows that the earlier Codex history is unavailable; other
+restore failures leave the saved thread unchanged so Open can be retried.
+
 The relay keeps SQLite state under the supplied data directory, or
 under the root-hashed XDG state directory when `--data-dir` is
 omitted. Active durable threads are resumed after a relay restart. A
@@ -156,6 +161,20 @@ install the Codex CLI version supported by that release. If session startup
 fails, first confirm `codex --version` works in the same shell and that Codex is
 authenticated. Use `gestalt-mobile --help` to diagnose rejected options without
 starting the server.
+
+From a source checkout, maintainers can exercise the installed isolated
+`gestalt` profile without touching their normal relay data:
+
+```sh
+npm run test:open-profile-smoke
+```
+
+The opt-in smoke derives the selected profile's CLI version, creates a
+temporary workspace and relay database, then checks normal Open and
+missing-rollout replacement. It creates one bounded harmless turn to establish
+durable history, deletes only the exact smoke-created Codex threads through the
+app-server afterwards, and always removes its temporary state. It reports
+`SKIP` when the isolated profile is unavailable.
 
 ## Run from source
 

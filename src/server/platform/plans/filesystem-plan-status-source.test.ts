@@ -40,11 +40,11 @@ function org(title: string): string {
 `;
 }
 
-function signal(planPath: string): string {
+function signal(planPath: string, reason = 'signal'): string {
   return JSON.stringify({
     schemaVersion: 1,
     planPath,
-    reason: 'signal',
+    reason,
     updatedAt: '2026-08-01T00:00:00.000Z',
   });
 }
@@ -54,6 +54,36 @@ function leaseStatusPath(lease: PlanStatusLease, planPath: string): string {
 }
 
 describe('FilesystemPlanStatusSource', () => {
+  it.each(['supervision-start', 'resync'])('retains the %s helper signal reason', async (reason) => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
+    temporaryPaths.push(root);
+    const workspace = join(root, 'workspace');
+    const planPath = join(workspace, 'plan.org');
+    await mkdir(workspace);
+    await writeFile(planPath, org('Signal vocabulary'));
+    const updates: PlanStatusUpdate[] = [];
+    const source = new FilesystemPlanStatusSource(join(root, 'state'));
+    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => updates.push(update));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath, reason));
+    await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ kind: 'updated', reason }));
+    lease.close();
+  });
+
+  it('rejects an unknown helper signal reason without rejecting the plan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
+    temporaryPaths.push(root);
+    const workspace = join(root, 'workspace');
+    const planPath = join(workspace, 'plan.org');
+    await mkdir(workspace);
+    await writeFile(planPath, org('Unknown signal'));
+    const updates: PlanStatusUpdate[] = [];
+    const source = new FilesystemPlanStatusSource(join(root, 'state'));
+    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => updates.push(update));
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath, 'unknown'));
+    await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ kind: 'updated', reason: null }));
+    lease.close();
+  });
+
   it('isolates two session-private signals and refreshes an atomic replacement', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
     temporaryPaths.push(root);
