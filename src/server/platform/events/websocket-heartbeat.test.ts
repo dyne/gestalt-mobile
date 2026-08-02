@@ -44,4 +44,18 @@ describe('installWebSocketHeartbeat', () => {
     expect(socket.ping).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
+
+  it('terminates a live socket when its authorization is revoked during revalidation', () => {
+    vi.useFakeTimers();
+    const socket = {
+      ping: vi.fn(),
+      terminate: vi.fn(),
+      on: vi.fn(),
+    };
+    installWebSocketHeartbeat(socket, 25_000, () => false);
+    vi.advanceTimersByTime(25_000);
+    expect(socket.terminate).toHaveBeenCalledOnce();
+    expect(socket.ping).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });

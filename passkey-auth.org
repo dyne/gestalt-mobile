@@ -1,0 +1,209 @@
+#+TITLE: Shared passkey authorization
+#+SUBTITLE: One local owner, named device credentials, and authorization shared by every Gestalt Mobile instance
+#+DATE: 2026-08-02
+#+KEYWORDS: authentication, passkeys, webauthn, devices, svelte, fastify
+
+* DONE [#A] Establish the shared passkey identity and runtime contract
+:PROPERTIES:
+:ID: establish-shared-passkey-contract
+:SKILLS: $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $security-best-practices
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-08-02T19:53:13Z
+:UPDATED_AT: 2026-08-02T20:45:00Z
+:COMPLETED_AT: 2026-08-02T20:45:00Z
+:ELAPSED_SECONDS: 3107
+:END:
+- Effort :: Medium
+- Goal :: Define the single-owner authorization model, stable WebAuthn relying-party contract, and user-wide persistence boundary that every Gestalt Mobile process on the host shares.
+- Notes :: Start from the existing Node 24, Fastify 5, Svelte 5 application: relay state currently lives in a per-workspace SQLite database, =--host= defaults to =127.0.0.1=, and the README explicitly says there is no built-in authentication or TLS. This milestone must not protect routes yet; it produces the contracts and adapter used by the next milestone. Use the ubiquitous terms =LocalOwner=, =AuthorizedDevice=, =DeviceNickname=, =PasskeyCeremony=, =EnrollmentTicket=, and =AuthorizationSession=. There are no accounts, usernames, roles, passwords, emails, recovery codes, or workspace-specific grants. One random, opaque WebAuthn user handle identifies the local owner, and every credential belongs to that owner. Store authorization independently of =--data-dir= at =~/.codex-gestalt/gestalt-mobile/auth.sqlite= (resolved from the injected home directory in tests), so different workspace roots and relay databases share it. The effective RP ID is the hostname of an explicit canonical public origin; different ports on that hostname remain compatible. A changed hostname is a deliberate migration boundary and must fail startup while credentials exist rather than silently stranding them. Follow current SimpleWebAuthn server/browser contracts, W3C WebAuthn origin/RP-ID validation, and exact expected-origin verification. Do not add an attestation metadata service or collect authenticator identity.
+
+** DONE [#A] Add canonical public-origin configuration and dependencies
+:PROPERTIES:
+:ID: configure-passkey-public-origin
+:END:
+- Why :: WebAuthn is bound to a secure origin and RP ID, while Gestalt Mobile currently knows only its listen host and port. Deriving security values from an untrusted =Host= or forwarded header would make verification configuration attacker-controlled.
+- Change :: Add =@simplewebauthn/server=, =@simplewebauthn/browser=, and =@fastify/cookie= as pinned lockfile dependencies compatible with Node 24 and the installed Fastify major. Extend =RelayConfig= and CLI help with =--public-origin <origin>=. Normalize it once with =URL=: allow only a bare origin with no credentials, path beyond =/=, query, or fragment; require =https:= except for =http://localhost[:port]=; reject IP-address/plain-HTTP LAN origins; and retain the exact normalized origin, including any non-default port, for verification. Default to =http://localhost:<port>= only for the existing loopback listen mode. When =--host= is non-loopback, require =--public-origin= instead of guessing. Set =rpId= to the public-origin hostname and =rpName= to =Gestalt Mobile=. Pass this typed configuration from =runCli= through =composeRelayApp=; never read it from individual requests. Update dev wiring so the browser-facing Vite origin, not the backend proxy target, is used during WebAuthn development.
+- Tests :: Extend =src/server/config.test.ts= and =src/server/cli.test.ts= for normalization, localhost development, HTTPS, default and explicit ports, paths/queries/credentials, plain HTTP, non-loopback startup without an origin, and propagation to composition. Add package-manifest and lockfile assertions for compatible dependency majors. Keep existing CLI defaults and help behavior unchanged outside the new security rule.
+- Done when :: Every running instance has one validated canonical =publicOrigin= and derived =rpId= before opening authorization storage, no request header can alter them, and unsupported insecure mobile/LAN configurations fail with an actionable startup error.
+
+** DONE [#A] Model the local owner and authorized-device invariants
+:PROPERTIES:
+:ID: model-authorized-device-invariants
+:END:
+- Why :: Credential bytes and counters are persistence details, but first-device claiming, nickname rules, and last-device protection are domain invariants that must behave identically for HTTP endpoints, tests, and future adapters.
+- Change :: Create the =auth= bounded context under =src/server/features/auth=. Define immutable domain/application types for the singleton local-owner ID, =AuthorizedDevice= identity separate from its WebAuthn credential ID, a trimmed =DeviceNickname= of 1–64 Unicode code points, credential public key/counter/transports/device-type/backed-up metadata, creation and optional last-used timestamps, ceremony purpose and expiry, and authorization-session identity. Define narrow application ports for the shared repository, clock, random bytes/IDs, WebAuthn option generation/verification, and session-cookie delivery. Put capability names in the domain language rather than exposing =DatabaseSync=, Fastify, cookie, or SimpleWebAuthn types. Enforce unique credential IDs, monotonic stored counters, one local owner, and “at least one authorized device after bootstrap” in aggregate/use-case methods. Do not introduce an event bus merely for pattern compliance; use explicit domain outcomes such as =firstDeviceAuthorized=, =deviceRenamed=, and =deviceRevoked= only where a slice consumes them.
+- Tests :: Add pure tests for nickname trimming/length, opaque IDs, duplicate credentials, counter updates including zero-counter multi-device credentials, first-device transition, and refusal to revoke the final device. Add compile-time/import-boundary coverage consistent with =AGENTS.md= so domain/application modules cannot import Fastify, SQLite, filesystem, Svelte, or SimpleWebAuthn.
+- Done when :: The authorization rules are expressible and testable without framework or storage imports, invalid device state is unrepresentable through public domain operations, and later endpoints depend only on the new ports and plain request/response types.
+
+** DONE [#A] Build the shared SQLite authorization adapter
+:PROPERTIES:
+:ID: persist-shared-authorization-state
+:END:
+- Why :: Separate Gestalt Mobile processes must observe the same credentials, challenges, enrollment tickets, and sessions without lost updates or dependence on a selected workspace.
+- Change :: Add a dedicated platform adapter, for example =src/server/platform/auth/sqlite-authorization-store.ts=, opened once in =composition.ts= at =~/.codex-gestalt/gestalt-mobile/auth.sqlite=. Create the parent directory with owner-only permissions and keep the database/WAL sidecars out of logs. Use WAL, foreign keys, and the existing busy timeout. Add an authorization-specific idempotent migration with: a singleton settings/owner row containing schema version, RP ID, and random WebAuthn user handle; authorized devices keyed by an internal UUID with unique credential ID, public-key BLOB, counter, JSON transports, device type, backup state, nickname, created/last-used timestamps; one-time ceremonies with hashed opaque correlation token, purpose, challenge, exact expected origin/RP ID, expiry and consumed timestamp; hashed enrollment tickets with expiry/consumption; and hashed authorization sessions linked to the credential that created them with absolute expiry and revocation timestamp. Store raw session/ticket tokens only in cookies or one response, never at rest. Initialize settings transactionally, reuse the existing owner handle, permit public-origin port changes, and reject an RP-ID hostname mismatch when credentials exist. Expose compare-and-set operations that atomically claim the first device, consume one-time artifacts, update counters, revoke a device plus its sessions, and guard the final device. Close this second database in the application lifecycle without coupling it to the relay database.
+- Tests :: Add adapter contract tests using temporary injected homes. Cover first initialization, restart, schema idempotence, binary key round trips as =Uint8Array=, hashed-token lookup, expiry, one-time consumption, concurrent first-device claims where exactly one wins, concurrent renames/revocations without lost updates, final-device refusal, session revocation, RP-ID mismatch, port-only origin changes, and two open stores seeing committed changes. Assert the default path is under =.codex-gestalt/gestalt-mobile= and is unaffected by workspace or =--data-dir=.
+- Done when :: Two independently composed instances sharing a home use one durable owner and credential set with transactionally enforced invariants, while their relay session/event databases remain isolated as before.
+
+* DONE [#A] Implement enrollment, authentication, and relay enforcement
+:PROPERTIES:
+:ID: implement-passkey-auth-boundary
+:SKILLS: $vertical-slice-architecture $hexagonal-architecture $domain-driven-design $nodejs-backend-patterns $security-best-practices
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-08-02T21:00:00Z
+:UPDATED_AT: 2026-08-03T00:03:00Z
+:COMPLETED_AT: 2026-08-03T00:03:00Z
+:ELAPSED_SECONDS: 10980
+:END:
+- Effort :: Large
+- Goal :: Add server-side WebAuthn ceremonies, shared cookie sessions, and a deny-by-default authorization boundary over every relay HTTP and WebSocket capability.
+- Notes :: Depends on =establish-shared-passkey-contract= and must use its ports and shared store. Preserve the requested trust-on-first-use model: while the shared device count is zero, any client that can reach the canonical origin may attempt to register the first device, and the first successfully verified transaction wins. The QR in the next milestone is a convenience, not a secret. Once any credential exists, anonymous bootstrap enrollment closes permanently unless an operator manually resets authorization storage. Make that exposure explicit in response copy and documentation; do not invent invitations, email recovery, or an administrator account. Require discoverable credentials and user verification for both registration and login, use =attestationType: 'none'=, =residentKey: 'required'=, =requireResidentKey: true= where represented, and algorithms =[-7, -257]=. Use a stable random =userID: Uint8Array= for the local owner, =excludeCredentials= for all registered devices, and =allowCredentials: []= for usernameless login. Challenges expire after ten minutes, are bound server-side to purpose, exact expected origin and RP ID, and are consumed exactly once. Never trust a challenge, origin, verification policy, credential owner, nickname, or redirect supplied back by the browser.
+
+** DONE [#A] Add the SimpleWebAuthn adapter and registration slices
+:PROPERTIES:
+:ID: implement-passkey-registration-slices
+:STARTED_AT: 2026-08-02T21:00:01Z
+:UPDATED_AT: 2026-08-02T22:40:00.000Z
+:COMPLETED_AT: 2026-08-02T21:16:01Z
+:ELAPSED_SECONDS: 5999
+:END:
+- Why :: First-run and later device enrollment need the same verified ceremony with different authorization preconditions, while cryptographic library DTOs must remain at the platform edge.
+- Change :: Implement a =SimpleWebAuthnAdapter= behind the option-generation/verification port, mapping stored BLOBs to =Uint8Array= and current =WebAuthnCredential= shapes. Add REPR slices with route-local Zod request/response schemas for =POST /api/auth/register/options= and =POST /api/auth/register/verify=. Options accept either the zero-device bootstrap condition or, in preparation for the management milestone, a valid one-time enrollment ticket; authenticated same-browser registration may obtain such a ticket from the management API later. Verification accepts the ceremony correlation cookie/token, WebAuthn response, and nickname, verifies challenge/origin/RP ID/user verification, then transactionally consumes the ceremony and inserts the credential only if its authorization precondition still holds. On a first-device race, return a stable =BOOTSTRAP_ALREADY_CLAIMED= problem instead of overwriting the winner. Persist credential ID/public key/counter/transports/device type/backup state and issue an authorization session on success. Map cancellation/invalid state to client-safe codes without logging attestation objects, challenges, tokens, public keys, or nicknames.
+- Tests :: Test the use cases with a fake WebAuthn port for bootstrap success, second concurrent claimant, expired/replayed/mismatched-purpose challenge, wrong origin/RP ID, missing user verification, duplicate credential, invalid nickname, and verification failure with no partial insert. Add platform-adapter tests against the installed SimpleWebAuthn types for option flags and registration-result mapping. Endpoint tests must assert schemas, cookie properties, stable RFC 9457-style problems, and that the client cannot override stored ceremony policy.
+- Done when :: Exactly one verified passkey can atomically establish an empty authorization store, successful verification creates the first shared session, and every subsequent anonymous registration attempt is rejected unless it carries an unexpired authorized enrollment ticket.
+
+** DONE [#A] Add usernameless login and shared authorization sessions
+:PROPERTIES:
+:ID: implement-passkey-login-session
+:STARTED_AT: 2026-08-02T22:43:00.000Z
+:UPDATED_AT: 2026-08-02T23:01:00.000Z
+:COMPLETED_AT: 2026-08-02T23:01:00.000Z
+:ELAPSED_SECONDS: 1080
+:END:
+- Why :: Registered devices need a username-free way to prove possession and receive a normal application session that every local Gestalt Mobile instance can validate.
+- Change :: Add =POST /api/auth/login/options=, =POST /api/auth/login/verify=, =GET /api/auth/status=, and =POST /api/auth/logout= as separate REPR slices. Status returns only =bootstrap=, =locked=, or =authenticated= plus the canonical public origin needed for presentation; it must not expose credential IDs or other relay data. Login options use an empty allow list and required user verification. Verification resolves the device from =response.id=, verifies against its public key/counter and the server-held ceremony, atomically advances the counter/last-used timestamp, and rejects unknown or revoked credentials without revealing whether an ID once existed. Generate a 32-byte random session token, store only its SHA-256 hash, and set a =gestalt_mobile_session= cookie with =HttpOnly=, =SameSite=Strict=, =Path=/=, a 30-day absolute =Max-Age=, and =Secure= for HTTPS (the localhost development exception remains non-Secure). Use the shared session table so the same cookie works across processes on the same host, including different ports. Logout revokes the shared token and expires the cookie. Expired/revoked sessions never slide silently.
+- Tests :: Cover discoverable options, known/unknown credentials, required user verification, counter and last-used updates, zero-counter synced credentials, challenge replay, token entropy/hash-at-rest, absolute expiry, logout, cookie flags on HTTPS and localhost, status in all three modes, and validation of a session created by one store instance through another. Assert all authentication failures use one non-enumerating response and logs contain no credential or token material.
+- Done when :: Any registered discoverable credential can perform explicit passkey login without a username, receive a correctly scoped shared session, and lose access after expiry, logout, or device revocation.
+
+** DONE [#A] Protect HTTP, WebSocket, and unsafe-origin boundaries
+:PROPERTIES:
+:ID: enforce-relay-authorization-boundary
+:STARTED_AT: 2026-08-02T23:05:00.000Z
+:UPDATED_AT: 2026-08-03T00:03:00Z
+:COMPLETED_AT: 2026-08-03T00:03:00Z
+:ELAPSED_SECONDS: 3480
+:END:
+- Why :: A login UI is ineffective if existing =/api/bootstrap=, session, Git, plan, skill, interaction, or raw WebSocket upgrade paths remain callable directly.
+- Change :: Add one cross-cutting Fastify authorization hook before protected API registration. Keep only static app assets/index, =GET /health=, auth status, login ceremonies, and eligible registration ceremonies public. Require a valid shared session for every other =/api/*= route, returning a stable =401 AUTH_REQUIRED= problem before invoking slice logic. For all browser state-changing requests, including public auth ceremonies, require an exact =Origin= match to configured =publicOrigin=; do not use suffix, =Host=, =Referer=, or forwarded-header inference. Adapt =registerSessionEvents= so its manual =upgrade= listener verifies both exact origin and the parsed authorization cookie through the same session port before checking session existence or replaying events; reject unauthorized upgrades without observable relay/session details and close established sockets when their session is detected as expired or revoked at heartbeat/revalidation. Preserve static SPA fallback behavior. Keep authentication middleware in =platform/http= and wire it only in =app.ts=/=composition.ts=; existing domain/use cases stay unaware of auth technology.
+- Tests :: Add a table-driven application test over every registered API route classifying public versus protected behavior, including =/api/bootstrap=. Test valid/expired/revoked/malformed cookies, exact and wrong/missing origins on unsafe methods, and that protected handlers are not called on failure. Extend WebSocket tests for missing/wrong-origin cookies, valid shared sessions, expiry/revocation, and absence of session-existence leakage. Retain existing health/static tests and all relay behavior behind a valid injected session.
+- Done when :: No HTTP or WebSocket path capable of reading relay state or controlling Codex/Git can be reached without a live shared authorization session, and the only anonymous mutation possible is the explicitly eligible first-device ceremony.
+
+* TODO [#A] Gate the client with first-run enrollment and returning-device login
+:PROPERTIES:
+:ID: add-authentication-client-gate
+:SKILLS: $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Present a focused first-run enrollment splash or returning-device passkey login before any relay bootstrap, cached session selection, event socket, or Codex-facing UI is initialized.
+- Notes :: Depends on the public status/registration/login contract from =implement-passkey-auth-boundary=. Keep authentication explicit: do not add conditional autofill or auto-trigger a browser WebAuthn prompt. Feature-detect =window.PublicKeyCredential= and =window.isSecureContext=; do not assume newer capability/signal methods exist and do not add WebAuthn polyfills. Use =@simplewebauthn/browser= for binary conversion and browser ceremony calls. The first-run QR is deliberately only a machine-readable link to the same canonical splash, because bootstrap is already trust-on-first-use; text must warn the operator to enroll before exposing an empty instance. A scanned phone still confirms and names the new device before invoking WebAuthn.
+
+** TODO [#A] Introduce an auth client and explicit state machine
+:PROPERTIES:
+:ID: create-client-auth-state-machine
+:END:
+- Why :: =App.svelte= currently starts =/api/bootstrap= and relay timers immediately, so merely rendering a login overlay would still leak data and create protected network activity underneath it.
+- Change :: Add typed client functions for status, registration options/verification, login options/verification, and logout, with a small state machine: =checking=, =bootstrap=, =locked=, =authenticated=, =unsupported=, and retryable =error=. Map expected WebAuthn =NotAllowedError=, =InvalidStateError=, =AbortError=, and =SecurityError= to calm actionable messages while retaining unknown failures for safe generic reporting. Move the current relay implementation mechanically into a =RelayApp.svelte= shell and make =App.svelte= the small authorization composition boundary; instantiate =RelayApp= only in =authenticated=. Ensure status checks use =credentials: 'same-origin'=. Add one shared authorized-fetch boundary used by existing relay API clients so a later =401 AUTH_REQUIRED= tears down sockets/timers and returns to =locked= instead of leaving stale privileged UI. Do not monkey-patch global =fetch=.
+- Tests :: Add state-machine and API-client tests for every state/transition, malformed response, retry, successful session establishment, logout, and a 401 emitted during an existing relay call. Add a characterization test proving no =/api/bootstrap=, recent-session, skills, Git, plan, or WebSocket request occurs before =authenticated=. Retain the existing =App.svelte= evidence modes and relay tests after the mechanical shell extraction.
+- Done when :: The browser performs only the public auth-status flow while locked, initializes the current relay exactly once after authentication, and returns safely to login if the shared session ends.
+
+** TODO [#A] Build the first-device enrollment splash
+:PROPERTIES:
+:ID: build-first-device-splash
+:END:
+- Why :: An empty installation needs an understandable single action that binds the first named device without introducing an account-creation form or hidden security assumptions.
+- Change :: Add a mobile-first =FirstDeviceEnrollment.svelte= with Gestalt/Dyne branding, a concise trust-on-first-use warning, a required “Device nickname” input, “Authorize this device” action, and a QR plus copyable canonical link for continuing on a phone. Add a small QR encoder dependency only if it is maintained, browser-safe, and substantially smaller/safer than hand-implementing QR encoding; isolate it behind a client adapter so a visible text link remains the fallback. The QR must encode only the configured canonical origin plus an SPA bootstrap hint—no challenge, cookie, credential material, or reusable secret. On submission, request options, call =startRegistration({ optionsJSON })= from the click handler, verify with nickname, then transition directly to =authenticated=. While a desktop splash is open, poll public status only when visible at a modest interval; if another device wins, stop registration/polling and move to the locked login explanation. Disable duplicate submissions and keep user-entered nickname after cancellation or a retryable failure.
+- Tests :: Component tests cover support detection, required/trimmed nickname, duplicate-click suppression, cancellation, =InvalidStateError=, server race loss, QR/link equivalence, polling cleanup, and successful transition. Add Playwright route-mocked flows at 375×812 and 1280×800 with 100% and 200% font scale; capture =test-results/auth/first-run-mobile.png= and =test-results/auth/first-run-desktop-200.png=. Assert visible focus, 44px controls, no horizontal overflow, useful non-QR link text, and reduced-motion behavior. Run the Svelte autofixer on every touched component.
+- Done when :: A user on an empty installation can name and authorize the current device—or scan a non-secret link on a phone—without any protected relay request, and a concurrent winner is handled without ambiguous or unsafe retry behavior.
+
+** TODO [#A] Build returning-device login and lock controls
+:PROPERTIES:
+:ID: build-returning-device-login
+:END:
+- Why :: Once the first device exists, every new or expired browser context must show a clear usernameless passkey action rather than a broken bootstrap screen.
+- Change :: Add =PasskeyLogin.svelte= with one explicit “Sign in with a passkey” button, unsupported/insecure-context guidance, retryable error area, and no username field. Invoke =startAuthentication({ optionsJSON })= only from the button handler, submit verification, then mount =RelayApp=. Add “Lock Gestalt Mobile” to the existing burger popover; it calls logout, closes relay sockets/timers, clears only in-memory privileged state (not durable relay history), and returns to login. If login reports an unknown credential, give a non-enumerating explanation and allow retry; use WebAuthn signal methods only behind feature detection if the server contract later supplies the exact safe inputs, never as a prerequisite.
+- Tests :: Component/client tests cover successful login, cancellation, unsupported WebAuthn, insecure context, server/network failures, double submission, logout, focus placement, and preservation of durable client caches. Update =AppHeader.test.ts= for the named lock action. Add route-mocked Playwright evidence at 375×812 and 1280×800/200% font scale, capturing =test-results/auth/login-mobile.png= and =test-results/auth/login-desktop-200.png=, and assert that authenticated relay navigation is absent from the locked accessibility tree. Run the Svelte autofixer.
+- Done when :: A returning authorized device can explicitly authenticate without a username, unsupported clients receive a useful explanation, and locking immediately removes all privileged UI and live connections.
+
+* TODO [#A] Manage named devices and cross-device enrollment
+:PROPERTIES:
+:ID: manage-authorized-devices
+:SKILLS: $vertical-slice-architecture $hexagonal-architecture $nodejs-backend-patterns $security-best-practices $svelte-code-writer $svelte-core-bestpractices $modern-web-guidance
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Large
+- Goal :: Let an authenticated owner list, add, nickname, rename, and revoke authorized devices from the existing burger menu, including a one-time QR flow for a different device.
+- Notes :: Depends on the protected auth/session boundary and authenticated client shell. Keep management intentionally smaller than consumer-account security pages: show an opaque device-management ID, nickname, added date, optional last-used date, and simple “this device” indication when derivable from the current session. Do not show public keys, counters, credential IDs, AAGUID/provider guesses, transports, backup-state jargon, IP addresses, or user-agent fingerprints. A passkey can be synced across multiple physical devices by its provider; the list represents registered WebAuthn credentials, and the UI should say “authorized devices/passkeys” without claiming hardware attestation. Revoking a credential must also revoke every shared session established by it. The final credential cannot be removed in the UI or API; losing all passkeys is recovered only by the documented local filesystem reset in the last milestone.
+
+** TODO [#A] Add device-list, rename, and revoke slices
+:PROPERTIES:
+:ID: implement-device-management-api
+:END:
+- Why :: The owner needs auditable names and revocation controls, and those mutations must preserve the final-device invariant under concurrent requests from multiple instances.
+- Change :: Add separate REPR slices for =GET /api/auth/devices=, =PATCH /api/auth/devices/:deviceId=, and =DELETE /api/auth/devices/:deviceId=. Return only internal device ID, nickname, created/last-used timestamps, and whether the current authorization session originated from that credential. Validate IDs and trimmed 1–64-code-point nicknames at the endpoint and domain boundaries. Rename transactionally. On revoke, transactionally re-count credentials, reject the last device with =LAST_DEVICE_REQUIRED=, remove/revoke the credential, revoke all sessions it created, and expire the current cookie when it was one of them. Return stable not-found semantics without exposing credential IDs. Keep these slices independent of SimpleWebAuthn DTOs.
+- Tests :: Domain/use-case/endpoint tests cover ordered listing, absent last-used date, Unicode nickname limits, rename, unknown IDs, two-instance visibility, concurrent attempts to delete the last two devices where one must remain, revocation of all credential-linked sessions, deleting the current device, and non-enumerating failures. Assert response/log snapshots never contain credential IDs, public keys, counters, tokens, or ceremony material.
+- Done when :: Device metadata is readable and renameable through authenticated routes, revocation immediately blocks that passkey’s sessions across every instance, and no race can reduce the store below one authorized credential.
+
+** TODO [#A] Add one-time enrollment tickets for another device
+:PROPERTIES:
+:ID: implement-cross-device-enrollment-ticket
+:END:
+- Why :: An authenticated owner needs to authorize a phone or security key without reopening global first-run enrollment or sharing the existing session cookie.
+- Change :: Add =POST /api/auth/enrollment-tickets= and a minimal status/cancel endpoint only if the UI needs them. Generate at least 32 random bytes, return the raw ticket once, persist only its hash with the creating session, ten-minute expiry, and single-use state, and cap each session to one live ticket by replacing its previous ticket. Build the canonical enrollment URL with the raw token in the URL fragment, for example =https://host/#enroll=<token>=, so it is not sent in the initial request, proxy logs, or =Referer=. The client explicitly extracts and removes the fragment with =history.replaceState= before sending the token in the registration-options JSON body. Bind the resulting ceremony to the ticket, expected origin, and RP ID; consume the ticket in the same transaction that inserts the new device. Successful verification creates a new authorization session for the enrolled browser. Expiry, cancellation, replay, origin mismatch, or creator-session revocation must fail closed. Never put the ticket in a query string or QR analytics.
+- Tests :: Test entropy/hash-at-rest, fragment URL construction, one-live-ticket replacement, expiry/cancel/replay, creator logout/revocation, exact origin/RP binding, concurrent scans where one succeeds, and successful registration/session creation from a different process sharing the auth database. Endpoint/log tests must prove raw tickets appear only in the creation response and verify request, never in persistence or logs.
+- Done when :: A QR/link generated by an authenticated owner grants exactly one ten-minute opportunity to register one named credential, and possession after use, expiry, or revocation grants nothing.
+
+** TODO [#A] Add the authorized-device management view
+:PROPERTIES:
+:ID: build-device-management-view
+:END:
+- Why :: The existing configuration popover contains only appearance, so device controls need a discoverable but uncluttered home that works on a phone.
+- Change :: Add “Authorized devices” to =AppHeader.svelte= and route its callback through the authenticated app shell to a dedicated =AuthorizedDevicesView.svelte= outside the bottom relay tabs. Render a keyed list with nickname, dates, current-device label, rename, and revoke actions; use an accessible native confirmation dialog or the existing project confirmation pattern for revocation, and visibly disable/explain final-device deletion. Add “Authorize another device”: request one ticket, present QR, copyable link, expiry countdown/status, cancel/replace action, and an optional same-device “Create passkey here” path using the same ticket. On =#enroll= startup, the outer auth boundary renders a focused nickname/enroll screen even though the browser has no session, scrubs the fragment, and enters the app after success. Poll only the ticket/device status while that panel is visible, with teardown on navigation/background. Keep appearance and lock actions intact in the burger popover.
+- Tests :: Add client/state/component tests for menu navigation, ordered list, empty-impossible fallback, rename validation/retry, final-device guard, revoke confirmation/current-session lockout, ticket replacement/expiry/cancel, fragment scrubbing before network calls, QR/link equivalence, remote enrollment success, polling cleanup, and no sensitive fields in rendered DOM. Add Playwright flows at 375×812 and 1280×800 with 100%/200% font scales and capture =test-results/auth/devices-mobile.png=, =test-results/auth/add-device-qr.png=, and =test-results/auth/devices-desktop-200.png=. Verify keyboard focus return, 44px targets, dialog naming, wrapping/overflow, reduced motion, forced colors, and safe nickname text rendering. Run the Svelte autofixer on all touched Svelte files.
+- Done when :: An authenticated owner can open the burger menu, manage understandable device names, enroll a different browser from a one-time QR/link, and revoke any non-final device with immediate cross-instance effect.
+
+* TODO [#B] Verify multi-instance operation and document recovery
+:PROPERTIES:
+:ID: verify-shared-auth-operations
+:SKILLS: $security-best-practices $playwright
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium
+- Goal :: Prove the real browser ceremony and multi-process sharing behavior, then document HTTPS deployment, stable origin, backup, loss, reset, upgrade, and operating limits before release.
+- Notes :: Depends on every earlier milestone and changes tests/docs only unless evidence reveals a defect, in which case reopen the owning milestone rather than hiding a product fix here. The implementation branch should be =passkey-auth= from the agreed current base; do not commit this Org plan. Gestalt Mobile still does not terminate TLS, so production/mobile use requires a stable HTTPS reverse proxy or trusted HTTPS tunnel whose external origin exactly matches =--public-origin=. Same-host processes may use different ports but must share the same home and RP-ID hostname. This milestone must keep the model deliberately local: no hosted service, federation, remote administrator, recovery code, credential export, authentication audit analytics, attestation trust policy, or automatic authorization reset.
+
+** TODO [#A] Exercise a real WebAuthn browser journey
+:PROPERTIES:
+:ID: test-real-webauthn-journey
+:END:
+- Why :: Mocked option/verification ports and route-mocked components cannot prove that browser JSON conversion, discoverable credentials, exact origin, cookie behavior, and resident-key login work together.
+- Change :: Add an auth-specific Playwright configuration that runs the built client and real Fastify server on =http://localhost= with an isolated temporary home/data root and configured browser-facing public origin. Use Chromium DevTools WebAuthn virtual authenticators with resident-key and user-verification support; do not make the ordinary UI suite depend on a developer’s platform authenticator. Exercise: empty status, named first registration, protected bootstrap access, logout/lock, usernameless login, second virtual authenticator enrollment by one-time link, rename, revoke, rejected login from the revoked credential, and final-device deletion refusal. Include an actual WebSocket connection after login and rejected upgrade before login. Keep generated credentials and temp databases out of artifacts.
+- Tests :: The new Playwright journey is the test. Require deterministic cleanup and screenshots named =test-results/auth/real-first-enrollment.png=, =real-login.png=, and =real-device-management.png= at 390×844; retain traces only on failure. Also run the existing route-mocked UI suite to protect non-Chromium behavior. If Chromium’s virtual authenticator cannot model a platform-specific hybrid QR prompt, test the application’s enrollment-link handoff with two isolated browser contexts and document that boundary rather than pretending to test OS UI.
+- Done when :: A clean Chromium context creates and later uses a real discoverable credential against the actual SimpleWebAuthn server adapter, protected HTTP/WebSocket access tracks session state, and the full named device lifecycle passes without mocked auth endpoints.
+
+** TODO [#A] Prove shared-store and upgrade behavior
+:PROPERTIES:
+:ID: test-multi-instance-auth-sharing
+:END:
+- Why :: The defining product requirement is user-wide authorization across every Gestalt Mobile instance, not merely restart persistence in one process.
+- Change :: Add an integration harness composing two relay instances with distinct workspace roots and relay data directories but the same injected home/authorization database and RP-ID hostname. Prove a credential and session established through instance A authorize protected HTTP and WebSocket access on instance B when the cookie host matches; device add/rename/revoke from either process appears immediately in the other; different ports work; different RP-ID hostname startup fails; concurrent first claims and final-device revocations preserve invariants; and closing one instance does not close/corrupt the shared store for the other. Add a forward migration fixture representing an installed pre-auth release with no authorization database: it starts in bootstrap mode without modifying the existing relay database.
+- Tests :: Run the focused multi-instance integration suite repeatedly enough to surface lock ordering, then run =npm run check=, =npm test=, =npm run lint=, =npm run build=, =npm run test:e2e=, the auth-specific real-browser suite, =npm run license:check=, and =npm run test:package=. Report counts and exact failing tests without raw credential/log output. Verify the intended diff contains no generated SQLite, WAL, QR, trace, screenshot, or test-result artifacts other than explicitly approved evidence locations.
+- Done when :: Automated evidence demonstrates shared authorization across simultaneous isolated relay instances and a safe upgrade from the current release, with the repository’s complete completion gate passing.
+
+** TODO [#B] Document deployment, recovery, and security limits
+:PROPERTIES:
+:ID: document-passkey-operations
+:END:
+- Why :: A correct implementation can still lock out its owner or provide no security if run over plain LAN HTTP, an unstable hostname, an untrusted empty bootstrap, or a mismatched reverse-proxy origin.
+- Change :: Update =README.md=, CLI help snapshots, release/package checks, and =AGENTS.md= where the new boundary affects future work. Replace the “no built-in authentication” warning with: passkey auth is built in; TLS is not; =--public-origin= must be the exact browser origin; =http://localhost= is development-only; an empty store is publicly claimable by the first verified device; enroll before exposing it; multiple processes share =~/.codex-gestalt/gestalt-mobile/auth.sqlite=; and changing the hostname/RP ID strands credentials and is refused. Document reverse-proxy requirements (HTTPS, WebSocket upgrade, unchanged external host/origin, cookies, no path-prefix rewriting), stable-host examples, multi-port behavior, backup of =auth.sqlite= plus =-wal= and =-shm= only while all instances are stopped or via SQLite backup tooling, and permission expectations. Recovery after losing all passkeys is deliberately local/manual: stop every instance, back up the directory, remove the authorization database and sidecars, restart into visibly open bootstrap mode, and immediately register a new device; state clearly that this discards only authorization/device/session state, not per-workspace relay databases, and that the reset is dangerous if the service is exposed. Document why the final device cannot be deleted, why synced passkeys may represent more than one physical device, and why the QR is not recovery or proof of proximity. Link the official SimpleWebAuthn server/passkey guides, MDN passkey guide, and W3C WebAuthn RP-ID/origin/challenge requirements.
+- Tests :: Extend README/CLI/release/package tests for the new flags, paths, security warnings, packaged dependencies/client assets, and removal of obsolete claims. Manually review every command/path against the implementation and test it in a temporary home; do not run destructive recovery instructions against a real profile. Validate =passkey-auth.org= with the Org-plan helper after any plan correction.
+- Done when :: An operator can deploy behind HTTPS, recognize the unsafe empty state, run multiple instances correctly, back up or intentionally reset authorization without deleting relay history, and understand the deliberate absence of remote recovery or account administration.
