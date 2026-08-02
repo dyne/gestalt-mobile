@@ -65,6 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import PlanView from './features/plans/PlanView.svelte';
   import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
+  import { getHistoryWithRecovery } from './features/sessions/history-recovery.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
   import { nextTab, type Tab } from './features/sessions/tab-state.js';
@@ -433,7 +434,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function resyncHistory(id: string, fallbackSequence = 0) {
-    const history: RelayHistory = await relay.getHistory(id);
+    const { history, restored } = await getHistoryWithRecovery(relay, id);
+    if (restored) {
+      sessions = sessions.map((session) => (session.id === id ? restored : session));
+      if (restored.recovery?.replacementCreated)
+        recoveryNotice =
+          'The session was restored with a replacement Codex thread because its prior history was unavailable.';
+    }
     if (sessionId !== id) return;
     const canonicalMessages: ChatMessage[] = history.items
       .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
