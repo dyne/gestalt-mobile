@@ -6,6 +6,8 @@
 
 const relayMessages = {
   RELAY_UNAVAILABLE: 'The relay is unavailable. Check the connection and try again.',
+  SESSION_HISTORY_UNAVAILABLE:
+    'Session history could not be loaded from GET /api/sessions/:id/history. The relay is connected, but Codex has no active process for this session. Open the session to restore it, then retry.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
   SESSION_REFRESH_FAILED: 'Sessions could not be refreshed. Try again.',
   MESSAGE_SEND_FAILED: 'The message was not sent. Your draft is preserved.',
@@ -23,8 +25,14 @@ export function relayFeedback(
   fallbackCode: RelayFeedbackCode,
 ): { code: RelayFeedbackCode; message: string } {
   const candidate = error instanceof Error ? error.message : '';
-  const code = Object.hasOwn(relayMessages, candidate)
-    ? (candidate as RelayFeedbackCode)
+  const problemCode =
+    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  const code = Object.hasOwn(relayMessages, problemCode)
+    ? (problemCode as RelayFeedbackCode)
+    : Object.hasOwn(relayMessages, candidate)
+      ? (candidate as RelayFeedbackCode)
     : fallbackCode;
   return { code, message: relayMessages[code] };
 }

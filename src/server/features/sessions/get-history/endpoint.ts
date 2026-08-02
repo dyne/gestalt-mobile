@@ -23,7 +23,22 @@ export function registerGetHistory(
   app.get('/api/sessions/:id/history', async (request, reply) => {
     const session = deps.find((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
-    const history = await deps.read(session);
+    let history: Awaited<ReturnType<typeof deps.read>>;
+    try {
+      history = await deps.read(session);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'CODEX_SESSION_NOT_RUNNING')
+        return reply.code(409).type('application/problem+json').send({
+          type: 'urn:gestalt-mobile:error:session-history-unavailable',
+          title: 'Session history unavailable',
+          status: 409,
+          detail:
+            'GET /api/sessions/:id/history requires an active Codex session process. Open the session to restore it, then retry.',
+          code: 'SESSION_HISTORY_UNAVAILABLE',
+          retryable: true,
+        });
+      throw error;
+    }
     const items: ChatItem[] = toChatItems(history.turns);
     return reply.send({
       items,

@@ -114,6 +114,7 @@ export type RelaySkillProfileList = {
 export function createRelayClient(fetcher: typeof fetch = fetch) {
   async function failure(response: Response): Promise<Error> {
     const body = (await response.json().catch(() => null)) as {
+      code?: unknown;
       detail?: unknown;
       title?: unknown;
     } | null;
@@ -123,7 +124,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         : typeof body?.title === 'string'
           ? body.title
           : `Relay request failed (${response.status}).`;
-    return new Error(message);
+    return Object.assign(new Error(message), {
+      ...(typeof body?.code === 'string' && /^[A-Z0-9_]+$/.test(body.code)
+        ? { code: body.code }
+        : {}),
+    });
   }
   async function request<T>(
     path: string,

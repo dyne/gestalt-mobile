@@ -43,4 +43,24 @@ describe('GET /api/sessions/:id/history', () => {
     });
     await app.close();
   });
+
+  it('reports a recoverable diagnostic when the Codex process is absent', async () => {
+    const app = fastify();
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      read: async () => {
+        throw new Error('CODEX_SESSION_NOT_RUNNING');
+      },
+      currentSequence: () => 0,
+    });
+    const response = await app.inject({ method: 'GET', url: '/api/sessions/s/history' });
+    expect(response.statusCode).toBe(409);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.json()).toMatchObject({
+      code: 'SESSION_HISTORY_UNAVAILABLE',
+      retryable: true,
+      detail: expect.stringContaining('GET /api/sessions/:id/history'),
+    });
+    await app.close();
+  });
 });
