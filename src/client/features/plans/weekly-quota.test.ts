@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SupervisedPlan } from './contracts.js';
-import { weeklyQuotaLeft } from './weekly-quota.js';
+import { weeklyQuotaUsed } from './weekly-quota.js';
 
 const plan = (remaining?: number): SupervisedPlan => ({
   title: 'Weekly quota',
@@ -26,14 +26,14 @@ const plan = (remaining?: number): SupervisedPlan => ({
   currentStepId: 'l2',
 });
 
-describe('weeklyQuotaLeft', () => {
-  it('returns the rounded remaining weekly percentage on the active step', () => {
-    expect(weeklyQuotaLeft(plan(62.7))).toBe(63);
+describe('weeklyQuotaUsed', () => {
+  it('returns the rounded used weekly percentage on the active step', () => {
+    expect(weeklyQuotaUsed(plan(62.7))).toBe(37);
   });
 
   it('keeps unavailable, invalid, and inactive measurements hidden', () => {
-    expect(weeklyQuotaLeft(plan())).toBeNull();
-    expect(weeklyQuotaLeft(plan(101))).toBeNull();
-    expect(weeklyQuotaLeft(undefined)).toBeNull();
+    expect(weeklyQuotaUsed(plan())).toBeNull();
+    expect(weeklyQuotaUsed(plan(101))).toBeNull();
+    expect(weeklyQuotaUsed(undefined)).toBeNull();
   });
 });

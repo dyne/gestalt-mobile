@@ -61,7 +61,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type PlanState,
   } from './features/plans/plan-controller.js';
   import { isRelayPlanUpdate } from './features/plans/contracts.js';
-  import { weeklyQuotaLeft } from './features/plans/weekly-quota.js';
+  import { weeklyQuotaUsed } from './features/plans/weekly-quota.js';
   import PlanView from './features/plans/PlanView.svelte';
   import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
@@ -120,8 +120,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     (planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error') &&
       !!planState.plan,
   );
-  let weeklyQuotaRemaining = $derived(
-    weeklyQuotaLeft(
+  let weeklyQuotaUsage = $derived(
+    weeklyQuotaUsed(
       planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error'
         ? planState.plan
         : undefined,
@@ -918,7 +918,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           )
         : null}
       sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
-      weeklyQuotaLeft={weeklyQuotaRemaining}
+      weeklyQuotaUsed={weeklyQuotaUsage}
       onthemechange={setTheme}
     />
 
