@@ -123,7 +123,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
               {/if}
               {#if session.lastOrgPlan}
-                <span class="profile-badge">Org plan: {session.lastOrgPlan.filename} — {session.lastOrgPlan.title}</span>
+                <span class="org-plan-metadata">
+                  <span class="org-plan-title">{session.lastOrgPlan.title}</span>
+                  <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
+                </span>
               {/if}
               </button>
             </div>
@@ -336,6 +339,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-size: 0.875rem;
     overflow-wrap: anywhere;
   }
+
+  .org-plan-metadata { display: grid; gap: 0.125rem; margin-block-start: 0.35rem; }
+  .org-plan-title { font-weight: 600; }
+  .org-plan-filename { overflow-wrap: anywhere; color: color-mix(in srgb, CanvasText 72%, Canvas); }
 
   .session-actions {
     display: flex;

@@ -155,7 +155,7 @@ describe('SessionsView session base tree', () => {
     expect(screen.queryByText('Skills profile: default')).toBeNull();
   });
 
-  it('shows an open session’s latest Org Plan filename and title', () => {
+  it('shows an open session’s latest Org Plan title above its filename', () => {
     renderView({
       sessions: [
         {
@@ -166,7 +166,11 @@ describe('SessionsView session base tree', () => {
         },
       ],
     });
-    expect(screen.getByText('Org plan: session-summary.org — Show session context')).toBeTruthy();
+    const title = screen.getByText('Show session context');
+    const filename = screen.getByText('session-summary.org');
+    expect(title.classList.contains('org-plan-title')).toBe(true);
+    expect(filename.classList.contains('org-plan-filename')).toBe(true);
+    expect(title.parentElement).toBe(filename.parentElement);
   });
 
   it('shows available metadata for a recent session', () => {
