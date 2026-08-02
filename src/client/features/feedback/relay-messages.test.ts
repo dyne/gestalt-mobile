@@ -14,6 +14,18 @@ describe('relayFeedback', () => {
       message: 'Clone failed.',
     }));
 
+  it('maps a stable API problem code without exposing its detail', () =>
+    expect(
+      relayFeedback(
+        Object.assign(new Error('unsafe server detail'), { code: 'SESSION_HISTORY_UNAVAILABLE' }),
+        'RELAY_UNAVAILABLE',
+      ),
+    ).toEqual({
+      code: 'SESSION_HISTORY_UNAVAILABLE',
+      message:
+        'Session history could not be loaded from GET /api/sessions/:id/history. The relay is connected, but Codex has no active process for this session. Open the session to restore it, then retry.',
+    }));
+
   it('never exposes arbitrary error details', () => {
     const feedback = relayFeedback(
       new Error('secret token and generated model output'),

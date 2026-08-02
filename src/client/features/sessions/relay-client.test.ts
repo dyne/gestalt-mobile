@@ -185,6 +185,22 @@ describe('relay client', () => {
     );
   });
 
+  it('retains a stable API problem code with its diagnostic detail', async () => {
+    const client = createRelayClient(async () =>
+      new Response(
+        JSON.stringify({
+          detail: 'GET /api/sessions/:id/history requires an active Codex session process.',
+          code: 'SESSION_HISTORY_UNAVAILABLE',
+        }),
+        { status: 409, headers: { 'content-type': 'application/problem+json' } },
+      ),
+    );
+    await expect(client.getHistory('session-1')).rejects.toMatchObject({
+      message: 'GET /api/sessions/:id/history requires an active Codex session process.',
+      code: 'SESSION_HISTORY_UNAVAILABLE',
+    });
+  });
+
   it('submits an interaction decision to the original session request', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {
