@@ -6,7 +6,7 @@
 
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { JsonRpcClient } from './json-rpc-client.js';
+import { CodexJsonRpcError, isMissingCodexThreadRollout, JsonRpcClient } from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
   it('correlates a JSONL response to its request', async () => {
@@ -62,5 +62,32 @@ describe('JsonRpcClient', () => {
 
     await expect(pending).rejects.toBe(failure);
     await expect(client.request('thread/start', {})).rejects.toBe(failure);
+  });
+
+  it('classifies only Codex’s missing-rollout invalid request response', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const response = client.request('thread/resume', { threadId: 'thread-1' });
+    output.once('data', (line) =>
+      input.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: JSON.parse(line.toString()).id,
+          error: { code: -32600, message: 'no rollout found for thread id thread-1' },
+        })}\n`,
+      ),
+    );
+
+    await expect(response).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(CodexJsonRpcError);
+      expect(isMissingCodexThreadRollout(error)).toBe(true);
+      return true;
+    });
+    expect(
+      isMissingCodexThreadRollout(
+        new CodexJsonRpcError(-32600, 'invalid parameters for thread/resume'),
+      ),
+    ).toBe(false);
   });
 });

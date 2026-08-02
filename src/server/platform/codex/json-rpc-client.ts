@@ -7,6 +7,30 @@
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 
+/** A bounded representation of an app-server JSON-RPC failure. */
+export class CodexJsonRpcError extends Error {
+  constructor(
+    readonly code: number | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CodexJsonRpcError';
+  }
+}
+
+/**
+ * Codex 0.146 reports a rollout removed by an upgrade as -32600.  Keep the
+ * message match deliberately narrow: other invalid-request responses must not
+ * be treated as permission to replace a durable thread.
+ */
+export function isMissingCodexThreadRollout(error: unknown): boolean {
+  return (
+    error instanceof CodexJsonRpcError &&
+    error.code === -32600 &&
+    /^no rollout found for thread id\b/i.test(error.message)
+  );
+}
+
 export class JsonRpcClient {
   private sequence = 0;
   private readonly pending = new Map<
@@ -95,7 +119,15 @@ export class JsonRpcClient {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
-      if (message.error) pending.reject(message.error);
+      if (message.error) {
+        const error = message.error as { code?: unknown; message?: unknown };
+        pending.reject(
+          new CodexJsonRpcError(
+            typeof error.code === 'number' ? error.code : undefined,
+            typeof error.message === 'string' ? error.message : 'JSON_RPC_ERROR',
+          ),
+        );
+      }
       else pending.resolve(message.result);
     } catch {
       /* malformed protocol messages are ignored at this boundary */
