@@ -5,6 +5,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const session = (id: string, workspacePath: string) => ({
   id,
@@ -81,6 +82,7 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
     () => {},
   );
 
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.addStyleTag({ content: 'html { font-size: 200% !important; }' });
 
@@ -191,6 +193,7 @@ test('adds and removes Plan from live events without stealing focus, then isolat
     () => {},
   );
 
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
   const navigation = page.getByLabel('Primary');
   const chat = navigation.getByRole('button', { name: 'Chat' });

@@ -54,13 +54,16 @@ export class SqliteAuthorizationStore implements AuthorizationRepository {
         .exec(`CREATE TABLE IF NOT EXISTS auth_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL, rp_id TEXT NOT NULL, user_handle BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS auth_devices (id TEXT PRIMARY KEY, credential_id TEXT NOT NULL UNIQUE, public_key BLOB NOT NULL, counter INTEGER NOT NULL, transports_json TEXT NOT NULL, device_type TEXT NOT NULL, backed_up INTEGER NOT NULL CHECK(backed_up IN (0,1)), nickname TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, version INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS auth_ceremonies (token_hash TEXT PRIMARY KEY, purpose TEXT NOT NULL, challenge BLOB NOT NULL, expected_origin TEXT NOT NULL, rp_id TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT, ticket_hash TEXT);
-CREATE TABLE IF NOT EXISTS auth_tickets (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, consumed_at TEXT);
+CREATE TABLE IF NOT EXISTS auth_tickets (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, consumed_at TEXT, creator_session_hash TEXT);
 CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id TEXT REFERENCES auth_devices(id) ON DELETE SET NULL, expires_at TEXT NOT NULL, revoked_at TEXT);`);
       const ceremonyColumns = this.db
         .prepare("SELECT name FROM pragma_table_info('auth_ceremonies')")
         .all() as { name: string }[];
       if (!ceremonyColumns.some((column) => column.name === 'ticket_hash'))
         this.db.exec('ALTER TABLE auth_ceremonies ADD COLUMN ticket_hash TEXT');
+      const ticketColumns = this.db.prepare("SELECT name FROM pragma_table_info('auth_tickets')").all() as { name: string }[];
+      if (!ticketColumns.some((column) => column.name === 'creator_session_hash'))
+        this.db.exec('ALTER TABLE auth_tickets ADD COLUMN creator_session_hash TEXT');
       const settings = this.db
         .prepare('SELECT rp_id FROM auth_settings WHERE singleton = 1')
         .get() as { rp_id: string } | undefined;
@@ -168,13 +171,24 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     expectedVersion: number,
     nickname: AuthorizedDevice['nickname'],
   ): 'renamed' | 'stale' | 'notFound' {
-    const result = this.db
-      .prepare(
-        'UPDATE auth_devices SET nickname = ?, version = version + 1 WHERE id = ? AND version = ?',
-      )
-      .run(nickname, id, expectedVersion);
-    if (result.changes) return 'renamed';
-    return this.findDevice(id) ? 'stale' : 'notFound';
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db
+        .prepare(
+          'UPDATE auth_devices SET nickname = ?, version = version + 1 WHERE id = ? AND version = ?',
+        )
+        .run(nickname, id, expectedVersion);
+      if (result.changes) {
+        this.db.exec('COMMIT');
+        return 'renamed';
+      }
+      const outcome = this.findDevice(id) ? 'stale' : 'notFound';
+      this.db.exec('COMMIT');
+      return outcome;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   advanceCounter(
     id: AuthorizedDevice['id'],
@@ -300,6 +314,36 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       .prepare('INSERT INTO auth_tickets (token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)')
       .run(hash(token), ticket.expiresAt);
   }
+  issueEnrollmentTicket(token: EnrollmentTicket['id'], creatorSession: AuthorizationSession['id'], expiresAt: string): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const creator = hash(creatorSession);
+      this.db.prepare('DELETE FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL').run(creator);
+      this.db.prepare('INSERT INTO auth_tickets (token_hash, expires_at, consumed_at, creator_session_hash) VALUES (?, ?, NULL, ?)').run(hash(token), expiresAt, creator);
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  enrollmentTicketStatus(creatorSession: AuthorizationSession['id'], now: string): 'none' | 'pending' | 'used' | 'expired' {
+    const row = this.db
+      .prepare('SELECT expires_at, consumed_at FROM auth_tickets WHERE creator_session_hash = ? ORDER BY rowid DESC LIMIT 1')
+      .get(hash(creatorSession)) as { expires_at: string; consumed_at: string | null } | undefined;
+    if (!row) return 'none';
+    if (row.consumed_at) return 'used';
+    return row.expires_at > now ? 'pending' : 'expired';
+  }
+  cancelEnrollmentTicket(creatorSession: AuthorizationSession['id'], now: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db
+        .prepare('DELETE FROM auth_tickets WHERE rowid = (SELECT rowid FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY rowid DESC LIMIT 1)')
+        .run(hash(creatorSession), now);
+      this.db.exec('COMMIT');
+      return result.changes === 1;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   consumeTicket(token: EnrollmentTicket['id'], now: string): boolean {
     return this.consume('auth_tickets', token, now);
   }
@@ -307,9 +351,9 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     return Boolean(
       this.db
         .prepare(
-          'SELECT 1 FROM auth_tickets WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?',
+          'SELECT 1 FROM auth_tickets t WHERE t.token_hash = ? AND t.consumed_at IS NULL AND t.expires_at > ? AND (t.creator_session_hash IS NULL OR EXISTS (SELECT 1 FROM auth_sessions s WHERE s.token_hash = t.creator_session_hash AND s.revoked_at IS NULL AND s.expires_at > ?))',
         )
-        .get(hash(token), now),
+        .get(hash(token), now, now),
     );
   }
   completeRegistration(input: {
@@ -340,9 +384,9 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       if (ceremony.ticket_hash) {
         const result = this.db
           .prepare(
-            'UPDATE auth_tickets SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?',
+            'UPDATE auth_tickets SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? AND (creator_session_hash IS NULL OR EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = auth_tickets.creator_session_hash AND revoked_at IS NULL AND expires_at > ?))',
           )
-          .run(input.now, ceremony.ticket_hash, input.now);
+          .run(input.now, ceremony.ticket_hash, input.now, input.now);
         if (result.changes !== 1) {
           this.db.exec('COMMIT');
           return 'ticketUnavailable';

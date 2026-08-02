@@ -32,6 +32,7 @@ describe('DeviceNickname', () => {
 
   it('refuses empty and overlong nicknames', () => {
     expect(() => deviceNickname('   ')).toThrow(new AuthorizationDomainError('DEVICE_NICKNAME_INVALID'));
+    expect(() => deviceNickname(' \u00a0 ')).toThrow(new AuthorizationDomainError('DEVICE_NICKNAME_INVALID'));
     expect(() => deviceNickname('a'.repeat(65))).toThrow(new AuthorizationDomainError('DEVICE_NICKNAME_INVALID'));
   });
 });

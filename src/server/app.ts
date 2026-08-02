@@ -79,6 +79,12 @@ import { registerLoginOptions } from './features/auth/login/options/endpoint.js'
 import { registerLoginVerification } from './features/auth/login/verify/endpoint.js';
 import { registerAuthStatus } from './features/auth/status/endpoint.js';
 import { registerLogout } from './features/auth/logout/endpoint.js';
+import { registerListAuthorizedDevices } from './features/auth/devices/list/endpoint.js';
+import { registerRenameAuthorizedDevice } from './features/auth/devices/rename/endpoint.js';
+import { registerRevokeAuthorizedDevice } from './features/auth/devices/revoke/endpoint.js';
+import { registerCreateEnrollmentTicket } from './features/auth/enrollment-tickets/endpoint.js';
+import { registerEnrollmentTicketStatus } from './features/auth/enrollment-tickets/status/endpoint.js';
+import { registerCancelEnrollmentTicket } from './features/auth/enrollment-tickets/cancel/endpoint.js';
 import type {
   AuthorizationRepository,
   Clock,
@@ -199,6 +205,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerLoginVerification(app, deps.auth);
     registerAuthStatus(app, deps.auth);
     registerLogout(app, deps.auth);
+    registerListAuthorizedDevices(app, deps.auth);
+    registerRenameAuthorizedDevice(app, deps.auth);
+    registerRevokeAuthorizedDevice(app, deps.auth);
+    registerCreateEnrollmentTicket(app, deps.auth);
+    registerEnrollmentTicketStatus(app, deps.auth);
+    registerCancelEnrollmentTicket(app, deps.auth);
   }
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   if (deps.recentThreads)

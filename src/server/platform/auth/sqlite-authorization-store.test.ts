@@ -534,7 +534,9 @@ describe('SqliteAuthorizationStore', () => {
     const now = '2026-08-02T00:00:00.000Z';
     const expiry = '2026-08-03T00:00:00.000Z';
     const ticket = enrollmentTicketId('shared-live-ticket');
-    first.saveTicket(ticket, { expiresAt: expiry });
+    const creator = authorizationSessionId('ticket-creator-session');
+    first.saveSession(creator, { deviceId: authorizedDeviceId('one'), expiresAt: expiry });
+    first.issueEnrollmentTicket(ticket, creator, expiry);
     const firstCeremony = passkeyCeremonyId('ticket-first');
     const secondCeremony = passkeyCeremonyId('ticket-second');
     for (const ceremony of [firstCeremony, secondCeremony])
@@ -571,9 +573,63 @@ describe('SqliteAuthorizationStore', () => {
       }),
     ).toBe('ticketUnavailable');
     expect(second.readCeremony(secondCeremony, now)).not.toBeNull();
-    expect(first.listAuthorizedDevices()).toHaveLength(2);
+    expect(first.listAuthorizedDevices().map((device) => device.id)).toEqual([
+      authorizedDeviceId('one'),
+      authorizedDeviceId('two'),
+    ]);
+    expect(second.sessionDevice(authorizationSessionId('ticket-one'), now)).toBe(authorizedDeviceId('two'));
+    expect(second.sessionDevice(authorizationSessionId('ticket-two'), now)).toBeNull();
     first.close();
     second.close();
+  });
+
+  it('replaces a creator session ticket and fails closed when that session is revoked before atomic registration', async () => {
+    const directory = await home();
+    const store = new SqliteAuthorizationStore(directory, rp);
+    store.initializeOwner(owner().userHandle);
+    store.claimFirstDevice(owner(), device('one'));
+    const now = '2026-08-02T00:00:00.000Z';
+    const expiry = '2026-08-02T00:10:00.000Z';
+    const creator = authorizationSessionId('creator-session-secret');
+    store.saveSession(creator, { deviceId: authorizedDeviceId('one'), expiresAt: expiry });
+    const replaced = enrollmentTicketId('replaced-ticket-secret');
+    const live = enrollmentTicketId('live-ticket-secret');
+    store.issueEnrollmentTicket(replaced, creator, expiry);
+    store.issueEnrollmentTicket(live, creator, expiry);
+    expect(store.ticketAvailable(replaced, now)).toBe(false);
+    expect(store.ticketAvailable(live, now)).toBe(true);
+    const ceremony = passkeyCeremonyId('creator-revoked-ceremony');
+    store.saveCeremony(ceremony, { purpose: 'registration', challenge: new Uint8Array([3]), expectedOrigin: rp.publicOrigin, rpId: rp.rpId, expiresAt: expiry, enrollmentTicket: live });
+    expect(store.revokeSession(creator, now)).toBe(true);
+    expect(store.completeRegistration({ ceremony, now, device: device('two'), session: { id: authorizationSessionId('enrolled-session-secret'), deviceId: authorizedDeviceId('two'), expiresAt: expiry } })).toBe('ticketUnavailable');
+    expect(store.listAuthorizedDevices()).toHaveLength(1);
+    store.close();
+    const database = await readFile(authorizationDatabasePath(directory));
+    expect(database.includes('live-ticket-secret')).toBe(false);
+    expect(database.includes('creator-session-secret')).toBe(false);
+  });
+
+  it('shares pending, expired, used, and cancelled creator-ticket status across stores', async () => {
+    const directory = await home();
+    const first = new SqliteAuthorizationStore(directory, rp);
+    const second = new SqliteAuthorizationStore(directory, rp);
+    first.initializeOwner(owner().userHandle);
+    first.claimFirstDevice(owner(), device('one'));
+    const creator = authorizationSessionId('status-creator-secret');
+    const now = '2026-08-02T00:00:00.000Z';
+    first.saveSession(creator, { deviceId: authorizedDeviceId('one'), expiresAt: '2026-08-03T00:00:00.000Z' });
+    first.issueEnrollmentTicket(enrollmentTicketId('status-pending-secret'), creator, '2026-08-02T00:10:00.000Z');
+    expect(second.enrollmentTicketStatus(creator, now)).toBe('pending');
+    expect(second.cancelEnrollmentTicket(creator, now)).toBe(true);
+    expect(first.enrollmentTicketStatus(creator, now)).toBe('none');
+    first.issueEnrollmentTicket(enrollmentTicketId('status-expired-secret'), creator, '2026-08-01T00:00:00.000Z');
+    expect(second.enrollmentTicketStatus(creator, now)).toBe('expired');
+    first.issueEnrollmentTicket(enrollmentTicketId('status-used-secret'), creator, '2026-08-03T00:00:00.000Z');
+    const ceremony = passkeyCeremonyId('status-used-ceremony');
+    first.saveCeremony(ceremony, { purpose: 'registration', challenge: new Uint8Array([1]), expectedOrigin: rp.publicOrigin, rpId: rp.rpId, expiresAt: '2026-08-03T00:00:00.000Z', enrollmentTicket: enrollmentTicketId('status-used-secret') });
+    expect(first.completeRegistration({ ceremony, now, device: device('two'), session: { id: authorizationSessionId('status-enrolled-secret'), deviceId: authorizedDeviceId('two'), expiresAt: '2026-08-03T00:00:00.000Z' } })).toBe('registered');
+    expect(second.enrollmentTicketStatus(creator, now)).toBe('used');
+    first.close(); second.close();
   });
 
   it('refuses an empty injected owner handle', async () => {

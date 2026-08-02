@@ -14,6 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     weeklyQuotaRemaining = null,
     onthemechange,
     onlock = () => {},
+    ondevices = () => {},
   }: {
     theme: ThemePreference;
     sessionPath?: string | null;
@@ -21,6 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     weeklyQuotaRemaining?: number | null;
     onthemechange: (theme: ThemePreference) => void;
     onlock?: () => void;
+    ondevices?: (trigger: HTMLButtonElement) => void;
   } = $props();
 </script>
 
@@ -85,5 +87,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <option value="dark">Dark</option>
     </select>
   </label>
+  <button type="button" popovertarget="configuration-panel" popovertargetaction="hide" onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button>
   <button type="button" class="lock-relay" popovertarget="configuration-panel" popovertargetaction="hide" onclick={onlock}>Lock Gestalt Mobile</button>
 </div>

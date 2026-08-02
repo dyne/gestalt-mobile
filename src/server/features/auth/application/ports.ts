@@ -29,6 +29,9 @@ export interface AuthorizationRepository {
   consumeCeremony(token: PasskeyCeremony['id'], now: string): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null;
   readCeremony(token: PasskeyCeremony['id'], now: string): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null;
   saveTicket(token: EnrollmentTicket['id'], ticket: Omit<EnrollmentTicket, 'id'>): void;
+  issueEnrollmentTicket(token: EnrollmentTicket['id'], creatorSession: AuthorizationSession['id'], expiresAt: string): void;
+  enrollmentTicketStatus(creatorSession: AuthorizationSession['id'], now: string): 'none' | 'pending' | 'used' | 'expired';
+  cancelEnrollmentTicket(creatorSession: AuthorizationSession['id'], now: string): boolean;
   consumeTicket(token: EnrollmentTicket['id'], now: string): boolean;
   ticketAvailable(token: EnrollmentTicket['id'], now: string): boolean;
   completeRegistration(input: { ceremony: PasskeyCeremony['id']; now: string; device: AuthorizedDevice; session: AuthorizationSession }): 'registered' | 'bootstrapAlreadyClaimed' | 'ticketUnavailable' | 'duplicateCredential' | 'ceremonyUnavailable';

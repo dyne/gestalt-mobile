@@ -6,6 +6,7 @@
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-toast-evidence';
 const viewports = [
@@ -17,6 +18,7 @@ const fontScales = [100, 200] as const;
 const variants = ['error', 'stacked'] as const;
 
 test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
+test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
 async function openEvidence(
   page: Page,

@@ -10,6 +10,7 @@ export type AuthState =
   | { kind: 'checking' }
   | { kind: 'bootstrap'; publicOrigin: string }
   | { kind: 'locked'; message?: string }
+  | { kind: 'enrollment'; publicOrigin: string }
   | { kind: 'authenticated' }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
@@ -39,7 +40,7 @@ function browserSupportsPasskeys(): boolean {
 }
 
 export function createAuthStateMachine(client: AuthClient, setState: (state: AuthState) => void) {
-  async function check(): Promise<AuthState> {
+  async function check(enrollmentTicket?: string): Promise<AuthState> {
     setState({ kind: 'checking' });
     if (!browserSupportsPasskeys()) {
       const next: AuthState = {
@@ -56,7 +57,9 @@ export function createAuthStateMachine(client: AuthClient, setState: (state: Aut
           ? { kind: 'authenticated' }
           : status === 'bootstrap'
             ? { kind: 'bootstrap', publicOrigin }
-            : { kind: 'locked' };
+            : enrollmentTicket
+              ? { kind: 'enrollment', publicOrigin }
+              : { kind: 'locked' };
       setState(next);
       return next;
     } catch {

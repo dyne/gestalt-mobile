@@ -6,6 +6,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-sessions-profile-evidence';
 const viewports = [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 768, height: 1024 }] as const;
@@ -38,6 +39,7 @@ async function open(page: Page, theme: string, scale: number, state: (typeof sta
     if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 });
     return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ version: 1, name: 'new-profile', path: '/profiles/new-profile.yml', skills: skills.skills.map(({ name, path, effectiveEnabled }) => ({ name, path, enabled: effectiveEnabled })) }) });
   });
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${scale}% !important; }` });
   await expect(page.getByLabel('Primary').getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);

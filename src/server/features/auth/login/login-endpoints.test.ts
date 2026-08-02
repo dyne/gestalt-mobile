@@ -64,6 +64,8 @@ function repo(overrides: Partial<AuthorizationRepository> = {}): AuthorizationRe
     consumeCeremony: () => null,
     readCeremony: () => ceremony,
     saveTicket: () => {},
+    issueEnrollmentTicket: () => {},
+    enrollmentTicketStatus: () => 'none', cancelEnrollmentTicket: () => false,
     consumeTicket: () => false,
     ticketAvailable: () => false,
     completeRegistration: () => 'ceremonyUnavailable',

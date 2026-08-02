@@ -6,6 +6,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-filesystem-tree-evidence';
 
@@ -34,6 +35,7 @@ async function openEvidence(
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('requestfailed', (request) => requestFailures.push(request.url()));
+  await mockAuthenticatedStatus(page);
   await page.addInitScript(
     ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
     { selectedTheme: theme },

@@ -20,9 +20,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     canonicalOrigin: string;
     onAuthenticated: () => void;
     onLocked: (message: string) => void;
+    enrollmentTicket?: string;
   };
 
-  let { client, canonicalOrigin, onAuthenticated, onLocked }: Props = $props();
+  let { client, canonicalOrigin, onAuthenticated, onLocked, enrollmentTicket }: Props = $props();
   let nickname = $state('');
   let feedback = $state<string | null>(null);
   let submitting = $state(false);
@@ -65,7 +66,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onMount(() => {
-    void bootstrapQrDataUrl(canonicalOrigin)
+    if (!enrollmentTicket) void bootstrapQrDataUrl(canonicalOrigin)
       .then((value) => {
         if (mounted) qrDataUrl = value;
       })
@@ -109,7 +110,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     submitting = true;
     feedback = null;
     try {
-      const { options } = await client.registrationOptions();
+      const { options } = await client.registrationOptions(enrollmentTicket);
       if (!mounted || !enrollmentAvailable) return;
       const response = await startRegistration({ optionsJSON: options as PublicKeyCredentialCreationOptionsJSON });
       if (!mounted || !enrollmentAvailable) return;
@@ -133,8 +134,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <main class="enrollment" aria-live="polite">
   <section class="card" aria-labelledby="enrollment-title">
     <p class="brand">Gestalt / Dyne</p>
-    <h1 id="enrollment-title">Authorize the first device</h1>
-    <p class="warning"><strong>Trust-on-first-use:</strong> anyone who can reach an empty relay instance could claim first-device access. Enroll this device before exposing the instance, and confirm you are at the canonical address before continuing.</p>
+    <h1 id="enrollment-title">{enrollmentTicket ? 'Authorize this device' : 'Authorize the first device'}</h1>
+    {#if enrollmentTicket}
+      <p class="warning">This one-time link authorizes one new passkey. Choose a nickname and complete the passkey prompt before it expires.</p>
+    {:else}
+      <p class="warning"><strong>Trust-on-first-use:</strong> anyone who can reach an empty relay instance could claim first-device access. Enroll this device before exposing the instance, and confirm you are at the canonical address before continuing.</p>
+    {/if}
     <label for="device-nickname">Device nickname</label>
     <input id="device-nickname" name="device-nickname" autocomplete="nickname" bind:value={nickname} required enterkeyhint="done" />
     <button class="authorize" type="button" disabled={submitting || !supported()} onclick={() => void authorize()}>
@@ -142,7 +147,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </button>
     {#if !supported()}<p class="error">Passkeys require a secure browser on this device.</p>{/if}
     {#if feedback}<p class="feedback">{feedback}</p>{/if}
-    <div class="handoff">
+    {#if !enrollmentTicket}<div class="handoff">
       {#if qrDataUrl}<img src={qrDataUrl} alt="QR code for the first-device setup link" />{/if}
       <div>
         <h2>Continue on your phone</h2>
@@ -150,7 +155,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <a href={link}>{link}</a>
         <button type="button" class="copy" onclick={() => void copyLink()}>Copy setup link</button>
       </div>
-    </div>
+    </div>{/if}
   </section>
 </main>
 

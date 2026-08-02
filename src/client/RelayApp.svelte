@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
 
-  let { authorizedFetch, onlock }: { authorizedFetch: typeof fetch; onlock: () => void } = $props();
+  let { authorizedFetch, onlock, oncreatepasskey = () => {} }: { authorizedFetch: typeof fetch; onlock: () => void; oncreatepasskey?: (ticket: string) => void } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
@@ -78,8 +78,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './features/sessions/session-list.js';
   import SkillsView from './features/skills/SkillsView.svelte';
   import { SkillsState } from './features/skills/skills-state.js';
+  import AuthorizedDevicesView from './features/auth/AuthorizedDevicesView.svelte';
+  import { createDeviceClient } from './features/auth/device-client.js';
 
   let tab = $state<Tab>('sessions');
+  let devicesOpen = $state(false);
   let status = $state('Loading relay…');
   type ThemePreference = 'system' | 'light' | 'dark';
   let theme = $state<ThemePreference>('system');
@@ -154,6 +157,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const deviceClient = createDeviceClient((input, init) => authorizedFetch(input, init));
   const planController = createPlanController(
     { getPlan: relay.getPlan, closePlan: relay.closePlan },
     (next) => (planState = next),
@@ -933,18 +937,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpointerup={completeTabSwipe}
     onpointercancel={cancelTabSwipe}
   >
-    <AppHeader
-      {theme}
-      sessionPath={tab === 'chat'
-        ? displayWorkspacePath(
-            sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
-          )
-        : null}
-      sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
-      weeklyQuotaRemaining={weeklyQuotaRemainingValue}
-      {onlock}
-      onthemechange={setTheme}
-    />
+    {#if !devicesOpen}<AppHeader
+        {theme}
+        sessionPath={tab === 'chat'
+          ? displayWorkspacePath(
+              sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
+            )
+          : null}
+        sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
+        weeklyQuotaRemaining={weeklyQuotaRemainingValue}
+        {onlock}
+        ondevices={() => (devicesOpen = true)}
+        onthemechange={setTheme}
+      />{/if}
+    {#if devicesOpen}
+      <AuthorizedDevicesView
+        client={deviceClient}
+        onclose={() => { devicesOpen = false; void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus()); }}
+        {onlock}
+        oncreatepasskey={(ticket) => oncreatepasskey(ticket)}
+      />
+    {:else}
     {#if recoveryNotice}
       <div class="recovery-notice" role="status" aria-live="polite" aria-atomic="true">
         <span>{recoveryNotice}</span>
@@ -1066,6 +1079,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       focusTab={navigationFocus}
       onselect={selectTab}
     />
+    {/if}
   </main>
 {/if}
 {#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}

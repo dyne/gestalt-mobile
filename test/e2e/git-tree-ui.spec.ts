@@ -6,6 +6,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-git-tree-evidence';
 const viewports = [
@@ -99,6 +100,7 @@ async function openGit(
     if (message.type() === 'error') diagnostics.consoleErrors.push(message.text());
   });
   page.on('requestfailed', (request) => diagnostics.requestFailures.push(request.url()));
+  await mockAuthenticatedStatus(page);
   await page.addInitScript(
     ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
     { selectedTheme: theme },
@@ -135,14 +137,33 @@ async function expectUsableLayout(page: Page): Promise<void> {
     const gitTree = document.querySelector<HTMLElement>('.git-tree');
     const clone = document.querySelector<HTMLElement>('.clone-form');
     const details = document.querySelector<HTMLElement>('.repository-details');
-    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')].map((button) => {
-      const box = button.getBoundingClientRect();
-      return {
-        name: button.getAttribute('aria-label') ?? button.textContent?.trim(),
-        width: box.width,
-        height: box.height,
-      };
-    });
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      .filter((button) => {
+        const box = button.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0) return false;
+        for (let element: HTMLElement | null = button; element; element = element.parentElement) {
+          const style = getComputedStyle(element);
+          if (
+            element.hidden ||
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.visibility === 'collapse' ||
+            style.contentVisibility === 'hidden' ||
+            style.opacity === '0'
+          ) {
+            return false;
+          }
+        }
+        return true;
+      })
+      .map((button) => {
+        const box = button.getBoundingClientRect();
+        return {
+          name: button.getAttribute('aria-label') ?? button.textContent?.trim(),
+          width: box.width,
+          height: box.height,
+        };
+      });
     const offenders = [...document.querySelectorAll<HTMLElement>('body *')]
       .map((element) => ({
         name: `${element.tagName.toLowerCase()}.${element.className}`,

@@ -17,3 +17,7 @@ export async function bootstrapQrDataUrl(canonicalOrigin: string): Promise<strin
     width: 256,
   });
 }
+
+export async function enrollmentQrDataUrl(link: string): Promise<string> {
+  return QRCode.toDataURL(link, { errorCorrectionLevel: 'M', margin: 1, width: 256 });
+}
