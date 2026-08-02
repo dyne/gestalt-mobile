@@ -14,6 +14,7 @@ export function registerStartTurn(
     find(id: string): RelaySessionSnapshot | null;
     start(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
     save(session: RelaySessionSnapshot): void;
+    onStarted?(session: RelaySessionSnapshot): void;
   },
 ): void {
   app.post('/api/sessions/:id/turns', async (request, reply) => {
@@ -25,6 +26,7 @@ export function registerStartTurn(
       return reply.code(409).send({ code: 'SESSION_NOT_READY' });
     const started = await deps.start(session, text);
     deps.save(started);
+    deps.onStarted?.(started);
     return reply.code(202).send(started);
   });
 }

@@ -50,6 +50,11 @@ export class PlanMeasurementRefresh {
     for (const sessionId of this.active.keys()) this.stop(sessionId);
   }
 
+  refreshNow(sessionId: string): void {
+    this.clearTimer(sessionId);
+    void this.refresh(sessionId);
+  }
+
   private schedule(sessionId: string): void {
     this.timers.set(
       sessionId,

@@ -69,6 +69,23 @@ describe('PlanMeasurementRefresh', () => {
     vi.useRealTimers();
   });
 
+  it('refreshes immediately on demand and restarts its cadence', async () => {
+    vi.useFakeTimers();
+    const checkpoints: string[] = [];
+    const refresh = new PlanMeasurementRefresh(
+      async () => ({ capturedAt: 'now', weeklyRemainingPercent: 80, threadTokens: 10 }),
+      async (_path, step) => { checkpoints.push(step); },
+    );
+    refresh.accept('one', active());
+    refresh.refreshNow('one');
+    await vi.runAllTicks();
+    expect(checkpoints).toEqual(['l2']);
+    await vi.advanceTimersByTimeAsync(PLAN_MEASUREMENT_REFRESH_MS);
+    expect(checkpoints).toEqual(['l2', 'l2']);
+    refresh.stopAll();
+    vi.useRealTimers();
+  });
+
   it('keeps future refreshes alive when a snapshot or helper call fails', async () => {
     vi.useFakeTimers();
     let attempts = 0;

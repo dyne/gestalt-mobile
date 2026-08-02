@@ -154,6 +154,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               sessions.save(
                 RelaySession.rehydrate(session).completeTurn(turnId, occurredAt).snapshot,
               );
+            planMeasurementRefresh?.refreshNow(sessionId);
           }
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
@@ -297,6 +298,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       startTurn: runtime
         ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
         : undefined,
+      onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
       models,
       readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
       currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,

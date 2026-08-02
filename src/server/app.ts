@@ -86,6 +86,7 @@ export type AppDependencies = {
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
     startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
+    onTurnStarted?(session: RelaySessionSnapshot): void;
     models?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;
     remove?(id: string): void;
@@ -185,6 +186,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         find: deps.sessionRoutes.find,
         start: deps.sessionRoutes.startTurn,
         save: deps.sessionRoutes.save,
+        onStarted: deps.sessionRoutes.onTurnStarted,
       });
     if (deps.sessionRoutes.models)
       registerSelectModel(app, {
