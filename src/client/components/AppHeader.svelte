@@ -13,12 +13,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionModel = null,
     weeklyQuotaRemaining = null,
     onthemechange,
+    onlock = () => {},
   }: {
     theme: ThemePreference;
     sessionPath?: string | null;
     sessionModel?: string | null;
     weeklyQuotaRemaining?: number | null;
     onthemechange: (theme: ThemePreference) => void;
+    onlock?: () => void;
   } = $props();
 </script>
 
@@ -83,4 +85,5 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <option value="dark">Dark</option>
     </select>
   </label>
+  <button type="button" class="lock-relay" popovertarget="configuration-panel" popovertargetaction="hide" onclick={onlock}>Lock Gestalt Mobile</button>
 </div>
