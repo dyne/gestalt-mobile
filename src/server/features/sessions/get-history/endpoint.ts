@@ -37,7 +37,15 @@ export function registerGetHistory(
           code: 'SESSION_HISTORY_UNAVAILABLE',
           retryable: true,
         });
-      throw error;
+      return reply.code(502).type('application/problem+json').send({
+        type: 'urn:gestalt-mobile:error:session-history-read-failed',
+        title: 'Session history read failed',
+        status: 502,
+        detail:
+          'GET /api/sessions/:id/history reached the relay, but Codex could not read this session history. The Codex process may have stopped during recovery; open the session again and inspect the running relay output if it persists.',
+        code: 'SESSION_HISTORY_READ_FAILED',
+        retryable: true,
+      });
     }
     const items: ChatItem[] = toChatItems(history.turns);
     return reply.send({

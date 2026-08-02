@@ -63,4 +63,24 @@ describe('GET /api/sessions/:id/history', () => {
     });
     await app.close();
   });
+
+  it('reports a Codex history-read failure without leaking its raw error', async () => {
+    const app = fastify();
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      read: async () => {
+        throw new Error('upstream detail that must not reach the browser');
+      },
+      currentSequence: () => 0,
+    });
+    const response = await app.inject({ method: 'GET', url: '/api/sessions/s/history' });
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: 'SESSION_HISTORY_READ_FAILED',
+      retryable: true,
+      detail: expect.stringContaining('GET /api/sessions/:id/history'),
+    });
+    expect(response.body).not.toContain('upstream detail');
+    await app.close();
+  });
 });
