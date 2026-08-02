@@ -294,6 +294,54 @@ describe('login endpoints', () => {
     });
     await instance.close();
   });
+  it('accepts the browser authentication response shape and resolves its base64url credential ID', async () => {
+    const credentialId = webAuthnCredentialId('Y3JlZGVudGlhbC1mcm9tLWJyb3dzZXI');
+    const browserDevice = { ...device, credentialId, publicKey: new Uint8Array([7, 8]) };
+    let resolved: unknown;
+    let verified: unknown;
+    const instance = await app(
+      repo({
+        findDeviceByCredentialId: (id) => {
+          resolved = id;
+          return id === credentialId ? browserDevice : null;
+        },
+      }),
+      {
+        ...webauthn,
+        verifyAuthentication: async (input) => {
+          verified = input;
+          return { credentialId, counter: 0, userVerified: true };
+        },
+      },
+    );
+    const response = await instance.inject({
+      method: 'POST',
+      url: '/api/auth/login/verify',
+      headers: { cookie: 'gestalt_mobile_login=login' },
+      payload: {
+        response: {
+          id: credentialId,
+          rawId: credentialId,
+          type: 'public-key',
+          response: {
+            clientDataJSON: 'Y2xpZW50LWRhdGE',
+            authenticatorData: 'YXV0aGVudGljYXRvci1kYXRh',
+            signature: 'c2lnbmF0dXJl',
+            userHandle: 'bG9jYWwtb3duZXI',
+          },
+          clientExtensionResults: {},
+          authenticatorAttachment: 'platform',
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(resolved).toBe(credentialId);
+    expect(verified).toMatchObject({
+      response: { id: credentialId, authenticatorAttachment: 'platform' },
+      credential: { id: credentialId, publicKey: browserDevice.publicKey, counter: 0 },
+    });
+    await instance.close();
+  });
   it('returns one non-enumerating failure without mutation or cookie for unknown, expired, replayed, and UV failures', async () => {
     let writes = 0;
     const instance = await app(

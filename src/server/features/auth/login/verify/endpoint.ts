@@ -28,6 +28,7 @@ const responseSchema = z
         userHandle: z.string().nullable().optional(),
       })
       .strict(),
+    authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
     clientExtensionResults: z.record(z.string(), z.unknown()),
   })
   .strict();
