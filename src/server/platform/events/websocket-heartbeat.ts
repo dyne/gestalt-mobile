@@ -13,12 +13,17 @@ type HeartbeatSocket = {
 export function installWebSocketHeartbeat(
   socket: HeartbeatSocket,
   intervalMs = 25_000,
+  isAuthorized: () => boolean = () => true,
 ): () => void {
   let alive = true;
   socket.on('pong', () => {
     alive = true;
   });
   const interval = setInterval(() => {
+    if (!isAuthorized()) {
+      socket.terminate();
+      return;
+    }
     if (!alive) {
       socket.terminate();
       return;

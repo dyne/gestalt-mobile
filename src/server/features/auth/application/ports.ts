@@ -25,12 +25,17 @@ export interface AuthorizationRepository {
   renameDevice(id: AuthorizedDevice['id'], expectedVersion: number, nickname: DeviceNickname): 'renamed' | 'stale' | 'notFound';
   advanceCounter(id: AuthorizedDevice['id'], expectedCounter: number, expectedVersion: number, nextCounter: number, usedAt: string): boolean;
   revokeDevice(id: AuthorizedDevice['id'], revokedAt: string): 'revoked' | 'finalDevice' | 'notFound';
-  saveCeremony(token: PasskeyCeremony['id'], ceremony: Omit<PasskeyCeremony, 'id'> & { challenge: Uint8Array; expectedOrigin: string; rpId: string }): void;
+  saveCeremony(token: PasskeyCeremony['id'], ceremony: Omit<PasskeyCeremony, 'id'> & { challenge: Uint8Array; expectedOrigin: string; rpId: string; enrollmentTicket?: EnrollmentTicket['id'] }): void;
   consumeCeremony(token: PasskeyCeremony['id'], now: string): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null;
+  readCeremony(token: PasskeyCeremony['id'], now: string): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null;
   saveTicket(token: EnrollmentTicket['id'], ticket: Omit<EnrollmentTicket, 'id'>): void;
   consumeTicket(token: EnrollmentTicket['id'], now: string): boolean;
+  ticketAvailable(token: EnrollmentTicket['id'], now: string): boolean;
+  completeRegistration(input: { ceremony: PasskeyCeremony['id']; now: string; device: AuthorizedDevice; session: AuthorizationSession }): 'registered' | 'bootstrapAlreadyClaimed' | 'ticketUnavailable' | 'duplicateCredential' | 'ceremonyUnavailable';
+  completeAuthentication(input: { ceremony: PasskeyCeremony['id']; now: string; device: AuthorizedDevice; nextCounter: number; session: AuthorizationSession }): boolean;
   saveSession(token: AuthorizationSession['id'], session: Omit<AuthorizationSession, 'id'>): void;
   sessionDevice(token: AuthorizationSession['id'], now: string): AuthorizedDevice['id'] | null;
+  revokeSession(token: AuthorizationSession['id'], now: string): boolean;
   close(): void;
 }
 
@@ -44,6 +49,7 @@ export interface RandomBytes {
 
 export interface AuthorizationIdentifiers {
   sessionId(): AuthorizationSessionId;
+  deviceId(): AuthorizedDevice['id'];
 }
 
 export interface PasskeyOptions {
@@ -52,18 +58,40 @@ export interface PasskeyOptions {
   userVerification: 'required';
 }
 
+/** Plain application input; adapters own library-specific option shapes. */
+export type RegistrationOptionsInput = PasskeyOptions & {
+  rpName: string;
+  userHandle: Uint8Array;
+  excludeCredentialIds: readonly WebAuthnCredentialId[];
+};
+
 export interface PasskeyVerification {
   credentialId: WebAuthnCredentialId;
   counter: number;
   userVerified: boolean;
 }
 
+export type RegistrationVerification = PasskeyVerification & {
+  publicKey: Uint8Array;
+  transports: readonly ('ble' | 'hybrid' | 'internal' | 'nfc' | 'usb')[];
+  deviceType: 'singleDevice' | 'multiDevice';
+  backedUp: boolean;
+};
+
 export interface WebAuthnCeremonyService {
-  registrationOptions(input: PasskeyOptions): Promise<unknown>;
+  registrationOptions(input: RegistrationOptionsInput): Promise<unknown>;
   authenticationOptions(input: PasskeyOptions): Promise<unknown>;
-  verifyRegistration(input: unknown): Promise<PasskeyVerification>;
+  verifyRegistration(input: {
+    response: unknown;
+    challenge: Uint8Array;
+    expectedOrigin: string;
+    rpId: string;
+  }): Promise<RegistrationVerification>;
   verifyAuthentication(input: unknown): Promise<PasskeyVerification>;
 }
+
+/** Expected proof failure; adapters must translate library-specific failures to this type. */
+export class PasskeyVerificationError extends Error {}
 
 export interface AuthorizationSessionCookieDelivery {
   deliver(session: AuthorizationSession): void;

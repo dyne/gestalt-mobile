@@ -5,6 +5,7 @@
  */
 
 import fastifyStatic from '@fastify/static';
+import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyInstance } from 'fastify';
 
 import { registerGetHealth, type HealthReader } from './features/health/get-health/endpoint.js';
@@ -16,7 +17,11 @@ import { registerPullRebase } from './features/git/pull-rebase/endpoint.js';
 import { registerCheckoutBranch } from './features/git/checkout-branch/endpoint.js';
 import { registerCloneRepository } from './features/git/clone-repository/endpoint.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
-import type { ModelCatalog, ProfileCatalog, WorkspaceCatalog } from './features/catalog/application/ports.js';
+import type {
+  ModelCatalog,
+  ProfileCatalog,
+  WorkspaceCatalog,
+} from './features/catalog/application/ports.js';
 import { registerGetSession } from './features/sessions/get-session/endpoint.js';
 import { registerListSessions } from './features/sessions/list-sessions/endpoint.js';
 import {
@@ -43,6 +48,10 @@ import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js'
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
+import {
+  authorizationSessionDevice,
+  registerAuthorizationBoundary,
+} from './platform/http/authorization-boundary.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
 import type { RestoreSessionResult } from './platform/codex/session-runtime.js';
 import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
@@ -64,6 +73,18 @@ import {
   registerDeleteSkillProfile,
   type DeleteSkillProfileDependencies,
 } from './features/skills/delete-profile/endpoint.js';
+import { registerRegistrationOptions } from './features/auth/register/options/endpoint.js';
+import { registerRegistrationVerification } from './features/auth/register/verify/endpoint.js';
+import { registerLoginOptions } from './features/auth/login/options/endpoint.js';
+import { registerLoginVerification } from './features/auth/login/verify/endpoint.js';
+import { registerAuthStatus } from './features/auth/status/endpoint.js';
+import { registerLogout } from './features/auth/logout/endpoint.js';
+import type {
+  AuthorizationRepository,
+  Clock,
+  RandomBytes,
+  WebAuthnCeremonyService,
+} from './features/auth/application/ports.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -122,7 +143,11 @@ export type AppDependencies = {
   planMeasurementRoutes?: {
     exists(id: string): boolean;
     authorize(id: string, authorization: string | undefined): boolean;
-    read(id: string): Promise<import('./features/plans/application/measurement-snapshot.js').PlanMeasurementSnapshot>;
+    read(
+      id: string,
+    ): Promise<
+      import('./features/plans/application/measurement-snapshot.js').PlanMeasurementSnapshot
+    >;
   };
   interactions?: {
     resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
@@ -146,25 +171,52 @@ export type AppDependencies = {
     ListSkillProfilesDependencies &
     ReplaceSkillProfileDependencies &
     DeleteSkillProfileDependencies;
+  auth?: {
+    repository: AuthorizationRepository;
+    clock: Clock;
+    random: RandomBytes;
+    identifiers: import('./features/auth/application/ports.js').AuthorizationIdentifiers;
+    webauthn: WebAuthnCeremonyService;
+    relyingParty: { publicOrigin: string; rpId: string; rpName: string };
+  };
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
   const app = fastify({ logger: false });
+  await app.register(fastifyCookie);
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
+  if (deps.auth)
+    registerAuthorizationBoundary(app, {
+      repository: deps.auth.repository,
+      clock: deps.auth.clock,
+      publicOrigin: deps.auth.relyingParty.publicOrigin,
+    });
   registerGetHealth(app, deps.health);
+  if (deps.auth) {
+    registerRegistrationOptions(app, deps.auth);
+    registerRegistrationVerification(app, deps.auth);
+    registerLoginOptions(app, deps.auth);
+    registerLoginVerification(app, deps.auth);
+    registerAuthStatus(app, deps.auth);
+    registerLogout(app, deps.auth);
+  }
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   if (deps.recentThreads)
     registerListRecentThreads(app, {
       ...deps.recentThreads,
       metadata: (threadId) => {
-        const session = deps.sessionRoutes?.list?.().find((candidate) => candidate.threadId === threadId);
+        const session = deps.sessionRoutes
+          ?.list?.()
+          .find((candidate) => candidate.threadId === threadId);
         if (!session) return null;
         return {
           ...(session.model === undefined ? {} : { model: session.model }),
           ...(session.effectiveSkillSelection?.selectedProfileName === undefined
             ? {}
             : { skillProfile: session.effectiveSkillSelection.selectedProfileName }),
-          ...(session.lastOrgPlan === undefined ? {} : { orgPlanFilename: session.lastOrgPlan.filename }),
+          ...(session.lastOrgPlan === undefined
+            ? {}
+            : { orgPlanFilename: session.lastOrgPlan.filename }),
         };
       },
     });
@@ -246,7 +298,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
         now: deps.sessionRoutes.now,
       });
   }
-  if (deps.sessionEvents) registerSessionEvents(app, deps.sessionEvents);
+  if (deps.sessionEvents)
+    registerSessionEvents(app, {
+      ...deps.sessionEvents,
+      ...(deps.auth
+        ? {
+            publicOrigin: deps.auth.relyingParty.publicOrigin,
+            authorized: (cookieHeader: string | undefined) =>
+              authorizationSessionDevice(cookieHeader, deps.auth!) !== null,
+          }
+        : {}),
+    });
   if (deps.planRoutes) {
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);

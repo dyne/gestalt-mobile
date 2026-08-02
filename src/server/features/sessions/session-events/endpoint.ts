@@ -18,6 +18,10 @@ export function registerSessionEvents(
     exists(id: string): boolean;
     since(id: string, after: number): SessionEvent[];
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
+    /** Set only by the composition root when the authorization boundary is installed. */
+    publicOrigin?: string;
+    authorized?: (cookieHeader: string | undefined) => boolean;
+    heartbeatIntervalMs?: number;
   },
 ): void {
   const server = new WebSocketServer({ noServer: true });
@@ -25,7 +29,14 @@ export function registerSessionEvents(
     const url = new URL(request.url ?? '/', 'http://relay.invalid');
     const match = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
     const after = Number(url.searchParams.get('after') ?? '0');
-    if (!match || !Number.isSafeInteger(after) || after < 0 || !deps.exists(match[1])) {
+    if (
+      !match ||
+      !Number.isSafeInteger(after) ||
+      after < 0 ||
+      (deps.publicOrigin !== undefined && request.headers.origin !== deps.publicOrigin) ||
+      (deps.authorized !== undefined && !deps.authorized(request.headers.cookie)) ||
+      !deps.exists(match[1])
+    ) {
       socket.destroy();
       return;
     }
@@ -44,7 +55,11 @@ export function registerSessionEvents(
       }
       replay.events.forEach(send);
       const unsubscribe = deps.subscribe(sessionId, send);
-      const removeHeartbeat = installWebSocketHeartbeat(connection);
+      const removeHeartbeat = installWebSocketHeartbeat(
+        connection,
+        deps.heartbeatIntervalMs ?? 25_000,
+        () => deps.authorized?.(request.headers.cookie) ?? true,
+      );
       connection.on('close', () => {
         removeHeartbeat();
         unsubscribe();

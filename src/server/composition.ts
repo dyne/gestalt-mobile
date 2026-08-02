@@ -21,6 +21,8 @@ import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
+import { SimpleWebAuthnAdapter } from './platform/auth/simple-webauthn-adapter.js';
+import { authorizationSessionId, authorizedDeviceId } from './features/auth/domain/identifiers.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import { SqlitePendingInteractionStore } from './platform/persistence/sqlite-pending-interaction-store.js';
@@ -79,6 +81,7 @@ export type ComposeRelayAppOptions = {
   homeDirectory?: string;
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
+  authorizationClock?: () => Date;
   explicitSkillProfile?: SkillProfile;
   planMeasurementBaseUrl?: string;
   /** Absolute path to the trusted Org Plan helper permitted to checkpoint plans. */
@@ -92,7 +95,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     relyingParty.rpName !== options.relyingParty.rpName
   )
     throw new Error('Invalid WebAuthn relying-party configuration');
-  const ownerHandle = (options.authorizationRandomBytes ?? randomBytes)(32);
+  const authorizationRandom = options.authorizationRandomBytes ?? randomBytes;
+  const ownerHandle = authorizationRandom(32);
   if (ownerHandle.length !== 32) throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
   const databasePath = options.dataDir
@@ -277,6 +281,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let app;
   try {
     app = await buildApp({
+    auth: {
+      repository: authorization,
+      clock: { now: options.authorizationClock ?? (() => new Date()) },
+      random: {
+        bytes: (length) => {
+          const value = authorizationRandom(length);
+          if (length !== 32 || value.length !== 32)
+            throw new Error('Authorization randomness must return exactly 32 bytes');
+          return value;
+        },
+      },
+      identifiers: {
+        sessionId: () => {
+          const value = authorizationRandom(32);
+          if (value.length !== 32) throw new Error('Authorization randomness must return exactly 32 bytes');
+          return authorizationSessionId(Buffer.from(value).toString('base64url'));
+        },
+        deviceId: () => authorizedDeviceId(randomUUID()),
+      },
+      webauthn: new SimpleWebAuthnAdapter(),
+      relyingParty,
+    },
     health: {
       async read() {
         return {
