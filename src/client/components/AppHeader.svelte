@@ -11,13 +11,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     theme,
     sessionPath = null,
     sessionModel = null,
-    weeklyQuotaUsed = null,
+    weeklyQuotaRemaining = null,
     onthemechange,
   }: {
     theme: ThemePreference;
     sessionPath?: string | null;
     sessionModel?: string | null;
-    weeklyQuotaUsed?: number | null;
+    weeklyQuotaRemaining?: number | null;
     onthemechange: (theme: ThemePreference) => void;
   } = $props();
 </script>
@@ -35,8 +35,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </p>
   {/if}
   <div class="header-actions">
-    {#if weeklyQuotaUsed !== null}
-      <span class="weekly-quota" aria-label="Weekly quota used">{weeklyQuotaUsed}% used</span>
+    {#if weeklyQuotaRemaining !== null}
+      <span class="weekly-quota" aria-label="Weekly quota remaining">{weeklyQuotaRemaining}% left</span>
     {/if}
     <button
       class="menu-trigger"

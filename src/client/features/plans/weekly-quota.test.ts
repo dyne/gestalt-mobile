@@ -7,33 +7,48 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SupervisedPlan } from './contracts.js';
-import { weeklyQuotaUsed } from './weekly-quota.js';
+import { weeklyQuotaRemaining } from './weekly-quota.js';
 
 const plan = (remaining?: number): SupervisedPlan => ({
   title: 'Weekly quota',
-  steps: [{
-    id: 'l1', title: 'Parent', level: 1, state: 'WIP', priority: 'A', description: {}, children: [
-      {
-        id: 'l2', title: 'Active', level: 2, state: 'WIP', priority: 'A', description: {},
-        ...(remaining === undefined ? {} : { measurement: { weeklyRemainingCurrent: remaining } }),
-        children: [],
-      },
-    ],
-  }],
+  steps: [
+    {
+      id: 'l1',
+      title: 'Parent',
+      level: 1,
+      state: 'WIP',
+      priority: 'A',
+      description: {},
+      children: [
+        {
+          id: 'l2',
+          title: 'Active',
+          level: 2,
+          state: 'WIP',
+          priority: 'A',
+          description: {},
+          ...(remaining === undefined
+            ? {}
+            : { measurement: { weeklyRemainingCurrent: remaining } }),
+          children: [],
+        },
+      ],
+    },
+  ],
   totalSteps: 2,
   doneSteps: 0,
   allDone: false,
   currentStepId: 'l2',
 });
 
-describe('weeklyQuotaUsed', () => {
-  it('returns the rounded used weekly percentage on the active step', () => {
-    expect(weeklyQuotaUsed(plan(62.7))).toBe(37);
+describe('weeklyQuotaRemaining', () => {
+  it('returns the rounded remaining weekly percentage on the active step', () => {
+    expect(weeklyQuotaRemaining(plan(62.7))).toBe(63);
   });
 
   it('keeps unavailable, invalid, and inactive measurements hidden', () => {
-    expect(weeklyQuotaUsed(plan())).toBeNull();
-    expect(weeklyQuotaUsed(plan(101))).toBeNull();
-    expect(weeklyQuotaUsed(undefined)).toBeNull();
+    expect(weeklyQuotaRemaining(plan())).toBeNull();
+    expect(weeklyQuotaRemaining(plan(101))).toBeNull();
+    expect(weeklyQuotaRemaining(undefined)).toBeNull();
   });
 });
