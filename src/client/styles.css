@@ -90,13 +90,26 @@ main {
   gap: 0.4rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+}
+
+.weekly-quota {
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .menu-trigger {
   display: grid;
   place-items: center;
   min-block-size: 44px;
   flex: 0 0 auto;
   inline-size: 44px;
-  margin-inline-start: auto;
   padding: 0;
   color: inherit;
   background: transparent;
