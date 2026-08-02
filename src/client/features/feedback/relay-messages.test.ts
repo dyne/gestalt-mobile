@@ -26,6 +26,18 @@ describe('relayFeedback', () => {
         'Session history could not be loaded from GET /api/sessions/:id/history. The relay is connected, but Codex has no active process for this session. Open the session to restore it, then retry.',
     }));
 
+  it('explains a Codex history read failure as distinct from a relay outage', () =>
+    expect(
+      relayFeedback(
+        Object.assign(new Error('unsafe server detail'), { code: 'SESSION_HISTORY_READ_FAILED' }),
+        'RELAY_UNAVAILABLE',
+      ),
+    ).toEqual({
+      code: 'SESSION_HISTORY_READ_FAILED',
+      message:
+        'GET /api/sessions/:id/history reached the relay, but Codex could not read this session after recovery. This is not a connection failure. Open the session again; if it continues, inspect the running relay output.',
+    }));
+
   it('never exposes arbitrary error details', () => {
     const feedback = relayFeedback(
       new Error('secret token and generated model output'),

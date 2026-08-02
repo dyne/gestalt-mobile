@@ -8,6 +8,8 @@ const relayMessages = {
   RELAY_UNAVAILABLE: 'The relay is unavailable. Check the connection and try again.',
   SESSION_HISTORY_UNAVAILABLE:
     'Session history could not be loaded from GET /api/sessions/:id/history. The relay is connected, but Codex has no active process for this session. Open the session to restore it, then retry.',
+  SESSION_HISTORY_READ_FAILED:
+    'GET /api/sessions/:id/history reached the relay, but Codex could not read this session after recovery. This is not a connection failure. Open the session again; if it continues, inspect the running relay output.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
   SESSION_REFRESH_FAILED: 'Sessions could not be refreshed. Try again.',
   MESSAGE_SEND_FAILED: 'The message was not sent. Your draft is preserved.',
