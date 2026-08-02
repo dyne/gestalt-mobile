@@ -6,6 +6,7 @@
 
 import type { SupervisedPlan } from '../domain/supervised-plan.js';
 import type { PlanMeasurementSnapshot } from './measurement-snapshot.js';
+import type { PlanSignalReason } from '../../../../shared/contracts/plan-signal.js';
 
 export type PlanStatusUpdate =
   | Readonly<{
@@ -17,7 +18,7 @@ export type PlanStatusUpdate =
     }>
   | Readonly<{ kind: 'unavailable'; code: 'PLAN_STATUS_UNAVAILABLE' }>;
 
-export type PlanSignalReason = 'authoring-start' | 'work-start' | 'checkpoint' | 'update';
+export type { PlanSignalReason } from '../../../../shared/contracts/plan-signal.js';
 
 export type PlanStatusLease = Readonly<{
   statusDirectory: string;

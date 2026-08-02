@@ -162,7 +162,11 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
   await chat.focus();
   await expect.poll(() => typeof emitPlanEvent).toBe('function');
-  emitPlanEvent!({ sequence: 1, type: 'plan.updated', payload: activePlan });
+  emitPlanEvent!({
+    sequence: 1,
+    type: 'plan.updated',
+    payload: { ...activePlan, reason: 'supervision-start' },
+  });
 
   const plan = navigation.getByRole('button', { name: 'Plan' });
   await expect(plan).toBeVisible();

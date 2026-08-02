@@ -882,7 +882,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         (event) => {
           planController.applyEvent(id, event);
           if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
-          if (event.payload.reason !== 'authoring-start' && event.payload.reason !== 'work-start') return;
+          if (
+            event.payload.reason !== 'authoring-start' &&
+            event.payload.reason !== 'work-start' &&
+            event.payload.reason !== 'supervision-start' &&
+            event.payload.reason !== 'resync'
+          )
+            return;
           const signal = `${id}:${event.sequence}`;
           if (signal === lastPlanOpenSignal) return;
           lastPlanOpenSignal = signal;
