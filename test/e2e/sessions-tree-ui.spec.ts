@@ -6,6 +6,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-sessions-tree-evidence';
 
@@ -113,6 +114,7 @@ async function openSessions(
     return route.fulfill({ contentType: 'application/json', body: '[]' });
   });
 
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${fontScale}% !important; }` });
   await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
@@ -121,7 +123,15 @@ async function openSessions(
 
 async function expectUsableLayout(page: Page): Promise<void> {
   const touchTargets = await page.locator('button').evaluateAll((buttons) =>
-    buttons.map((button) => {
+    buttons.filter((button) => {
+      const box = button.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0) return false;
+      for (let element: HTMLElement | null = button; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        if (element.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return false;
+      }
+      return true;
+    }).map((button) => {
       const box = button.getBoundingClientRect();
       return { width: box.width, height: box.height, name: button.getAttribute('aria-label') };
     }),

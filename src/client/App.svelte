@@ -16,13 +16,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import PasskeyLogin from './features/auth/PasskeyLogin.svelte';
   import { createAuthStateMachine, type AuthState } from './features/auth/auth-state.js';
 
+  let { enrollmentTicket: initialEnrollmentTicket }: { enrollmentTicket?: string } = $props();
+  let localEnrollmentTicket = $state<string | undefined>(undefined);
+  let enrollmentTicket = $derived(localEnrollmentTicket ?? initialEnrollmentTicket);
   let authState = $state<AuthState>({ kind: 'checking' });
   let locking = false;
   const client = createAuthClient();
   const machine = createAuthStateMachine(client, (next) => (authState = next));
   const authorizedFetch = createAuthorizedFetch(() => machine.locked('Your session ended. Sign in with your passkey to continue.'));
 
-  onMount(() => { void machine.check(); });
+  onMount(() => { void machine.check(enrollmentTicket); });
+
+  function createPasskeyHere(ticket: string): void {
+    localEnrollmentTicket = ticket;
+    authState = { kind: 'enrollment', publicOrigin: authState.kind === 'authenticated' ? '' : 'http://localhost' };
+  }
 
   async function lockRelay(): Promise<void> {
     if (locking || authState.kind !== 'authenticated') return;
@@ -40,11 +48,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#if authState.kind === 'authenticated'}
-  <RelayApp {authorizedFetch} onlock={() => void lockRelay()} />
-{:else if authState.kind === 'bootstrap'}
+  <RelayApp {authorizedFetch} onlock={() => void lockRelay()} oncreatepasskey={createPasskeyHere} />
+{:else if authState.kind === 'bootstrap' || authState.kind === 'enrollment'}
   <FirstDeviceEnrollment
     {client}
     canonicalOrigin={authState.publicOrigin}
+    {enrollmentTicket}
     onAuthenticated={() => machine.authenticated()}
     onLocked={(message) => machine.locked(message)}
   />

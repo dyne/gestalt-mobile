@@ -5,6 +5,9 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
+
+test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
 function session(pendingInteractions: unknown[]) {
   return {

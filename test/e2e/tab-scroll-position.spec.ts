@@ -5,6 +5,9 @@
  */
 
 import { expect, test } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
+
+test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
 const sessions = Array.from({ length: 24 }, (_, index) => ({
   id: `session-${index + 1}`,

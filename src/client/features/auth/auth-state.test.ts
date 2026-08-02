@@ -62,6 +62,13 @@ describe('auth state machine', () => {
     });
   });
 
+  it('keeps a no-session enrollment handoff focused on registration', async () => {
+    const states: AuthState[] = [];
+    const machine = createAuthStateMachine(client('locked'), (state) => states.push(state));
+    await machine.check('opaque-ticket');
+    expect(states.at(-1)).toEqual({ kind: 'enrollment', publicOrigin: 'https://relay.test' });
+  });
+
   it('moves an established session to authenticated and can lock it after expiry', () => {
     const states: AuthState[] = [];
     const machine = createAuthStateMachine(client('locked'), (state) => states.push(state));

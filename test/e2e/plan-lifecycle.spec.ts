@@ -12,6 +12,14 @@ import { join, resolve } from 'node:path';
 import { expect, test, type WebSocketRoute } from '@playwright/test';
 
 import { composeRelayApp } from '../../src/server/composition.js';
+import {
+  authorizationSessionId,
+  authorizedDeviceId,
+  localOwnerId,
+  webAuthnCredentialId,
+} from '../../src/server/features/auth/domain/identifiers.js';
+import { deviceNickname } from '../../src/server/features/auth/domain/device-nickname.js';
+import { SqliteAuthorizationStore } from '../../src/server/platform/auth/sqlite-authorization-store.js';
 import type {
   AppServer,
   AppServerLaunchInput,
@@ -119,12 +127,39 @@ function fakeAppServer(input: AppServerLaunchInput, launches: AppServerLaunchInp
   };
 }
 
+async function seedAuthenticatedRelay(homeDirectory: string, relyingParty: {
+  publicOrigin: string;
+  rpId: string;
+  rpName: 'Gestalt Mobile';
+}): Promise<void> {
+  const store = new SqliteAuthorizationStore(homeDirectory, relyingParty);
+  const device = {
+    id: authorizedDeviceId('plan-lifecycle-device'),
+    credentialId: webAuthnCredentialId('plan-lifecycle-credential'),
+    publicKey: new Uint8Array([1]),
+    counter: 0,
+    transports: ['internal'] as const,
+    deviceType: 'singleDevice' as const,
+    backedUp: false,
+    nickname: deviceNickname('Plan lifecycle device'),
+    createdAt: '2026-08-02T00:00:00.000Z',
+  };
+  store.initializeOwner(new Uint8Array(32).fill(1));
+  store.claimFirstDevice({ id: localOwnerId('local-owner'), userHandle: new Uint8Array(32).fill(1) }, device);
+  store.saveSession(authorizationSessionId('plan-lifecycle-session'), {
+    deviceId: device.id,
+    expiresAt: '2026-09-01T00:00:00.000Z',
+  });
+  store.close();
+}
+
 test('runs the reviewed helper through the real relay and selected mobile session lifecycle', async ({
   page,
 }) => {
   test.setTimeout(60_000);
   const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-root-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-state-'));
+  const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-auth-'));
   const workspace = join(root, 'workspace');
   const planPath = join(workspace, 'lifecycle.org');
   const launches: AppServerLaunchInput[] = [];
@@ -146,10 +181,23 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     rpId: 'localhost',
     rpName: 'Gestalt Mobile' as const,
   };
-  const startRelay = async (port = 0) => {
+  const sessionCookie = 'gestalt_mobile_session=plan-lifecycle-session';
+  const authorizedFetch = (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? 'GET';
+    return fetch(url, {
+      ...init,
+      headers: {
+        cookie: sessionCookie,
+        ...(method === 'GET' ? {} : { origin: relyingParty.publicOrigin }),
+        ...init.headers,
+      },
+    });
+  };
+  const startRelay = async (port = 3000) => {
     app = await composeRelayApp({
       root,
       dataDir,
+      homeDirectory,
       relyingParty,
       staticDir: resolve('dist/client'),
       profiles,
@@ -161,7 +209,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
     relayPort = address.port;
-    return `http://127.0.0.1:${relayPort}`;
+    return relyingParty.publicOrigin;
   };
   const invokeHelper = async (...args: string[]) => {
     expect(owningStatusDirectory, 'the relay injects a session-owned helper status path').toBeTruthy();
@@ -172,8 +220,10 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
   try {
     await mkdir(workspace);
     await writeFile(planPath, fixturePlan);
+    await seedAuthenticatedRelay(homeDirectory, relyingParty);
     let relayUrl = await startRelay();
-    const bootstrap = (await fetch(`${relayUrl}/api/bootstrap`).then((response) =>
+    await page.context().addCookies([{ name: 'gestalt_mobile_session', value: 'plan-lifecycle-session', url: relayUrl }]);
+    const bootstrap = (await authorizedFetch(`${relayUrl}/api/bootstrap`).then((response) =>
       response.json(),
     )) as {
       workspaces: Array<{ children: Array<{ id: string; name: string }> }>;
@@ -183,7 +233,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     )?.id;
     expect(workspaceId).toBeTruthy();
     const createSession = async (): Promise<StartedSession> => {
-      const response = await fetch(`${relayUrl}/api/sessions`, {
+      const response = await authorizedFetch(`${relayUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, profile: 'default', model: 'gpt-5.6-terra' }),
@@ -291,7 +341,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
         .filter((launch) => launch.environment)
         .map((launch) => launch.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY),
     ).toContain(owningStatusDirectory);
-    const retained = await fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`);
+    const retained = await authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`);
     expect(retained.status).toBe(200);
     expect(await retained.json()).toMatchObject({
       doneSteps: 1,
@@ -302,7 +352,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await invokeHelper('l2', 'finish-after-reconnect', 'DONE');
     await expect
       .poll(async () =>
-        fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
+        authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
           .then((response) => response.json())
           .then((plan: { doneSteps: number }) => plan.doneSteps),
       )
@@ -349,7 +399,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     });
     const sessionItems = page.getByLabel('Open sessions').getByRole('listitem');
     await expect(sessionItems).toHaveCount(2);
-    const listedSessions = (await fetch(`${relayUrl}/api/bootstrap`).then((response) =>
+    const listedSessions = (await authorizedFetch(`${relayUrl}/api/bootstrap`).then((response) =>
       response.json(),
     )) as {
       sessions: Array<{ id: string }>;
@@ -371,7 +421,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
             .__planSeenDuringIsolation,
       ),
     ).toBe(false);
-    const isolatedPlan = await fetch(`${relayUrl}/api/sessions/${isolatedSession.id}/plan`);
+    const isolatedPlan = await authorizedFetch(`${relayUrl}/api/sessions/${isolatedSession.id}/plan`);
     expect(isolatedPlan.status).toBe(204);
 
     await navigation.getByRole('button', { name: 'Sessions' }).click();
@@ -386,7 +436,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     );
     await expect(navigation.getByRole('button', { name: 'Chat' })).toBeFocused();
     expect(
-      await fetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`).then(
+      await authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`).then(
         (response) => response.status,
       ),
     ).toBe(204);
@@ -400,6 +450,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await Promise.all([
       rm(root, { recursive: true, force: true }),
       rm(dataDir, { recursive: true, force: true }),
+      rm(homeDirectory, { recursive: true, force: true }),
     ]);
   }
 });

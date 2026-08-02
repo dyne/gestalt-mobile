@@ -50,4 +50,12 @@ describe('AppHeader', () => {
     await fireEvent.click(action);
     expect(onlock).toHaveBeenCalledOnce();
   });
+
+  it('opens the named authorized-devices route from the burger popover', async () => {
+    const ondevices = vi.fn();
+    render(AppHeader, { theme: 'system', onthemechange: () => {}, ondevices });
+    const action = screen.getByRole('button', { name: 'Authorized devices', hidden: true });
+    await fireEvent.click(action);
+    expect(ondevices).toHaveBeenCalledWith(action);
+  });
 });

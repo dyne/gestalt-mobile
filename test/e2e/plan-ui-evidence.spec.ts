@@ -8,6 +8,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, test, type Page } from '@playwright/test';
+import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 import type { SupervisedPlan } from '../../src/client/features/plans/contracts.js';
 
@@ -207,6 +208,7 @@ test('captures every responsive Plan state with executable accessibility evidenc
       insets: { top: 16, left: 8, bottom: 24, right: 8 },
     } as never,
   );
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
 
   const capture = async (
