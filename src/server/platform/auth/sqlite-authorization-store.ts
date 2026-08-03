@@ -28,6 +28,11 @@ import { deviceNickname } from '../../features/auth/domain/device-nickname.js';
 
 const OWNER_ID = localOwnerId('local-owner');
 const SCHEMA_VERSION = 1;
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_STARTUP_BUSY_TIMEOUT_MS = 250;
+const STARTUP_LOCK_DEADLINE_MS = 2_000;
+const STARTUP_LOCK_RETRY_DELAY_MS = 25;
+const startupLockWaiter = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 export function authorizationDatabasePath(homeDirectory: string): string {
   return join(resolve(homeDirectory), '.codex-gestalt', 'gestalt-mobile', 'auth.sqlite');
@@ -47,9 +52,36 @@ export class SqliteAuthorizationStore implements AuthorizationRepository {
     this.relyingParty = relyingParty;
     this.db = new DatabaseSync(this.path);
     try {
-      this.db.exec(
-        'PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;',
-      );
+      // journal_mode can take an exclusive lock. Install the bounded busy handler first so
+      // simultaneous first opens wait for the winner instead of failing during startup.
+      this.db.exec(`PRAGMA busy_timeout = ${SQLITE_STARTUP_BUSY_TIMEOUT_MS}`);
+      this.initializeSchema();
+      this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
+  }
+
+  private initializeSchema(): void {
+    const deadline = Date.now() + STARTUP_LOCK_DEADLINE_MS;
+    for (;;) {
+      try {
+        this.initializeSchemaAttempt();
+        return;
+      } catch (error) {
+        const remaining = deadline - Date.now();
+        if (!isLocked(error) || remaining <= 0) throw error;
+        Atomics.wait(startupLockWaiter, 0, 0, Math.min(STARTUP_LOCK_RETRY_DELAY_MS, remaining));
+      }
+    }
+  }
+
+  private initializeSchemaAttempt(): void {
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA foreign_keys = ON;');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
       this.db
         .exec(`CREATE TABLE IF NOT EXISTS auth_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL, rp_id TEXT NOT NULL, user_handle BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS auth_devices (id TEXT PRIMARY KEY, credential_id TEXT NOT NULL UNIQUE, public_key BLOB NOT NULL, counter INTEGER NOT NULL, transports_json TEXT NOT NULL, device_type TEXT NOT NULL, backed_up INTEGER NOT NULL CHECK(backed_up IN (0,1)), nickname TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, version INTEGER NOT NULL DEFAULT 0);
@@ -61,16 +93,21 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
         .all() as { name: string }[];
       if (!ceremonyColumns.some((column) => column.name === 'ticket_hash'))
         this.db.exec('ALTER TABLE auth_ceremonies ADD COLUMN ticket_hash TEXT');
-      const ticketColumns = this.db.prepare("SELECT name FROM pragma_table_info('auth_tickets')").all() as { name: string }[];
+      const ticketColumns = this.db
+        .prepare("SELECT name FROM pragma_table_info('auth_tickets')")
+        .all() as { name: string }[];
       if (!ticketColumns.some((column) => column.name === 'creator_session_hash'))
         this.db.exec('ALTER TABLE auth_tickets ADD COLUMN creator_session_hash TEXT');
       const settings = this.db
         .prepare('SELECT rp_id FROM auth_settings WHERE singleton = 1')
         .get() as { rp_id: string } | undefined;
-      if (settings && settings.rp_id !== relyingParty.rpId && this.deviceCount() > 0)
+      if (settings && settings.rp_id !== this.relyingParty.rpId && this.deviceCount() > 0)
         throw new Error('WebAuthn RP ID hostname changed while credentials exist');
+      this.db.exec('COMMIT');
     } catch (error) {
-      this.db.close();
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {}
       throw error;
     }
   }
@@ -567,4 +604,8 @@ function toDevice(row: DeviceRow): AuthorizedDevice {
 }
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function isLocked(error: unknown): boolean {
+  return error instanceof Error && /database is locked/i.test(error.message);
 }
