@@ -87,10 +87,18 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   async remove(sessionId: string, identity?: string): Promise<void> {
     const statusPath = this.activeStatusPaths.get(sessionId);
     const signal = statusPath ? await this.readStatusForRollback(statusPath) : undefined;
-    if (statusPath) await this.statusRemovalFilesystem.rm(statusPath, { force: true });
+    if (statusPath) {
+      try {
+        await this.statusRemovalFilesystem.rm(statusPath, { force: true });
+      } catch (error) {
+        this.leases.get(sessionId)?.allowRepeatedUpdate();
+        throw error;
+      }
+    }
     try {
       if (identity) await this.dismiss(sessionId, identity);
     } catch (error) {
+      this.leases.get(sessionId)?.allowRepeatedUpdate();
       if (signal !== undefined && statusPath) await this.restoreStatus(statusPath, signal);
       throw error;
     }
@@ -176,6 +184,7 @@ class ActiveLease implements PlanStatusLease {
   private debounce: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
   private activeStatusPath: string | undefined;
+  private lastEmittedUpdate: string | undefined;
 
   constructor(
     readonly statusDirectory: string,
@@ -194,7 +203,7 @@ class ActiveLease implements PlanStatusLease {
       this.watcher = watch(this.statusDirectory, { persistent: false });
       void this.consumeChanges();
     } catch {
-      this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+      this.emitUnavailable();
     }
   }
 
@@ -210,6 +219,10 @@ class ActiveLease implements PlanStatusLease {
     if (this.activeStatusPath) await rm(this.activeStatusPath, { force: true });
   }
 
+  allowRepeatedUpdate(): void {
+    this.lastEmittedUpdate = undefined;
+  }
+
   private async consumeChanges(): Promise<void> {
     try {
       for await (const event of this.watcher!) {
@@ -223,7 +236,7 @@ class ActiveLease implements PlanStatusLease {
         this.scheduleRefresh(join(this.statusDirectory, filename));
       }
     } catch {
-      if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+      if (!this.closed) this.emitUnavailable();
     }
   }
 
@@ -268,7 +281,7 @@ class ActiveLease implements PlanStatusLease {
         )[0];
       if (latest) await this.refresh(latest.statusPath, latest.signal);
     } catch {
-      if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+      if (!this.closed) this.emitUnavailable();
     }
   }
 
@@ -294,12 +307,17 @@ class ActiveLease implements PlanStatusLease {
           const previousStatusPath = this.activeStatusPath;
           this.activeStatusPath = statusPath;
           this.onActiveStatusPath(statusPath);
-          this.listener({ kind: 'updated', plan: result.plan, identity, planPath, reason: signal.reason });
+          const update = { kind: 'updated', plan: result.plan, identity, planPath, reason: signal.reason } as const;
+          const serializedUpdate = JSON.stringify(update);
+          if (serializedUpdate !== this.lastEmittedUpdate) {
+            this.lastEmittedUpdate = serializedUpdate;
+            this.listener(update);
+          }
           if (previousStatusPath && previousStatusPath !== statusPath)
             await rm(previousStatusPath, { force: true }).catch(() => {});
         }
       } else if (!this.closed) {
-        this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+        this.emitUnavailable();
       }
     } catch (error) {
       if (
@@ -308,8 +326,13 @@ class ActiveLease implements PlanStatusLease {
         statusPath !== this.activeStatusPath
       )
         return;
-      if (!this.closed) this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+      if (!this.closed) this.emitUnavailable();
     }
+  }
+
+  private emitUnavailable(): void {
+    this.lastEmittedUpdate = undefined;
+    this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
   }
 }
 
