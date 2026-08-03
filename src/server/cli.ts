@@ -25,7 +25,7 @@ Options:
   --cwd <path>       Workspace root (default: current directory)
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
-  --public-origin <origin> Canonical browser origin for passkeys
+  --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
   --data-dir <path>  Directory for persistent application data
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server

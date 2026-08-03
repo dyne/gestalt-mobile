@@ -116,6 +116,7 @@ test('refreshes new-session profile choices after create, replace, and delete', 
     profiles = [...profiles.filter((profile) => profile.name !== name), saved];
     return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(saved) });
   });
+  await mockAuthenticatedStatus(page);
   await page.goto('/');
 
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();

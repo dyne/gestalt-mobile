@@ -54,17 +54,17 @@ configuration or skill files.
 
 ## Command-line options
 
-| Option              | Default             | Purpose                                      |
-| ------------------- | ------------------- | -------------------------------------------- |
-| `--cwd <path>`      | Current directory   | Root containing selectable workspaces        |
-| `--host <address>`  | `127.0.0.1`         | HTTP listen address                          |
-| `--port <number>`   | `3000`              | HTTP listen port, from 1 through 65535       |
-| `--public-origin <origin>` | Loopback Vite origin | Canonical WebAuthn public origin; required for non-loopback hosts |
-| `--data-dir <path>` | XDG state directory | Directory containing `relay.sqlite`          |
-| `--skills <profile>` |                     | Apply a saved global profile to every session |
-| `--skills list`     |                     | List global profiles without starting the server |
-| `--help`            |                     | Print usage without starting the application |
-| `--version`         |                     | Print the installed package version          |
+| Option                     | Default              | Purpose                                                           |
+| -------------------------- | -------------------- | ----------------------------------------------------------------- |
+| `--cwd <path>`             | Current directory    | Root containing selectable workspaces                             |
+| `--host <address>`         | `127.0.0.1`          | HTTP listen address                                               |
+| `--port <number>`          | `3000`               | HTTP listen port, from 1 through 65535                            |
+| `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
+| `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                               |
+| `--skills <profile>`       |                      | Apply a saved global profile to every session                     |
+| `--skills list`            |                      | List global profiles without starting the server                  |
+| `--help`                   |                      | Print usage without starting the application                      |
+| `--version`                |                      | Print the installed package version                               |
 
 `--cwd` may be relative to the directory where the command is invoked. The
 resolved directory is the selectable root of a recursive workspace tree. Dot
@@ -74,16 +74,28 @@ included only when their real target stays under the resolved root; repeated
 real targets and cycles are omitted. Browser requests select nodes by opaque ID,
 while real filesystem paths remain server-side.
 
-Gestalt Mobile has no built-in authentication or TLS. The loopback default is
-safe for use on the same computer. `--host 0.0.0.0` exposes the relay and its
-Codex controls on every network interface; use it only behind a trusted private
-VPN or an authenticated, encrypted reverse proxy.
+## Passkey deployment and operating limits
 
-Passkey ceremonies use `--public-origin` as their fixed, canonical browser
-origin. It defaults only for loopback development; non-loopback listening
-requires an explicit HTTPS public origin. The hostname is the WebAuthn RP ID,
-so changing ports is compatible while changing the hostname is refused after
-credentials exist.
+Gestalt Mobile has built-in passkey authentication, but does **not** terminate
+TLS. `--public-origin` must be the exact origin the browser uses, including its
+external HTTPS scheme and port. `http://localhost` is the development-only
+exception; every other browser origin must be HTTPS. For example, a local
+developer may use `--public-origin http://localhost:3000`, while a deployed
+relay may listen locally on `127.0.0.1:3000` behind
+`https://relay.example.org` with `--public-origin https://relay.example.org`.
+
+For mobile or network use, put a trusted HTTPS reverse proxy or tunnel in front
+of the relay. It must preserve the external host and origin, cookies, and
+WebSocket upgrade; do not mount the relay below a rewritten path prefix. Same
+hostname processes may use different ports and share authorization (for example,
+two local relay processes behind `https://relay.example.org`), but an RP-ID/
+hostname change is refused once credentials exist because it would strand those
+credentials. Do not expose `--host 0.0.0.0` before that boundary is in place.
+
+An empty authorization store is deliberately bootstrap-open: the first verified passkey becomes the owner. Register a device before exposing the service. The
+final authorized device cannot be deleted; synced passkeys can represent more
+than one physical device, and an enrollment QR/link is neither recovery nor
+proof of physical proximity.
 
 ## Persistent state
 
@@ -93,6 +105,28 @@ stored below `$XDG_STATE_HOME/gestalt-mobile/<workspace-hash>/relay.sqlite`, or
 `~/.local/state/gestalt-mobile/<workspace-hash>/relay.sqlite` when
 `XDG_STATE_HOME` is unset. A matching legacy `codex-relay` database is reused
 when present.
+
+Authorization is separate shared state at
+`~/.codex-gestalt/gestalt-mobile/auth.sqlite` (under the selected home). Its
+directory is created owner-only (`0700`); treat the database as sensitive and
+keep it accessible only to the local relay user. Back up `auth.sqlite`
+with `auth.sqlite-wal` and `auth.sqlite-shm` only after **all** instances are
+stopped, or use SQLite backup tooling.
+
+Recovery after losing every passkey is deliberately local and manual: stop every
+instance, make a backup, remove only `auth.sqlite` and its `-wal`/`-shm`
+sidecars, restart into visibly open bootstrap mode, and immediately enroll a new
+device before exposing the service. This discards authorization, device, and
+session state only—not workspace relay databases or history—and is dangerous
+while the service is exposed. There is intentionally no hosted service,
+federation, remote administrator, recovery code, credential export,
+authentication audit analytics, attestation trust policy, or automatic reset.
+
+For the protocol requirements behind these limits, see the official
+[SimpleWebAuthn server guide](https://simplewebauthn.dev/docs/packages/server),
+[SimpleWebAuthn passkey guidance](https://simplewebauthn.dev/docs/advanced/passkeys/),
+[MDN passkey guide](https://developer.mozilla.org/en-US/docs/Web/Security/Authentication/Passkeys),
+and [W3C WebAuthn RP ID, origin, and challenge requirements](https://www.w3.org/TR/webauthn-3/).
 
 ## Sessions
 

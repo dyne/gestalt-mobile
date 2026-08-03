@@ -52,4 +52,10 @@ describe('publishable package manifest', () => {
       '@simplewebauthn/server': '13.3.2',
     });
   });
+
+  it('ships the passkey operations guide with the packed CLI', () => {
+    expect(manifest.files).toContain('README.md');
+    expect(manifest.dependencies).toHaveProperty('@simplewebauthn/server');
+    expect(manifest.dependencies).toHaveProperty('@simplewebauthn/browser');
+  });
 });

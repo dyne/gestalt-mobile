@@ -14,4 +14,13 @@ The relay uses a narrow handwritten Codex app-server adapter rather than checked
 
 Use Node.js 24 or newer. Before completion run `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows.
 
-Do not log prompts, model output, secrets, or environment values. Every file-changing Org L2 has a conventional commit.
+Do not log prompts, model output, secrets, or environment values. Every accepted file-changing Org L1 has exactly one conventional commit, unless it has no changes.
+
+## Passkey boundary
+
+Passkey authentication is built in, but TLS termination is external. Keep
+`--public-origin` equal to the exact browser origin; only `http://localhost` is
+valid without HTTPS. Treat the shared authorization database at
+`~/.codex-gestalt/gestalt-mobile/auth.sqlite` as private local state: preserve
+its RP-ID hostname, and do not document or implement remote recovery, automatic
+reset, credential export, or hosted administration.
