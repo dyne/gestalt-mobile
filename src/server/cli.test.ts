@@ -73,6 +73,7 @@ describe('runCli', () => {
       await runCli({ args: ['--help'], stdout: stdout.stream, compose, probeCodexVersion }),
     ).toBe(0);
     expect(stdout.value()).toBe(`${usage}\n`);
+    expect(stdout.value()).toContain('Exact HTTPS browser origin for passkeys');
     expect(compose).not.toHaveBeenCalled();
     expect(probeCodexVersion).not.toHaveBeenCalled();
   });

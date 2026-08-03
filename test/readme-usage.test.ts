@@ -37,8 +37,25 @@ describe('npm usage documentation', () => {
     'SIGINT or SIGTERM',
     '`codex-profile cli gestalt app-server --stdio`',
     '`codex app-server --stdio`',
+    'built-in passkey authentication',
+    '`--public-origin`',
+    'Exact browser origin for passkeys',
+    'http://localhost',
+    'HTTPS reverse proxy',
+    'WebSocket upgrade',
+    '`~/.codex-gestalt/gestalt-mobile/auth.sqlite`',
+    'auth.sqlite-wal',
+    'auth.sqlite-shm',
+    'first verified passkey becomes the owner',
+    'no hosted service',
+    'SimpleWebAuthn server guide',
+    'W3C WebAuthn RP ID, origin, and challenge requirements',
     'SPDX-License-Identifier: AGPL-3.0-or-later',
   ])('documents the support boundary: %s', (requirement) => {
     expect(readme).toContain(requirement);
+  });
+
+  it('does not retain the obsolete no-authentication deployment claim', () => {
+    expect(readme).not.toContain('no built-in authentication');
   });
 });

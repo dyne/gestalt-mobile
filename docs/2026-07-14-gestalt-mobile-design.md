@@ -7,7 +7,10 @@
 
 Codex Relay is a private, mobile-first web application for controlling Codex CLI app-server sessions from a phone. It runs inside a directory containing project folders, starts isolated Codex app-server processes for selected folder/profile pairs, survives flaky browser connections, restores saved sessions after relay restarts, and makes each Codex thread easy to resume later from SSH.
 
-The first release provides three primary views: Chat, Git, and Sessions. It is a single-user tool reachable only through a trusted VPN. It deliberately serves plain HTTP with no application authentication, TLS termination, or cross-origin API support.
+The first release provided three primary views: Chat, Git, and Sessions. This
+historical design is superseded for authentication by the current README:
+Gestalt Mobile now has built-in passkey authentication, while TLS termination
+remains external.
 
 ## Product Decisions
 
@@ -20,7 +23,7 @@ The first release provides three primary views: Chat, Git, and Sessions. It is a
 - Codex thread history is the durable conversation source of truth. Relay persistence supplements it with lifecycle state and a bounded live-event journal.
 - V1 supports command approvals, file-change approvals, and Codex `requestUserInput` prompts.
 - Git status performs a throttled background fetch. Push is explicit, never forced, and disabled when the current branch has no configured upstream.
-- No application authentication is required inside the VPN.
+- Passkey authentication is required; deployment still needs an external HTTPS boundary.
 
 ## Architecture
 
@@ -271,7 +274,7 @@ The development workflow includes a binding regeneration/check command and contr
 
 V1 intentionally excludes:
 
-- TLS termination, CORS configuration, accounts, roles, and application authentication.
+- TLS termination, CORS configuration, hosted accounts, roles, federation, and remote administration.
 - Profile creation, deletion, login, or configuration management.
 - Arbitrary filesystem browsing, nested workspace discovery, or paths outside the Relay Root.
 - Force push, upstream creation, merge/rebase, commit creation, or conflict resolution.

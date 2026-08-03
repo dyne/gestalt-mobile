@@ -22,6 +22,7 @@ import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SimpleWebAuthnAdapter } from './platform/auth/simple-webauthn-adapter.js';
+import type { WebAuthnCeremonyService } from './features/auth/application/ports.js';
 import { authorizationSessionId, authorizedDeviceId } from './features/auth/domain/identifiers.js';
 import { SqliteSessionRepository } from './platform/persistence/sqlite-session-repository.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
@@ -82,6 +83,8 @@ export type ComposeRelayAppOptions = {
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
   authorizationClock?: () => Date;
+  /** Test seam; production always uses the SimpleWebAuthn adapter. */
+  authorizationWebauthn?: WebAuthnCeremonyService;
   explicitSkillProfile?: SkillProfile;
   planMeasurementBaseUrl?: string;
   /** Absolute path to the trusted Org Plan helper permitted to checkpoint plans. */
@@ -300,7 +303,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         deviceId: () => authorizedDeviceId(randomUUID()),
       },
-      webauthn: new SimpleWebAuthnAdapter(),
+      webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
       relyingParty,
     },
     health: {
