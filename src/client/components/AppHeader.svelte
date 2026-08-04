@@ -12,6 +12,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionPath = null,
     sessionModel = null,
     weeklyQuotaRemaining = null,
+    passkeyAuthEnabled = true,
     onthemechange,
     onlock = () => {},
     ondevices = () => {},
@@ -20,6 +21,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionPath?: string | null;
     sessionModel?: string | null;
     weeklyQuotaRemaining?: number | null;
+    passkeyAuthEnabled?: boolean;
     onthemechange: (theme: ThemePreference) => void;
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
@@ -87,6 +89,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <option value="dark">Dark</option>
     </select>
   </label>
-  <button type="button" popovertarget="configuration-panel" popovertargetaction="hide" onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button>
-  <button type="button" class="lock-relay" popovertarget="configuration-panel" popovertargetaction="hide" onclick={onlock}>Lock Gestalt Mobile</button>
+  {#if passkeyAuthEnabled}
+    <button type="button" popovertarget="configuration-panel" popovertargetaction="hide" onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button>
+    <button type="button" class="lock-relay" popovertarget="configuration-panel" popovertargetaction="hide" onclick={onlock}>Lock Gestalt Mobile</button>
+  {/if}
 </div>

@@ -15,6 +15,7 @@ describe('parseConfig', () => {
     expect(parseConfig([], '/caller')).toEqual({
       host: '127.0.0.1',
       port: 3000,
+      passkeyAuthEnabled: true,
       relyingParty: {
         publicOrigin: 'http://localhost:3000',
         rpId: 'localhost',
@@ -45,6 +46,7 @@ describe('parseConfig', () => {
     ).toEqual({
       host: '0.0.0.0',
       port: 4242,
+      passkeyAuthEnabled: true,
       relyingParty: {
         publicOrigin: 'https://gestalt.example:8443',
         rpId: 'gestalt.example',
@@ -70,6 +72,16 @@ describe('parseConfig', () => {
     );
   });
 
+  it('allows an unprotected non-loopback listener only with the explicit opt-out flag', () => {
+    expect(
+      parseConfig(['--host', '0.0.0.0', '--disable-passkey-auth'], '/caller'),
+    ).toMatchObject({
+      host: '0.0.0.0',
+      passkeyAuthEnabled: false,
+      relyingParty: { publicOrigin: 'http://localhost:3000' },
+    });
+  });
+
   it('preserves an absolute workspace path', () => {
     expect(parseConfig(['--cwd', '/workspace'], '/caller').root).toBe(resolve('/workspace'));
   });
@@ -83,6 +95,7 @@ describe('parseConfig', () => {
     [['--port', '3.5'], 'Invalid --port: 3.5'],
     [['workspace'], 'Unexpected argument: workspace'],
     [['--cwd', '.', '--cwd', '..'], 'Duplicate option: --cwd'],
+    [['--disable-passkey-auth', '--disable-passkey-auth'], 'Duplicate option: --disable-passkey-auth'],
   ])('rejects invalid arguments %#', (args, message) => {
     expect(() => parseConfig(args, '/caller')).toThrow(new CliUsageError(message));
   });

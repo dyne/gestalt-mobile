@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
 
-  let { authorizedFetch, onlock, oncreatepasskey = () => {} }: { authorizedFetch: typeof fetch; onlock: () => void; oncreatepasskey?: (ticket: string) => void } = $props();
+  let { authorizedFetch, passkeyAuthEnabled, onlock, oncreatepasskey = () => {} }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void; oncreatepasskey?: (ticket: string) => void } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
@@ -946,11 +946,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           : null}
         sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
+        {passkeyAuthEnabled}
         {onlock}
         ondevices={() => (devicesOpen = true)}
         onthemechange={setTheme}
       />{/if}
-    {#if devicesOpen}
+    {#if devicesOpen && passkeyAuthEnabled}
       <AuthorizedDevicesView
         client={deviceClient}
         onclose={() => { devicesOpen = false; void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus()); }}

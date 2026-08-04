@@ -10,6 +10,7 @@ import { isIP } from 'node:net';
 export type RelayConfig = {
   host: string;
   port: number;
+  passkeyAuthEnabled: boolean;
   /** Stable, configuration-derived WebAuthn contract for every ceremony. */
   relyingParty: RelyingPartyConfig;
   root: string;
@@ -38,13 +39,20 @@ const optionNames = new Set([
   '--public-origin',
   '--skills',
 ]);
+const flagNames = new Set(['--disable-passkey-auth']);
 
 export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
   const values = new Map<string, string>();
+  const flags = new Set<string>();
 
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
     if (!option.startsWith('--')) throw new CliUsageError(`Unexpected argument: ${option}`);
+    if (flagNames.has(option)) {
+      if (flags.has(option)) throw new CliUsageError(`Duplicate option: ${option}`);
+      flags.add(option);
+      continue;
+    }
     if (!optionNames.has(option)) throw new CliUsageError(`Unknown option: ${option}`);
     if (values.has(option)) throw new CliUsageError(`Duplicate option: ${option}`);
 
@@ -60,13 +68,15 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     throw new CliUsageError(`Invalid --port: ${portValue}`);
 
   const host = values.get('--host') ?? '127.0.0.1';
+  const passkeyAuthEnabled = !flags.has('--disable-passkey-auth');
   const publicOrigin = values.has('--public-origin')
     ? normalizePublicOrigin(values.get('--public-origin')!)
-    : defaultPublicOrigin(host, port);
+    : defaultPublicOrigin(host, port, passkeyAuthEnabled);
 
   return {
     host,
     port,
+    passkeyAuthEnabled,
     relyingParty: createRelyingPartyConfig(publicOrigin),
     root: resolve(cwd, values.get('--cwd') ?? '.'),
     dataDir: values.get('--data-dir'),
@@ -107,8 +117,8 @@ export function createRelyingPartyConfig(publicOrigin: string): RelyingPartyConf
   };
 }
 
-function defaultPublicOrigin(host: string, port: number): string {
-  if (!isLoopbackHost(host))
+function defaultPublicOrigin(host: string, port: number, passkeyAuthEnabled: boolean): string {
+  if (passkeyAuthEnabled && !isLoopbackHost(host))
     throw new CliUsageError('--public-origin is required when --host is not a loopback address');
   return `http://localhost:${port}`;
 }

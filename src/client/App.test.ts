@@ -32,6 +32,20 @@ describe('App auth gate', () => {
     return response({ status: 'authenticated', publicOrigin: 'https://relay.test' });
   }
 
+  it('mounts the relay without passkey controls when the server disables access control', async () => {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+    const fetcher = vi.fn(async () =>
+      response({ status: 'authenticated', publicOrigin: '', passkeyAuthEnabled: false }),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    vi.stubGlobal('WebSocket', class { close() {} });
+
+    const view = render(App);
+
+    await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Lock Gestalt Mobile' })).toBeNull();
+  });
+
   function installLifecycleProbes() {
     const close = vi.fn();
     const abort = vi.fn();

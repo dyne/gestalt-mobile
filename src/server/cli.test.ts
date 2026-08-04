@@ -74,6 +74,7 @@ describe('runCli', () => {
     ).toBe(0);
     expect(stdout.value()).toBe(`${usage}\n`);
     expect(stdout.value()).toContain('Exact HTTPS browser origin for passkeys');
+    expect(stdout.value()).toContain('--disable-passkey-auth');
     expect(compose).not.toHaveBeenCalled();
     expect(probeCodexVersion).not.toHaveBeenCalled();
   });
@@ -135,10 +136,38 @@ describe('runCli', () => {
           rpId: 'localhost',
           rpName: 'Gestalt Mobile',
         },
+        passkeyAuthEnabled: true,
       }),
     );
     expect(listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 43210 });
     expect(stdout.value()).toBe('Gestalt Mobile listening on http://127.0.0.1:43210\n');
+  });
+
+  it('starts without passkey access control only after warning prominently', async () => {
+    const root = await createPackageFixture();
+    const stdout = output();
+    const stderr = output();
+    const signals = new EventEmitter();
+    const listen = vi.fn(async () => 'http://0.0.0.0:3000');
+    const compose = vi.fn(async () => ({ listen, close: vi.fn(async () => {}) }) as never);
+
+    expect(
+      await runCli({
+        args: ['--host', '0.0.0.0', '--disable-passkey-auth'],
+        moduleUrl: pathToFileURL(join(root, 'dist/server/server/main.js')).href,
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        signalSource: fakeSignals(signals),
+        compose,
+        probeCodexVersion: async () => null,
+      }),
+    ).toBe(0);
+    expect(compose).toHaveBeenCalledWith(
+      expect.objectContaining({ passkeyAuthEnabled: false }),
+    );
+    expect(stderr.value()).toContain(
+      'WARNING: Passkey access control is disabled; anyone who can reach this server has full access.',
+    );
   });
 
   it('closes the composed app when listening fails', async () => {

@@ -11,7 +11,7 @@ export type AuthState =
   | { kind: 'bootstrap'; publicOrigin: string }
   | { kind: 'locked'; message?: string }
   | { kind: 'enrollment'; publicOrigin: string }
-  | { kind: 'authenticated' }
+  | { kind: 'authenticated'; passkeyAuthEnabled: boolean }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
 
@@ -42,19 +42,24 @@ function browserSupportsPasskeys(): boolean {
 export function createAuthStateMachine(client: AuthClient, setState: (state: AuthState) => void) {
   async function check(enrollmentTicket?: string): Promise<AuthState> {
     setState({ kind: 'checking' });
-    if (!browserSupportsPasskeys()) {
-      const next: AuthState = {
-        kind: 'unsupported',
-        message: 'Passkeys require a secure browser on this device.',
-      };
-      setState(next);
-      return next;
-    }
     try {
-      const { status, publicOrigin } = await client.status();
+      const { status, publicOrigin, passkeyAuthEnabled = true } = await client.status();
+      if (!passkeyAuthEnabled) {
+        const next: AuthState = { kind: 'authenticated', passkeyAuthEnabled: false };
+        setState(next);
+        return next;
+      }
+      if (!browserSupportsPasskeys()) {
+        const next: AuthState = {
+          kind: 'unsupported',
+          message: 'Passkeys require a secure browser on this device.',
+        };
+        setState(next);
+        return next;
+      }
       const next: AuthState =
         status === 'authenticated'
-          ? { kind: 'authenticated' }
+          ? { kind: 'authenticated', passkeyAuthEnabled: true }
           : status === 'bootstrap'
             ? { kind: 'bootstrap', publicOrigin }
             : enrollmentTicket
@@ -72,7 +77,7 @@ export function createAuthStateMachine(client: AuthClient, setState: (state: Aut
     }
   }
   function authenticated(): void {
-    setState({ kind: 'authenticated' });
+    setState({ kind: 'authenticated', passkeyAuthEnabled: true });
   }
   function locked(message?: string): void {
     setState({ kind: 'locked', ...(message ? { message } : {}) });

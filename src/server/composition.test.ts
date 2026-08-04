@@ -127,6 +127,37 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
+  it('serves the relay without creating passkey state when access control is disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-'));
+    temporaryPaths.push(root, dataDir, homeDirectory);
+    const authorizationRandomBytes = vi.fn(() => new Uint8Array(32));
+    const app = await composeRelayApp({
+      root,
+      dataDir,
+      homeDirectory,
+      relyingParty,
+      passkeyAuthEnabled: false,
+      authorizationRandomBytes,
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+      installedCodexVersion: null,
+    });
+
+    expect((await app.inject('/api/auth/status')).json()).toEqual({
+      status: 'authenticated',
+      publicOrigin: '',
+      passkeyAuthEnabled: false,
+    });
+    expect((await app.inject('/api/bootstrap')).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login/options' })).statusCode).toBe(404);
+    expect(authorizationRandomBytes).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('inventory-classifies every production API route and reserves exactly six public entries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

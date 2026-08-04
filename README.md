@@ -60,6 +60,7 @@ configuration or skill files.
 | `--host <address>`         | `127.0.0.1`          | HTTP listen address                                               |
 | `--port <number>`          | `3000`               | HTTP listen port, from 1 through 65535                            |
 | `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
+| `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly    |
 | `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                               |
 | `--skills <profile>`       |                      | Apply a saved global profile to every session                     |
 | `--skills list`            |                      | List global profiles without starting the server                  |
@@ -96,6 +97,14 @@ An empty authorization store is deliberately bootstrap-open: the first verified 
 final authorized device cannot be deleted; synced passkeys can represent more
 than one physical device, and an enrollment QR/link is neither recovery nor
 proof of physical proximity.
+
+`--disable-passkey-auth` restores the unprotected serving behavior from before
+passkey authentication was added. It does not create or consult passkey state,
+and `--public-origin` is not required even for a non-loopback listener. This is
+an explicit unsafe mode: anyone who can reach the HTTP or WebSocket listener has
+full access to workspaces, Codex sessions, and Git operations. Use it only on a
+trusted, access-controlled local environment; never expose that mode directly
+to a shared or public network. Startup prints a warning whenever it is active.
 
 ## Persistent state
 
