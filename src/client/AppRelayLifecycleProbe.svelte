@@ -9,7 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
 
-  let { authorizedFetch, onlock }: { authorizedFetch: typeof fetch; onlock: () => void } = $props();
+  let { authorizedFetch, passkeyAuthEnabled, onlock }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void } = $props();
 
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -36,5 +36,5 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <button type="button" onclick={() => void authorizedFetch('/api/probe', { signal: request.signal })}>
     Trigger authorized request
   </button>
-  <button type="button" onclick={onlock}>Lock Gestalt Mobile</button>
+  {#if passkeyAuthEnabled}<button type="button" onclick={onlock}>Lock Gestalt Mobile</button>{/if}
 </nav>

@@ -69,6 +69,7 @@ export type ComposeRelayAppOptions = {
   dataDir?: string;
   /** Canonical, configuration-derived WebAuthn contract; never request-derived. */
   relyingParty: RelyingPartyConfig;
+  passkeyAuthEnabled?: boolean;
   staticDir?: string;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
@@ -92,6 +93,7 @@ export type ComposeRelayAppOptions = {
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
+  const passkeyAuthEnabled = options.passkeyAuthEnabled ?? true;
   const relyingParty = createRelyingPartyConfig(options.relyingParty.publicOrigin);
   if (
     relyingParty.rpId !== options.relyingParty.rpId ||
@@ -99,8 +101,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   )
     throw new Error('Invalid WebAuthn relying-party configuration');
   const authorizationRandom = options.authorizationRandomBytes ?? randomBytes;
-  const ownerHandle = authorizationRandom(32);
-  if (ownerHandle.length !== 32) throw new Error('Authorization randomness must return exactly 32 bytes');
+  const ownerHandle = passkeyAuthEnabled ? authorizationRandom(32) : undefined;
+  if (ownerHandle && ownerHandle.length !== 32)
+    throw new Error('Authorization randomness must return exactly 32 bytes');
   const root = resolve(options.root);
   const databasePath = options.dataDir
     ? join(resolve(options.dataDir), 'relay.sqlite')
@@ -273,18 +276,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
     recoverExitedSession = (sessionId) => supervisor.recover(sessionId);
   }
-  let authorization: SqliteAuthorizationStore;
-  try {
-    authorization = new SqliteAuthorizationStore(options.homeDirectory ?? homedir(), relyingParty);
-    authorization.initializeOwner(ownerHandle);
-  } catch (error) {
-    database.close();
-    throw error;
+  let authorization: SqliteAuthorizationStore | undefined;
+  if (passkeyAuthEnabled) {
+    try {
+      authorization = new SqliteAuthorizationStore(options.homeDirectory ?? homedir(), relyingParty);
+      authorization.initializeOwner(ownerHandle!);
+    } catch (error) {
+      database.close();
+      throw error;
+    }
   }
   let app;
   try {
     app = await buildApp({
-    auth: {
+    ...(authorization ? { auth: {
       repository: authorization,
       clock: { now: options.authorizationClock ?? (() => new Date()) },
       random: {
@@ -305,7 +310,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
       relyingParty,
-    },
+    } } : { passkeyAuthDisabled: true }),
     health: {
       async read() {
         return {
@@ -467,7 +472,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     });
   } catch (error) {
-    authorization.close();
+    authorization?.close();
     database.close();
     throw error;
   }
@@ -499,7 +504,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     runtime?.stopAll();
     planStatusSource.closeAll();
     database.close();
-    authorization.close();
+    authorization?.close();
   });
   return app;
 }

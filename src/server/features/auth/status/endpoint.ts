@@ -30,3 +30,11 @@ export function registerAuthStatus(
     };
   });
 }
+
+export function registerDisabledAuthStatus(app: FastifyInstance): void {
+  app.get('/api/auth/status', async () => ({
+    status: 'authenticated',
+    publicOrigin: '',
+    passkeyAuthEnabled: false,
+  }));
+}

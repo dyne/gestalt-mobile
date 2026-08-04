@@ -12,7 +12,11 @@ import type {
 } from '@simplewebauthn/browser';
 
 export type AuthStatus = 'bootstrap' | 'locked' | 'authenticated';
-export type AuthStatusResponse = { status: AuthStatus; publicOrigin: string };
+export type AuthStatusResponse = {
+  status: AuthStatus;
+  publicOrigin: string;
+  passkeyAuthEnabled?: boolean;
+};
 export type CeremonyOptions = {
   options: PublicKeyCredentialCreationOptionsJSON | PublicKeyCredentialRequestOptionsJSON;
 };
@@ -34,7 +38,9 @@ function isStatus(value: unknown): value is AuthStatusResponse {
     ['bootstrap', 'locked', 'authenticated'].includes(
       (value as { status?: unknown }).status as string,
     ) &&
-    typeof (value as { publicOrigin?: unknown }).publicOrigin === 'string'
+    typeof (value as { publicOrigin?: unknown }).publicOrigin === 'string' &&
+    ((value as { passkeyAuthEnabled?: unknown }).passkeyAuthEnabled === undefined ||
+      typeof (value as { passkeyAuthEnabled?: unknown }).passkeyAuthEnabled === 'boolean')
   );
 }
 

@@ -58,4 +58,15 @@ describe('AppHeader', () => {
     await fireEvent.click(action);
     expect(ondevices).toHaveBeenCalledWith(action);
   });
+
+  it('omits passkey-only actions when passkey access control is disabled', () => {
+    render(AppHeader, {
+      theme: 'system',
+      passkeyAuthEnabled: false,
+      onthemechange: () => {},
+    });
+
+    expect(screen.queryByRole('button', { name: 'Authorized devices', hidden: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Lock Gestalt Mobile', hidden: true })).toBeNull();
+  });
 });

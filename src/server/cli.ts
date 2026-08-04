@@ -26,6 +26,7 @@ Options:
   --host <address>   Listen address (default: 127.0.0.1)
   --port <number>    Listen port (default: 3000)
   --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
+  --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server
@@ -164,6 +165,10 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
   if (invocation.command === 'list') return listSkillProfiles(skillProfiles, stdout, stderr);
 
   const config = invocation.config;
+  if (!config.passkeyAuthEnabled)
+    stderr.write(
+      'WARNING: Passkey access control is disabled; anyone who can reach this server has full access.\n',
+    );
   let explicitSkillProfile;
   try {
     explicitSkillProfile = config.skillsProfile
@@ -181,6 +186,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     root: config.root,
     dataDir: config.dataDir,
     relyingParty: config.relyingParty,
+    passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),
     profiles: new CodexProfileCatalog(),
     installedCodexVersion: await (dependencies.probeCodexVersion ?? probeCodexVersion)(),

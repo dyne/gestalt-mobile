@@ -20,7 +20,7 @@ describe('auth state machine', () => {
 
   it('moves checking to unsupported when passkeys are unavailable', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
-    const status = vi.fn();
+    const status = vi.fn(async () => ({ status: 'locked', publicOrigin: 'https://relay.test' }));
     const states: AuthState[] = [];
     const machine = createAuthStateMachine({ status } as never, (state) => states.push(state));
     await machine.check();
@@ -28,7 +28,7 @@ describe('auth state machine', () => {
       { kind: 'checking' },
       { kind: 'unsupported', message: 'Passkeys require a secure browser on this device.' },
     ]);
-    expect(status).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledOnce();
   });
 
   it.each(['bootstrap', 'locked', 'authenticated'] as const)(
@@ -41,7 +41,9 @@ describe('auth state machine', () => {
         { kind: 'checking' },
         status === 'bootstrap'
           ? { kind: 'bootstrap', publicOrigin: 'https://relay.test' }
-          : { kind: status },
+          : status === 'authenticated'
+            ? { kind: 'authenticated', passkeyAuthEnabled: true }
+            : { kind: status },
       ]);
     },
   );
@@ -62,6 +64,24 @@ describe('auth state machine', () => {
     });
   });
 
+  it('enters the relay without requiring browser passkey support when access control is disabled', async () => {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+    const states: AuthState[] = [];
+    const status = vi.fn(async () => ({
+      status: 'authenticated',
+      publicOrigin: '',
+      passkeyAuthEnabled: false,
+    }));
+    const machine = createAuthStateMachine({ status } as never, (state) => states.push(state));
+
+    await machine.check();
+
+    expect(states).toEqual([
+      { kind: 'checking' },
+      { kind: 'authenticated', passkeyAuthEnabled: false },
+    ]);
+  });
+
   it('keeps a no-session enrollment handoff focused on registration', async () => {
     const states: AuthState[] = [];
     const machine = createAuthStateMachine(client('locked'), (state) => states.push(state));
@@ -75,7 +95,7 @@ describe('auth state machine', () => {
     machine.authenticated();
     machine.locked('Your session ended.');
     expect(states).toEqual([
-      { kind: 'authenticated' },
+      { kind: 'authenticated', passkeyAuthEnabled: true },
       { kind: 'locked', message: 'Your session ended.' },
     ]);
   });

@@ -48,7 +48,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#if authState.kind === 'authenticated'}
-  <RelayApp {authorizedFetch} onlock={() => void lockRelay()} oncreatepasskey={createPasskeyHere} />
+  <RelayApp
+    {authorizedFetch}
+    passkeyAuthEnabled={authState.passkeyAuthEnabled}
+    onlock={() => void lockRelay()}
+    oncreatepasskey={createPasskeyHere}
+  />
 {:else if authState.kind === 'bootstrap' || authState.kind === 'enrollment'}
   <FirstDeviceEnrollment
     {client}

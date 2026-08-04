@@ -77,7 +77,10 @@ import { registerRegistrationOptions } from './features/auth/register/options/en
 import { registerRegistrationVerification } from './features/auth/register/verify/endpoint.js';
 import { registerLoginOptions } from './features/auth/login/options/endpoint.js';
 import { registerLoginVerification } from './features/auth/login/verify/endpoint.js';
-import { registerAuthStatus } from './features/auth/status/endpoint.js';
+import {
+  registerAuthStatus,
+  registerDisabledAuthStatus,
+} from './features/auth/status/endpoint.js';
 import { registerLogout } from './features/auth/logout/endpoint.js';
 import { registerListAuthorizedDevices } from './features/auth/devices/list/endpoint.js';
 import { registerRenameAuthorizedDevice } from './features/auth/devices/rename/endpoint.js';
@@ -185,6 +188,7 @@ export type AppDependencies = {
     webauthn: WebAuthnCeremonyService;
     relyingParty: { publicOrigin: string; rpId: string; rpName: string };
   };
+  passkeyAuthDisabled?: boolean;
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
@@ -211,7 +215,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     registerCreateEnrollmentTicket(app, deps.auth);
     registerEnrollmentTicketStatus(app, deps.auth);
     registerCancelEnrollmentTicket(app, deps.auth);
-  }
+  } else if (deps.passkeyAuthDisabled) registerDisabledAuthStatus(app);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   if (deps.recentThreads)
     registerListRecentThreads(app, {
