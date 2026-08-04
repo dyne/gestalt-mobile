@@ -118,6 +118,14 @@ describe('registration endpoints', () => {
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().code).toBe('INVALID_REGISTRATION_REQUEST');
+    const malformedTicket = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register/options',
+      payload: { enrollmentTicket: ' browser-ticket' },
+    });
+    expect(malformedTicket.statusCode).toBe(400);
+    expect(malformedTicket.json().code).toBe('INVALID_REGISTRATION_REQUEST');
+    expect(malformedTicket.headers['set-cookie']).toBeUndefined();
     const response = await app.inject({
       method: 'POST',
       url: '/api/auth/register/options',

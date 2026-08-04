@@ -3,6 +3,8 @@
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+import cookie from '@fastify/cookie';
+import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../../app.js';
 import {
@@ -18,6 +20,8 @@ import {
   webAuthnCredentialId,
 } from '../domain/identifiers.js';
 import { deviceNickname } from '../domain/device-nickname.js';
+import { registerLogout } from '../logout/endpoint.js';
+import { registerAuthStatus } from '../status/endpoint.js';
 
 const rp = { publicOrigin: 'https://gestalt.example', rpId: 'gestalt.example', rpName: 'Gestalt' };
 const clock = { now: () => new Date('2026-08-02T00:00:00.000Z') };
@@ -567,6 +571,29 @@ describe('login endpoints', () => {
     expect(logout.headers['set-cookie']).toContain('Secure');
     expect(logout.headers['set-cookie']).toContain('HttpOnly');
     expect(logout.headers['set-cookie']).toContain('SameSite=Strict');
+    await instance.close();
+  });
+  it('treats malformed session cookies as locked and clears them without revocation', async () => {
+    const instance = fastify();
+    await instance.register(cookie);
+    instance.addHook('preHandler', async (request) => {
+      request.cookies.gestalt_mobile_session = ' forged';
+    });
+    let repositoryCalls = 0;
+    const repository = repo({
+      sessionDevice: () => { repositoryCalls++; return device.id; },
+      revokeSession: () => { repositoryCalls++; return true; },
+      listAuthorizedDevices: () => [device],
+    });
+    registerAuthStatus(instance, { repository, clock, relyingParty: rp });
+    registerLogout(instance, { repository, clock, relyingParty: rp });
+    const status = await instance.inject({ method: 'GET', url: '/api/auth/status' });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toEqual({ status: 'locked', publicOrigin: rp.publicOrigin });
+    const logout = await instance.inject({ method: 'POST', url: '/api/auth/logout' });
+    expect(logout.statusCode).toBe(204);
+    expect(logout.headers['set-cookie']).toContain('Max-Age=0');
+    expect(repositoryCalls).toBe(0);
     await instance.close();
   });
   it.each(['expired', 'device-revoked'])(

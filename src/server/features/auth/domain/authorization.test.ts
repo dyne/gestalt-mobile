@@ -9,7 +9,13 @@ import { describe, expect, it } from 'vitest';
 import { LocalOwnerAuthorization, type AuthorizedDevice } from './authorization.js';
 import { deviceNickname } from './device-nickname.js';
 import { AuthorizationDomainError } from './errors.js';
-import { authorizedDeviceId, localOwnerId, webAuthnCredentialId } from './identifiers.js';
+import {
+  authorizedDeviceId,
+  localOwnerId,
+  parseAuthorizationSessionId,
+  parseEnrollmentTicketId,
+  webAuthnCredentialId,
+} from './identifiers.js';
 
 const owner = { id: localOwnerId('owner-1'), userHandle: new Uint8Array([1, 2, 3]) };
 const device = (id: string, credential: string, type: AuthorizedDevice['deviceType'] = 'singleDevice') => ({
@@ -42,6 +48,14 @@ describe('LocalOwnerAuthorization', () => {
     expect(() => localOwnerId(' owner')).toThrow('LOCAL_OWNER_ID_INVALID');
     expect(() => authorizedDeviceId('')).toThrow('AUTHORIZED_DEVICE_ID_INVALID');
     expect(webAuthnCredentialId('credential-1')).toBe('credential-1');
+  });
+
+  it('parses untrusted session and enrollment IDs without throwing', () => {
+    expect(parseAuthorizationSessionId('session')).toBe('session');
+    expect(parseAuthorizationSessionId(' session')).toBeNull();
+    expect(parseAuthorizationSessionId(undefined)).toBeNull();
+    expect(parseEnrollmentTicketId('ticket')).toBe('ticket');
+    expect(parseEnrollmentTicketId('ticket ')).toBeNull();
   });
 
   it('starts with a first device and rejects duplicate credentials', () => {

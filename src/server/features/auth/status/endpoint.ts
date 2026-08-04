@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { AuthorizationRepository, Clock } from '../application/ports.js';
-import { authorizationSessionId } from '../domain/identifiers.js';
+import { parseAuthorizationSessionId } from '../domain/identifiers.js';
 export function registerAuthStatus(
   app: FastifyInstance,
   deps: {
@@ -16,12 +16,10 @@ export function registerAuthStatus(
 ): void {
   app.get('/api/auth/status', async (request) => {
     const token = request.cookies.gestalt_mobile_session;
+    const session = parseAuthorizationSessionId(token);
     const authenticated =
-      typeof token === 'string' &&
-      deps.repository.sessionDevice(
-        authorizationSessionId(token),
-        deps.clock.now().toISOString(),
-      ) !== null;
+      session !== null &&
+      deps.repository.sessionDevice(session, deps.clock.now().toISOString()) !== null;
     return {
       status: authenticated
         ? 'authenticated'

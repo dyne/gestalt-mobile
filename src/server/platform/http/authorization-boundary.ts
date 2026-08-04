@@ -7,13 +7,14 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { AuthorizationRepository, Clock } from '../../features/auth/application/ports.js';
-import { authorizationSessionId } from '../../features/auth/domain/identifiers.js';
+import { parseAuthorizationSessionId } from '../../features/auth/domain/identifiers.js';
 import { problem } from './problem.js';
 
 const publicApi = new Set([
   'GET /api/auth/status',
   'POST /api/auth/login/options',
   'POST /api/auth/login/verify',
+  'POST /api/auth/logout',
   'POST /api/auth/register/options',
   'POST /api/auth/register/verify',
 ]);
@@ -50,9 +51,10 @@ export function authorizationSessionDevice(
   deps: Pick<AuthorizationBoundaryDependencies, 'repository' | 'clock'>,
 ) {
   const token = cookieValue(cookieHeader, 'gestalt_mobile_session');
-  return token === undefined
+  const session = parseAuthorizationSessionId(token);
+  return session === null
     ? null
-    : deps.repository.sessionDevice(authorizationSessionId(token), deps.clock.now().toISOString());
+    : deps.repository.sessionDevice(session, deps.clock.now().toISOString());
 }
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
