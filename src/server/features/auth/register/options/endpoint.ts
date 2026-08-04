@@ -7,7 +7,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { problem } from '../../../../platform/http/problem.js';
 import type { AuthorizationRepository, Clock, RandomBytes, WebAuthnCeremonyService } from '../../application/ports.js';
-import { enrollmentTicketId, passkeyCeremonyId } from '../../domain/identifiers.js';
+import { parseEnrollmentTicketId, passkeyCeremonyId } from '../../domain/identifiers.js';
 
 const requestSchema = z.object({ enrollmentTicket: z.string().min(1).optional() }).strict();
 const optionsResponseSchema = z.object({ options: z.object({ challenge: z.string().min(1) }).passthrough() }).strict();
@@ -17,10 +17,11 @@ export function registerRegistrationOptions(app: FastifyInstance, deps: { reposi
   app.post('/api/auth/register/options', async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).type('application/problem+json').send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
+    const ticket = parsed.data.enrollmentTicket === undefined ? undefined : parseEnrollmentTicketId(parsed.data.enrollmentTicket);
+    if (ticket === null) return reply.code(400).type('application/problem+json').send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
     const owner = deps.repository.readOwner();
     const devices = deps.repository.listAuthorizedDevices();
     const now = deps.clock.now();
-    const ticket = parsed.data.enrollmentTicket ? enrollmentTicketId(parsed.data.enrollmentTicket) : undefined;
     if (devices.length > 0 && (!ticket || !deps.repository.ticketAvailable(ticket, now.toISOString())))
       return reply.code(403).type('application/problem+json').send(problem('ENROLLMENT_NOT_AUTHORIZED', 403, 'Registration is not authorized.'));
     const ownerHandle = owner ? undefined : deps.random.bytes(32);

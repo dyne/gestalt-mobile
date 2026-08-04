@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import type { AuthorizationRepository, Clock } from '../application/ports.js';
-import { authorizationSessionId } from '../domain/identifiers.js';
+import { parseAuthorizationSessionId } from '../domain/identifiers.js';
 export function registerLogout(
   app: FastifyInstance,
   deps: {
@@ -16,8 +16,9 @@ export function registerLogout(
 ): void {
   app.post('/api/auth/logout', async (request, reply) => {
     const token = request.cookies.gestalt_mobile_session;
-    if (typeof token === 'string')
-      deps.repository.revokeSession(authorizationSessionId(token), deps.clock.now().toISOString());
+    const session = parseAuthorizationSessionId(token);
+    if (session !== null)
+      deps.repository.revokeSession(session, deps.clock.now().toISOString());
     reply.clearCookie('gestalt_mobile_session', {
       path: '/',
       httpOnly: true,

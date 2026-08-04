@@ -35,13 +35,30 @@ export function passkeyCeremonyId(value: string): PasskeyCeremonyId {
   return opaqueId(value, 'PASSKEY_CEREMONY_ID_INVALID') as PasskeyCeremonyId;
 }
 export function enrollmentTicketId(value: string): EnrollmentTicketId {
-  return opaqueId(value, 'ENROLLMENT_TICKET_ID_INVALID') as EnrollmentTicketId;
+  const parsed = parseEnrollmentTicketId(value);
+  if (parsed === null) throw new AuthorizationDomainError('ENROLLMENT_TICKET_ID_INVALID');
+  return parsed;
 }
 export function authorizationSessionId(value: string): AuthorizationSessionId {
-  return opaqueId(value, 'AUTHORIZATION_SESSION_ID_INVALID') as AuthorizationSessionId;
+  const parsed = parseAuthorizationSessionId(value);
+  if (parsed === null) throw new AuthorizationDomainError('AUTHORIZATION_SESSION_ID_INVALID');
+  return parsed;
+}
+
+export function parseEnrollmentTicketId(value: unknown): EnrollmentTicketId | null {
+  return opaqueIdOrNull(value) as EnrollmentTicketId | null;
+}
+
+export function parseAuthorizationSessionId(value: unknown): AuthorizationSessionId | null {
+  return opaqueIdOrNull(value) as AuthorizationSessionId | null;
 }
 
 function opaqueId(value: string, code: string): string {
-  if (!value || value.trim() !== value) throw new AuthorizationDomainError(code);
-  return value;
+  const parsed = opaqueIdOrNull(value);
+  if (parsed === null) throw new AuthorizationDomainError(code);
+  return parsed;
+}
+
+function opaqueIdOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 && value.trim() === value ? value : null;
 }

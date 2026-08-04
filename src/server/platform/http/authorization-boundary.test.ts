@@ -25,6 +25,7 @@ async function app() {
   instance.get('/api/auth/status', async () => ({ status: 'locked' }));
   instance.post('/api/auth/login/options', async () => ({ options: {} }));
   instance.post('/api/auth/login/verify', async () => ({ status: 'authenticated' }));
+  instance.post('/api/auth/logout', async () => ({ status: 'locked' }));
   instance.post('/api/auth/register/options', async () => ({ options: {} }));
   instance.post('/api/auth/register/verify', async () => ({ status: 'authenticated' }));
   instance.get('/api/bootstrap', async () => {
@@ -43,6 +44,7 @@ describe('authorization boundary', () => {
     ['GET', '/api/auth/status'],
     ['POST', '/api/auth/login/options'],
     ['POST', '/api/auth/login/verify'],
+    ['POST', '/api/auth/logout'],
     ['POST', '/api/auth/register/options'],
     ['POST', '/api/auth/register/verify'],
   ] as const)(
@@ -59,7 +61,7 @@ describe('authorization boundary', () => {
     },
   );
 
-  it.each(['missing', 'malformed', 'empty', 'duplicate', 'expired', 'revoked'])(
+  it.each(['missing', 'malformed', 'whitespace', 'empty', 'duplicate', 'expired', 'revoked'])(
     'rejects a %s session before protected handlers run',
     async (kind) => {
       const { instance, calls } = await app();
@@ -70,7 +72,9 @@ describe('authorization boundary', () => {
             ? 'gestalt_mobile_session='
             : kind === 'duplicate'
               ? 'gestalt_mobile_session=live; gestalt_mobile_session=other'
-              : `gestalt_mobile_session=${kind === 'malformed' ? '%' : kind}`;
+              : kind === 'whitespace'
+                ? 'gestalt_mobile_session= forged'
+                : `gestalt_mobile_session=${kind === 'malformed' ? '%' : kind}`;
       const response = await instance.inject({
         method: 'GET',
         url: '/api/bootstrap',

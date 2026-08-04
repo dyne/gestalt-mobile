@@ -53,6 +53,41 @@ describe('create enrollment ticket endpoint', () => {
     await app.close();
   });
 
+  it('treats malformed creator cookies as unauthenticated without invoking repository operations', async () => {
+    const app = fastify();
+    await app.register(cookie);
+    app.addHook('preHandler', async (request) => {
+      request.cookies.gestalt_mobile_session = ' forged';
+    });
+    let repositoryCalls = 0;
+    const repository = {
+      sessionDevice: () => { repositoryCalls++; return null; },
+      issueEnrollmentTicket: () => { repositoryCalls++; },
+      enrollmentTicketStatus: () => { repositoryCalls++; return 'none' as const; },
+      cancelEnrollmentTicket: () => { repositoryCalls++; return false; },
+    };
+    const deps = {
+      repository: repository as never,
+      clock: { now: () => new Date('2026-08-02T00:00:00.000Z') },
+    };
+    registerCreateEnrollmentTicket(app, {
+      ...deps,
+      random: { bytes: (length) => new Uint8Array(length) },
+      relyingParty: { publicOrigin: 'https://relay.example' },
+    });
+    registerEnrollmentTicketStatus(app, deps);
+    registerCancelEnrollmentTicket(app, deps);
+    for (const [method, url] of [
+      ['POST', '/api/auth/enrollment-tickets'],
+      ['GET', '/api/auth/enrollment-tickets/current'],
+      ['DELETE', '/api/auth/enrollment-tickets/current'],
+    ] as const) {
+      expect((await app.inject({ method, url })).statusCode).toBe(401);
+    }
+    expect(repositoryCalls).toBe(0);
+    await app.close();
+  });
+
   it('exposes only tokenless current status and truthful cancel responses for a live creator session', async () => {
     const app = fastify();
     await app.register(cookie);

@@ -7,16 +7,16 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { AuthorizationRepository, Clock } from '../../application/ports.js';
-import { authorizationSessionId } from '../../domain/identifiers.js';
+import { parseAuthorizationSessionId } from '../../domain/identifiers.js';
 
 const responseSchema = z.object({ status: z.enum(['none', 'used', 'expired']) }).strict();
 export function registerCancelEnrollmentTicket(app: FastifyInstance, deps: { repository: AuthorizationRepository; clock: Clock }): void {
   app.delete('/api/auth/enrollment-tickets/current', async (request, reply) => {
     const rawSession = request.cookies.gestalt_mobile_session;
+    const session = parseAuthorizationSessionId(rawSession);
     const now = deps.clock.now().toISOString();
-    if (typeof rawSession !== 'string' || deps.repository.sessionDevice(authorizationSessionId(rawSession), now) === null)
+    if (session === null || deps.repository.sessionDevice(session, now) === null)
       return reply.code(401).send();
-    const session = authorizationSessionId(rawSession);
     deps.repository.cancelEnrollmentTicket(session, now);
     return reply.send(responseSchema.parse({ status: deps.repository.enrollmentTicketStatus(session, now) }));
   });

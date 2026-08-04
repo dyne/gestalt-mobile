@@ -127,7 +127,7 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
-  it('inventory-classifies every production API route and reserves exactly five public entries', async () => {
+  it('inventory-classifies every production API route and reserves exactly six public entries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
@@ -148,7 +148,7 @@ describe('production composition', () => {
       ['POST', '/api/auth/register/options', '/api/auth/register/options', 'public'],
       ['POST', '/api/auth/register/verify', '/api/auth/register/verify', 'public'],
       ['HEAD', '/api/auth/status', '/api/auth/status', 'protected'],
-      ['POST', '/api/auth/logout', '/api/auth/logout', 'protected'],
+      ['POST', '/api/auth/logout', '/api/auth/logout', 'public'],
       ['POST', '/api/auth/enrollment-tickets', '/api/auth/enrollment-tickets', 'protected'],
       ['GET', '/api/auth/enrollment-tickets/current', '/api/auth/enrollment-tickets/current', 'protected'],
       ['HEAD', '/api/auth/enrollment-tickets/current', '/api/auth/enrollment-tickets/current', 'protected'],
@@ -206,6 +206,7 @@ describe('production composition', () => {
       ['POST', '/api/auth/login/verify', '/api/auth/login/verify', 'public'],
       ['POST', '/api/auth/register/options', '/api/auth/register/options', 'public'],
       ['POST', '/api/auth/register/verify', '/api/auth/register/verify', 'public'],
+      ['POST', '/api/auth/logout', '/api/auth/logout', 'public'],
     ]);
     const unauthorized = await createUnauthorizedProductionApp(root, dataDir);
     for (const [method, pattern, url, access] of routes) {
