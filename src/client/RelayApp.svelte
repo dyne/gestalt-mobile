@@ -7,17 +7,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
 
-  let { authorizedFetch, passkeyAuthEnabled, onlock, oncreatepasskey = () => {} }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void; oncreatepasskey?: (ticket: string) => void } = $props();
+  let {
+    authorizedFetch,
+    passkeyAuthEnabled,
+    onlock,
+    oncreatepasskey = () => {},
+  }: {
+    authorizedFetch: typeof fetch;
+    passkeyAuthEnabled: boolean;
+    onlock: () => void;
+    oncreatepasskey?: (ticket: string) => void;
+  } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
   import InteractionList from './features/chat/InteractionList.svelte';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
-  import {
-    loadBootstrap,
-    type WorkspaceOption,
-  } from './features/catalog/bootstrap-client.js';
+  import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createMessageCache } from './features/chat/message-cache.js';
@@ -33,6 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     treeNodePolicies,
   } from './features/filesystem-tree/tree-state.js';
   import GitView from './features/git/GitView.svelte';
+  import { GitController, type GitState } from './features/git/git-controller.js';
   import { selectAfterClone } from './features/git/post-clone-selection.js';
   import {
     appendUserMessage,
@@ -45,7 +53,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     readUserInputQuestions,
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
-  import { mapNativeUserInputToQuiz, parseQuiz, toQuizToolResponse } from '../shared/contracts/quiz.js';
+  import {
+    mapNativeUserInputToQuiz,
+    parseQuiz,
+    toQuizToolResponse,
+  } from '../shared/contracts/quiz.js';
   import {
     createRelayClient,
     type RelayGitSummary,
@@ -59,18 +71,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { applyRelayEvent } from './features/sessions/session-events-client.js';
-  import {
-    createPlanController,
-    type PlanState,
-  } from './features/plans/plan-controller.js';
+  import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
   import { isRelayPlanUpdate } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
-  import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
+  import { turnReadiness } from './features/sessions/session-state.js';
+  import { SessionConnectionController } from './features/sessions/session-connection-controller.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
   import { getHistoryWithRecovery } from './features/sessions/history-recovery.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
+  import { SessionStartController, type SessionStartState } from './features/sessions/session-start-controller.js';
   import { nextTab, type Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
   import {
@@ -98,7 +109,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionSkillProfiles = $state.raw<RelaySkillProfile[]>([]);
   let selectedSessionSkillProfile = $state('');
   let sessionSkillProfileError = $state('');
-  let profileManagerHeading = $state<HTMLHeadingElement | null>(null);
   let sessionWorkspaceId = $state('');
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
@@ -113,7 +123,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
   let startRequestKey = $state<string | null>(null);
-  let startingSession = $state(false);
+  let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
+  let startingSession = $derived(sessionStartState.starting);
   let openingSessionId = $state<string | null>(null);
   let recoveryNotice = $state<string | null>(null);
   let message = $state('');
@@ -133,7 +144,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let navigationFocus = $state<Tab | null>(null);
   let lastPlanOpenSignal = $state('');
   let plansWorkspaceId = $derived(
-    (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) || null,
+    (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) ||
+      null,
   );
   let visiblePlanState = $derived.by<PlanState | null>(() => {
     if (passivePlan) return { kind: 'ready', sessionId: 'catalog', plan: passivePlan };
@@ -149,28 +161,34 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : undefined,
     ),
   );
-  let socket: WebSocket | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let stableConnectionTimer: ReturnType<typeof setTimeout> | null = null;
-  let historyRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  let historyRefreshInFlight = false;
-  let reconnectAttempt = 0;
-  let socketGeneration = 0;
-  let gitSummary = $state<RelayGitSummary | null>(null);
-  let gitWorkspaceId = $state<string | null>(null);
+  let gitState = $state<GitState>({ workspaceId: null, summary: null, loading: false, refreshing: false, checkingOut: false, error: null });
+  let gitWorkspaceId = $derived(gitState.workspaceId);
   let gitExpandedIds = $state<Set<string>>(new Set());
   let pushConfirmationOpen = $state(false);
-  let gitRefreshing = $state(false);
-  let gitCheckingOut = $state(false);
   let gitCloning = $state(false);
-  let gitError = $state<string | null>(null);
   let gitCloneStatus = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
-  let gitSummaryRequest = 0;
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const sessionStartController = new SessionStartController({ start: relay.startSession }, createIdempotencyKey, (next) => (sessionStartState = next));
+  const gitController = new GitController(
+    { getSummary: relay.getGitSummary, pull: relay.pullGit, checkout: relay.checkoutGitBranch },
+    (workspaceId) => Boolean(findTreeNode(workspaceTree, workspaceId)?.isGitRepository),
+    (next) => (gitState = next),
+    (error, code) => reportRelayError(error, code),
+  );
+  const connection = new SessionConnectionController({
+    selectedSessionId: () => sessionId,
+    cursor: () => cursor,
+    onopen: () => (status = turnReadiness(activeTurnId)),
+    onclose: () => (status = 'Connection interrupted. Reconnecting…'),
+    onmessage: (raw) => handleSessionSocketMessage(raw),
+    onreconcile: async () => {
+      if (sessionId) await resyncHistory(sessionId);
+    },
+  });
   const deviceClient = createDeviceClient((input, init) => authorizedFetch(input, init));
   const planController = createPlanController(
     { getPlan: relay.getPlan, closePlan: relay.closePlan },
@@ -193,9 +211,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       toastEvidence === 'stacked'
     )
       return;
-    historyRefreshTimer = setInterval(reconcileVisibleHistory, 2_000);
-    document.addEventListener('visibilitychange', reconcileVisibleHistory);
-    window.addEventListener('focus', reconcileVisibleHistory);
+    connection.start();
     try {
       const bootstrap = await loadBootstrap(authorizedFetch);
       sessionWorkspaceId =
@@ -242,13 +258,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onDestroy(() => {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
-    if (historyRefreshTimer) clearInterval(historyRefreshTimer);
-    document.removeEventListener('visibilitychange', reconcileVisibleHistory);
-    window.removeEventListener('focus', reconcileVisibleHistory);
-    socket?.close();
+    connection.dispose();
     planController.dispose();
+    gitController.dispose();
+    sessionStartController.dispose();
+    skillsState?.dispose();
   });
 
   async function startSession() {
@@ -262,21 +276,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       status = errors.profile;
       return;
     }
-    startRequestKey ??= createIdempotencyKey();
-    startingSession = true;
     status = 'Starting session…';
+    const session = await sessionStartController.start(sessionWorkspaceId, {
+      sandbox, approvalPolicy, model: sessionModel, skillProfile: selectedSessionSkillProfile || undefined,
+    });
+    if (!session) { if (sessionStartState.error) status = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED'); return; }
     try {
-      const session = await relay.startSession(
-        sessionWorkspaceId,
-        {
-          sandbox,
-          approvalPolicy,
-          model: sessionModel,
-          skillProfile: selectedSessionSkillProfile || undefined,
-        },
-        startRequestKey,
-      );
-      startRequestKey = null;
       sessionId = session.id;
       planController.select(session.id);
       activeTurnId = null;
@@ -291,11 +296,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       tab = 'chat';
       scrollTabIntoInitialPosition('chat');
       status = 'Session started.';
-    } catch (error) {
-      status = reportRelayError(error, 'SESSION_START_FAILED');
-    } finally {
-      startingSession = false;
-    }
+    } catch (error) { status = reportRelayError(error, 'SESSION_START_FAILED'); }
   }
 
   async function refreshSessions() {
@@ -327,7 +328,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         const restored = await relay.restoreSession(id);
         sessions = sessions.map((session) => (session.id === id ? restored : session));
         if (restored.recovery?.replacementCreated) {
-          recoveryNotice = 'Open created a replacement session because the prior Codex history was unavailable.';
+          recoveryNotice =
+            'Open created a replacement session because the prior Codex history was unavailable.';
         }
       }
       sessionId = id;
@@ -371,10 +373,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         activeTurnId = null;
         interactions = [];
         void sessionCache.saveSelectedSession(null);
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-        socket?.close();
-        socket = null;
+        connection.disconnect();
       }
       await refreshSessionLists();
       status = 'Session closed.';
@@ -388,7 +387,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.forgetSession(id);
       if (sessionId === id) {
-        socket?.close();
+        connection.disconnect();
         sessionId = null;
         activeTurnId = null;
         void sessionCache.saveSelectedSession(null);
@@ -410,7 +409,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (!sessionId || activeTurnId) return;
     try {
       const updated = await relay.selectModel(sessionId, model);
-      sessions = sessions.map((session) => (session.id === updated.id ? { ...session, ...updated } : session));
+      sessions = sessions.map((session) =>
+        session.id === updated.id ? { ...session, ...updated } : session,
+      );
       message = '';
       status = `Model changed to ${model}; it applies to the next turn.`;
     } catch (error) {
@@ -500,19 +501,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function reconcileVisibleHistory(): void {
-    if (
-      tab !== 'chat' ||
-      !sessionId ||
-      document.visibilityState !== 'visible' ||
-      historyRefreshInFlight
-    )
-      return;
-    historyRefreshInFlight = true;
-    void resyncHistory(sessionId)
-      .catch(() => undefined)
-      .finally(() => {
-        historyRefreshInFlight = false;
-      });
+    if (tab === 'chat' && sessionId) connection.resync();
   }
 
   function selectTab(next: Tab, focusChatPrompt = false): void {
@@ -524,7 +513,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       reconcileVisibleHistory();
       if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
-    if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
+    if (next === 'git' && gitWorkspaceId) void gitController.refresh();
     if (next === 'plan') void loadPlansCatalog();
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
@@ -578,7 +567,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     plansCatalogRequest = request;
     const generation = ++plansCatalogGeneration;
     plansCatalog = { kind: 'loading', workspaceId };
-    void relay.listWorkspacePlans(workspaceId, request.signal)
+    void relay
+      .listWorkspacePlans(workspaceId, request.signal)
       .then((entries) => {
         if (generation !== plansCatalogGeneration || request.signal.aborted) return;
         plansCatalog = { kind: 'ready', workspaceId, entries };
@@ -600,7 +590,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const request = new AbortController();
     passivePlanRequest = request;
     const generation = ++passivePlanGeneration;
-    void relay.getWorkspacePlan(workspaceId, planName, request.signal)
+    void relay
+      .getWorkspacePlan(workspaceId, planName, request.signal)
       .then((plan) => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
         passivePlan = plan;
@@ -641,7 +632,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         selectedSessionSkillProfile = '';
     } catch (error) {
       sessionSkillProfiles = [];
-      sessionSkillProfileError = error instanceof Error ? error.message : 'Unable to load saved skill profiles.';
+      sessionSkillProfileError =
+        error instanceof Error ? error.message : 'Unable to load saved skill profiles.';
     }
   }
 
@@ -654,8 +646,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     await loadSkills(workspaceId, profile);
     sessionSubview = 'profile-manager';
-    await tick();
-    profileManagerHeading?.focus();
+  }
+
+  function focusOnAttach(element: HTMLElement): void {
+    queueMicrotask(() => element.focus());
   }
 
   async function closeProfileManager(returnFocus = true): Promise<void> {
@@ -689,51 +683,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
   }
 
-  async function loadGitSummary(workspaceId = gitWorkspaceId) {
-    const selected = workspaceId ? findTreeNode(workspaceTree, workspaceId) : undefined;
-    if (!workspaceId || !selected?.isGitRepository) {
-      gitSummaryRequest += 1;
-      gitSummary = null;
-      return;
-    }
-    const request = ++gitSummaryRequest;
-    try {
-      const summary = await relay.getGitSummary(workspaceId);
-      if (request === gitSummaryRequest && gitWorkspaceId === workspaceId) gitSummary = summary;
-    } catch (error) {
-      if (request !== gitSummaryRequest || gitWorkspaceId !== workspaceId) return;
-      gitSummary = null;
-      gitError = reportRelayError(error, 'GIT_SUMMARY_FAILED');
-    }
-  }
-
   function selectGitWorkspace(node: WorkspaceOption): void {
-    gitWorkspaceId = node.id;
-    gitError = null;
-    gitSummary = null;
+    gitController.select(node.id);
     pushConfirmationOpen = false;
-    if (node.isGitRepository) void loadGitSummary(node.id);
-    else {
-      gitSummaryRequest += 1;
-      gitSummary = null;
-    }
   }
 
   async function pullGit() {
     const workspaceId = gitWorkspaceId;
     if (!workspaceId || !findTreeNode(workspaceTree, workspaceId)?.isGitRepository) return;
     refreshRequestKey ??= createIdempotencyKey();
-    gitRefreshing = true;
-    gitError = null;
-    try {
-      await relay.pullGit(workspaceId, refreshRequestKey);
-      await loadGitSummary(workspaceId);
-      refreshRequestKey = null;
-    } catch (error) {
-      gitError = reportRelayError(error, 'GIT_PULL_FAILED');
-    } finally {
-      gitRefreshing = false;
-    }
+    await gitController.pull(refreshRequestKey);
+    if (!gitState.error) refreshRequestKey = null;
   }
 
   async function cloneGitRepository(address: string) {
@@ -750,7 +710,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     const workspaceId = destination.id;
     gitCloning = true;
-    gitError = null;
     gitCloneStatus = null;
     try {
       await relay.cloneGitRepository(workspaceId, address);
@@ -770,11 +729,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           treeNodePolicies.sessionBase,
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
-      gitWorkspaceId = postClone.selectedId;
+      gitController.select(postClone.selectedId);
       gitExpandedIds = postClone.expandedIds;
-      if (gitWorkspaceId && findTreeNode(workspaceTree, gitWorkspaceId)?.isGitRepository)
-        await loadGitSummary(gitWorkspaceId);
-      else gitSummary = null;
       gitCloneStatus = 'Repository cloned into the selected workspace.';
       toastQueue.enqueue({ kind: 'success', message: 'Repository cloned.' });
     } catch (error) {
@@ -786,31 +742,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function checkoutGitBranch(branch: string) {
     const workspaceId = gitWorkspaceId;
-    if (!workspaceId || branch === gitSummary?.branch) return;
-    gitCheckingOut = true;
-    gitError = null;
-    try {
-      await relay.checkoutGitBranch(workspaceId, branch);
-      await loadGitSummary(workspaceId);
-    } catch (error) {
-      gitError = reportRelayError(error, 'GIT_CHECKOUT_FAILED');
-    } finally {
-      gitCheckingOut = false;
-    }
+    if (!workspaceId) return;
+    await gitController.checkout(branch);
   }
 
   async function pushGit() {
     const workspaceId = gitWorkspaceId;
     if (!workspaceId) return;
     pushRequestKey ??= createIdempotencyKey();
-    gitError = null;
     try {
       await relay.pushGit(workspaceId, pushRequestKey);
       pushConfirmationOpen = false;
-      await loadGitSummary(workspaceId);
+      await gitController.refresh();
       pushRequestKey = null;
     } catch (error) {
-      gitError = reportRelayError(error, 'GIT_PUSH_FAILED');
+      reportRelayError(error, 'GIT_PUSH_FAILED');
     }
   }
 
@@ -820,15 +766,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
   }
 
-  async function resolveUserInput(interaction: { requestId: string; kind: string; payload: unknown }) {
+  async function resolveUserInput(interaction: {
+    requestId: string;
+    kind: string;
+    payload: unknown;
+  }) {
     if (!sessionId) return;
-    const quiz = interaction.kind === 'quiz' ? parseQuiz(interaction.payload) : mapNativeUserInputToQuiz(interaction.payload);
+    const quiz =
+      interaction.kind === 'quiz'
+        ? parseQuiz(interaction.payload)
+        : mapNativeUserInputToQuiz(interaction.payload);
     if (!quiz) return;
     const answers = quiz.questions.map((question) => ({
-        id: question.id,
-        answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
-      }));
-    const response = interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
+      id: question.id,
+      answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
+    }));
+    const response =
+      interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
     try {
       await relay.respondInteraction(sessionId, interaction.requestId, response);
       interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
@@ -878,109 +832,91 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function connectSession(id: string) {
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
-    socket?.close();
-    const generation = ++socketGeneration;
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    socket = new WebSocket(
-      `${protocol}//${location.host}/api/sessions/${encodeURIComponent(id)}/events?after=${cursor}`,
-    );
-    socket.onopen = () => {
-      if (generation !== socketGeneration || sessionId !== id) return;
-      status = turnReadiness(activeTurnId);
-      reconcileVisibleHistory();
-      stableConnectionTimer = setTimeout(() => {
-        reconnectAttempt = 0;
-      }, 30_000);
-    };
-    socket.onmessage = (message) => {
-      const envelope = JSON.parse(String(message.data));
-      if (envelope.type === 'relay.resyncRequired') {
-        void resyncHistory(
-          id,
-          typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0,
-        );
-        return;
-      }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
-        const interaction = envelope.event.payload as {
-          requestId: string;
-          kind: string;
-          payload: unknown;
-        };
-        if (!interactions.some((item) => item.requestId === interaction.requestId))
-          interactions = [...interactions, interaction];
-      }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') {
-        activeTurnId = null;
-        status = turnReadiness(activeTurnId);
-        messages = completeMessage(messages, `assistant-${id}`);
-        persistMessages(id);
-        void resyncHistory(id).catch(() => undefined);
-      }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'session.updated') {
-        const updated = envelope.event.payload;
-        if (
-          typeof updated === 'object' &&
-          updated !== null &&
-          (updated as { id?: unknown }).id === id
-        ) {
-          const session = updated as RelaySession;
-          const previousTurnId = activeTurnId;
-          activeTurnId = typeof session.activeTurnId === 'string' ? session.activeTurnId : null;
-          if (previousTurnId && !activeTurnId) status = turnReadiness(activeTurnId);
-          sessions = sessions.map((item) => (item.id === id ? { ...item, ...session } : item));
-        }
-      }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
-        const { requestId } = envelope.event.payload as { requestId: string };
-        interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
-      }
-      if (envelope.type === 'relay.event' && envelope.event?.type === 'activity.updated') {
-        const activity = envelope.event.payload as HistoryActivity;
-        if (
-          typeof activity.id === 'string' &&
-          typeof activity.label === 'string' &&
-          typeof activity.detail === 'string'
-        )
-          activities = [...activities.filter((item) => item.id !== activity.id), activity];
-      }
-      cursor = applyRelayEvent(
-        cursor,
-        envelope,
-        (text) => {
-          messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
-          persistMessages(id);
-        },
-        () => {
-          void resyncHistory(id);
-        },
-        (event) => {
-          planController.applyEvent(id, event);
-          if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
-          if (
-            event.payload.reason !== 'authoring-start' &&
-            event.payload.reason !== 'work-start' &&
-            event.payload.reason !== 'supervision-start' &&
-            event.payload.reason !== 'resync'
-          )
-            return;
-          const signal = `${id}:${event.sequence}`;
-          if (signal === lastPlanOpenSignal) return;
-          lastPlanOpenSignal = signal;
-          tab = 'plan';
-          scrollTabIntoInitialPosition('plan');
-        },
+    connection.connect(id);
+  }
+
+  function handleSessionSocketMessage(raw: string) {
+    if (!sessionId) return;
+    const id = sessionId;
+    const envelope = JSON.parse(raw);
+    if (envelope.type === 'relay.resyncRequired') {
+      void resyncHistory(
+        id,
+        typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0,
       );
-      void sessionCache.saveCursor(id, cursor);
-    };
-    socket.onclose = () => {
-      if (generation !== socketGeneration || sessionId !== id) return;
-      if (stableConnectionTimer) clearTimeout(stableConnectionTimer);
-      status = 'Connection interrupted. Reconnecting…';
-      reconnectTimer = setTimeout(() => connectSession(id), reconnectDelay(reconnectAttempt++));
-    };
+      return;
+    }
+    if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
+      const interaction = envelope.event.payload as {
+        requestId: string;
+        kind: string;
+        payload: unknown;
+      };
+      if (!interactions.some((item) => item.requestId === interaction.requestId))
+        interactions = [...interactions, interaction];
+    }
+    if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') {
+      activeTurnId = null;
+      status = turnReadiness(activeTurnId);
+      messages = completeMessage(messages, `assistant-${id}`);
+      persistMessages(id);
+      void resyncHistory(id).catch(() => undefined);
+    }
+    if (envelope.type === 'relay.event' && envelope.event?.type === 'session.updated') {
+      const updated = envelope.event.payload;
+      if (
+        typeof updated === 'object' &&
+        updated !== null &&
+        (updated as { id?: unknown }).id === id
+      ) {
+        const session = updated as RelaySession;
+        const previousTurnId = activeTurnId;
+        activeTurnId = typeof session.activeTurnId === 'string' ? session.activeTurnId : null;
+        if (previousTurnId && !activeTurnId) status = turnReadiness(activeTurnId);
+        sessions = sessions.map((item) => (item.id === id ? { ...item, ...session } : item));
+      }
+    }
+    if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
+      const { requestId } = envelope.event.payload as { requestId: string };
+      interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
+    }
+    if (envelope.type === 'relay.event' && envelope.event?.type === 'activity.updated') {
+      const activity = envelope.event.payload as HistoryActivity;
+      if (
+        typeof activity.id === 'string' &&
+        typeof activity.label === 'string' &&
+        typeof activity.detail === 'string'
+      )
+        activities = [...activities.filter((item) => item.id !== activity.id), activity];
+    }
+    cursor = applyRelayEvent(
+      cursor,
+      envelope,
+      (text) => {
+        messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
+        persistMessages(id);
+      },
+      () => {
+        void resyncHistory(id);
+      },
+      (event) => {
+        planController.applyEvent(id, event);
+        if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
+        if (
+          event.payload.reason !== 'authoring-start' &&
+          event.payload.reason !== 'work-start' &&
+          event.payload.reason !== 'supervision-start' &&
+          event.payload.reason !== 'resync'
+        )
+          return;
+        const signal = `${id}:${event.sequence}`;
+        if (signal === lastPlanOpenSignal) return;
+        lastPlanOpenSignal = signal;
+        tab = 'plan';
+        scrollTabIntoInitialPosition('plan');
+      },
+    );
+    void sessionCache.saveCursor(id, cursor);
   }
 </script>
 
@@ -1008,7 +944,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
             )
           : null}
-        sessionModel={tab === 'chat' ? sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel : null}
+        sessionModel={tab === 'chat'
+          ? (sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel)
+          : null}
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
         {passkeyAuthEnabled}
         {onlock}
@@ -1018,136 +956,148 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if devicesOpen && passkeyAuthEnabled}
       <AuthorizedDevicesView
         client={deviceClient}
-        onclose={() => { devicesOpen = false; void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus()); }}
+        onclose={() => {
+          devicesOpen = false;
+          void tick().then(() =>
+            document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus(),
+          );
+        }}
         {onlock}
         oncreatepasskey={(ticket) => oncreatepasskey(ticket)}
       />
     {:else}
-    {#if recoveryNotice}
-      <div class="recovery-notice" role="status" aria-live="polite" aria-atomic="true">
-        <span>{recoveryNotice}</span>
-        <button type="button" onclick={() => (recoveryNotice = null)}>Dismiss</button>
-      </div>
-    {/if}
+      {#if recoveryNotice}
+        <div class="recovery-notice" role="status" aria-live="polite" aria-atomic="true">
+          <span>{recoveryNotice}</span>
+          <button type="button" onclick={() => (recoveryNotice = null)}>Dismiss</button>
+        </div>
+      {/if}
 
-    {#if tab === 'chat'}
-      <section class="chat-view" aria-labelledby="chat-title">
-        <h2 id="chat-title" class="visually-hidden">Chat</h2>
-        {#if sessionId}
-          <MessageList {messages} {activities} />
-          <InteractionList
-            {interactions}
-            answers={userInputAnswers}
-            onanswer={setUserInputAnswer}
-            onquiz={(interaction) => void resolveUserInput(interaction)}
-            onpermission={(interaction) => void resolvePermissions(interaction)}
-            ondecision={(id, decision) => void resolveInteraction(id, decision)}
-          />
-          <Composer
-            {status}
-            {message}
-            {activeTurnId}
-            starting={startingTurn}
-            models={sessionModels}
-            onchange={updateDraft}
-            onscrollbottom={scrollChatToBottom}
-            onmodelselect={(model) => void selectSessionModel(model)}
-            onsend={() => void sendMessage()}
-            oninterrupt={() => void interruptTurn()}
-          />
-        {:else}
-          <p>Start a session from the Sessions tab to chat with Codex.</p>
-        {/if}
-      </section>
-    {:else if tab === 'plan'}
-      <PlansView
-        catalog={plansCatalog}
-        state={visiblePlanState}
-        onopen={openWorkspacePlan}
-        onclose={closePlanViewer}
-      />
-    {:else if tab === 'git'}
-      <GitView
-        {workspaceTree}
-        selectedWorkspace={gitWorkspaceId
-          ? (findTreeNode(workspaceTree, gitWorkspaceId) ?? null)
-          : null}
-        expandedIds={gitExpandedIds}
-        summary={gitSummary}
-        refreshing={gitRefreshing}
-        checkingOut={gitCheckingOut}
-        cloning={gitCloning}
-        error={gitError}
-        cloneStatus={gitCloneStatus}
-        confirmingPush={pushConfirmationOpen}
-        onpull={() => void pullGit()}
-        oncheckout={(branch) => void checkoutGitBranch(branch)}
-        onopenpushconfirmation={() => (pushConfirmationOpen = true)}
-        onpush={() => void pushGit()}
-        oncancelpush={() => (pushConfirmationOpen = false)}
-        onselect={selectGitWorkspace}
-        onexpandedchange={(value) => (gitExpandedIds = value)}
-        onclone={(address) => void cloneGitRepository(address)}
-      />
-    {:else}
-      {#if sessionSubview === 'profile-manager'}
-        <section class="session-profile-manager" aria-labelledby="session-profile-manager-title">
-          <div class="session-profile-manager-header">
-            <h2 id="session-profile-manager-title" tabindex="-1" bind:this={profileManagerHeading}>Manage skill profiles</h2>
-            <button type="button" class="close-profile-manager" aria-label="Close skill profile editor" onclick={() => void closeProfileManager()}>×</button>
-          </div>
-          {#if skillsState}
-            <SkillsView
-              skillsState={skillsState}
-              onrefresh={() => skillsState?.refresh() ?? Promise.resolve()}
-              onprofileschange={() => void refreshSkillProfiles()}
-              heading="Skill profile editor"
+      {#if tab === 'chat'}
+        <section class="chat-view" aria-labelledby="chat-title">
+          <h2 id="chat-title" class="visually-hidden">Chat</h2>
+          {#if sessionId}
+            <MessageList {messages} {activities} />
+            <InteractionList
+              {interactions}
+              answers={userInputAnswers}
+              onanswer={setUserInputAnswer}
+              onquiz={(interaction) => void resolveUserInput(interaction)}
+              onpermission={(interaction) => void resolvePermissions(interaction)}
+              ondecision={(id, decision) => void resolveInteraction(id, decision)}
+            />
+            <Composer
+              {status}
+              {message}
+              {activeTurnId}
+              starting={startingTurn}
+              models={sessionModels}
+              onchange={updateDraft}
+              onscrollbottom={scrollChatToBottom}
+              onmodelselect={(model) => void selectSessionModel(model)}
+              onsend={() => void sendMessage()}
+              oninterrupt={() => void interruptTurn()}
             />
           {:else}
-            <p>Loading skill profiles…</p>
+            <p>Start a session from the Sessions tab to chat with Codex.</p>
           {/if}
         </section>
-      {:else}
-        <SessionsView
-          {sessions}
-          {recentSessions}
-          selectedSessionId={sessionId}
-          {workspaceTree}
-          workspaceId={sessionWorkspaceId}
-          expandedIds={sessionExpandedIds}
-          {sandbox}
-          {approvalPolicy}
-          models={sessionModels}
-          selectedModel={sessionModel}
-          skillProfiles={sessionSkillProfiles}
-          selectedSkillProfile={selectedSessionSkillProfile}
-          skillProfileError={sessionSkillProfileError}
-          {startingSession}
-          {openingSessionId}
-          onworkspacechange={(value) => (sessionWorkspaceId = value)}
-          onexpandedchange={(value) => (sessionExpandedIds = value)}
-          onsandboxchange={(value) => (sandbox = value)}
-          onapprovalpolicychange={(value) => (approvalPolicy = value)}
-          onmodelchange={(value) => (sessionModel = value)}
-          onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
-          onmanageprofiles={(trigger) => void openProfileManager(trigger)}
-          onopen={openSession}
-          onselectopen={openSession}
-          onclose={(id) => void closeSession(id)}
-          onopenrecent={(session) => void openRecentSession(session)}
-          onforget={(id) => void forgetSession(id)}
-          oncopyresume={(command) => void copyResumeCommand(command)}
-          onstart={() => void startSession()}
+      {:else if tab === 'plan'}
+        <PlansView
+          catalog={plansCatalog}
+          state={visiblePlanState}
+          onopen={openWorkspacePlan}
+          onclose={closePlanViewer}
         />
+      {:else if tab === 'git'}
+        <GitView
+          {workspaceTree}
+          selectedWorkspace={gitWorkspaceId
+            ? (findTreeNode(workspaceTree, gitWorkspaceId) ?? null)
+            : null}
+          expandedIds={gitExpandedIds}
+          summary={gitState.summary}
+          refreshing={gitState.refreshing}
+          checkingOut={gitState.checkingOut}
+          cloning={gitCloning}
+          error={gitState.error}
+          cloneStatus={gitCloneStatus}
+          confirmingPush={pushConfirmationOpen}
+          onpull={() => void pullGit()}
+          oncheckout={(branch) => void checkoutGitBranch(branch)}
+          onopenpushconfirmation={() => (pushConfirmationOpen = true)}
+          onpush={() => void pushGit()}
+          oncancelpush={() => (pushConfirmationOpen = false)}
+          onselect={selectGitWorkspace}
+          onexpandedchange={(value) => (gitExpandedIds = value)}
+          onclone={(address) => void cloneGitRepository(address)}
+        />
+      {:else}
+        {#if sessionSubview === 'profile-manager'}
+          <section class="session-profile-manager" aria-labelledby="session-profile-manager-title">
+            <div class="session-profile-manager-header">
+              <h2 id="session-profile-manager-title" tabindex="-1" {@attach focusOnAttach}>
+                Manage skill profiles
+              </h2>
+              <button
+                type="button"
+                class="close-profile-manager"
+                aria-label="Close skill profile editor"
+                onclick={() => void closeProfileManager()}>×</button
+              >
+            </div>
+            {#if skillsState}
+              <SkillsView
+                {skillsState}
+                onrefresh={() => skillsState?.refresh() ?? Promise.resolve()}
+                onprofileschange={() => void refreshSkillProfiles()}
+                heading="Skill profile editor"
+              />
+            {:else}
+              <p>Loading skill profiles…</p>
+            {/if}
+          </section>
+        {:else}
+          <SessionsView
+            {sessions}
+            {recentSessions}
+            selectedSessionId={sessionId}
+            {workspaceTree}
+            workspaceId={sessionWorkspaceId}
+            expandedIds={sessionExpandedIds}
+            {sandbox}
+            {approvalPolicy}
+            models={sessionModels}
+            selectedModel={sessionModel}
+            skillProfiles={sessionSkillProfiles}
+            selectedSkillProfile={selectedSessionSkillProfile}
+            skillProfileError={sessionSkillProfileError}
+            {startingSession}
+            {openingSessionId}
+            onworkspacechange={(value) => (sessionWorkspaceId = value)}
+            onexpandedchange={(value) => (sessionExpandedIds = value)}
+            onsandboxchange={(value) => (sandbox = value)}
+            onapprovalpolicychange={(value) => (approvalPolicy = value)}
+            onmodelchange={(value) => (sessionModel = value)}
+            onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
+            onmanageprofiles={(trigger) => void openProfileManager(trigger)}
+            onopen={openSession}
+            onselectopen={openSession}
+            onclose={(id) => void closeSession(id)}
+            onopenrecent={(session) => void openRecentSession(session)}
+            onforget={(id) => void forgetSession(id)}
+            oncopyresume={(command) => void copyResumeCommand(command)}
+            onstart={() => void startSession()}
+          />
+        {/if}
       {/if}
-    {/if}
 
-    <BottomNavigation
-      activeTab={tab}
-      {chatEnabled}
-      focusTab={navigationFocus}
-      onselect={selectTab}
-    />
+      <BottomNavigation
+        activeTab={tab}
+        {chatEnabled}
+        focusTab={navigationFocus}
+        onselect={selectTab}
+      />
     {/if}
   </main>
 {/if}

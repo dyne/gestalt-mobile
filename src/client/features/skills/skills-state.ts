@@ -12,8 +12,8 @@ import type {
 } from '../sessions/relay-client.js';
 
 export type SkillsClient = {
-  listAvailableSkills(workspaceId: string, profile: string, refresh?: boolean): Promise<RelaySkillList>;
-  listSkillProfiles(): Promise<RelaySkillProfileList>;
+  listAvailableSkills(workspaceId: string, profile: string, refresh?: boolean, signal?: AbortSignal): Promise<RelaySkillList>;
+  listSkillProfiles(signal?: AbortSignal): Promise<RelaySkillProfileList>;
   replaceSkillProfile(
     name: string,
     profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
@@ -44,6 +44,9 @@ export class SkillsState {
   private baseline = new Map<string, boolean>();
   private saving = false;
   private deleting = false;
+  private request: AbortController | null = null;
+  private generation = 0;
+  private disposed = false;
 
   constructor(private readonly client: SkillsClient) {}
 
@@ -64,14 +67,17 @@ export class SkillsState {
   }
 
   async load(workspaceId: string, codexProfile: string): Promise<void> {
+    const request = this.beginRequest();
+    const generation = this.generation;
     this.workspaceId = workspaceId;
     this.codexProfile = codexProfile;
     this.status = { kind: 'loading' };
     try {
       const [available, profiles] = await Promise.all([
-        this.client.listAvailableSkills(workspaceId, codexProfile),
-        this.client.listSkillProfiles(),
+        this.client.listAvailableSkills(workspaceId, codexProfile, false, request.signal),
+        this.client.listSkillProfiles(request.signal),
       ]);
+      if (!this.current(generation, request)) return;
       this.applyAvailable(available);
       this.profiles = profiles.profiles;
       const invalid = profiles.profiles.find((profile) => 'error' in profile);
@@ -81,18 +87,22 @@ export class SkillsState {
         this.status = { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') };
       else this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
     } catch (error) {
+      if (!this.current(generation, request) || request.signal.aborted) return;
       this.status = { kind: 'error', message: errorMessage(error) };
     }
   }
 
   async refresh(): Promise<void> {
+    const request = this.beginRequest();
+    const generation = this.generation;
     this.status = { kind: 'loading' };
     try {
       const available = await this.client.listAvailableSkills(
         this.workspaceId,
         this.codexProfile,
-        true,
+        true, request.signal,
       );
+      if (!this.current(generation, request)) return;
       this.applyAvailable(available);
       this.status = available.errors.length
         ? { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') }
@@ -100,6 +110,7 @@ export class SkillsState {
           ? { kind: 'ready' }
           : { kind: 'empty' };
     } catch (error) {
+      if (!this.current(generation, request) || request.signal.aborted) return;
       this.status = { kind: 'error', message: errorMessage(error) };
     }
   }
@@ -182,6 +193,24 @@ export class SkillsState {
     } finally {
       this.deleting = false;
     }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    ++this.generation;
+    this.request?.abort();
+    this.request = null;
+  }
+
+  private beginRequest(): AbortController {
+    this.request?.abort();
+    this.request = new AbortController();
+    ++this.generation;
+    return this.request;
+  }
+
+  private current(generation: number, request: AbortController): boolean {
+    return !this.disposed && generation === this.generation && this.request === request;
   }
 
   savePayload(name = this.saveAsName.trim()): Pick<RelaySkillProfile, 'version' | 'name' | 'skills'> {

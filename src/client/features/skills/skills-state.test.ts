@@ -140,4 +140,21 @@ describe('SkillsState', () => {
     expect(state.dirty).toBe(true);
     expect(state.status).toEqual({ kind: 'warning', message: 'One scope was unavailable.' });
   });
+
+  it('does not publish a stale profile load after a newer workspace selection', async () => {
+    const resolvers: Array<(value: typeof available) => void> = [];
+    const state = new SkillsState(client({
+      listAvailableSkills: vi.fn(() => new Promise<typeof available>((resolve) => resolvers.push(resolve))),
+    }));
+    const first = state.load('first', 'default');
+    const second = state.load('second', 'default');
+    resolvers[0]?.(available);
+    await first;
+    expect(state.workspaceId).toBe('second');
+    expect(state.skills).toEqual([]);
+    resolvers[1]?.(available);
+    await second;
+    expect(state.workspaceId).toBe('second');
+    expect(state.status).toEqual({ kind: 'ready' });
+  });
 });

@@ -145,11 +145,13 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     path: string,
     body: unknown,
     headers: Record<string, string> = {},
+    signal?: AbortSignal,
   ): Promise<T> {
     const response = await fetcher(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
+      signal,
     });
     if (!response.ok) throw await failure(response);
     return response.json() as Promise<T>;
@@ -224,8 +226,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}`,
         signal,
       ),
-    getGitSummary: (workspaceId: string) =>
-      get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`),
+    getGitSummary: (workspaceId: string, signal?: AbortSignal) =>
+      get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`, signal),
     cloneGitRepository: (workspaceId: string, address: string) =>
       request<void>('/api/git/clone', { workspaceId, address }),
     refreshGit: (workspaceId: string, key?: string) =>
@@ -234,31 +236,31 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         {},
         key ? { 'idempotency-key': key } : {},
       ),
-    pullGit: (workspaceId: string, key?: string) =>
+    pullGit: (workspaceId: string, key?: string, signal?: AbortSignal) =>
       request<void>(
         `/api/git/repositories/${encodeURIComponent(workspaceId)}/pull`,
         {},
-        key ? { 'idempotency-key': key } : {},
+        key ? { 'idempotency-key': key } : {}, signal,
       ),
-    checkoutGitBranch: (workspaceId: string, branch: string) =>
+    checkoutGitBranch: (workspaceId: string, branch: string, signal?: AbortSignal) =>
       request<void>(`/api/git/repositories/${encodeURIComponent(workspaceId)}/checkout`, {
         branch,
-      }),
+      }, {}, signal),
     pushGit: (workspaceId: string, key?: string) =>
       request<void>(
         `/api/git/repositories/${encodeURIComponent(workspaceId)}/push`,
         {},
         key ? { 'idempotency-key': key } : {},
       ),
-    listAvailableSkills: (workspaceId: string, profile: string, refresh = false) =>
+    listAvailableSkills: (workspaceId: string, profile: string, refresh = false, signal?: AbortSignal) =>
       get<RelaySkillList>(
         `/api/skills?${new URLSearchParams({
           workspaceId,
           profile,
           ...(refresh ? { refresh: 'true' } : {}),
-        }).toString()}`,
+        }).toString()}`, signal,
       ),
-    listSkillProfiles: () => get<RelaySkillProfileList>('/api/skill-profiles'),
+    listSkillProfiles: (signal?: AbortSignal) => get<RelaySkillProfileList>('/api/skill-profiles', signal),
     replaceSkillProfile: (
       name: string,
       profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
