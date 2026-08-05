@@ -23,6 +23,8 @@ import {
   type MissingRolloutRecovery,
 } from '../../features/sessions/restore-session/use-case.js';
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
+import { threadPlanName } from './thread-plan-name.js';
+import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
 
 export type AppServer = {
   rpc: {
@@ -77,6 +79,8 @@ export class CodexSessionRuntime {
   private readonly threadIds = new Map<string, string>();
   private readonly planStatusLeases = new Map<string, PlanStatusLease>();
   private readonly planMeasurementTokens = new Map<string, string>();
+  private readonly pendingThreadNames = new Map<string, string>();
+  private readonly writtenThreadNames = new Map<string, string>();
 
   async start(
     session: RelaySessionSnapshot,
@@ -95,6 +99,7 @@ export class CodexSessionRuntime {
       const startedThreadId = await this.startThread(process, session, settings);
       this.processes.set(session.id, process);
       this.threadIds.set(session.id, startedThreadId);
+      await this.writePendingThreadName(session.id);
       return RelaySession.rehydrate(session).bindThread(startedThreadId, now).snapshot;
     } catch (error) {
       this.discardProcess(session.id, process);
@@ -108,6 +113,8 @@ export class CodexSessionRuntime {
     this.processes.get(sessionId)?.close();
     this.processes.delete(sessionId);
     this.threadIds.delete(sessionId);
+    this.pendingThreadNames.delete(sessionId);
+    this.writtenThreadNames.delete(sessionId);
     this.clearPendingRequests(sessionId);
     this.planMeasurementTokens.delete(sessionId);
     this.releasePlanStatus(sessionId);
@@ -250,10 +257,30 @@ export class CodexSessionRuntime {
       }
       this.processes.set(session.id, process);
       this.threadIds.set(session.id, result.session.threadId!);
+      await this.writePendingThreadName(session.id);
       return result;
     } catch (error) {
       this.discardProcess(session.id, process);
       throw error;
+    }
+  }
+
+  /** Best-effort metadata only: failures never affect plan or session execution. */
+  async syncThreadPlanName(sessionId: string, plan: SupervisedPlan): Promise<void> {
+    this.pendingThreadNames.set(sessionId, threadPlanName(plan));
+    await this.writePendingThreadName(sessionId);
+  }
+
+  private async writePendingThreadName(sessionId: string): Promise<void> {
+    const process = this.processes.get(sessionId);
+    const threadId = this.threadIds.get(sessionId);
+    const name = this.pendingThreadNames.get(sessionId);
+    if (!process || !threadId || !name || this.writtenThreadNames.get(sessionId) === name) return;
+    try {
+      await process.rpc.request('thread/name/set', { threadId, name });
+      this.writtenThreadNames.set(sessionId, name);
+    } catch {
+      // Unsupported servers and transient failures are bounded metadata failures.
     }
   }
 
@@ -275,6 +302,8 @@ export class CodexSessionRuntime {
       process.onExit?.(() => {
         this.processes.delete(sessionId);
         this.threadIds.delete(sessionId);
+        this.pendingThreadNames.delete(sessionId);
+        this.writtenThreadNames.delete(sessionId);
         this.clearPendingRequests(sessionId);
         this.planMeasurementTokens.delete(sessionId);
         this.exitUnsubscribers.delete(sessionId);

@@ -47,6 +47,24 @@ describe('CodexSessionRuntime', () => {
     expect(session).toMatchObject({ state: 'ready', threadId: 'thread-1', updatedAt: 'after' });
   });
 
+  it('writes each live-plan-derived thread name once and ignores metadata failures', async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          calls.push({ method, params });
+          return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+        },
+        onNotification: () => () => {}, onServerRequest: () => () => {},
+      }, close: () => {},
+    }));
+    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    const plan = { title: 'Roadmap', totalSteps: 1, doneSteps: 0, allDone: false, currentStepId: 'l1', steps: [{ id: 'l1', title: 'Ship', level: 1 as const, state: 'WIP' as const, priority: 'A' as const, reviewStatus: 'UNREVIEWED' as const, description: {}, children: [] }] };
+    await runtime.syncThreadPlanName('session-1', plan);
+    await runtime.syncThreadPlanName('session-1', plan);
+    expect(calls.filter((call) => call.method === 'thread/name/set')).toEqual([{ method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Roadmap — L1 1/1' } }]);
+  });
+
   it('applies the resolved override to both new and restored child launches', async () => {
     const launches: unknown[] = [];
     const resolvedSelections: unknown[] = [];
