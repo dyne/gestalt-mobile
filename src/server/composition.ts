@@ -55,6 +55,7 @@ import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
+import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import {
@@ -124,6 +125,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const idempotency = new SqliteIdempotencyStore(database);
   const supervisedPlans = new SupervisedPlanRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
+  const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const planMeasurementHelperPath =
     options.planMeasurementHelperPath ?? process.env.GESTALT_MOBILE_ORG_PLAN_HELPER;
   const withPendingInteractions = (
@@ -419,6 +421,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
       },
     },
+    workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
     ...(runtime
       ? {
           planMeasurementRoutes: {
