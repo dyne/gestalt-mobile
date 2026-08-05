@@ -228,3 +228,73 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveCount(1);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
 });
+
+test('keeps the selected workspace plan or catalog visible across live plan updates', async ({
+  page,
+}) => {
+  const selected = session('session-1', '/projects/one');
+  const workspacePlan = { ...activePlan, title: 'Workspace roadmap' };
+  let emitPlanEvent: ((event: object) => void) | undefined;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [selected] }),
+    }),
+  );
+  await routeSessionHistory(page, selected.id);
+  await page.route(`**/api/sessions/${selected.id}/plan`, (route) =>
+    route.fulfill({ status: 204 }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/workspaces/workspace-1/plans', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          planName: 'roadmap.org',
+          title: workspacePlan.title,
+          totalSteps: workspacePlan.totalSteps,
+          doneSteps: workspacePlan.doneSteps,
+          allDone: workspacePlan.allDone,
+        },
+      ]),
+    }),
+  );
+  await page.route('**/api/workspaces/workspace-1/plans/roadmap.org', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(workspacePlan) }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    (socket) => {
+      emitPlanEvent = (event) => socket.send(JSON.stringify({ type: 'relay.event', event }));
+    },
+  );
+
+  await mockAuthenticatedStatus(page);
+  await page.goto('/');
+  await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
+  const roadmap = page.getByRole('button', { name: /Workspace roadmap.*roadmap.org/ });
+  await roadmap.click();
+  await expect(page.getByRole('heading', { name: workspacePlan.title })).toBeVisible();
+  await expect.poll(() => typeof emitPlanEvent).toBe('function');
+
+  emitPlanEvent!({
+    sequence: 1,
+    type: 'plan.updated',
+    payload: { plan: { ...activePlan, title: 'Live session plan' }, reason: 'update' },
+  });
+  await expect(page.getByRole('heading', { name: workspacePlan.title })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Live session plan' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  await expect(roadmap).toBeFocused();
+  emitPlanEvent!({
+    sequence: 2,
+    type: 'plan.updated',
+    payload: { plan: { ...activePlan, title: 'New live session plan' }, reason: 'update' },
+  });
+  await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New live session plan' })).toHaveCount(0);
+});

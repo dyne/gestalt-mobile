@@ -43,7 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (viewState.kind === 'error' && !plan) return viewState.error;
     if (viewState.kind === 'closing') return 'Closing completed plan.';
     if (!plan) return '';
-    if (!currentStep) return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.`;
+    if (!currentStep) return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
     return `Current step: ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
   });
 

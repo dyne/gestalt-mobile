@@ -5,7 +5,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import type { SupervisedPlan } from './contracts.js';
   import PlanView from './PlanView.svelte';
   import type { PlanState } from './plan-controller.js';
   import type { WorkspacePlanEntry } from '../sessions/relay-client.js';
@@ -18,20 +17,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     catalog: PlansCatalogState;
-    plan: SupervisedPlan | null;
+    state: PlanState | null;
     onopen: (planName: string) => void;
     onclose: () => void;
   };
 
-  let { catalog, plan, onopen, onclose }: Props = $props();
+  let { catalog, state: planState, onopen, onclose }: Props = $props();
   let heading = $state<HTMLHeadingElement | null>(null);
   let buttons = $state<Partial<Record<string, HTMLButtonElement>>>({});
   let lastClosed = $state<string | null>(null);
+  let wasViewing = false;
+  let restoreFocus = false;
 
   function close(): void {
     onclose();
-    const name = lastClosed;
-    queueMicrotask(() => (name ? buttons[name]?.focus() : heading?.focus()));
   }
 
   function open(planName: string): void {
@@ -40,18 +39,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   $effect(() => {
-    if (plan) return;
+    if (planState) {
+      wasViewing = true;
+      return;
+    }
+    if (wasViewing) {
+      wasViewing = false;
+      restoreFocus = true;
+    }
+    if (!restoreFocus) return;
+    const catalogKind = catalog.kind;
     const name = lastClosed;
-    if (name) queueMicrotask(() => buttons[name]?.focus() ?? heading?.focus());
+    queueMicrotask(() => {
+      const button = name ? buttons[name] : undefined;
+      if (button?.isConnected) {
+        button.focus();
+        restoreFocus = false;
+      } else if (catalogKind !== 'loading') {
+        heading?.focus();
+        restoreFocus = false;
+      }
+    });
   });
-
-  function viewState(value: SupervisedPlan): PlanState {
-    return { kind: 'ready', sessionId: 'catalog', plan: value };
-  }
 </script>
 
-{#if plan}
-  <PlanView state={viewState(plan)} onclose={close} />
+{#if planState}
+  <PlanView state={planState} onclose={close} />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <h2 id="plans-title" bind:this={heading} tabindex="-1">Plans</h2>
