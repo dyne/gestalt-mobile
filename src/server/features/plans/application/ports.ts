@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../domain/supervised-plan.js';
+import type { WorkspacePlanEntry, WorkspacePlanReadResult } from '../domain/workspace-plan-catalog.js';
 import type { PlanMeasurementSnapshot } from './measurement-snapshot.js';
 import type { PlanSignalReason } from '../../../../shared/contracts/plan-signal.js';
 
@@ -39,4 +40,10 @@ export interface PlanStatusSource {
 /** Supplies one session's measurement data without exposing Codex wire types. */
 export interface PlanMeasurementSnapshotSource {
   read(sessionId: string): Promise<PlanMeasurementSnapshot>;
+}
+
+/** Reads passive workspace-local Org plans without coupling to a relay session. */
+export interface WorkspacePlanCatalogSource {
+  list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]>;
+  read(workspacePath: string, planName: string): Promise<WorkspacePlanReadResult>;
 }

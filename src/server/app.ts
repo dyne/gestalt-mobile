@@ -42,9 +42,12 @@ import { registerRespondInteraction } from './features/sessions/respond-interact
 import { stopSession } from './features/sessions/lifecycle/use-case.js';
 import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
 import { registerGetPlan } from './features/plans/get-plan/endpoint.js';
+import { registerGetWorkspacePlan } from './features/plans/get-workspace-plan/endpoint.js';
+import { registerListWorkspacePlans } from './features/plans/list-workspace-plans/endpoint.js';
 import { registerClosePlan } from './features/plans/close-plan/endpoint.js';
 import { registerGetPlanMeasurement } from './features/plans/get-measurement/endpoint.js';
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
+import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
@@ -148,6 +151,10 @@ export type AppDependencies = {
     removeStatus(id: string): Promise<void>;
     clear(id: string): void;
     closed(id: string): void;
+  };
+  workspacePlanRoutes?: {
+    workspaces: Pick<WorkspaceCatalog, 'resolve'>;
+    plans: WorkspacePlanCatalogSource;
   };
   planMeasurementRoutes?: {
     exists(id: string): boolean;
@@ -328,6 +335,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.planRoutes) {
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);
+  }
+  if (deps.workspacePlanRoutes) {
+    registerListWorkspacePlans(app, deps.workspacePlanRoutes);
+    registerGetWorkspacePlan(app, deps.workspacePlanRoutes);
   }
   if (deps.planMeasurementRoutes) registerGetPlanMeasurement(app, deps.planMeasurementRoutes);
   if (deps.gitSummary)
