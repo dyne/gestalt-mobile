@@ -14,29 +14,53 @@ export function normalizeCodexNotification(
   notification: { method?: string; params?: unknown },
   workspacePath?: string,
 ): SessionEvent | null {
-  if (notification.method === 'item/agentMessage/delta')
+  const decoded = decodeNotification(notification);
+  if (!decoded) return null;
+  if (decoded.method === 'item/agentMessage/delta')
     return {
       sessionId,
       sequence,
       occurredAt,
       type: 'agentMessageDelta',
-      payload: { text: (notification.params as { delta?: string } | undefined)?.delta ?? '' },
+      payload: { text: decoded.params.delta },
     };
-  if (notification.method === 'turn/completed')
+  if (decoded.method === 'turn/completed')
     return {
       sessionId,
       sequence,
       occurredAt,
       type: 'turnCompleted',
-      payload: notification.params ?? {},
+      payload: decoded.params,
     };
-  if (notification.method === 'item/started' || notification.method === 'item/completed') {
-    const activity = safeActivity(
-      (notification.params as { item?: unknown } | undefined)?.item,
-      workspacePath,
-    );
+  if (decoded.method === 'item/started' || decoded.method === 'item/completed') {
+    const activity = safeActivity(decoded.params.item, workspacePath);
     if (activity)
       return { sessionId, sequence, occurredAt, type: 'activity.updated', payload: activity };
+  }
+  return null;
+}
+
+type DecodedNotification =
+  | { method: 'item/agentMessage/delta'; params: { delta: string } }
+  | { method: 'turn/completed'; params: { threadId?: string; turn: { id: string; status?: string } } }
+  | { method: 'item/started' | 'item/completed'; params: { item: unknown } };
+
+/** Strictly decode only consumed notification shapes; unknown/future methods stay isolated. */
+export function decodeNotification(input: { method?: string; params?: unknown }): DecodedNotification | null {
+  if (input.method === 'item/agentMessage/delta') {
+    const params = record(input.params);
+    return typeof params?.delta === 'string' && params.delta.length <= 64_000
+      ? { method: input.method, params: { delta: params.delta } } : null;
+  }
+  if (input.method === 'turn/completed') {
+    const params = record(input.params);
+    const turn = record(params?.turn);
+    if (!turn || typeof turn.id !== 'string' || turn.id.length > 256) return null;
+    return { method: input.method, params: { ...(typeof params?.threadId === 'string' && params.threadId.length <= 256 ? { threadId: params.threadId } : {}), turn: { id: turn.id, ...(typeof turn.status === 'string' && turn.status.length <= 64 ? { status: turn.status } : {}) } } };
+  }
+  if (input.method === 'item/started' || input.method === 'item/completed') {
+    const params = record(input.params);
+    return params && 'item' in params ? { method: input.method, params: { item: params.item } } : null;
   }
   return null;
 }
@@ -98,4 +122,8 @@ function reasoningSummary(parts: unknown[]): string[] {
       return [(part as Record<string, string>).text];
     return [];
   });
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
