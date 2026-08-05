@@ -113,6 +113,20 @@ describe('relay client', () => {
     ]);
   });
 
+  it('lists and opens workspace-local plans with encoded opaque identifiers', async () => {
+    const requests: string[] = [];
+    const client = createRelayClient(async (url, init) => {
+      requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    await client.listWorkspacePlans('workspace/id');
+    await client.getWorkspacePlan('workspace/id', 'roadmap space.org');
+    expect(requests).toEqual([
+      'GET /api/workspaces/workspace%2Fid/plans',
+      'GET /api/workspaces/workspace%2Fid/plans/roadmap%20space.org',
+    ]);
+  });
+
   it('releases a session without forgetting it', async () => {
     const requests: Array<{ url: string; method?: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {

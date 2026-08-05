@@ -209,6 +209,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     'Sessions',
     'Git',
     'Chat',
+    'Plan',
   ]);
   await page.getByRole('button', { name: 'Sessions' }).click();
 
@@ -1588,6 +1589,10 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(git).toHaveCSS('font-weight', '700');
   await expect(git).toBeFocused();
   await git.press('ArrowRight');
+  const plan = page.getByRole('button', { name: 'Plan', pressed: true });
+  await expect(plan).toHaveCSS('font-weight', '700');
+  await expect(plan).toBeFocused();
+  await plan.press('ArrowRight');
   const selectedSessions = page.getByRole('button', { name: 'Sessions', pressed: true });
   await expect(selectedSessions).toHaveCSS('font-weight', '700');
   await expect(selectedSessions).toBeFocused();

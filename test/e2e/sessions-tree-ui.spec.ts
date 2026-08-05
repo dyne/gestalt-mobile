@@ -171,7 +171,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
   });
   expect(navigationLayout.withinViewport, JSON.stringify(navigationLayout.buttons)).toBe(true);
   expect(navigationLayout.nonOverlapping, JSON.stringify(navigationLayout.buttons)).toBe(true);
-  expect(navigationLayout.buttons).toHaveLength(3);
+  expect(navigationLayout.buttons).toHaveLength(4);
   expect(
     Math.max(...navigationLayout.buttons.map(({ width }) => width)) -
       Math.min(...navigationLayout.buttons.map(({ width }) => width)),

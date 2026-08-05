@@ -42,7 +42,7 @@ async function open(page: Page, theme: string, scale: number, state: (typeof sta
   await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${scale}% !important; }` });
-  await expect(page.getByLabel('Primary').getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+  await expect(page.getByLabel('Primary').getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
   const skillProfile = page.getByLabel('Skills profile');
   await expect(skillProfile).toBeVisible();
   await expect(skillProfile.locator('option').first()).toHaveText('Default');

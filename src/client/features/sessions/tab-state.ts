@@ -5,11 +5,11 @@
  */
 
 export type Tab = 'chat' | 'git' | 'sessions' | 'plan';
-export type TabCapabilities = Readonly<{ chatEnabled: boolean; planEnabled: boolean }>;
-export function visibleTabs({ chatEnabled, planEnabled }: TabCapabilities): Tab[] {
-  return ['sessions', 'git', ...(chatEnabled ? ['chat'] as Tab[] : []), ...(chatEnabled && planEnabled ? ['plan'] as Tab[] : [])];
+export type TabCapabilities = Readonly<{ chatEnabled: boolean; planEnabled?: boolean }>;
+export function visibleTabs({ chatEnabled }: TabCapabilities): Tab[] {
+  return ['sessions', 'git', ...(chatEnabled ? ['chat'] as Tab[] : []), 'plan'];
 }
-export function nextTab(current: Tab, direction: 1 | -1, capabilities: TabCapabilities = { chatEnabled: true, planEnabled: false }): Tab {
+export function nextTab(current: Tab, direction: 1 | -1, capabilities: TabCapabilities = { chatEnabled: true }): Tab {
   const tabs = visibleTabs(capabilities);
   return tabs[(tabs.indexOf(current) + direction + tabs.length) % tabs.length]!;
 }

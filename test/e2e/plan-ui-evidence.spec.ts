@@ -229,16 +229,14 @@ test('captures every responsive Plan state with executable accessibility evidenc
       await planTab.click();
       await expect(page.getByRole('heading', { name: statePlan.title })).toBeVisible();
     } else {
-      await expect(planTab).toHaveCount(0);
-    }
-    if (options.error) {
-      await page.getByRole('button', { name: 'Close completed plan' }).click();
-      await expect(page.getByText('Evidence close failure', { exact: true })).toBeVisible();
+      await expect(planTab).toBeVisible();
+      await planTab.click();
+      await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
     }
     if (options.close) {
-      await page.getByRole('button', { name: 'Close completed plan' }).click();
-      await expect(planTab).toHaveCount(0);
-      await expect(navigation.getByRole('button', { name: 'Chat' })).toBeFocused();
+      await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+      await expect(planTab).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
     }
 
     await assertNoHorizontalOverflow(page);
@@ -281,8 +279,8 @@ test('captures every responsive Plan state with executable accessibility evidenc
       await expect
         .poll(() => details.evaluate((element) => (element as HTMLDetailsElement).open))
         .toBe(wasOpen);
-      if (statePlan.allDone) {
-        const close = page.getByRole('button', { name: 'Close completed plan' });
+      if (statePlan) {
+        const close = page.getByRole('button', { name: 'Close plan and return to list' });
         const bounds = await close.boundingBox();
         expect(bounds?.width).toBeGreaterThanOrEqual(44);
         expect(bounds?.height).toBeGreaterThanOrEqual(44);

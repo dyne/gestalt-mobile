@@ -14,20 +14,12 @@ import BottomNavigation from './BottomNavigation.svelte';
 afterEach(cleanup);
 
 describe('BottomNavigation', () => {
-  it('renders Plan directly after Chat only when the selected session has a plan', () => {
-    const { rerender } = render(BottomNavigation, {
+  it('renders Plan directly after Chat regardless of retained-plan availability', () => {
+    render(BottomNavigation, {
       activeTab: 'chat',
       chatEnabled: true,
-      planEnabled: false,
       onselect: vi.fn(),
     });
-    expect(screen.getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
-      'Sessions',
-      'Git',
-      'Chat',
-    ]);
-
-    rerender({ activeTab: 'chat', chatEnabled: true, planEnabled: true, onselect: vi.fn() });
     expect(screen.getAllByRole('button').map((button) => button.textContent?.trim())).toEqual([
       'Sessions',
       'Git',
@@ -41,7 +33,6 @@ describe('BottomNavigation', () => {
     render(BottomNavigation, {
       activeTab: 'chat',
       chatEnabled: true,
-      planEnabled: true,
       onselect,
     });
     const chat = screen.getByRole('button', { name: 'Chat' });
@@ -56,19 +47,4 @@ describe('BottomNavigation', () => {
     expect(document.activeElement).toBe(plan);
   });
 
-  it('falls back to and focuses Chat when the selected Plan tab is removed', async () => {
-    const onselect = vi.fn();
-    const { rerender } = render(BottomNavigation, {
-      activeTab: 'plan',
-      chatEnabled: true,
-      planEnabled: true,
-      onselect,
-    });
-    const plan = screen.getByRole('button', { name: 'Plan' });
-    plan.focus();
-
-    rerender({ activeTab: 'plan', chatEnabled: true, planEnabled: false, onselect });
-    await vi.waitFor(() => expect(onselect).toHaveBeenLastCalledWith('chat'));
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Chat' }));
-  });
 });
