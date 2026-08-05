@@ -27,6 +27,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Audit production dependencies
+        run: npm run audit:prod
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Check source licenses

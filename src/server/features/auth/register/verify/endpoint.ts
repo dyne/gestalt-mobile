@@ -10,6 +10,7 @@ import { PasskeyVerificationError, type AuthorizationIdentifiers, type Authoriza
 import { deviceNickname } from '../../domain/device-nickname.js';
 import { passkeyCeremonyId } from '../../domain/identifiers.js';
 import { AuthorizationDomainError } from '../../domain/errors.js';
+import { clearAuthCookie, setAuthCookie } from '../../http/cookies.js';
 
 const registrationResponseSchema = z.object({
   id: z.string().min(1), rawId: z.string().min(1), type: z.literal('public-key'),
@@ -21,7 +22,7 @@ const successSchema = z.object({ status: z.literal('authenticated') }).strict();
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
 export function registerRegistrationVerification(app: FastifyInstance, deps: { repository: AuthorizationRepository; clock: Clock; random: RandomBytes; identifiers: AuthorizationIdentifiers; webauthn: WebAuthnCeremonyService; relyingParty: { publicOrigin: string; rpId: string } }): void {
-  app.post('/api/auth/register/verify', async (request, reply) => {
+  app.post('/api/auth/register/verify', { bodyLimit: 128 * 1024 }, async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     const token = request.cookies.gestalt_mobile_registration;
     if (!parsed.success || typeof token !== 'string') return reply.code(400).type('application/problem+json').send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
@@ -42,8 +43,8 @@ export function registerRegistrationVerification(app: FastifyInstance, deps: { r
       const expiresAt = new Date(now.getTime() + sessionLifetimeMs).toISOString();
       const outcome = deps.repository.completeRegistration({ ceremony: passkeyCeremonyId(token), now: now.toISOString(), device, session: { id: session, deviceId: device.id, expiresAt } });
       if (outcome !== 'registered') return reply.code(outcome === 'bootstrapAlreadyClaimed' ? 409 : 400).type('application/problem+json').send(problem(outcome === 'bootstrapAlreadyClaimed' ? 'BOOTSTRAP_ALREADY_CLAIMED' : 'REGISTRATION_NOT_AVAILABLE', outcome === 'bootstrapAlreadyClaimed' ? 409 : 400, 'Registration could not be completed.'));
-      reply.setCookie('gestalt_mobile_session', session, { httpOnly: true, sameSite: 'strict', path: '/', secure: deps.relyingParty.publicOrigin.startsWith('https://'), maxAge: 30 * 24 * 60 * 60 });
-      reply.clearCookie('gestalt_mobile_registration', { path: '/' });
+      setAuthCookie(reply, 'gestalt_mobile_session', session, deps.relyingParty.publicOrigin);
+      clearAuthCookie(reply, 'gestalt_mobile_registration', deps.relyingParty.publicOrigin);
       return reply.code(201).send(successSchema.parse({ status: 'authenticated' }));
     } catch (error) {
       if (error instanceof PasskeyVerificationError || error instanceof AuthorizationDomainError)

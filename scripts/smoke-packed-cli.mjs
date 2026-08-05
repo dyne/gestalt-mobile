@@ -19,12 +19,38 @@ const temporaryRoot = await mkdtemp(join(tmpdir(), 'gestalt-mobile-package-'));
 let server;
 
 try {
+  const npmConfigDirectory = join(temporaryRoot, 'npm-config');
+  const npmHome = join(temporaryRoot, 'npm-home');
+  const npmUserConfig = join(npmConfigDirectory, 'user.npmrc');
+  const npmGlobalConfig = join(npmConfigDirectory, 'global.npmrc');
+  await Promise.all([mkdir(npmConfigDirectory), mkdir(npmHome)]);
+  await Promise.all([writeFile(npmUserConfig, ''), writeFile(npmGlobalConfig, '')]);
+  // Keep npm's user-home and both config scopes inside the disposable smoke
+  // directory. This prevents host allow-scripts policy from entering the
+  // packed-install boundary; --ignore-scripts below remains mandatory.
+  const npmEnvironment = { ...process.env };
+  delete npmEnvironment.NPM_CONFIG_ALLOW_SCRIPTS;
+  delete npmEnvironment.npm_config_allow_scripts;
+  const cleanNpmEnvironment = {
+    ...npmEnvironment,
+    HOME: npmHome,
+    NPM_CONFIG_USERCONFIG: npmUserConfig,
+    NPM_CONFIG_GLOBALCONFIG: npmGlobalConfig,
+  };
+  const cleanNpmArgs = (args) => [
+    '--userconfig',
+    npmUserConfig,
+    '--globalconfig',
+    npmGlobalConfig,
+    ...args,
+  ];
   run('npm', ['run', 'build'], root);
   const pack = run(
     'npm',
     ['pack', '--ignore-scripts', '--json', '--pack-destination', temporaryRoot],
     root,
     true,
+    cleanNpmEnvironment,
   );
   const filename = packedFilename(JSON.parse(pack.stdout), packageManifest.name);
   const tarball = join(temporaryRoot, filename);
@@ -37,23 +63,33 @@ try {
   const codex = join(fakeBin, 'codex');
   await writeFile(codex, '#!/usr/bin/env node\nconsole.log("codex-cli 0.144.3");\n');
   await chmod(codex, 0o755);
-  run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], installation);
+  run(
+    'npm',
+    cleanNpmArgs(['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball]),
+    installation,
+    false,
+    cleanNpmEnvironment,
+  );
 
   const environment = { ...process.env, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` };
+  const cleanNpmExecutionEnvironment = {
+    ...cleanNpmEnvironment,
+    PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+  };
   const help = run(
     'npm',
-    ['exec', '--', 'gestalt-mobile', '--help'],
+    cleanNpmArgs(['exec', '--', 'gestalt-mobile', '--help']),
     installation,
     true,
-    environment,
+    cleanNpmExecutionEnvironment,
   );
   assert(help.stdout.includes('Usage: gestalt-mobile'), 'packed --help did not print usage');
   const version = run(
     'npm',
-    ['exec', '--', 'gestalt-mobile', '--version'],
+    cleanNpmArgs(['exec', '--', 'gestalt-mobile', '--version']),
     installation,
     true,
-    environment,
+    cleanNpmExecutionEnvironment,
   );
   assert(
     version.stdout.trim() === expectedVersion,

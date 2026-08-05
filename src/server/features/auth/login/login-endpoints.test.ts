@@ -20,6 +20,7 @@ import {
   webAuthnCredentialId,
 } from '../domain/identifiers.js';
 import { deviceNickname } from '../domain/device-nickname.js';
+import { ExpiringCeremonyAttemptGate } from '../application/ceremony-attempts.js';
 import { registerLogout } from '../logout/endpoint.js';
 import { registerAuthStatus } from '../status/endpoint.js';
 
@@ -69,7 +70,8 @@ function repo(overrides: Partial<AuthorizationRepository> = {}): AuthorizationRe
     readCeremony: () => ceremony,
     saveTicket: () => {},
     issueEnrollmentTicket: () => {},
-    enrollmentTicketStatus: () => 'none', cancelEnrollmentTicket: () => false,
+    enrollmentTicketStatus: () => 'none',
+    cancelEnrollmentTicket: () => false,
     consumeTicket: () => false,
     ticketAvailable: () => false,
     completeRegistration: () => 'ceremonyUnavailable',
@@ -93,7 +95,13 @@ const webauthn: WebAuthnCeremonyService = {
     userVerified: true,
   }),
 };
-async function app(repository = repo(), service = webauthn, relyingParty = rp) {
+async function app(
+  repository = repo(),
+  service = webauthn,
+  relyingParty = rp,
+  authClock = clock,
+  ceremonyAttempts?: ExpiringCeremonyAttemptGate,
+) {
   const instance = await buildApp({
     health: {
       read: async () => ({
@@ -105,7 +113,7 @@ async function app(repository = repo(), service = webauthn, relyingParty = rp) {
     logger: console,
     auth: {
       repository,
-      clock,
+      clock: authClock,
       random: { bytes: () => new Uint8Array(32).fill(7) },
       identifiers: {
         deviceId: () => device.id,
@@ -114,10 +122,13 @@ async function app(repository = repo(), service = webauthn, relyingParty = rp) {
       },
       webauthn: service,
       relyingParty,
+      ceremonyAttempts,
     },
   });
   const inject = instance.inject.bind(instance) as (options: unknown) => Promise<unknown>;
-  instance.inject = ((options: string | { headers?: Record<string, string>; [key: string]: unknown }) => {
+  instance.inject = ((
+    options: string | { headers?: Record<string, string>; [key: string]: unknown },
+  ) => {
     if (typeof options === 'string') return inject(options);
     return inject({
       ...options,
@@ -137,6 +148,62 @@ describe('login endpoints', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ options: { challenge: 'server' } });
     expect(response.headers['set-cookie']).toContain('gestalt_mobile_login=');
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(response.headers['permissions-policy']).toBe(
+      'publickey-credentials-get=(self), publickey-credentials-create=(self)',
+    );
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    await instance.close();
+  });
+
+  it('enforces the login attempt boundary and resets after the expiry window', async () => {
+    let now = new Date('2026-08-02T00:00:00.000Z');
+    const instance = await app(
+      repo(),
+      webauthn,
+      rp,
+      { now: () => now },
+      new ExpiringCeremonyAttemptGate(2, 1_000),
+    );
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect(
+        (await instance.inject({ method: 'POST', url: '/api/auth/login/options' })).statusCode,
+      ).toBe(200);
+    expect(
+      (await instance.inject({ method: 'POST', url: '/api/auth/login/options' })).json(),
+    ).toMatchObject({ code: 'AUTHENTICATION_FAILED' });
+    now = new Date(now.getTime() + 1_000);
+    expect(
+      (await instance.inject({ method: 'POST', url: '/api/auth/login/options' })).statusCode,
+    ).toBe(200);
+    await instance.close();
+  });
+
+  it('rejects an oversized WebAuthn proof as a problem response before verification', async () => {
+    let verified = false;
+    const instance = await app(repo(), {
+      ...webauthn,
+      verifyAuthentication: async () => {
+        verified = true;
+        return { credentialId: device.credentialId, counter: 1, userVerified: true };
+      },
+    });
+    const response = await instance.inject({
+      method: 'POST',
+      url: '/api/auth/login/verify',
+      headers: { cookie: 'gestalt_mobile_login=login' },
+      payload: {
+        response: {
+          ...proof,
+          response: { ...proof.response, clientDataJSON: 'a'.repeat(64 * 1024) },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.json()).toMatchObject({ code: 'PAYLOAD_TOO_LARGE', status: 413 });
+    expect(verified).toBe(false);
     await instance.close();
   });
   it('stores the exact server-held authentication policy after issuing empty-allow-list options', async () => {
@@ -293,6 +360,20 @@ describe('login endpoints', () => {
     expect(cookies).toContain('HttpOnly');
     expect(cookies).toContain('SameSite=Strict');
     expect(cookies).toContain('Path=/');
+    const cookieLines = Array.isArray(response.headers['set-cookie'])
+      ? response.headers['set-cookie']
+      : [response.headers['set-cookie']];
+    const sessionCookie = cookieLines.find((value) => value?.startsWith('gestalt_mobile_session='));
+    const clearedLoginCookie = cookieLines.find((value) =>
+      value?.startsWith('gestalt_mobile_login='),
+    );
+    for (const value of [sessionCookie, clearedLoginCookie]) {
+      expect(value).toContain('HttpOnly');
+      expect(value).toContain('SameSite=Strict');
+      expect(value).toContain('Path=/');
+      expect(value).toContain('Secure');
+    }
+    expect(clearedLoginCookie).toContain('Max-Age=0');
     expect(completion).toMatchObject({
       session: { expiresAt: '2026-09-01T00:00:00.000Z' },
     });
@@ -581,8 +662,14 @@ describe('login endpoints', () => {
     });
     let repositoryCalls = 0;
     const repository = repo({
-      sessionDevice: () => { repositoryCalls++; return device.id; },
-      revokeSession: () => { repositoryCalls++; return true; },
+      sessionDevice: () => {
+        repositoryCalls++;
+        return device.id;
+      },
+      revokeSession: () => {
+        repositoryCalls++;
+        return true;
+      },
       listAuthorizedDevices: () => [device],
     });
     registerAuthStatus(instance, { repository, clock, relyingParty: rp });

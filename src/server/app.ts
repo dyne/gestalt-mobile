@@ -80,10 +80,7 @@ import { registerRegistrationOptions } from './features/auth/register/options/en
 import { registerRegistrationVerification } from './features/auth/register/verify/endpoint.js';
 import { registerLoginOptions } from './features/auth/login/options/endpoint.js';
 import { registerLoginVerification } from './features/auth/login/verify/endpoint.js';
-import {
-  registerAuthStatus,
-  registerDisabledAuthStatus,
-} from './features/auth/status/endpoint.js';
+import { registerAuthStatus, registerDisabledAuthStatus } from './features/auth/status/endpoint.js';
 import { registerLogout } from './features/auth/logout/endpoint.js';
 import { registerListAuthorizedDevices } from './features/auth/devices/list/endpoint.js';
 import { registerRenameAuthorizedDevice } from './features/auth/devices/rename/endpoint.js';
@@ -97,6 +94,10 @@ import type {
   RandomBytes,
   WebAuthnCeremonyService,
 } from './features/auth/application/ports.js';
+import {
+  ExpiringCeremonyAttemptGate,
+  type CeremonyAttemptGate,
+} from './features/auth/application/ceremony-attempts.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -194,12 +195,29 @@ export type AppDependencies = {
     identifiers: import('./features/auth/application/ports.js').AuthorizationIdentifiers;
     webauthn: WebAuthnCeremonyService;
     relyingParty: { publicOrigin: string; rpId: string; rpName: string };
+    ceremonyAttempts?: CeremonyAttemptGate;
   };
   passkeyAuthDisabled?: boolean;
 };
 
 export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> {
-  const app = fastify({ logger: false });
+  // Keep the default boundary finite even when an endpoint forgot a narrower schema.
+  const app = fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header(
+      'Content-Security-Policy',
+      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+    );
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    // WebAuthn is same-origin; explicitly allow only this origin's ceremony calls.
+    reply.header(
+      'Permissions-Policy',
+      'publickey-credentials-get=(self), publickey-credentials-create=(self)',
+    );
+    return payload;
+  });
   await app.register(fastifyCookie);
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
   if (deps.auth)
@@ -210,9 +228,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   registerGetHealth(app, deps.health);
   if (deps.auth) {
-    registerRegistrationOptions(app, deps.auth);
+    const auth = {
+      ...deps.auth,
+      ceremonyAttempts: deps.auth.ceremonyAttempts ?? new ExpiringCeremonyAttemptGate(),
+    };
+    registerRegistrationOptions(app, auth);
     registerRegistrationVerification(app, deps.auth);
-    registerLoginOptions(app, deps.auth);
+    registerLoginOptions(app, auth);
     registerLoginVerification(app, deps.auth);
     registerAuthStatus(app, deps.auth);
     registerLogout(app, deps.auth);

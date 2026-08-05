@@ -25,6 +25,7 @@ import {
   webAuthnCredentialId,
 } from '../../features/auth/domain/identifiers.js';
 import { deviceNickname } from '../../features/auth/domain/device-nickname.js';
+import { CeremonyCapacityError } from '../../features/auth/domain/errors.js';
 
 const OWNER_ID = localOwnerId('local-owner');
 const SCHEMA_VERSION = 1;
@@ -284,20 +285,36 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       rpId: string;
       enrollmentTicket?: EnrollmentTicket['id'];
     },
+    now?: string,
   ): void {
-    this.db
-      .prepare(
-        'INSERT INTO auth_ceremonies (token_hash, purpose, challenge, expected_origin, rp_id, expires_at, ticket_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        hash(token),
-        ceremony.purpose,
-        ceremony.challenge,
-        ceremony.expectedOrigin,
-        ceremony.rpId,
-        ceremony.expiresAt,
-        ceremony.enrollmentTicket ? hash(ceremony.enrollmentTicket) : null,
-      );
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      // Admission and cleanup share one immediate transaction, so separate
+      // processes cannot both observe the same remaining slot.
+      this.db.prepare('DELETE FROM auth_ceremonies WHERE consumed_at IS NOT NULL').run();
+      if (now) this.db.prepare('DELETE FROM auth_ceremonies WHERE expires_at <= ?').run(now);
+      const active = this.db
+        .prepare('SELECT count(*) AS count FROM auth_ceremonies WHERE consumed_at IS NULL')
+        .get() as { count: number };
+      if (active.count >= 64) throw new CeremonyCapacityError('Ceremony capacity reached');
+      this.db
+        .prepare(
+          'INSERT INTO auth_ceremonies (token_hash, purpose, challenge, expected_origin, rp_id, expires_at, ticket_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          hash(token),
+          ceremony.purpose,
+          ceremony.challenge,
+          ceremony.expectedOrigin,
+          ceremony.rpId,
+          ceremony.expiresAt,
+          ceremony.enrollmentTicket ? hash(ceremony.enrollmentTicket) : null,
+        );
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   consumeCeremony(
     token: PasskeyCeremony['id'],
@@ -351,18 +368,36 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       .prepare('INSERT INTO auth_tickets (token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)')
       .run(hash(token), ticket.expiresAt);
   }
-  issueEnrollmentTicket(token: EnrollmentTicket['id'], creatorSession: AuthorizationSession['id'], expiresAt: string): void {
+  issueEnrollmentTicket(
+    token: EnrollmentTicket['id'],
+    creatorSession: AuthorizationSession['id'],
+    expiresAt: string,
+  ): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const creator = hash(creatorSession);
-      this.db.prepare('DELETE FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL').run(creator);
-      this.db.prepare('INSERT INTO auth_tickets (token_hash, expires_at, consumed_at, creator_session_hash) VALUES (?, ?, NULL, ?)').run(hash(token), expiresAt, creator);
+      this.db
+        .prepare('DELETE FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL')
+        .run(creator);
+      this.db
+        .prepare(
+          'INSERT INTO auth_tickets (token_hash, expires_at, consumed_at, creator_session_hash) VALUES (?, ?, NULL, ?)',
+        )
+        .run(hash(token), expiresAt, creator);
       this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
-  enrollmentTicketStatus(creatorSession: AuthorizationSession['id'], now: string): 'none' | 'pending' | 'used' | 'expired' {
+  enrollmentTicketStatus(
+    creatorSession: AuthorizationSession['id'],
+    now: string,
+  ): 'none' | 'pending' | 'used' | 'expired' {
     const row = this.db
-      .prepare('SELECT expires_at, consumed_at FROM auth_tickets WHERE creator_session_hash = ? ORDER BY rowid DESC LIMIT 1')
+      .prepare(
+        'SELECT expires_at, consumed_at FROM auth_tickets WHERE creator_session_hash = ? ORDER BY rowid DESC LIMIT 1',
+      )
       .get(hash(creatorSession)) as { expires_at: string; consumed_at: string | null } | undefined;
     if (!row) return 'none';
     if (row.consumed_at) return 'used';
@@ -372,7 +407,9 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = this.db
-        .prepare('DELETE FROM auth_tickets WHERE rowid = (SELECT rowid FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY rowid DESC LIMIT 1)')
+        .prepare(
+          'DELETE FROM auth_tickets WHERE rowid = (SELECT rowid FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY rowid DESC LIMIT 1)',
+        )
         .run(hash(creatorSession), now);
       this.db.exec('COMMIT');
       return result.changes === 1;

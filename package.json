@@ -45,6 +45,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test:open-profile-smoke": "tsx scripts/open-profile-smoke.ts",
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-packed-cli.mjs",

@@ -22,12 +22,11 @@ export function registerPromoteRecentThread(
     promote(thread: RecentThread): Promise<RelaySessionSnapshot>;
   },
 ): void {
-  app.post('/api/sessions/recent-threads/open', async (request, reply) => {
+  app.post('/api/sessions/recent-threads/open', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ code: 'INVALID_RECENT_THREAD' });
     const thread = (await deps.list()).find(
-      (candidate) =>
-        candidate.id === parsed.data.threadId && candidate.cwd === parsed.data.cwd,
+      (candidate) => candidate.id === parsed.data.threadId && candidate.cwd === parsed.data.cwd,
     );
     if (!thread) return reply.code(404).send({ code: 'RECENT_THREAD_NOT_FOUND' });
     try {

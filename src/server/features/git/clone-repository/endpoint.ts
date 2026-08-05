@@ -21,7 +21,7 @@ export function registerCloneRepository(
     clone(path: string, address: string): Promise<void>;
   },
 ): void {
-  app.post('/api/git/clone', async (request, reply) => {
+  app.post('/api/git/clone', { bodyLimit: 8 * 1024 }, async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ code: 'INVALID_CLONE_ADDRESS' });
     const destination = await resolveCloneDestination(deps.workspaces, parsed.data.workspaceId);
