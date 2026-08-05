@@ -135,14 +135,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansWorkspaceId = $derived(
     (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) || null,
   );
-  let visiblePlan = $derived(
-    passivePlan ??
-      (hideLivePlan
-        ? null
-        : planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error'
-          ? (planState.plan ?? null)
-          : null),
-  );
+  let visiblePlanState = $derived.by<PlanState | null>(() => {
+    if (passivePlan) return { kind: 'ready', sessionId: 'catalog', plan: passivePlan };
+    if (hideLivePlan) return null;
+    if (planState.kind === 'ready' || planState.kind === 'closing') return planState;
+    if (planState.kind === 'error' && planState.plan) return planState;
+    return null;
+  });
   let weeklyQuotaRemainingValue = $derived(
     weeklyQuotaRemaining(
       planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error'
@@ -958,10 +957,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           void resyncHistory(id);
         },
         (event) => {
-          if (event.type === 'plan.updated' && isRelayPlanUpdate(event.payload)) {
-            passivePlan = null;
-            hideLivePlan = false;
-          }
           planController.applyEvent(id, event);
           if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
           if (
@@ -1067,7 +1062,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {:else if tab === 'plan'}
       <PlansView
         catalog={plansCatalog}
-        plan={visiblePlan}
+        state={visiblePlanState}
         onopen={openWorkspacePlan}
         onclose={closePlanViewer}
       />
