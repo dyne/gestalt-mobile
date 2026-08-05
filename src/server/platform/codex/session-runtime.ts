@@ -51,10 +51,55 @@ export type RestoreSessionResult =
   | { session: RelaySessionSnapshot; historyUnavailable: false; replacementCreated: false }
   | MissingRolloutRecovery;
 
+type PendingRequest = {
+  resolve(result: unknown): void;
+  reject(reason: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+/** One private owner for every resource acquired for a live Codex child. */
+class SessionResource {
+  private disposed = false;
+  readonly pendingRequests = new Map<string, PendingRequest>();
+  threadId: string | undefined;
+  pendingThreadName: string | undefined;
+  writtenThreadName: string | undefined;
+  readonly capabilities = new Map<string, boolean>();
+
+  constructor(
+    readonly sessionId: string,
+    readonly process: AppServer,
+    readonly planStatusLease: PlanStatusLease | undefined,
+    readonly planMeasurementToken: string,
+    private unregister: readonly (() => void)[],
+    private readonly onDisposed: () => void,
+  ) {}
+
+  dispose(): boolean {
+    if (this.disposed) return false;
+    this.disposed = true;
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
+    }
+    this.pendingRequests.clear();
+    for (const unsubscribe of this.unregister) unsubscribe();
+    this.process.close();
+    this.planStatusLease?.close();
+    this.onDisposed();
+    return true;
+  }
+
+  get active(): boolean { return !this.disposed; }
+  attach(unregister: readonly (() => void)[]): void { this.unregister = unregister; }
+}
+
 export class CodexSessionRuntime {
   constructor(
     private readonly launch: (input: AppServerLaunchInput) => AppServer,
-    private readonly processes = new Map<string, AppServer>(),
+    // Kept as an ignored compatibility slot while callers migrate from the old
+    // correlated-map constructor shape.  Live ownership is `sessions` only.
+    _legacyProcesses: Map<string, AppServer> | undefined = undefined,
     private readonly onNotification?: (
       sessionId: string,
       notification: { method: string; params: unknown },
@@ -73,59 +118,42 @@ export class CodexSessionRuntime {
       update: import('../../features/plans/application/ports.js').PlanStatusUpdate,
     ) => void,
     private readonly planMeasurementBaseUrl?: string,
-  ) {}
-  private readonly pendingRequests = new Map<string, (result: unknown) => void>();
-  private readonly exitUnsubscribers = new Map<string, () => void>();
-  private readonly threadIds = new Map<string, string>();
-  private readonly planStatusLeases = new Map<string, PlanStatusLease>();
-  private readonly planMeasurementTokens = new Map<string, string>();
-  private readonly pendingThreadNames = new Map<string, string>();
-  private readonly writtenThreadNames = new Map<string, string>();
+    private readonly requestTimeoutMs = 30_000,
+    private readonly maxPendingRequests = 64,
+  ) { void _legacyProcesses; }
+  private readonly sessions = new Map<string, SessionResource>();
 
   async start(
     session: RelaySessionSnapshot,
     now: string,
     settings: StartSessionSettings = {},
   ): Promise<RelaySessionSnapshot> {
-    const process = await this.launchForSession(session);
+    const resource = await this.createResource(session);
     try {
-      process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
-      process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
-      this.attachExitHandler(session.id, process);
-      await process.rpc.request('initialize', {
+      await resource.process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
-      const startedThreadId = await this.startThread(process, session, settings);
-      this.processes.set(session.id, process);
-      this.threadIds.set(session.id, startedThreadId);
+      const startedThreadId = await this.startThread(resource.process, session, settings);
+      resource.threadId = startedThreadId;
+      this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
       return RelaySession.rehydrate(session).bindThread(startedThreadId, now).snapshot;
     } catch (error) {
-      this.discardProcess(session.id, process);
+      resource.dispose();
       throw error;
     }
   }
 
   stop(sessionId: string): void {
-    this.exitUnsubscribers.get(sessionId)?.();
-    this.exitUnsubscribers.delete(sessionId);
-    this.processes.get(sessionId)?.close();
-    this.processes.delete(sessionId);
-    this.threadIds.delete(sessionId);
-    this.pendingThreadNames.delete(sessionId);
-    this.writtenThreadNames.delete(sessionId);
-    this.clearPendingRequests(sessionId);
-    this.planMeasurementTokens.delete(sessionId);
-    this.releasePlanStatus(sessionId);
+    this.sessions.get(sessionId)?.dispose();
   }
 
   async release(sessionId: string): Promise<void> {
-    const process = this.processes.get(sessionId);
-    const threadId = this.threadIds.get(sessionId);
-    if (process && threadId) {
+    const resource = this.sessions.get(sessionId);
+    if (resource?.threadId) {
       try {
-        await process.rpc.request('thread/unsubscribe', { threadId });
+        await resource.process.rpc.request('thread/unsubscribe', { threadId: resource.threadId });
       } catch {
         // Closing the child still releases relay ownership if Codex has already exited.
       }
@@ -135,16 +163,16 @@ export class CodexSessionRuntime {
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
-    for (const sessionId of [...this.processes.keys()]) this.stop(sessionId);
-    for (const sessionId of [...this.planStatusLeases.keys()]) this.releasePlanStatus(sessionId);
+    for (const resource of [...this.sessions.values()]) resource.dispose();
   }
 
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
-    const key = `${sessionId}:${requestId}`;
-    const resolve = this.pendingRequests.get(key);
-    if (!resolve) return false;
-    this.pendingRequests.delete(key);
-    resolve(result);
+    const resource = this.sessions.get(sessionId);
+    const pending = resource?.pendingRequests.get(requestId);
+    if (!resource || !pending) return false;
+    resource.pendingRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(result);
     return true;
   }
 
@@ -153,39 +181,38 @@ export class CodexSessionRuntime {
     text: string,
     now: string,
   ): Promise<RelaySessionSnapshot> {
-    const process = this.processes.get(session.id);
-    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    const result = (await process.rpc.request('turn/start', {
+    const resource = this.sessions.get(session.id);
+    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const result = decodeTurnStart(await resource.process.rpc.request('turn/start', {
       threadId: session.threadId,
       input: [{ type: 'text', text, text_elements: [] }],
       ...(session.model ? { model: session.model } : {}),
-    })) as { turn?: { id?: string } };
-    if (!result.turn?.id) throw new Error('CODEX_TURN_ID_MISSING');
-    return RelaySession.rehydrate(session).startTurn(result.turn.id, now).snapshot;
+    }));
+    return RelaySession.rehydrate(session).startTurn(result, now).snapshot;
   }
 
   async interruptTurn(session: RelaySessionSnapshot, turnId: string): Promise<void> {
-    const process = this.processes.get(session.id);
-    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    await process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
+    const resource = this.sessions.get(session.id);
+    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    await resource.process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
   }
 
   async readPlanMeasurement(session: RelaySessionSnapshot) {
-    const process = this.processes.get(session.id);
-    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const resource = this.sessions.get(session.id);
+    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const [rateLimits, thread] = await Promise.all([
-      process.rpc.request('account/rateLimits/read', {}),
-      process.rpc.request('thread/read', { threadId: session.threadId, includeTurns: true }),
+      resource.process.rpc.request('account/rateLimits/read', {}),
+      resource.process.rpc.request('thread/read', { threadId: session.threadId, includeTurns: true }),
     ]);
     return createPlanMeasurementSnapshot({
       capturedAt: new Date().toISOString(),
-      rateLimits: rateLimitWindows(rateLimits),
+      rateLimits: rateLimitWindows(decodeRateLimits(rateLimits)),
       tokenUsage: threadTokenUsage(thread),
     });
   }
 
   authorizePlanMeasurement(sessionId: string, authorization: string | undefined): boolean {
-    const token = this.planMeasurementTokens.get(sessionId);
+    const token = this.sessions.get(sessionId)?.planMeasurementToken;
     return Boolean(token && authorization === `Bearer ${token}`);
   }
 
@@ -193,23 +220,13 @@ export class CodexSessionRuntime {
     turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
-    const process = this.processes.get(session.id);
-    if (!process || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    const result = (await process.rpc.request('thread/read', {
+    const resource = this.sessions.get(session.id);
+    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const result = decodeThreadRead(await resource.process.rpc.request('thread/read', {
       threadId: session.threadId,
       includeTurns: true,
-    })) as {
-      thread?: {
-        turns?: Array<{
-          id?: unknown;
-          status?: unknown;
-          startedAt?: unknown;
-          completedAt?: unknown;
-          items?: Array<Record<string, unknown>>;
-        }>;
-      };
-    };
-    const rawTurns = result.thread?.turns ?? [];
+    }));
+    const rawTurns = result;
     const activeTurn = rawTurns.find(
       (turn) => turn.status === 'inProgress' && typeof turn.id === 'string',
     );
@@ -229,18 +246,15 @@ export class CodexSessionRuntime {
 
   async restoreWithOutcome(session: RelaySessionSnapshot, now: string): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
-    const process = await this.launchForSession(session);
+    const resource = await this.createResource(session);
     try {
-      process.rpc.onNotification((notification) => this.onNotification?.(session.id, notification));
-      process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
-      this.attachExitHandler(session.id, process);
-      await process.rpc.request('initialize', {
+      await resource.process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
       let result: RestoreSessionResult;
       try {
-        await process.rpc.request('thread/resume', {
+        await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
           dynamicTools: [gestaltQuizDynamicTool],
@@ -252,34 +266,41 @@ export class CodexSessionRuntime {
         };
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
-        const replacementThreadId = await this.startThread(process, session, { model: session.model });
+        const replacementThreadId = await this.startThread(resource.process, session, { model: session.model });
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
-      this.processes.set(session.id, process);
-      this.threadIds.set(session.id, result.session.threadId!);
+      resource.threadId = result.session.threadId!;
+      this.sessions.get(session.id)?.dispose();
+      this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
       return result;
     } catch (error) {
-      this.discardProcess(session.id, process);
+      resource.dispose();
       throw error;
     }
   }
 
   /** Best-effort metadata only: failures never affect plan or session execution. */
   async syncThreadPlanName(sessionId: string, plan: SupervisedPlan): Promise<void> {
-    this.pendingThreadNames.set(sessionId, threadPlanName(plan));
+    const resource = this.sessions.get(sessionId);
+    if (!resource) return;
+    resource.pendingThreadName = threadPlanName(plan);
     await this.writePendingThreadName(sessionId);
   }
 
   private async writePendingThreadName(sessionId: string): Promise<void> {
-    const process = this.processes.get(sessionId);
-    const threadId = this.threadIds.get(sessionId);
-    const name = this.pendingThreadNames.get(sessionId);
-    if (!process || !threadId || !name || this.writtenThreadNames.get(sessionId) === name) return;
+    const resource = this.sessions.get(sessionId);
+    const threadId = resource?.threadId;
+    const name = resource?.pendingThreadName;
+    if (!resource || !threadId || !name || resource.writtenThreadName === name || resource.capabilities.get('thread/name/set') === false) return;
     try {
-      await process.rpc.request('thread/name/set', { threadId, name });
-      this.writtenThreadNames.set(sessionId, name);
-    } catch {
+      await resource.process.rpc.request('thread/name/set', { threadId, name });
+      if (resource.active) {
+        resource.capabilities.set('thread/name/set', true);
+        resource.writtenThreadName = name;
+      }
+    } catch (error) {
+      if (isMethodNotFound(error)) resource.capabilities.set('thread/name/set', false);
       // Unsupported servers and transient failures are bounded metadata failures.
     }
   }
@@ -288,29 +309,19 @@ export class CodexSessionRuntime {
     sessionId: string,
     request: { id: number; method: string; params: unknown },
   ): Promise<unknown> {
-    if (!this.onServerRequest?.(sessionId, request)) {
+    const resource = this.sessions.get(sessionId);
+    if (!resource || !this.onServerRequest?.(sessionId, request)) {
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     }
-    return new Promise((resolve) =>
-      this.pendingRequests.set(`${sessionId}:${request.id}`, resolve),
-    );
-  }
-
-  private attachExitHandler(sessionId: string, process: AppServer): void {
-    this.exitUnsubscribers.set(
-      sessionId,
-      process.onExit?.(() => {
-        this.processes.delete(sessionId);
-        this.threadIds.delete(sessionId);
-        this.pendingThreadNames.delete(sessionId);
-        this.writtenThreadNames.delete(sessionId);
-        this.clearPendingRequests(sessionId);
-        this.planMeasurementTokens.delete(sessionId);
-        this.exitUnsubscribers.delete(sessionId);
-        this.releasePlanStatus(sessionId);
-        this.onProcessExit?.(sessionId);
-      }) ?? (() => {}),
-    );
+    if (resource.pendingRequests.size >= this.maxPendingRequests)
+      return Promise.reject(new Error('CODEX_SERVER_REQUEST_LIMIT'));
+    const requestId = String(request.id);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (resource.pendingRequests.delete(requestId)) reject(new Error('CODEX_SERVER_REQUEST_TIMEOUT'));
+      }, this.requestTimeoutMs);
+      resource.pendingRequests.set(requestId, { resolve, reject, timer });
+    });
   }
 
   private async startThread(
@@ -318,13 +329,7 @@ export class CodexSessionRuntime {
     session: RelaySessionSnapshot,
     settings: StartSessionSettings = {},
   ): Promise<string> {
-    const result = (await process.rpc.request('thread/start', this.threadStartParams(session, settings))) as {
-      thread?: { id?: unknown };
-    };
-    if (typeof result.thread?.id !== 'string' || !result.thread.id) {
-      throw new Error('CODEX_THREAD_ID_MISSING');
-    }
-    return result.thread.id;
+    return decodeThreadStart(await process.rpc.request('thread/start', this.threadStartParams(session, settings)));
   }
 
   private threadStartParams(session: RelaySessionSnapshot, settings: StartSessionSettings): Record<string, unknown> {
@@ -337,34 +342,16 @@ export class CodexSessionRuntime {
     };
   }
 
-  private discardProcess(sessionId: string, process: AppServer): void {
-    this.exitUnsubscribers.get(sessionId)?.();
-    this.exitUnsubscribers.delete(sessionId);
-    process.close();
-    this.clearPendingRequests(sessionId);
-    this.planMeasurementTokens.delete(sessionId);
-    this.releasePlanStatus(sessionId);
-  }
-
-  private clearPendingRequests(sessionId: string): void {
-    const prefix = `${sessionId}:`;
-    for (const key of this.pendingRequests.keys()) {
-      if (key.startsWith(prefix)) this.pendingRequests.delete(key);
-    }
-  }
-
-  private async launchForSession(session: RelaySessionSnapshot): Promise<AppServer> {
+  private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(
           { id: session.id, workspacePath: session.workspacePath },
           (update) => this.onPlanStatus?.(session.id, update),
         )
       : undefined;
-    if (lease) this.planStatusLeases.set(session.id, lease);
     try {
       const token = randomUUID();
-      this.planMeasurementTokens.set(session.id, token);
-      return this.launch({
+      const process = this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
         skillsConfig: await this.resolveSkills?.(session),
@@ -385,16 +372,28 @@ export class CodexSessionRuntime {
             }
           : {}),
       });
+      const resource = new SessionResource(session.id, process, lease, token, [], () => {
+        if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
+      });
+      const notificationUnsubscribe = process.rpc.onNotification((notification) => {
+        if (resource.active) this.onNotification?.(session.id, notification);
+      });
+      const requestUnsubscribe = process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
+      const exitUnsubscribe = process.onExit?.(() => {
+        if (resource.dispose()) this.onProcessExit?.(session.id);
+      }) ?? (() => {});
+      // The resource's private unsubscribe list is populated before it is published.
+      resource.attach([notificationUnsubscribe, requestUnsubscribe, exitUnsubscribe]);
+      return resource;
     } catch (error) {
-      this.releasePlanStatus(session.id);
+      lease?.close();
       throw error;
     }
   }
+}
 
-  private releasePlanStatus(sessionId: string): void {
-    this.planStatusLeases.get(sessionId)?.close();
-    this.planStatusLeases.delete(sessionId);
-  }
+function isMethodNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === -32601);
 }
 
 function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefined {
@@ -408,6 +407,15 @@ function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefine
       ? [{ durationSeconds: durationMinutes * 60, usedPercent }]
       : [];
   });
+}
+function decodeRateLimits(value: unknown): { rateLimits: Array<{ windowDurationMins: number; usedPercent: number }> } | undefined {
+  const limits = asRecord(value)?.rateLimits;
+  if (!Array.isArray(limits) || limits.length > 32) return undefined;
+  const decoded = limits.flatMap((limit) => {
+    const record = asRecord(limit);
+    return typeof record?.windowDurationMins === 'number' && Number.isFinite(record.windowDurationMins) && typeof record.usedPercent === 'number' && Number.isFinite(record.usedPercent) ? [{ windowDurationMins: record.windowDurationMins, usedPercent: record.usedPercent }] : [];
+  });
+  return decoded.length === limits.length ? { rateLimits: decoded } : undefined;
 }
 
 function threadTokenUsage(value: unknown): ThreadTokenBreakdown | undefined {
@@ -433,4 +441,33 @@ function threadTokenUsage(value: unknown): ThreadTokenBreakdown | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function decodeThreadStart(value: unknown): string {
+  const id = asRecord(asRecord(value)?.thread)?.id;
+  if (typeof id !== 'string' || !id || id.length > 256) throw new Error('CODEX_THREAD_ID_MISSING');
+  return id;
+}
+function decodeTurnStart(value: unknown): string {
+  const id = asRecord(asRecord(value)?.turn)?.id;
+  if (typeof id !== 'string' || !id || id.length > 256) throw new Error('CODEX_TURN_ID_MISSING');
+  return id;
+}
+function decodeThreadRead(value: unknown): Array<{ id?: string; status?: string; startedAt?: number; completedAt?: number; items?: Array<Record<string, unknown>> }> {
+  const turns = asRecord(asRecord(value)?.thread)?.turns;
+  if (!Array.isArray(turns) || turns.length > 10_000) throw new Error('CODEX_THREAD_READ_MALFORMED');
+  return turns.map((turn) => {
+    const record = asRecord(turn);
+    if (!record) throw new Error('CODEX_THREAD_READ_MALFORMED');
+    return { id: boundedString(record.id), status: boundedString(record.status), startedAt: typeof record.startedAt === 'number' ? record.startedAt : undefined, completedAt: typeof record.completedAt === 'number' ? record.completedAt : undefined, items: Array.isArray(record.items) ? record.items.flatMap(decodeHistoryItem) : undefined };
+  });
+}
+function boundedString(value: unknown, max = 64_000): string | undefined { return typeof value === 'string' && value.length <= max ? value : undefined; }
+function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
+  const item = asRecord(value); const id = boundedString(item?.id, 256); const type = boundedString(item?.type, 64);
+  if (!item || !id || !type) return [];
+  if (type === 'agentMessage') return [{ id, type, ...(boundedString(item.text) ? { text: boundedString(item.text)! } : {}), ...(boundedString(item.phase, 64) ? { phase: boundedString(item.phase, 64)! } : {}) }];
+  if (type === 'plan' && boundedString(item.text)) return [{ id, type, text: boundedString(item.text)! }];
+  if (type === 'commandExecution' && boundedString(item.command) && boundedString(item.status, 64)) return [{ id, type, command: boundedString(item.command)!, status: boundedString(item.status, 64)!, ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}) }];
+  return [];
 }

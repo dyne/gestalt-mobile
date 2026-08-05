@@ -54,7 +54,6 @@ import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
-import { NativePlanAlignmentRegistry } from './features/plans/application/native-plan-alignment.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
@@ -125,7 +124,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
   const supervisedPlans = new SupervisedPlanRegistry();
-  const nativePlanAlignment = new NativePlanAlignmentRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const planMeasurementHelperPath =
@@ -175,8 +173,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
-          if (notification.method === 'turn/plan/updated')
-            nativePlanAlignment.observe(sessionId, sessions.find(sessionId)?.threadId ?? null, notification.params);
           const normalized = normalizeCodexNotification(
             sessionId,
             0,
@@ -220,7 +216,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           supervisedPlans.accept(sessionId, update);
           planMeasurementRefresh?.accept(sessionId, update);
           if (update.kind === 'updated') {
-            nativePlanAlignment.replace(sessionId, update.plan);
             void runtime?.syncThreadPlanName(sessionId, update.plan);
             const occurredAt = new Date().toISOString();
             const session = sessions.find(sessionId);

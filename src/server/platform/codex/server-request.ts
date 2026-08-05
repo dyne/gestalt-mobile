@@ -12,6 +12,7 @@ export function toPendingInteraction(input: {
   method: string;
   params: unknown;
 }): PendingInteraction | null {
+  if (!Number.isSafeInteger(input.id) || !isRecord(input.params)) return null;
   if (input.method === 'item/tool/call') {
     if (!isRecord(input.params) || input.params.tool !== GESTALT_QUIZ_TOOL_NAME) return null;
     const quiz = parseQuiz(input.params.arguments);

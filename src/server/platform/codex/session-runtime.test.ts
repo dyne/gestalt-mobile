@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
 import { GESTALT_QUIZ_TOOL_NAME, gestaltQuizDynamicTool, toQuizToolResponse } from '../../../shared/contracts/quiz.js';
@@ -910,5 +910,70 @@ describe('CodexSessionRuntime', () => {
     await expect(
       requestListener?.({ id: 8, method: 'unsupported/request', params: {} }),
     ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+  });
+
+  it('bounds server requests, times them out, and makes late resolutions harmless', async () => {
+    vi.useFakeTimers();
+    let requestListener: ((request: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => () => {},
+          onServerRequest: (listener) => { requestListener = listener; return () => {}; },
+        }, close: () => {},
+      }),
+      undefined, undefined, () => true, undefined, undefined, undefined, undefined, undefined, 10, 1,
+    );
+    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    const pending = requestListener!({ id: 1, method: 'item/tool/call', params: {} });
+    await expect(requestListener!({ id: 2, method: 'item/tool/call', params: {} })).rejects.toThrow('CODEX_SERVER_REQUEST_LIMIT');
+    const timeout = expect(pending).rejects.toThrow('CODEX_SERVER_REQUEST_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(10);
+    await timeout;
+    expect(runtime.resolveServerRequest('session-1', '1', {})).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('removes listeners and leases exactly once when exit races release', async () => {
+    let exit: (() => void) | undefined;
+    let listeners = 0;
+    let leases = 0;
+    const source: PlanStatusSource = {
+      open: async () => ({ statusDirectory: '/private/session-1', close: () => { leases += 1; }, remove: async () => {} }),
+      remove: async () => {}, closeAll: () => {},
+    };
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => { listeners += 1; return () => { listeners -= 1; }; },
+          onServerRequest: () => { listeners += 1; return () => { listeners -= 1; }; },
+        }, close: () => {}, onExit: (listener) => { exit = listener; listeners += 1; return () => { listeners -= 1; }; },
+      }),
+      undefined, undefined, undefined, undefined, undefined, source,
+    );
+    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    exit?.();
+    await runtime.release('session-1');
+    expect({ listeners, leases }).toEqual({ listeners: 0, leases: 1 });
+  });
+
+  it('caches an unsupported optional thread-name capability', async () => {
+    let nameCalls = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'thread/name/set') { nameCalls += 1; throw new CodexJsonRpcError(-32601, 'method not found'); }
+          return {};
+        }, onNotification: () => () => {}, onServerRequest: () => () => {},
+      }, close: () => {},
+    }));
+    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    const plan = { title: 'Plan', totalSteps: 1, doneSteps: 0, allDone: false, currentStepId: 'l1', steps: [{ id: 'l1', title: 'Ship', level: 1 as const, state: 'WIP' as const, priority: 'A' as const, reviewStatus: 'UNREVIEWED' as const, description: {}, children: [] }] };
+    await runtime.syncThreadPlanName('session-1', plan);
+    await runtime.syncThreadPlanName('session-1', plan);
+    expect(nameCalls).toBe(1);
   });
 });
