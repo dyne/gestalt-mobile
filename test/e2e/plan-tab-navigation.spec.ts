@@ -157,11 +157,10 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
   });
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: 'Close completed plan' }).click();
-  await expect.poll(() => closed).toBe(true);
-  await expect(chat).toHaveAttribute('aria-pressed', 'true');
-  await expect(chat).toBeFocused();
-  await expect(plan).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  await expect.poll(() => closed).toBe(false);
+  await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('adds and removes Plan from live events without stealing focus, then isolates a session without a plan', async ({
@@ -197,7 +196,7 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   await page.goto('/');
   const navigation = page.getByLabel('Primary');
   const chat = navigation.getByRole('button', { name: 'Chat' });
-  await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+  await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
   await chat.focus();
   await expect.poll(() => typeof emitPlanEvent).toBe('function');
   emitPlanEvent!({
@@ -215,9 +214,8 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
 
   emitPlanEvent!({ sequence: 2, type: 'plan.closed', payload: {} });
-  await expect(plan).toHaveCount(0);
-  await expect(chat).toHaveAttribute('aria-pressed', 'true');
-  await expect(chat).toBeFocused();
+  await expect(plan).toHaveCount(1);
+  await expect(plan).toHaveAttribute('aria-pressed', 'true');
 
   await navigation.getByRole('button', { name: 'Sessions' }).click();
   await page
@@ -227,6 +225,6 @@ test('adds and removes Plan from live events without stealing focus, then isolat
     .getByRole('button', { name: /\/projects\/two/ })
     .click();
   await expect(chat).toHaveAttribute('aria-pressed', 'true');
-  await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveCount(0);
+  await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveCount(1);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
 });

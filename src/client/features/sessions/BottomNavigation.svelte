@@ -10,31 +10,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     activeTab: Tab;
     chatEnabled: boolean;
-    planEnabled?: boolean;
     focusTab?: Tab | null;
     onselect: (tab: Tab, focusChatPrompt?: boolean) => void;
   };
 
-  let { activeTab, chatEnabled, planEnabled = false, focusTab = null, onselect }: Props = $props();
+  let { activeTab, chatEnabled, focusTab = null, onselect }: Props = $props();
   let buttons = $state<Partial<Record<Tab, HTMLButtonElement>>>({});
 
   $effect(() => {
     if (focusTab) buttons[focusTab]?.focus();
   });
 
-  $effect(() => {
-    if (!planEnabled && activeTab === 'plan') {
-      const fallback = chatEnabled ? 'chat' : 'sessions';
-      onselect(fallback);
-      buttons[fallback]?.focus();
-    }
-  });
-
   function handleKeydown(event: KeyboardEvent): void {
     const direction = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : null;
     if (direction === null) return;
     event.preventDefault();
-    const next = nextTab(activeTab, direction, { chatEnabled, planEnabled });
+    const next = nextTab(activeTab, direction, { chatEnabled });
     onselect(next);
     buttons[next]?.focus();
   }
@@ -60,12 +51,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onkeydown={handleKeydown}
     onclick={() => onselect('chat', true)}>Chat</button
   >
-  {#if planEnabled}
-    <button
-      bind:this={buttons.plan}
-      aria-pressed={activeTab === 'plan'}
-      onkeydown={handleKeydown}
-      onclick={() => onselect('plan')}>Plan</button
-    >
-  {/if}
+  <button
+    bind:this={buttons.plan}
+    aria-pressed={activeTab === 'plan'}
+    onkeydown={handleKeydown}
+    onclick={() => onselect('plan')}>Plan</button
+  >
 </nav>

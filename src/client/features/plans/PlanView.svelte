@@ -129,22 +129,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <h2 id="plan-title">{plan.title}</h2>
         <p>{plan.doneSteps} / {plan.totalSteps} complete</p>
       </div>
-      {#if plan.allDone}
-        <button
-          class="close"
-          aria-label="Close completed plan"
-          disabled={viewState.kind === 'closing'}
-          onclick={onclose}>×</button
-        >
-      {/if}
+      <button
+        class="close"
+        aria-label="Close plan and return to list"
+        onclick={onclose}>×</button
+      >
     </header>
     <progress aria-label="Plan progress" value={plan.doneSteps} max={progressMax(plan)}>
       {plan.doneSteps} of {plan.totalSteps} complete
     </progress>
     <p>Current: {currentStep ? `${currentStep.title} (${currentStep.state})` : 'No current step'}</p>
-    {#if viewState.kind === 'closing'}
-      <p>Closing completed plan…</p>
-    {:else if viewState.kind === 'error'}
+    {#if viewState.kind === 'error'}
       <p>{viewState.error}</p>
     {/if}
     {#if plan.subtitle || plan.date || plan.keywords}

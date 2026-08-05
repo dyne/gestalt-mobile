@@ -211,26 +211,25 @@ describe('PlanView', () => {
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Offline');
   });
 
-  it('shows an accessible 44px close control only for completed plans, disables it while closing, and retains close failure feedback', async () => {
+  it('shows an accessible 44px non-destructive return control for incomplete and completed plans', async () => {
     const onclose = vi.fn();
     const { rerender } = render(PlanView, { state: ready(), onclose });
-    expect(screen.queryByRole('button', { name: 'Close completed plan' })).toBeNull();
-
-    const completed = plan({ allDone: true, doneSteps: 3 });
-    rerender({ state: { kind: 'ready', sessionId: 'one', plan: completed }, onclose });
-    const close = screen.getByRole('button', { name: 'Close completed plan' });
+    const close = screen.getByRole('button', { name: 'Close plan and return to list' });
     expect(close.classList.contains('close')).toBe(true);
     await fireEvent.click(close);
     expect(onclose).toHaveBeenCalledTimes(1);
 
+    const completed = plan({ allDone: true, doneSteps: 3 });
+    rerender({ state: { kind: 'ready', sessionId: 'one', plan: completed }, onclose });
+    expect(screen.getByRole('button', { name: 'Close plan and return to list' })).toBeTruthy();
+
     rerender({ state: { kind: 'closing', sessionId: 'one', plan: completed }, onclose });
-    expect((screen.getByRole('button', { name: 'Close completed plan' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Closing completed plan…')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement).disabled).toBe(false);
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Closing completed plan.');
 
     rerender({ state: { kind: 'error', sessionId: 'one', plan: completed, error: 'Relay is busy' }, onclose });
     expect(screen.getByText('Relay is busy')).toBeTruthy();
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Relay is busy');
-    expect((screen.getByRole('button', { name: 'Close completed plan' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

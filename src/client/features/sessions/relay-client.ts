@@ -6,6 +6,17 @@
 
 import type { SupervisedPlan } from '../plans/contracts.js';
 
+export type WorkspacePlanEntry = Readonly<{
+  planName: string;
+  title: string;
+  subtitle?: string;
+  date?: string;
+  keywords?: string;
+  totalSteps: number;
+  doneSteps: number;
+  allDone: boolean;
+}>;
+
 export type RelaySession = {
   id: string;
   state: string;
@@ -206,6 +217,13 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       getOptional<SupervisedPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/plan`, signal),
     closePlan: (sessionId: string) =>
       remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),
+    listWorkspacePlans: (workspaceId: string, signal?: AbortSignal) =>
+      get<WorkspacePlanEntry[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/plans`, signal),
+    getWorkspacePlan: (workspaceId: string, planName: string, signal?: AbortSignal) =>
+      get<SupervisedPlan>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}`,
+        signal,
+      ),
     getGitSummary: (workspaceId: string) =>
       get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`),
     cloneGitRepository: (workspaceId: string, address: string) =>

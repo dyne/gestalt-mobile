@@ -54,6 +54,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type RelaySession,
     type RelaySkillProfile,
     type StartSessionSettings,
+    type WorkspacePlanEntry,
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
@@ -64,7 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './features/plans/plan-controller.js';
   import { isRelayPlanUpdate } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
-  import PlanView from './features/plans/PlanView.svelte';
+  import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
   import { reconnectDelay, turnReadiness } from './features/sessions/session-state.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
   import { getHistoryWithRecovery } from './features/sessions/history-recovery.js';
@@ -122,11 +123,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let activities = $state<HistoryActivity[]>([]);
   let cursor = $state(0);
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
+  let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
+  let passivePlan = $state.raw<import('./features/plans/contracts.js').SupervisedPlan | null>(null);
+  let hideLivePlan = $state(false);
+  let plansCatalogRequest: AbortController | null = null;
+  let passivePlanRequest: AbortController | null = null;
+  let plansCatalogGeneration = 0;
+  let passivePlanGeneration = 0;
   let navigationFocus = $state<Tab | null>(null);
   let lastPlanOpenSignal = $state('');
-  let planEnabled = $derived(
-    (planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error') &&
-      !!planState.plan,
+  let plansWorkspaceId = $derived(
+    (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) || null,
+  );
+  let visiblePlan = $derived(
+    passivePlan ??
+      (hideLivePlan
+        ? null
+        : planState.kind === 'ready' || planState.kind === 'closing' || planState.kind === 'error'
+          ? (planState.plan ?? null)
+          : null),
   );
   let weeklyQuotaRemainingValue = $derived(
     weeklyQuotaRemaining(
@@ -503,7 +518,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function selectTab(next: Tab, focusChatPrompt = false): void {
     if (next === 'chat' && !chatEnabled) return;
-    if (next === 'plan' && !planEnabled) return;
     const changedTab = tab !== next;
     tab = next;
     scrollTabIntoInitialPosition(next);
@@ -512,6 +526,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
     if (next === 'git' && gitWorkspaceId) void loadGitSummary(gitWorkspaceId);
+    if (next === 'plan') void loadPlansCatalog();
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
       void refreshSessionLists();
@@ -544,18 +559,68 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const horizontal = event.clientX - start.x;
     const vertical = event.clientY - start.y;
     if (Math.abs(horizontal) < 48 || Math.abs(horizontal) <= Math.abs(vertical)) return;
-    selectTab(nextTab(tab, horizontal < 0 ? 1 : -1, { chatEnabled, planEnabled }));
+    selectTab(nextTab(tab, horizontal < 0 ? 1 : -1, { chatEnabled }));
   }
 
   function cancelTabSwipe(event: PointerEvent): void {
     if (swipeStart?.pointerId === event.pointerId) swipeStart = null;
   }
 
-  async function closePlan(): Promise<void> {
-    if ((await planController.close()) === 'chat') {
-      selectTab('chat');
-      focusNavigationTab('chat');
+  function loadPlansCatalog(): void {
+    const workspaceId = plansWorkspaceId;
+    plansCatalogRequest?.abort();
+    passivePlanRequest?.abort();
+    passivePlan = null;
+    if (!workspaceId) {
+      plansCatalog = { kind: 'no-workspace' };
+      return;
     }
+    const request = new AbortController();
+    plansCatalogRequest = request;
+    const generation = ++plansCatalogGeneration;
+    plansCatalog = { kind: 'loading', workspaceId };
+    void relay.listWorkspacePlans(workspaceId, request.signal)
+      .then((entries) => {
+        if (generation !== plansCatalogGeneration || request.signal.aborted) return;
+        plansCatalog = { kind: 'ready', workspaceId, entries };
+      })
+      .catch((error: unknown) => {
+        if (generation !== plansCatalogGeneration || request.signal.aborted) return;
+        plansCatalog = {
+          kind: 'error',
+          workspaceId,
+          error: error instanceof Error ? error.message : 'Could not load workspace plans.',
+        };
+      });
+  }
+
+  function openWorkspacePlan(planName: string): void {
+    const workspaceId = plansWorkspaceId;
+    if (!workspaceId) return;
+    passivePlanRequest?.abort();
+    const request = new AbortController();
+    passivePlanRequest = request;
+    const generation = ++passivePlanGeneration;
+    void relay.getWorkspacePlan(workspaceId, planName, request.signal)
+      .then((plan) => {
+        if (generation !== passivePlanGeneration || request.signal.aborted) return;
+        passivePlan = plan;
+        hideLivePlan = false;
+      })
+      .catch((error: unknown) => {
+        if (generation !== passivePlanGeneration || request.signal.aborted) return;
+        plansCatalog = {
+          kind: 'error',
+          workspaceId,
+          error: error instanceof Error ? error.message : 'Could not open this plan.',
+        };
+      });
+  }
+
+  function closePlanViewer(): void {
+    passivePlan = null;
+    hideLivePlan = true;
+    loadPlansCatalog();
   }
 
   async function loadSkills(workspaceId: string, profile: string): Promise<void> {
@@ -893,6 +958,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           void resyncHistory(id);
         },
         (event) => {
+          if (event.type === 'plan.updated' && isRelayPlanUpdate(event.payload)) {
+            passivePlan = null;
+            hideLivePlan = false;
+          }
           planController.applyEvent(id, event);
           if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
           if (
@@ -996,7 +1065,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {/if}
       </section>
     {:else if tab === 'plan'}
-      <PlanView state={planState} onclose={() => void closePlan()} />
+      <PlansView
+        catalog={plansCatalog}
+        plan={visiblePlan}
+        onopen={openWorkspacePlan}
+        onclose={closePlanViewer}
+      />
     {:else if tab === 'git'}
       <GitView
         {workspaceTree}
@@ -1076,7 +1150,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <BottomNavigation
       activeTab={tab}
       {chatEnabled}
-      {planEnabled}
       focusTab={navigationFocus}
       onselect={selectTab}
     />

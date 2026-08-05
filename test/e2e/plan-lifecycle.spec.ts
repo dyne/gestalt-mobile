@@ -284,11 +284,10 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await page.goto(relayUrl);
     const navigation = page.getByLabel('Primary');
     const planTab = navigation.getByRole('button', { name: 'Plan' });
-    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
+    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
 
     await invokeHelper('signal', 'first-publication');
     await expect(planTab).toBeVisible();
-    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
     await planTab.click();
     await expect(page.getByRole('heading', { name: 'Supervised browser lifecycle' })).toBeVisible();
     await expect(page.locator('details[data-step-id="deliver-lifecycle"]')).toHaveAttribute(
@@ -377,7 +376,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await invokeHelper('set', 'deliver-lifecycle', 'DONE');
     await expect(page.getByText('1 / 3 complete')).not.toBeVisible();
     await expect(page.getByText('3 / 3 complete')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Close completed plan' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Close plan and return to list' })).toBeVisible();
     await expect(page.getByText('DONE · Priority A · UNREVIEWED').first()).toBeVisible();
     await invokeHelper('review', 'deliver-lifecycle', 'REVIEWED');
     await expect(page.getByText('DONE · Priority A · REVIEWED')).toBeVisible();
@@ -413,7 +412,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     expect(isolatedIndex).toBeGreaterThanOrEqual(0);
     expect(owningIndex).toBeGreaterThanOrEqual(0);
     await sessionItems.nth(isolatedIndex).locator('button.session-select').click();
-    await expect(planTab).toHaveCount(0);
+    await expect(planTab).toHaveCount(1);
     expect(
       await page.evaluate(
         () =>
@@ -428,21 +427,18 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await sessionItems.nth(owningIndex).locator('button.session-select').click();
     await expect(planTab).toBeVisible();
     await planTab.click();
-    await page.getByRole('button', { name: 'Close completed plan' }).click();
-    await expect(planTab).toHaveCount(0);
-    await expect(navigation.getByRole('button', { name: 'Chat' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-    await expect(navigation.getByRole('button', { name: 'Chat' })).toBeFocused();
+    await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+    await expect(planTab).toHaveCount(1);
+    await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+    await expect(planTab).toHaveAttribute('aria-pressed', 'true');
     expect(
       await authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`).then(
         (response) => response.status,
       ),
-    ).toBe(204);
+    ).toBe(200);
     await page.reload();
-    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat']);
-    await expect(planTab).toHaveCount(0);
+    await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
+    await expect(planTab).toHaveCount(1);
     expect(errors).toEqual([]);
   } finally {
     await page.close().catch(() => {});
