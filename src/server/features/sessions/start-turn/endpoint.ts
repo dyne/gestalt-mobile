@@ -17,7 +17,8 @@ export function registerStartTurn(
     onStarted?(session: RelaySessionSnapshot): void;
   },
 ): void {
-  app.post('/api/sessions/:id/turns', async (request, reply) => {
+  // Text is capped at 100,000 characters; leave room for JSON encoding only.
+  app.post('/api/sessions/:id/turns', { bodyLimit: 128 * 1024 }, async (request, reply) => {
     const session = deps.find((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     const text = (request.body as { text?: string }).text?.trim() ?? '';

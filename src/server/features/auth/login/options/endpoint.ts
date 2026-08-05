@@ -13,6 +13,9 @@ import type {
   WebAuthnCeremonyService,
 } from '../../application/ports.js';
 import { passkeyCeremonyId } from '../../domain/identifiers.js';
+import { CeremonyCapacityError } from '../../domain/errors.js';
+import { setAuthCookie } from '../../http/cookies.js';
+import type { CeremonyAttemptGate } from '../../application/ceremony-attempts.js';
 
 const lifetimeMs = 10 * 60 * 1000;
 const responseSchema = z
@@ -27,9 +30,15 @@ export function registerLoginOptions(
     random: RandomBytes;
     webauthn: WebAuthnCeremonyService;
     relyingParty: { publicOrigin: string; rpId: string };
+    ceremonyAttempts: CeremonyAttemptGate;
   },
 ): void {
-  app.post('/api/auth/login/options', async (_request, reply) => {
+  app.post('/api/auth/login/options', async (request, reply) => {
+    if (!deps.ceremonyAttempts.allow(`login:${request.ip}`, deps.clock.now()))
+      return reply
+        .code(400)
+        .type('application/problem+json')
+        .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
     if (deps.repository.listAuthorizedDevices().length === 0)
       return reply
         .code(400)
@@ -48,20 +57,27 @@ export function registerLoginOptions(
       }),
     });
     const token = passkeyCeremonyId(Buffer.from(correlation).toString('base64url'));
-    deps.repository.saveCeremony(token, {
-      purpose: 'authentication',
-      challenge,
-      expectedOrigin: deps.relyingParty.publicOrigin,
-      rpId: deps.relyingParty.rpId,
-      expiresAt: new Date(now.getTime() + lifetimeMs).toISOString(),
-    });
-    reply.setCookie('gestalt_mobile_login', token, {
-      httpOnly: true,
-      sameSite: 'strict',
-      path: '/',
-      secure: deps.relyingParty.publicOrigin.startsWith('https://'),
-      maxAge: 600,
-    });
+    try {
+      deps.repository.saveCeremony(
+        token,
+        {
+          purpose: 'authentication',
+          challenge,
+          expectedOrigin: deps.relyingParty.publicOrigin,
+          rpId: deps.relyingParty.rpId,
+          expiresAt: new Date(now.getTime() + lifetimeMs).toISOString(),
+        },
+        now.toISOString(),
+      );
+    } catch (error) {
+      if (error instanceof CeremonyCapacityError)
+        return reply
+          .code(400)
+          .type('application/problem+json')
+          .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
+      throw error;
+    }
+    setAuthCookie(reply, 'gestalt_mobile_login', token, deps.relyingParty.publicOrigin);
     return reply.send(options);
   });
 }

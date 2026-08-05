@@ -18,22 +18,26 @@ export function registerCheckoutBranch(
     checkout(path: string, branch: string): Promise<void>;
   },
 ): void {
-  app.post('/api/git/repositories/:workspaceId/checkout', async (request, reply) => {
-    const target = await resolveRepositoryTarget(
-      deps.workspaces,
-      (request.params as { workspaceId: string }).workspaceId,
-    );
-    if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
-    const parsed = requestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ code: 'INVALID_BRANCH' });
-    try {
-      await deps.checkout(target.path, parsed.data.branch);
-      return reply.code(202).send({ accepted: true });
-    } catch (error) {
-      return reply.code(409).send({
-        code: 'GIT_CHECKOUT_FAILED',
-        detail: error instanceof Error ? error.message : 'Git checkout failed.',
-      });
-    }
-  });
+  app.post(
+    '/api/git/repositories/:workspaceId/checkout',
+    { bodyLimit: 8 * 1024 },
+    async (request, reply) => {
+      const target = await resolveRepositoryTarget(
+        deps.workspaces,
+        (request.params as { workspaceId: string }).workspaceId,
+      );
+      if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
+      const parsed = requestSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ code: 'INVALID_BRANCH' });
+      try {
+        await deps.checkout(target.path, parsed.data.branch);
+        return reply.code(202).send({ accepted: true });
+      } catch (error) {
+        return reply.code(409).send({
+          code: 'GIT_CHECKOUT_FAILED',
+          detail: error instanceof Error ? error.message : 'Git checkout failed.',
+        });
+      }
+    },
+  );
 }

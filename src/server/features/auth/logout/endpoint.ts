@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AuthorizationRepository, Clock } from '../application/ports.js';
 import { parseAuthorizationSessionId } from '../domain/identifiers.js';
+import { clearAuthCookie } from '../http/cookies.js';
 export function registerLogout(
   app: FastifyInstance,
   deps: {
@@ -19,12 +20,7 @@ export function registerLogout(
     const session = parseAuthorizationSessionId(token);
     if (session !== null)
       deps.repository.revokeSession(session, deps.clock.now().toISOString());
-    reply.clearCookie('gestalt_mobile_session', {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: deps.relyingParty.publicOrigin.startsWith('https://'),
-    });
+    clearAuthCookie(reply, 'gestalt_mobile_session', deps.relyingParty.publicOrigin);
     return reply.code(204).send();
   });
 }

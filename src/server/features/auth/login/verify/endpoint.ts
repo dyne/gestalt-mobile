@@ -14,6 +14,7 @@ import {
   type WebAuthnCeremonyService,
 } from '../../application/ports.js';
 import { passkeyCeremonyId, webAuthnCredentialId } from '../../domain/identifiers.js';
+import { clearAuthCookie, setAuthCookie } from '../../http/cookies.js';
 
 const responseSchema = z
   .object({
@@ -45,7 +46,7 @@ export function registerLoginVerification(
     relyingParty: { publicOrigin: string };
   },
 ): void {
-  app.post('/api/auth/login/verify', async (request, reply) => {
+  app.post('/api/auth/login/verify', { bodyLimit: 64 * 1024 }, async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     const token = request.cookies.gestalt_mobile_login;
     const fail = () =>
@@ -91,14 +92,8 @@ export function registerLoginVerification(
         },
       });
       if (!authenticated) return fail();
-      reply.setCookie('gestalt_mobile_session', session, {
-        httpOnly: true,
-        sameSite: 'strict',
-        path: '/',
-        secure: deps.relyingParty.publicOrigin.startsWith('https://'),
-        maxAge: 2592000,
-      });
-      reply.clearCookie('gestalt_mobile_login', { path: '/' });
+      setAuthCookie(reply, 'gestalt_mobile_session', session, deps.relyingParty.publicOrigin);
+      clearAuthCookie(reply, 'gestalt_mobile_login', deps.relyingParty.publicOrigin);
       return reply.send({ status: 'authenticated' });
     } catch (error) {
       if (error instanceof PasskeyVerificationError) return fail();

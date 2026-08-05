@@ -21,7 +21,7 @@ export function registerStartSession(
     reportFailure?(operation: string, error: unknown): void;
   },
 ): void {
-  app.post('/api/sessions', async (request, reply) => {
+  app.post('/api/sessions', { bodyLimit: 4 * 1024 }, async (request, reply) => {
     const key = idempotencyKey(request.headers);
     const prior = key ? deps.idempotency?.get('start-session', key) : null;
     if (prior) return reply.code(prior.statusCode).send(JSON.parse(prior.body));
@@ -41,15 +41,18 @@ export function registerStartSession(
     } catch (error) {
       deps.reportFailure?.('start-session', error);
       if (error instanceof SkillProfileError)
-        return reply.code(400).type('application/problem+json').send(
-          problem(
-            error.code,
-            400,
-            error.code === 'UNKNOWN_SKILL_PROFILE'
-              ? 'The selected skill profile does not exist.'
-              : 'The selected skill profile is invalid.',
-          ),
-        );
+        return reply
+          .code(400)
+          .type('application/problem+json')
+          .send(
+            problem(
+              error.code,
+              400,
+              error.code === 'UNKNOWN_SKILL_PROFILE'
+                ? 'The selected skill profile does not exist.'
+                : 'The selected skill profile is invalid.',
+            ),
+          );
       throw error;
     }
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));

@@ -25,6 +25,22 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'FST_ERR_CTP_BODY_TOO_LARGE'
+    ) {
+      const problem: ProblemDetail = {
+        type: 'urn:gestalt-mobile:error:payload-too-large',
+        title: 'Payload too large',
+        status: 413,
+        detail: 'The request body exceeds this endpoint limit.',
+        code: 'PAYLOAD_TOO_LARGE',
+        retryable: false,
+      };
+      return reply.code(413).type('application/problem+json').send(problem);
+    }
     const problem: ProblemDetail = {
       type: 'urn:gestalt-mobile:error:internal',
       title: 'Internal server error',
