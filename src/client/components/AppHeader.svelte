@@ -64,7 +64,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .session-model { margin-inline-start: clamp(0.75rem, 3vw, 2rem); }
+  .session-model {
+    margin-inline-start: clamp(0.75rem, 3vw, 2rem);
+    color: var(--theme-text-muted);
+    font-family: var(--theme-font-code);
+  }
 
   @media (max-width: 34rem) {
     .session-model { display: none; }

@@ -70,11 +70,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </main>
 
 <style>
-  .login { box-sizing: border-box; inline-size: 100%; max-inline-size: none; min-height: 100dvh; margin: 0; padding: 1rem; display: grid; place-items: center; background: #10231e; color: #f5f6ed; }
-  .card { width: min(100%, 32rem); box-sizing: border-box; padding: clamp(1.25rem, 5vw, 3rem); background: #17352c; border: 1px solid #88bda7; border-radius: 1rem; }
-  .brand { color: #b6e6ce; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-  h1 { margin-block: .25rem 1rem; font-size: clamp(1.8rem, 7vw, 3rem); }
-  .sign-in { min-height: 44px; width: 100%; margin-top: 1rem; padding: .55rem 1rem; border-radius: .4rem; background: #b6e6ce; color: #10231e; font: inherit; font-weight: 700; }
-  .error { color: #ffd2c5; }
+  .login { box-sizing: border-box; inline-size: 100%; max-inline-size: none; min-height: 100dvh; margin: 0; padding: 1rem; display: grid; place-items: center; background: var(--theme-page); color: var(--theme-text); }
+  .card { width: min(100%, 32rem); box-sizing: border-box; padding: clamp(1.25rem, 5vw, 3rem); background: var(--theme-surface); border: 1px solid var(--theme-border); border-radius: calc(var(--theme-radius) * 2); box-shadow: 0 0.5rem 1.5rem var(--theme-shadow); }
+  .brand { color: var(--theme-info); font-family: var(--theme-font-display); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  h1 { margin-block: .25rem 1rem; font-family: var(--theme-font-display); font-size: clamp(1.8rem, 7vw, 3rem); }
+  .sign-in { min-height: 44px; width: 100%; margin-top: 1rem; padding: .55rem 1rem; border-radius: var(--theme-radius); background: var(--theme-accent); color: var(--theme-accent-contrast); border-color: var(--theme-accent); font: inherit; font-weight: 700; }
+  .error { color: var(--theme-error); font-weight: 700; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
 </style>

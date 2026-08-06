@@ -46,7 +46,7 @@ test('first-device enrollment is usable at mobile size', async ({ page }) => {
     await page
       .locator('.enrollment')
       .evaluate((element) => getComputedStyle(element).backgroundColor),
-  ).toBe('rgb(16, 35, 30)');
+  ).toBe('rgb(244, 240, 232)');
   await expect(page.locator('.enrollment')).toHaveCSS('animation-duration', '1e-05s');
   await page.screenshot({ path: 'test-results/auth/first-run-mobile.png', fullPage: true });
 });
