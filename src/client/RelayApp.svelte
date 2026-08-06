@@ -6,15 +6,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import { selectTheme } from './features/theme/browser-theme.js';
+  import { type ThemeId } from './features/theme/theme-registry.js';
 
   let {
     authorizedFetch,
     passkeyAuthEnabled,
+    theme: initialTheme,
     onlock,
     oncreatepasskey = () => {},
   }: {
     authorizedFetch: typeof fetch;
     passkeyAuthEnabled: boolean;
+    theme: ThemeId;
     onlock: () => void;
     oncreatepasskey?: (ticket: string) => void;
   } = $props();
@@ -96,8 +100,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let tab = $state<Tab>('sessions');
   let devicesOpen = $state(false);
   let status = $state('Loading relay…');
-  type ThemePreference = 'system' | 'light' | 'dark';
-  let theme = $state<ThemePreference>('system');
+  let theme = $derived<ThemeId>(initialTheme);
   let workspaceTree = $state<WorkspaceOption[]>([]);
   const defaultSessionModel = 'gpt-5.6-terra';
   let sessionModels = $state.raw<string[]>([defaultSessionModel]);
@@ -201,9 +204,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
 
   onMount(async () => {
-    const savedTheme = localStorage.getItem('gestalt-mobile.theme');
-    if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system')
-      setTheme(savedTheme);
     if (
       evidenceContext === 'sessions' ||
       evidenceContext === 'git' ||
@@ -250,11 +250,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   });
 
-  function setTheme(value: ThemePreference): void {
-    theme = value;
-    if (value === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.dataset.theme = value;
-    localStorage.setItem('gestalt-mobile.theme', value);
+  function setTheme(value: ThemeId): void {
+    theme = selectTheme(value);
   }
 
   onDestroy(() => {

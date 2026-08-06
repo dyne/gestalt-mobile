@@ -15,8 +15,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import FirstDeviceEnrollment from './features/auth/FirstDeviceEnrollment.svelte';
   import PasskeyLogin from './features/auth/PasskeyLogin.svelte';
   import { createAuthStateMachine, type AuthState } from './features/auth/auth-state.js';
+  import { type ThemeId } from './features/theme/theme-registry.js';
 
-  let { enrollmentTicket: initialEnrollmentTicket }: { enrollmentTicket?: string } = $props();
+  let { enrollmentTicket: initialEnrollmentTicket, initialTheme = 'dyne-org' }: { enrollmentTicket?: string; initialTheme?: ThemeId } = $props();
   let localEnrollmentTicket = $state<string | undefined>(undefined);
   let enrollmentTicket = $derived(localEnrollmentTicket ?? initialEnrollmentTicket);
   let authState = $state<AuthState>({ kind: 'checking' });
@@ -50,6 +51,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {#if authState.kind === 'authenticated'}
   <RelayApp
     {authorizedFetch}
+    theme={initialTheme}
     passkeyAuthEnabled={authState.passkeyAuthEnabled}
     onlock={() => void lockRelay()}
     oncreatepasskey={createPasskeyHere}

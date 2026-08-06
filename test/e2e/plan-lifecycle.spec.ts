@@ -287,6 +287,16 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
 
     await invokeHelper('signal', 'first-publication');
+    await expect
+      .poll(async () =>
+        authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
+          .then(async (response) => {
+            const body = await response.text();
+            return body ? JSON.parse(body) as { title?: string } : null;
+          })
+          .then((plan) => plan?.title),
+      )
+      .toBe('Supervised browser lifecycle');
     await expect(planTab).toBeVisible();
     await planTab.click();
     await expect(page.getByRole('heading', { name: 'Supervised browser lifecycle' })).toBeVisible();
@@ -348,6 +358,19 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
       currentStepId: 'finish-after-reconnect',
     });
 
+    blockSockets = false;
+    await expect
+      .poll(() =>
+        relayEvents.find(
+          (event) =>
+            event.sequence > cursorBeforeOffline &&
+            event.type === 'plan.updated' &&
+            (event.payload as { plan?: { currentStepId?: string } }).plan?.currentStepId ===
+              'finish-after-reconnect' &&
+            (event.payload as { plan?: { doneSteps?: number } }).plan?.doneSteps === 1,
+        ),
+      )
+      .toBeTruthy();
     await invokeHelper('l2', 'finish-after-reconnect', 'DONE');
     await expect
       .poll(async () =>
@@ -356,7 +379,6 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           .then((plan: { doneSteps: number }) => plan.doneSteps),
       )
       .toBe(2);
-    blockSockets = false;
     await expect
       .poll(() =>
         relayEvents.find(
@@ -370,7 +392,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
       )
       .toBeTruthy();
     expect(socketUrls.at(-1)).toContain(`after=${cursorBeforeOffline}`);
-    await expect(page.getByText('Current: Finish after reconnect (WIP)')).toBeVisible();
+    await expect(page.getByText('Current: Deliver the supervised lifecycle (WIP)')).toBeVisible();
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');
 
     await invokeHelper('set', 'deliver-lifecycle', 'DONE');
