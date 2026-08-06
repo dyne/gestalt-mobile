@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { problem } from '../../../../platform/http/problem.js';
+import { sendProblem } from '../../../../platform/http/problem-reply.js';
 import type {
   AuthorizationRepository,
   Clock,
@@ -35,15 +35,9 @@ export function registerLoginOptions(
 ): void {
   app.post('/api/auth/login/options', async (request, reply) => {
     if (!deps.ceremonyAttempts.allow(`login:${request.ip}`, deps.clock.now()))
-      return reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
+      return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
     if (deps.repository.listAuthorizedDevices().length === 0)
-      return reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
+      return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
     const correlation = deps.random.bytes(32);
     const challenge = deps.random.bytes(32);
     if (correlation.length !== 32 || challenge.length !== 32)
@@ -71,10 +65,7 @@ export function registerLoginOptions(
       );
     } catch (error) {
       if (error instanceof CeremonyCapacityError)
-        return reply
-          .code(400)
-          .type('application/problem+json')
-          .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
+        return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
       throw error;
     }
     setAuthCookie(reply, 'gestalt_mobile_login', token, deps.relyingParty.publicOrigin);
