@@ -305,7 +305,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     list-style: none;
   }
 
-  .current-session { outline: 2px solid var(--accent, #4f46e5); outline-offset: 2px; }
+  .current-session { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
   .session-select { display: block; inline-size: 100%; color: inherit; font: inherit; text-align: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
 
   .managed-session {
@@ -316,13 +316,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     inline-size: 100%;
     box-sizing: border-box;
     padding: 0.75rem;
-    border: 1px solid CanvasText;
+    border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
   }
 
   .open-session {
-    border-inline-start: 0.3rem solid Highlight;
-    background: color-mix(in srgb, Highlight 12%, Canvas);
+    border-inline-start: 0.3rem solid var(--theme-accent);
+    background: var(--theme-control-hover);
   }
 
   .session-details {
@@ -338,15 +338,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-start: 0.35rem;
     padding: 0.15rem 0.4rem;
     border-radius: 999px;
-    background: color-mix(in srgb, Highlight 14%, Canvas);
-    color: CanvasText;
+    background: var(--theme-control-pressed);
+    color: var(--theme-text);
     font-size: 0.875rem;
     overflow-wrap: anywhere;
   }
 
   .org-plan-metadata { display: grid; gap: 0.125rem; margin-block-start: 0.35rem; }
   .org-plan-title { font-weight: 600; }
-  .org-plan-filename { overflow-wrap: anywhere; color: color-mix(in srgb, CanvasText 72%, Canvas); }
+  .org-plan-filename { overflow-wrap: anywhere; color: var(--theme-text-muted); }
 
   .session-actions {
     display: flex;
@@ -391,7 +391,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+    border: 1px solid var(--theme-border);
     border-radius: 0.6rem;
   }
 
@@ -445,16 +445,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .skills-profile-error {
-    color: #8a1c14;
+    color: var(--theme-error);
   }
 
   .new-session-button {
     inline-size: auto;
-    color: Canvas;
+    color: var(--theme-accent-contrast);
     font-weight: 700;
-    background: CanvasText;
-    border-color: CanvasText;
-    box-shadow: inset 0 0.15rem 0 color-mix(in srgb, Canvas 45%, transparent);
+    background: var(--theme-accent);
+    border-color: var(--theme-accent);
+    box-shadow: inset 0 0.15rem 0 var(--theme-accent-contrast);
   }
 
   @media (max-width: 28rem) {

@@ -98,7 +98,7 @@ async function updateFixturePlan(
     JSON.stringify({
       schemaVersion: 1,
       planPath: canonicalPlanPath,
-      reason: command,
+      reason: command === 'signal' ? id : command,
       updatedAt: new Date().toISOString(),
     }),
   );
@@ -286,7 +286,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     const planTab = navigation.getByRole('button', { name: 'Plan' });
     await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
 
-    await invokeHelper('signal', 'first-publication');
+    await invokeHelper('signal', 'supervision-start');
     await expect
       .poll(async () =>
         authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
@@ -297,9 +297,9 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           .then((plan) => plan?.title),
       )
       .toBe('Supervised browser lifecycle');
-    await expect(planTab).toBeVisible();
-    await planTab.click();
     await expect(page.getByRole('heading', { name: 'Supervised browser lifecycle' })).toBeVisible();
+    await expect(planTab).toBeVisible();
+    await expect(planTab).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('details[data-step-id="deliver-lifecycle"]')).toHaveAttribute(
       'open',
       '',

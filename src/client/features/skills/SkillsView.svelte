@@ -229,10 +229,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .refresh-skills { flex: 0 0 auto; inline-size: auto; min-block-size: 2.25rem; padding-inline: .65rem; }
   .refresh-skills span:first-child { font-size: 1.2em; line-height: 1; }
   .summary { min-inline-size: 0; margin: 0; overflow-wrap: anywhere; }
-  .notice { border-inline-start: .3rem solid #976600; padding-inline-start: .7rem; }
-  .error { border-inline-start: .3rem solid #b42318; padding-inline-start: .7rem; color: #8a1c14; }
+  .notice { border-inline-start: .3rem solid var(--theme-warning); padding-inline-start: .7rem; color: var(--theme-warning); }
+  .error { border-inline-start: .3rem solid var(--theme-error); padding-inline-start: .7rem; color: var(--theme-error); }
   .skill-list { display: grid; gap: .75rem; padding: 0; list-style: none; }
-  .skill-card { min-inline-size: 0; scroll-margin-block: 1rem; border: 1px solid color-mix(in srgb, var(--brand-color, currentColor) 35%, transparent); border-radius: .5rem; padding: .75rem; }
+  .skill-card { min-inline-size: 0; scroll-margin-block: 1rem; border: 1px solid var(--theme-border); border-radius: .5rem; padding: .75rem; }
   .skill-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; min-block-size: 3rem; }
   .skill-toggle > span { min-inline-size: 0; overflow-wrap: anywhere; }
   .skill-toggle input { flex: 0 0 auto; inline-size: 1.25rem; min-block-size: 1.25rem; }
@@ -245,8 +245,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   dd { min-inline-size: 0; margin: 0; }
   dd ul { margin: 0; padding-inline-start: 1.25rem; }
   .path { overflow-wrap: anywhere; }
-  :where(button, input, select):focus-visible { outline: 3px solid #1261a0; outline-offset: 2px; }
-  @media (prefers-color-scheme: dark) { .error { color: #ffb4ab; } .notice { color: #ffd8a8; } }
+  :where(button, input, select):focus-visible { outline: 3px solid var(--theme-focus); outline-offset: 2px; }
   @media (min-width: 42rem) { .field-grid { grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr); align-items: center; } }
   @media (max-width: 30rem) { dl { grid-template-columns: 1fr; gap: .2rem; } }
 </style>

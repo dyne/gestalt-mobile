@@ -126,7 +126,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .tree-panel {
     min-inline-size: 0;
     padding: 0.5rem;
-    border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+    border: 1px solid var(--theme-border);
     border-radius: 0.6rem;
   }
 
