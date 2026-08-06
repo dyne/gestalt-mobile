@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { problem } from '../../../../platform/http/problem.js';
+import { sendProblem } from '../../../../platform/http/problem-reply.js';
 import type {
   AuthorizationRepository,
   Clock,
@@ -36,25 +36,16 @@ export function registerRegistrationOptions(
 ): void {
   app.post('/api/auth/register/options', { bodyLimit: 4 * 1024 }, async (request, reply) => {
     if (!deps.ceremonyAttempts.allow(`register:${request.ip}`, deps.clock.now()))
-      return reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.'));
+      return sendProblem(reply, 'REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.');
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success)
-      return reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
+      return sendProblem(reply, 'INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.');
     const ticket =
       parsed.data.enrollmentTicket === undefined
         ? undefined
         : parseEnrollmentTicketId(parsed.data.enrollmentTicket);
     if (ticket === null)
-      return reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
+      return sendProblem(reply, 'INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.');
     const owner = deps.repository.readOwner();
     const devices = deps.repository.listAuthorizedDevices();
     const now = deps.clock.now();
@@ -62,10 +53,7 @@ export function registerRegistrationOptions(
       devices.length > 0 &&
       (!ticket || !deps.repository.ticketAvailable(ticket, now.toISOString()))
     )
-      return reply
-        .code(403)
-        .type('application/problem+json')
-        .send(problem('ENROLLMENT_NOT_AUTHORIZED', 403, 'Registration is not authorized.'));
+      return sendProblem(reply, 'ENROLLMENT_NOT_AUTHORIZED', 403, 'Registration is not authorized.');
     const ownerHandle = owner ? undefined : deps.random.bytes(32);
     if (ownerHandle && ownerHandle.length !== 32)
       throw new Error('AUTHORIZATION_RANDOMNESS_INVALID');
@@ -100,10 +88,7 @@ export function registerRegistrationOptions(
       );
     } catch (error) {
       if (error instanceof CeremonyCapacityError)
-        return reply
-          .code(400)
-          .type('application/problem+json')
-          .send(problem('REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.'));
+        return sendProblem(reply, 'REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.');
       throw error;
     }
     setAuthCookie(reply, 'gestalt_mobile_registration', token, deps.relyingParty.publicOrigin);

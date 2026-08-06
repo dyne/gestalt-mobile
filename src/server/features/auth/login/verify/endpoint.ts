@@ -5,7 +5,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { problem } from '../../../../platform/http/problem.js';
+import { sendProblem } from '../../../../platform/http/problem-reply.js';
 import {
   PasskeyVerificationError,
   type AuthorizationIdentifiers,
@@ -50,10 +50,7 @@ export function registerLoginVerification(
     const parsed = requestSchema.safeParse(request.body);
     const token = request.cookies.gestalt_mobile_login;
     const fail = () =>
-      reply
-        .code(400)
-        .type('application/problem+json')
-        .send(problem('AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.'));
+      sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
     if (!parsed.success || typeof token !== 'string') return fail();
     const now = deps.clock.now();
     const ceremony = deps.repository.readCeremony(passkeyCeremonyId(token), now.toISOString());

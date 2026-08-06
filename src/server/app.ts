@@ -10,94 +10,40 @@ import fastify, { type FastifyInstance } from 'fastify';
 
 import { registerGetHealth, type HealthReader } from './features/health/get-health/endpoint.js';
 import { registerGetBootstrap } from './features/catalog/get-bootstrap/endpoint.js';
-import { registerGetGitSummary } from './features/git/get-summary/endpoint.js';
-import { registerPushUpstream } from './features/git/push-upstream/endpoint.js';
-import { registerRefreshGit } from './features/git/refresh/endpoint.js';
-import { registerPullRebase } from './features/git/pull-rebase/endpoint.js';
-import { registerCheckoutBranch } from './features/git/checkout-branch/endpoint.js';
-import { registerCloneRepository } from './features/git/clone-repository/endpoint.js';
+import { registerAuthRoutes } from './features/auth/register-routes.js';
+import { registerGitRoutes } from './features/git/register-routes.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
 import type {
   ModelCatalog,
   ProfileCatalog,
   WorkspaceCatalog,
 } from './features/catalog/application/ports.js';
-import { registerGetSession } from './features/sessions/get-session/endpoint.js';
-import { registerListSessions } from './features/sessions/list-sessions/endpoint.js';
-import {
-  registerListRecentThreads,
-  type RecentThread,
-} from './features/sessions/list-recent-threads/endpoint.js';
-import { registerPromoteRecentThread } from './features/sessions/promote-recent-thread/endpoint.js';
-import { registerGetHistory } from './features/sessions/get-history/endpoint.js';
-import { registerStartSession } from './features/sessions/start-session/endpoint.js';
-import { registerStartTurn } from './features/sessions/start-turn/endpoint.js';
-import { registerSelectModel } from './features/sessions/select-model/endpoint.js';
-import { registerInterruptTurn } from './features/sessions/interrupt-turn/endpoint.js';
-import { registerStopSession } from './features/sessions/stop-session/endpoint.js';
-import { registerRestoreSession } from './features/sessions/restore-session/endpoint.js';
-import { registerReleaseSession } from './features/sessions/release-session/endpoint.js';
-import { registerForgetSession } from './features/sessions/forget-session/endpoint.js';
-import { registerRespondInteraction } from './features/sessions/respond-interaction/endpoint.js';
-import { stopSession } from './features/sessions/lifecycle/use-case.js';
-import { registerSessionEvents } from './features/sessions/session-events/endpoint.js';
-import { registerGetPlan } from './features/plans/get-plan/endpoint.js';
-import { registerGetWorkspacePlan } from './features/plans/get-workspace-plan/endpoint.js';
-import { registerListWorkspacePlans } from './features/plans/list-workspace-plans/endpoint.js';
-import { registerClosePlan } from './features/plans/close-plan/endpoint.js';
-import { registerGetPlanMeasurement } from './features/plans/get-measurement/endpoint.js';
+import { registerPlanRoutes } from './features/plans/register-routes.js';
+import type { RecentThread } from './features/sessions/list-recent-threads/endpoint.js';
+import { registerSessionRoutes } from './features/sessions/register-routes.js';
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
 import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
-import {
-  authorizationSessionDevice,
-  registerAuthorizationBoundary,
-} from './platform/http/authorization-boundary.js';
+import { registerAuthorizationBoundary } from './platform/http/authorization-boundary.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
 import type { RestoreSessionResult } from './platform/codex/session-runtime.js';
 import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
 import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
-import {
-  registerListAvailableSkills,
-  type ListAvailableSkillsDependencies,
-} from './features/skills/list-available/endpoint.js';
-import {
-  registerListSkillProfiles,
-  type ListSkillProfilesDependencies,
-} from './features/skills/list-profiles/endpoint.js';
-import {
-  registerReplaceSkillProfile,
-  type ReplaceSkillProfileDependencies,
-} from './features/skills/replace-profile/endpoint.js';
-import {
-  registerDeleteSkillProfile,
-  type DeleteSkillProfileDependencies,
-} from './features/skills/delete-profile/endpoint.js';
-import { registerRegistrationOptions } from './features/auth/register/options/endpoint.js';
-import { registerRegistrationVerification } from './features/auth/register/verify/endpoint.js';
-import { registerLoginOptions } from './features/auth/login/options/endpoint.js';
-import { registerLoginVerification } from './features/auth/login/verify/endpoint.js';
-import { registerAuthStatus, registerDisabledAuthStatus } from './features/auth/status/endpoint.js';
-import { registerLogout } from './features/auth/logout/endpoint.js';
-import { registerListAuthorizedDevices } from './features/auth/devices/list/endpoint.js';
-import { registerRenameAuthorizedDevice } from './features/auth/devices/rename/endpoint.js';
-import { registerRevokeAuthorizedDevice } from './features/auth/devices/revoke/endpoint.js';
-import { registerCreateEnrollmentTicket } from './features/auth/enrollment-tickets/endpoint.js';
-import { registerEnrollmentTicketStatus } from './features/auth/enrollment-tickets/status/endpoint.js';
-import { registerCancelEnrollmentTicket } from './features/auth/enrollment-tickets/cancel/endpoint.js';
+import { registerSkillRoutes } from './features/skills/register-routes.js';
+import type { ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
+import type { ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
+import type { ReplaceSkillProfileDependencies } from './features/skills/replace-profile/endpoint.js';
+import type { DeleteSkillProfileDependencies } from './features/skills/delete-profile/endpoint.js';
 import type {
   AuthorizationRepository,
   Clock,
   RandomBytes,
   WebAuthnCeremonyService,
 } from './features/auth/application/ports.js';
-import {
-  ExpiringCeremonyAttemptGate,
-  type CeremonyAttemptGate,
-} from './features/auth/application/ceremony-attempts.js';
+import type { CeremonyAttemptGate } from './features/auth/application/ceremony-attempts.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -227,190 +173,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       publicOrigin: deps.auth.relyingParty.publicOrigin,
     });
   registerGetHealth(app, deps.health);
-  if (deps.auth) {
-    const auth = {
-      ...deps.auth,
-      ceremonyAttempts: deps.auth.ceremonyAttempts ?? new ExpiringCeremonyAttemptGate(),
-    };
-    registerRegistrationOptions(app, auth);
-    registerRegistrationVerification(app, deps.auth);
-    registerLoginOptions(app, auth);
-    registerLoginVerification(app, deps.auth);
-    registerAuthStatus(app, deps.auth);
-    registerLogout(app, deps.auth);
-    registerListAuthorizedDevices(app, deps.auth);
-    registerRenameAuthorizedDevice(app, deps.auth);
-    registerRevokeAuthorizedDevice(app, deps.auth);
-    registerCreateEnrollmentTicket(app, deps.auth);
-    registerEnrollmentTicketStatus(app, deps.auth);
-    registerCancelEnrollmentTicket(app, deps.auth);
-  } else if (deps.passkeyAuthDisabled) registerDisabledAuthStatus(app);
+  registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
-  if (deps.recentThreads)
-    registerListRecentThreads(app, {
-      ...deps.recentThreads,
-      metadata: (threadId) => {
-        const session = deps.sessionRoutes
-          ?.list?.()
-          .find((candidate) => candidate.threadId === threadId);
-        if (!session) return null;
-        return {
-          ...(session.model === undefined ? {} : { model: session.model }),
-          ...(session.effectiveSkillSelection?.selectedProfileName === undefined
-            ? {}
-            : { skillProfile: session.effectiveSkillSelection.selectedProfileName }),
-          ...(session.lastOrgPlan === undefined
-            ? {}
-            : { orgPlanFilename: session.lastOrgPlan.filename }),
-        };
-      },
-    });
-  if (deps.sessionRoutes) {
-    registerStartSession(app, {
-      ...deps.sessionRoutes,
-      reportFailure: (operation, error) =>
-        deps.logger.error(`${operation} failed: ${safeErrorLabel(error)}`),
-    });
-    registerGetSession(app, deps.sessionRoutes.find);
-    if (deps.sessionRoutes.list) registerListSessions(app, { list: deps.sessionRoutes.list });
-    if (deps.sessionRoutes.readHistory)
-      registerGetHistory(app, {
-        find: deps.sessionRoutes.find,
-        read: deps.sessionRoutes.readHistory,
-        currentSequence: deps.sessionRoutes.currentSequence ?? (() => 0),
-      });
-    if (deps.sessionRoutes.startTurn)
-      registerStartTurn(app, {
-        find: deps.sessionRoutes.find,
-        start: deps.sessionRoutes.startTurn,
-        save: deps.sessionRoutes.save,
-        onStarted: deps.sessionRoutes.onTurnStarted,
-      });
-    if (deps.sessionRoutes.models)
-      registerSelectModel(app, {
-        find: deps.sessionRoutes.find,
-        models: () => deps.sessionRoutes!.models!.list(),
-        now: deps.sessionRoutes.now,
-        save: deps.sessionRoutes.save,
-      });
-    if (deps.sessionRoutes.interruptTurn)
-      registerInterruptTurn(app, {
-        find: deps.sessionRoutes.find,
-        interrupt: deps.sessionRoutes.interruptTurn,
-      });
-    if (deps.sessionRoutes.restore)
-      registerRestoreSession(app, {
-        find: deps.sessionRoutes.find,
-        restore: deps.sessionRoutes.restore,
-        save: deps.sessionRoutes.save,
-        idempotency: deps.sessionRoutes.idempotency,
-      });
-    if (deps.recentThreads && deps.sessionRoutes.promoteRecent)
-      registerPromoteRecentThread(app, {
-        list: () => deps.recentThreads!.list(),
-        promote: deps.sessionRoutes.promoteRecent,
-      });
-    if (deps.sessionRoutes.release && deps.sessionRoutes.close)
-      registerReleaseSession(app, {
-        find: deps.sessionRoutes.find,
-        release: deps.sessionRoutes.release,
-        save: deps.sessionRoutes.save,
-        close: deps.sessionRoutes.close,
-        idempotency: deps.sessionRoutes.idempotency,
-      });
-    if (deps.sessionRoutes.remove && deps.sessionRoutes.close)
-      registerForgetSession(app, {
-        find: deps.sessionRoutes.find,
-        close: deps.sessionRoutes.close,
-        remove: deps.sessionRoutes.remove,
-      });
-    if (deps.sessionRoutes.close)
-      registerStopSession(app, {
-        find: deps.sessionRoutes.find,
-        stop: (session) => stopSession(session, deps.sessionRoutes!.now()),
-        save: deps.sessionRoutes.save,
-        close: deps.sessionRoutes.close,
-        idempotency: deps.sessionRoutes.idempotency,
-      });
-    if (deps.sessionRoutes.replyInteraction && deps.interactions)
-      registerRespondInteraction(app, {
-        exists: (id) => deps.sessionRoutes!.find(id) !== null,
-        resolve: (sessionId, requestId, resolvedAt) =>
-          deps.interactions!.resolve(sessionId, requestId, resolvedAt),
-        validate: deps.interactions.validate,
-        reply: deps.sessionRoutes.replyInteraction,
-        resolved: deps.sessionRoutes.interactionResolved,
-        now: deps.sessionRoutes.now,
-      });
-  }
-  if (deps.sessionEvents)
-    registerSessionEvents(app, {
-      ...deps.sessionEvents,
-      ...(deps.auth
-        ? {
-            publicOrigin: deps.auth.relyingParty.publicOrigin,
-            authorized: (cookieHeader: string | undefined) =>
-              authorizationSessionDevice(cookieHeader, deps.auth!) !== null,
-          }
-        : {}),
-    });
-  if (deps.planRoutes) {
-    registerGetPlan(app, deps.planRoutes);
-    registerClosePlan(app, deps.planRoutes);
-  }
-  if (deps.workspacePlanRoutes) {
-    registerListWorkspacePlans(app, deps.workspacePlanRoutes);
-    registerGetWorkspacePlan(app, deps.workspacePlanRoutes);
-  }
-  if (deps.planMeasurementRoutes) registerGetPlanMeasurement(app, deps.planMeasurementRoutes);
-  if (deps.gitSummary)
-    registerGetGitSummary(app, {
-      workspaces: deps.gitSummary.workspaces,
-      inspect: deps.gitSummary.inspect,
-    });
-  if (deps.gitSummary)
-    registerPushUpstream(app, {
-      workspaces: deps.gitSummary.workspaces,
-      inspect: deps.gitSummary.inspectForPush ?? deps.gitSummary.inspect,
-      push: deps.gitSummary.push,
-      idempotency: deps.gitSummary.idempotency,
-    });
-  if (deps.gitSummary)
-    registerRefreshGit(app, {
-      workspaces: deps.gitSummary.workspaces,
-      refresh: deps.gitSummary.refresh,
-      idempotency: deps.gitSummary.idempotency,
-    });
-  if (deps.gitSummary?.pull && deps.gitSummary.checkout) {
-    registerPullRebase(app, {
-      workspaces: deps.gitSummary.workspaces,
-      pull: deps.gitSummary.pull,
-    });
-    registerCheckoutBranch(app, {
-      workspaces: deps.gitSummary.workspaces,
-      checkout: deps.gitSummary.checkout,
-    });
-  }
-  if (deps.gitSummary?.clone)
-    registerCloneRepository(app, {
-      workspaces: deps.gitSummary.workspaces,
-      clone: deps.gitSummary.clone,
-    });
-  if (deps.skills) {
-    registerListAvailableSkills(app, deps.skills);
-    registerListSkillProfiles(app, deps.skills);
-    registerReplaceSkillProfile(app, deps.skills);
-    registerDeleteSkillProfile(app, deps.skills);
-  }
+  registerSessionRoutes(app, deps);
+  registerPlanRoutes(app, deps);
+  registerGitRoutes(app, deps);
+  registerSkillRoutes(app, deps);
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
-}
-
-function safeErrorLabel(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
-  }
-  if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)) return error.message;
-  return error instanceof Error ? error.name : 'UNKNOWN_ERROR';
 }

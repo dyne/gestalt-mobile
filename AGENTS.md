@@ -4,6 +4,8 @@
 
 Organize server use cases under `src/server/features/<context>/<use-case>` as vertical slices. HTTP slices use REPR: route-local request/response schemas, one public endpoint registration entry point, slice-owned validation and orchestration, narrow outbound ports, and a primary endpoint test. Keep shared domain concepts inside their bounded context; extract shared infrastructure only after genuine cross-slice reuse appears.
 
+`src/server/app.ts` owns Fastify construction, cross-cutting browser policy, and the visible order of feature registration. Each feature's `register-routes.ts` owns that feature's endpoint list and accepts only the dependencies it needs. `src/server/composition.ts` remains the sole production constructor for concrete adapters and lifecycle hooks; do not turn these route modules into a service locator or a second composition root. Shared HTTP helpers belong in `src/server/platform/http` only when several endpoints share exactly the same transport contract; they must not decide authorization or business outcomes.
+
 Domain and application code must not import Fastify, SQLite, filesystem, child-process, Svelte, or concrete Git implementations. Put those integrations in `src/server/platform`; wire adapters to slices only in `src/server/composition.ts`. Keep client behavior organized under `src/client/features`.
 
 ## Codex compatibility
@@ -15,6 +17,8 @@ The relay uses a narrow handwritten Codex app-server adapter rather than checked
 Use Node.js 24 or newer. Before completion run `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows.
 
 Do not log prompts, model output, secrets, or environment values. Every accepted file-changing Org L1 has exactly one conventional commit, unless it has no changes.
+
+Deliberate non-goals: no framework rewrite, no global client store, no service locator, and no inversion of Org/native-plan authority.
 
 ## Passkey boundary
 
