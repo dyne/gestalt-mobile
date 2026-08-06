@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { ProblemDetail } from '../../../shared/contracts/problem.js';
+import { problem as createProblem } from './problem.js';
 
 export function registerProblemHandler(app: FastifyInstance, serveSpa = false): void {
   app.setNotFoundHandler((request, reply) => {
@@ -31,15 +32,10 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
       'code' in error &&
       error.code === 'FST_ERR_CTP_BODY_TOO_LARGE'
     ) {
-      const problem: ProblemDetail = {
-        type: 'urn:gestalt-mobile:error:payload-too-large',
-        title: 'Payload too large',
-        status: 413,
-        detail: 'The request body exceeds this endpoint limit.',
-        code: 'PAYLOAD_TOO_LARGE',
-        retryable: false,
-      };
-      return reply.code(413).type('application/problem+json').send(problem);
+      return reply
+        .code(413)
+        .type('application/problem+json')
+        .send(createProblem('PAYLOAD_TOO_LARGE', 413, 'The request body exceeds this endpoint limit.'));
     }
     const problem: ProblemDetail = {
       type: 'urn:gestalt-mobile:error:internal',

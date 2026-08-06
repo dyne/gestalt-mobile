@@ -306,11 +306,10 @@ export class CodexSessionRuntime {
   }
 
   private holdServerRequest(
-    sessionId: string,
+    resource: SessionResource,
     request: { id: number; method: string; params: unknown },
   ): Promise<unknown> {
-    const resource = this.sessions.get(sessionId);
-    if (!resource || !this.onServerRequest?.(sessionId, request)) {
+    if (!resource.active || !this.onServerRequest?.(resource.sessionId, request)) {
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     }
     if (resource.pendingRequests.size >= this.maxPendingRequests)
@@ -378,7 +377,7 @@ export class CodexSessionRuntime {
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (resource.active) this.onNotification?.(session.id, notification);
       });
-      const requestUnsubscribe = process.rpc.onServerRequest((request) => this.holdServerRequest(session.id, request));
+      const requestUnsubscribe = process.rpc.onServerRequest((request) => this.holdServerRequest(resource, request));
       const exitUnsubscribe = process.onExit?.(() => {
         if (resource.dispose()) this.onProcessExit?.(session.id);
       }) ?? (() => {});
