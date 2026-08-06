@@ -66,10 +66,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .choices { display: grid; gap: 0.5rem; margin-block-start: 0.5rem; }
   .choice { position: relative; }
   .choice > input { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; margin: 0; opacity: 0; cursor: pointer; }
-  .choice > label { display: grid; gap: 0.125rem; min-block-size: 44px; padding: 0.75rem; border: 2px solid color-mix(in srgb, CanvasText 28%, Canvas); border-radius: 0.5rem; }
-  .choice > input:checked + label { border-width: 3px; border-color: Highlight; }
-  .choice > input:focus-visible + label { outline: 3px solid Highlight; outline-offset: 2px; }
-  label span, legend span { color: color-mix(in srgb, CanvasText 72%, Canvas); }
+  .choice > label { display: grid; gap: 0.125rem; min-block-size: 44px; padding: 0.75rem; background: var(--theme-surface); border: 2px solid var(--theme-border); border-radius: 0.5rem; }
+  .choice > input:checked + label { border-width: 3px; border-color: var(--theme-accent); background: var(--theme-surface-subtle); }
+  .choice > input:focus-visible + label { outline: 3px solid var(--theme-focus); outline-offset: 2px; }
+  label span, legend span { color: var(--theme-text-muted); }
   .custom { margin-block-start: 0.25rem; }
   .custom input { inline-size: 100%; min-block-size: 44px; margin-block-start: 0.375rem; box-sizing: border-box; font: inherit; }
 </style>

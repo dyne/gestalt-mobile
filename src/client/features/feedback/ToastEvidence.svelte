@@ -72,8 +72,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.5rem;
     padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
-    background: Canvas;
-    border-block-start: 1px solid CanvasText;
+    background: var(--theme-surface);
+    border-block-start: 1px solid var(--theme-border);
   }
 
   .evidence-nav button {

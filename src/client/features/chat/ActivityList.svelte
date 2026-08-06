@@ -43,7 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   #chat-activity {
     --activity-gap: 0.4rem;
-    --activity-type-color: var(--muted-text, currentColor);
+    --activity-type-color: var(--theme-text-muted);
   }
 
   #chat-activity > summary {
@@ -67,6 +67,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.25rem 0.5rem;
     align-items: baseline;
   }
+
+  .activity-row[data-activity-status='failed'] { border-inline-start: 0.25rem solid var(--theme-error); padding-inline-start: 0.375rem; }
+  .activity-row[data-activity-status='completed'] { border-inline-start: 0.25rem solid var(--theme-success); padding-inline-start: 0.375rem; }
+  .activity-row[data-activity-status]:not([data-activity-status='completed']):not([data-activity-status='failed']) { border-inline-start: 0.25rem solid var(--theme-info); padding-inline-start: 0.375rem; }
 
   .activity-type {
     color: var(--activity-type-color);

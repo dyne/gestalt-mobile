@@ -132,8 +132,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin: 0 0 0.35rem;
     padding: 0.25rem;
     list-style: none;
-    background: Canvas;
-    border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
     border-radius: 0.375rem;
   }
   .command-menu button {
@@ -142,21 +142,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.5rem;
     align-items: baseline;
     padding: 0.25rem 0.375rem;
-    color: inherit;
+    color: var(--theme-text);
     text-align: start;
     background: transparent;
     border: 0;
     border-radius: 0.25rem;
   }
   .command-menu .command-selected button,
-  .command-menu button:hover { background: color-mix(in srgb, CanvasText 10%, Canvas); }
-  .command-menu small { color: #666; font-size: 0.8em; }
-  .command-menu button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+  .command-menu button:hover { background: var(--theme-control-hover); }
+  .command-menu small { color: var(--theme-text-muted); font-size: 0.8em; }
+  .command-menu button:focus-visible { outline: 2px solid var(--theme-focus); outline-offset: 1px; }
   .prompt-row { display: flex; align-items: end; gap: 0.5rem; }
   textarea { flex: 1 1 auto; min-block-size: 2.75rem; resize: vertical; }
   .prompt-row button { display: grid; place-items: center; flex: 0 0 auto; inline-size: 3rem; min-block-size: 3rem; padding: 0; }
   .prompt-row svg { inline-size: 1.35rem; block-size: 1.35rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .block-cursor { display: inline-block; inline-size: 0.55ch; block-size: 1em; vertical-align: -0.1em; background: currentColor; animation: blink 1s steps(2, start) infinite; }
+  .block-cursor { display: inline-block; inline-size: 0.55ch; block-size: 1em; vertical-align: -0.1em; background: var(--theme-accent); animation: blink 1s steps(2, start) infinite; }
   @media (prefers-reduced-motion: reduce) { .block-cursor { animation: none; } }
   @keyframes blink { 50% { opacity: 0; } }
 </style>

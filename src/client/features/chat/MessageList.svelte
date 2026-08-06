@@ -152,7 +152,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .prompt-turn {
     padding: 0.5rem 0.625rem;
-    background: color-mix(in srgb, Canvas 94%, CanvasText);
+    background: var(--theme-surface-subtle);
+    border-inline-start: 0.25rem solid var(--theme-accent);
+    border-radius: 0.375rem;
+  }
+
+  .answer-turn { border-inline-start: 0.25rem solid var(--theme-border); padding-inline-start: 0.625rem; }
+
+  .commentary-turn,
+  .commentary-content {
+    padding: 0.5rem 0.625rem;
+    background: var(--theme-surface-subtle);
+    border-inline-start: 0.25rem solid var(--theme-info);
     border-radius: 0.375rem;
   }
 
@@ -164,7 +175,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   time {
     margin-inline-start: auto;
-    color: #666;
+    color: var(--theme-text-muted);
     font-size: 0.875em;
     white-space: nowrap;
   }
@@ -172,15 +183,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .commentary-toggle {
     min-block-size: 1.5rem;
     padding: 0 0.125rem;
-    color: #666;
+    color: var(--theme-text-muted);
     background: transparent;
     border: 0;
     font-size: 0.875em;
   }
 
-  .commentary-content {
-    margin-block: 0.25rem 0.5rem;
-  }
+  .commentary-content { margin-block: 0.25rem 0.5rem; }
 
   .entry-content {
     margin-block: 0.125rem 0;
@@ -189,13 +198,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   pre,
   code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--theme-font-code);
   }
 
   pre {
+    padding: 0.625rem;
     white-space: pre;
     overflow-x: auto;
+    background: var(--theme-code);
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
   }
+
+  :not(pre) > code { padding-inline: 0.2em; background: var(--theme-code); border-radius: 0.2rem; }
+
+  a { color: var(--theme-info); }
 
   .table-scroll {
     overflow-x: auto;
@@ -214,9 +231,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.25rem 0.5rem;
     text-align: left;
     vertical-align: top;
+    border: 1px solid var(--theme-border);
   }
 
   th {
     font-weight: 600;
+    background: var(--theme-surface-subtle);
   }
 </style>

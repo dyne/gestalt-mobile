@@ -12,8 +12,9 @@ const evidenceDirectory = '/tmp/gestalt-mobile-toast-evidence';
 const viewports = [
   { width: 320, height: 568 },
   { width: 390, height: 844 },
+  { width: 768, height: 1024 },
 ] as const;
-const themes = ['light', 'dark'] as const;
+const themes = ['dyne-org', 'minimal-light', 'minimal-dark'] as const;
 const fontScales = [100, 200] as const;
 const variants = ['error', 'stacked'] as const;
 
@@ -66,7 +67,7 @@ test('announces feedback, is non-modal, keyboard-dismissible, and does not steal
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const diagnostics = await openEvidence(page, 'error', 'light', 100);
+  const diagnostics = await openEvidence(page, 'error', 'dyne-org', 100);
   const alert = page.getByRole('alert');
   await expect(alert).toContainText('Clone failed.');
   await expect(alert).toHaveAttribute('aria-live', 'assertive');
