@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import {
@@ -107,6 +107,29 @@ async function openSessions(
   const diagnostics = await openThemeEvidence(page, { theme, fontScale, url: '/' });
   await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
   return diagnostics;
+}
+
+async function expectReadableSelection(locator: Locator): Promise<void> {
+  const contrast = await locator.evaluate((element) => {
+    const channels = (color: string) =>
+      (color.match(/\d+(?:\.\d+)?/g) ?? [])
+        .slice(0, 3)
+        .map(Number)
+        .map((value) => value / 255)
+        .map((value) =>
+          value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+        );
+    const luminance = (color: string) => {
+      const values = channels(color);
+      return 0.2126 * values[0]! + 0.7152 * values[1]! + 0.0722 * values[2]!;
+    };
+    const style = getComputedStyle(element);
+    const values = [luminance(style.color), luminance(style.backgroundColor)].sort(
+      (left, right) => right - left,
+    );
+    return (values[0]! + 0.05) / (values[1]! + 0.05);
+  });
+  expect(contrast).toBeGreaterThanOrEqual(4.5);
 }
 
 async function expectUsableLayout(page: Page): Promise<void> {
@@ -267,6 +290,7 @@ for (const viewport of evidenceViewports) {
         const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
         await repository.click();
         await expect(repository).toHaveAttribute('aria-selected', 'true');
+        await expectReadableSelection(repository);
         await expect(repository).toContainText('~/dyne/mobile-applications-and-experiments/');
         await expectUsableLayout(page);
         await repository.evaluate((element) => element.scrollIntoView({ block: 'center' }));

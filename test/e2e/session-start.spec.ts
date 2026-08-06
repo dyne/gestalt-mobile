@@ -1644,7 +1644,43 @@ test('captures the configuration popover across the named theme accessibility ma
         const panel = page.locator('.configuration-panel');
         await expect(panel).toBeVisible();
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-        expect(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
+        const viewportContainment = await panel.evaluate((element) => {
+          const boxes = [element, ...element.querySelectorAll('select, button')].map((candidate) => {
+            const box = candidate.getBoundingClientRect();
+            return { left: box.left, right: box.right };
+          });
+          return {
+            documentFits:
+              document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            panel: (() => {
+              const box = element.getBoundingClientRect();
+              return { top: box.top, bottom: box.bottom };
+            })(),
+            boxes,
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+          };
+        });
+        expect(viewportContainment.documentFits, JSON.stringify(viewportContainment)).toBe(true);
+        expect(
+          viewportContainment.boxes.every(
+            ({ left, right }) => left >= -0.5 && right <= viewportContainment.viewportWidth + 0.5,
+          ),
+          JSON.stringify(viewportContainment),
+        ).toBe(true);
+        expect(viewportContainment.panel.top).toBeGreaterThanOrEqual(-0.5);
+        expect(viewportContainment.panel.bottom).toBeLessThanOrEqual(
+          viewportContainment.viewportHeight + 0.5,
+        );
+        const lastAction = panel.getByRole('button', { name: 'Lock Gestalt Mobile' });
+        await lastAction.scrollIntoViewIfNeeded();
+        await expect(lastAction).toBeVisible();
+        const lastActionBox = await lastAction.boundingBox();
+        expect(lastActionBox).not.toBeNull();
+        expect(lastActionBox!.y).toBeGreaterThanOrEqual(-0.5);
+        expect(lastActionBox!.y + lastActionBox!.height).toBeLessThanOrEqual(
+          viewportContainment.viewportHeight + 0.5,
+        );
         expect(await page.getByRole('button', { name: 'Open configuration' }).evaluate((button) => button.getBoundingClientRect().height >= 44)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`configuration-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`) });
       }

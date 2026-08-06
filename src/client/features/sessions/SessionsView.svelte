@@ -339,7 +339,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.15rem 0.4rem;
     border-radius: 999px;
     background: var(--theme-control-pressed);
-    color: var(--theme-text);
+    color: var(--theme-control-pressed-contrast);
     font-size: 0.875rem;
     overflow-wrap: anywhere;
   }
