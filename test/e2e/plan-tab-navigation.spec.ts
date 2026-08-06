@@ -276,6 +276,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await page.goto('/');
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
   const roadmap = page.getByRole('button', { name: /Workspace roadmap.*roadmap.org/ });
+  await expect(roadmap).toBeVisible();
   await roadmap.click();
   await expect(page.getByRole('heading', { name: workspacePlan.title })).toBeVisible();
   await expect.poll(() => typeof emitPlanEvent).toBe('function');

@@ -191,7 +191,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .disclosure:hover {
-    background: color-mix(in srgb, CanvasText 10%, transparent);
+    background: var(--theme-control-hover);
   }
 
   .tree-item {
@@ -212,12 +212,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .tree-item:hover {
-    background: color-mix(in srgb, CanvasText 8%, transparent);
+    background: var(--theme-control-hover);
   }
 
   .tree-item.selected {
-    background: color-mix(in srgb, Highlight 16%, Canvas);
-    border-color: currentColor;
+    background: var(--theme-control-pressed);
+    border-color: var(--theme-accent);
     font-weight: 650;
   }
 

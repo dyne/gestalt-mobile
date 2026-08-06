@@ -222,7 +222,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .section-heading p {
     margin-block: 0 0.75rem;
-    color: color-mix(in srgb, CanvasText 70%, Canvas);
+    color: var(--theme-text-muted);
   }
   .clone-form {
     display: grid;
@@ -247,7 +247,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-block-size: 2.75rem;
     padding: 0.65rem 0.75rem;
     overflow-wrap: anywhere;
-    border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas);
+    border: 1px solid var(--theme-border);
     border-radius: 0.35rem;
   }
   .clone-controls button {
@@ -255,11 +255,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .clone-form p {
     margin: 0;
-    color: color-mix(in srgb, CanvasText 70%, Canvas);
+    color: var(--theme-text-muted);
     font-size: 0.875rem;
   }
   .clone-status {
-    color: CanvasText !important;
+    color: var(--theme-info) !important;
     font-weight: 600;
   }
   .git-overview {
@@ -296,7 +296,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
     gap: 0.35rem;
     padding: 0.8rem 0;
-    border-block-end: 1px solid color-mix(in srgb, CanvasText 20%, Canvas);
+    border-block-end: 1px solid var(--theme-border);
   }
   .commit-subject,
   .commit-meta {
@@ -311,13 +311,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .commit-subject code {
     flex: 0 0 auto;
-    color: color-mix(in srgb, CanvasText 75%, Canvas);
+    color: var(--theme-code);
     font-size: 0.875em;
   }
   .commit-meta {
     flex-wrap: wrap;
     justify-content: space-between;
-    color: color-mix(in srgb, CanvasText 70%, Canvas);
+    color: var(--theme-text-muted);
     font-size: 0.875rem;
   }
   .commit-meta time {
