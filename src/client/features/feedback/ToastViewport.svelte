@@ -19,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {#each visibleToasts as toast (toast.id)}
     <section
       class:error={toast.kind === 'error'}
+      class:success={toast.kind === 'success'}
       class="toast"
       role={toast.kind === 'error' ? 'alert' : 'status'}
       aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}
@@ -75,17 +76,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.6rem;
     min-inline-size: 0;
     padding: 0.65rem;
-    color: CanvasText;
-    background: Canvas;
-    border: 1px solid CanvasText;
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-info);
     border-inline-start-width: 0.35rem;
     border-radius: 0.55rem;
-    box-shadow: 0 0.4rem 1.2rem color-mix(in srgb, CanvasText 24%, transparent);
+    box-shadow: 0 0.4rem 1.2rem var(--theme-shadow);
     pointer-events: auto;
   }
 
   .toast.error {
+    color: var(--theme-error);
+    border-color: var(--theme-error);
     border-inline-start-style: double;
+  }
+
+  .toast.success {
+    color: var(--theme-success);
+    border-color: var(--theme-success);
+    border-inline-start-style: solid;
   }
 
   .toast-symbol {
@@ -122,7 +131,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     inline-size: 44px;
     min-block-size: 44px;
     padding: 0;
-    color: inherit;
+    color: var(--theme-text);
     background: transparent;
     border: 0;
     border-radius: 0.35rem;
@@ -131,7 +140,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   button:hover {
-    background: color-mix(in srgb, CanvasText 10%, transparent);
+    background: var(--theme-control-hover);
   }
 
   @media (max-width: 24rem) {

@@ -68,7 +68,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.625rem;
     overflow-x: auto;
     white-space: pre-wrap;
-    background: color-mix(in srgb, CanvasText 8%, Canvas);
+    font-family: var(--theme-font-code);
+    background: var(--theme-code);
+    border: 1px solid var(--theme-border);
     border-radius: 0.375rem;
   }
   .command-approval-missing { margin-block: 0.5rem 0.75rem; }
