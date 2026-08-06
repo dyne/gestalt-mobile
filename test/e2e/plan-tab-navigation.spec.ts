@@ -197,8 +197,8 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   const navigation = page.getByLabel('Primary');
   const chat = navigation.getByRole('button', { name: 'Chat' });
   await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
-  await chat.focus();
   await expect.poll(() => typeof emitPlanEvent).toBe('function');
+  await chat.focus();
   emitPlanEvent!({
     sequence: 1,
     type: 'plan.updated',
@@ -235,12 +235,17 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   const selected = session('session-1', '/projects/one');
   const workspacePlan = { ...activePlan, title: 'Workspace roadmap' };
   let emitPlanEvent: ((event: object) => void) | undefined;
-  await page.route('**/api/bootstrap', (route) =>
-    route.fulfill({
+  let releaseBootstrap = () => {};
+  const bootstrapGate = new Promise<void>((resolve) => {
+    releaseBootstrap = resolve;
+  });
+  await page.route('**/api/bootstrap', async (route) => {
+    await bootstrapGate;
+    await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({ workspaces: [], profiles: [], sessions: [selected] }),
-    }),
-  );
+    });
+  });
   await routeSessionHistory(page, selected.id);
   await page.route(`**/api/sessions/${selected.id}/plan`, (route) =>
     route.fulfill({ status: 204 }),
@@ -275,6 +280,8 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
+  await expect(page.getByText('Select a workspace to browse its local plans.')).toBeVisible();
+  releaseBootstrap();
   const roadmap = page.getByRole('button', { name: /Workspace roadmap.*roadmap.org/ });
   await expect(roadmap).toBeVisible();
   await roadmap.click();

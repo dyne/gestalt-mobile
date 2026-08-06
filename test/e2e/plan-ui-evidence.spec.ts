@@ -9,6 +9,12 @@ import { join } from 'node:path';
 
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import {
+  evidenceFilename,
+  evidenceFontScales,
+  evidenceThemes,
+  evidenceViewports,
+} from './theme-evidence.js';
 
 import type { SupervisedPlan } from '../../src/client/features/plans/contracts.js';
 
@@ -23,13 +29,6 @@ const session = {
   activeTurnId: null,
 };
 const longToken = `https://example.test/${'unbroken-mobile-token-'.repeat(14)}終端`;
-const viewports = [
-  { width: 320, height: 568 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-] as const;
-const themes = ['light', 'dark'] as const;
-const fontScales = [100, 200] as const;
 
 const firstStepPlan: SupervisedPlan = {
   title: 'Mobile supervised plan',
@@ -161,7 +160,7 @@ test('captures every responsive Plan state with executable accessibility evidenc
   await mkdir(evidenceDirectory, { recursive: true });
   let plan: SupervisedPlan | null = null;
   let closeFailure = false;
-  let activeFontScale: (typeof fontScales)[number] = 100;
+  let activeFontScale: (typeof evidenceFontScales)[number] = 100;
   const artifacts: Array<Record<string, unknown>> = [];
 
   await page.route('**/api/bootstrap', (route) =>
@@ -287,7 +286,14 @@ test('captures every responsive Plan state with executable accessibility evidenc
       }
     }
 
-    const filename = `${state}__${page.viewportSize()!.width}x${page.viewportSize()!.height}__${await page.evaluate(() => document.documentElement.dataset.theme)}__${activeFontScale}.png`;
+    const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+    const filename = evidenceFilename(
+      'plan',
+      state,
+      page.viewportSize()!,
+      activeFontScale,
+      theme as (typeof evidenceThemes)[number],
+    );
     const path = join(evidenceDirectory, filename);
     await page.screenshot({ path });
     artifacts.push({
@@ -299,12 +305,15 @@ test('captures every responsive Plan state with executable accessibility evidenc
     });
   };
 
-  for (const viewport of viewports) {
+  for (const viewport of evidenceViewports) {
     await page.setViewportSize(viewport);
-    for (const theme of themes) {
-      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    for (const theme of evidenceThemes) {
+      await page.emulateMedia({
+        colorScheme: theme === 'minimal-dark' ? 'dark' : 'light',
+        reducedMotion: 'reduce',
+      });
       await page.evaluate((value) => localStorage.setItem('gestalt-mobile.theme', value), theme);
-      for (const fontScale of fontScales) {
+      for (const fontScale of evidenceFontScales) {
         activeFontScale = fontScale;
         await capture('absent', null);
         await capture('active-first-step', firstStepPlan);
@@ -318,7 +327,7 @@ test('captures every responsive Plan state with executable accessibility evidenc
     }
   }
 
-  expect(artifacts).toHaveLength(96);
+  expect(artifacts).toHaveLength(144);
   const inspectionSheets: string[] = [];
   for (const state of [
     'absent',

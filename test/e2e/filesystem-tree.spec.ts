@@ -7,6 +7,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import {
+  evidenceFilename,
+  evidenceFontScales,
+  evidenceThemes,
+  evidenceViewports,
+  expectCleanThemeDiagnostics,
+  openThemeEvidence,
+} from './theme-evidence.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-filesystem-tree-evidence';
 
@@ -14,47 +22,33 @@ test.beforeAll(async () => {
   await mkdir(evidenceDirectory, { recursive: true });
 });
 
-const viewports = [
-  { width: 320, height: 568 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-] as const;
-const themes = ['light', 'dark'] as const;
-const fontScales = [100, 200] as const;
 const contexts = ['sessions', 'git'] as const;
 
 async function openEvidence(
   page: Page,
   context: (typeof contexts)[number],
-  theme: (typeof themes)[number],
-  fontScale: (typeof fontScales)[number],
-): Promise<{ consoleErrors: string[]; requestFailures: string[] }> {
-  const consoleErrors: string[] = [];
-  const requestFailures: string[] = [];
-  page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
-  });
-  page.on('requestfailed', (request) => requestFailures.push(request.url()));
+  theme: (typeof evidenceThemes)[number],
+  fontScale: (typeof evidenceFontScales)[number],
+) {
   await mockAuthenticatedStatus(page);
-  await page.addInitScript(
-    ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
-    { selectedTheme: theme },
-  );
-  await page.goto(`/?tree-evidence=${context}`);
-  await page.addStyleTag({ content: `html { font-size: ${fontScale}% !important; }` });
+  const diagnostics = await openThemeEvidence(page, {
+    theme,
+    fontScale,
+    url: `/?tree-evidence=${context}`,
+  });
   const tree = page.getByRole('tree');
   await expect(tree).toBeVisible();
   await tree
     .getByRole('treeitem', { selected: true })
     .evaluate((item) => (item as HTMLElement).focus({ preventScroll: true }));
-  return { consoleErrors, requestFailures };
+  return diagnostics;
 }
 
 test('supports deep folding, pointer selection, and ARIA tree keyboard interaction', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const diagnostics = await openEvidence(page, 'sessions', 'light', 100);
+  const diagnostics = await openEvidence(page, 'sessions', 'minimal-light', 100);
   const tree = page.getByRole('tree', { name: 'Session base' });
   const items = tree.getByRole('treeitem');
 
@@ -86,13 +80,13 @@ test('supports deep folding, pointer selection, and ARIA tree keyboard interacti
   const repository = tree.getByRole('treeitem', { name: /gestalt-mobile/ });
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
-  expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+  expectCleanThemeDiagnostics(diagnostics);
 });
 
 for (const context of contexts) {
-  for (const viewport of viewports) {
-    for (const fontScale of fontScales) {
-      for (const theme of themes) {
+  for (const viewport of evidenceViewports) {
+    for (const fontScale of evidenceFontScales) {
+      for (const theme of evidenceThemes) {
         test(`captures ${context} tree at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
           page,
         }) => {
@@ -120,12 +114,12 @@ for (const context of contexts) {
           }));
           expect(overflow).toEqual({ document: 0, tree: 0 });
 
-          const filename = `tree-${context}-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`;
+          const filename = evidenceFilename('tree', context, viewport, fontScale, theme);
           await page.screenshot({
             path: `${evidenceDirectory}/${filename}`,
             fullPage: false,
           });
-          expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+          expectCleanThemeDiagnostics(diagnostics);
         });
       }
     }

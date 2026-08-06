@@ -7,15 +7,16 @@
 import { mkdir } from 'node:fs/promises';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import {
+  evidenceFilename,
+  evidenceFontScales,
+  evidenceThemes,
+  evidenceViewports,
+  expectCleanThemeDiagnostics,
+  openThemeEvidence,
+} from './theme-evidence.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-git-tree-evidence';
-const viewports = [
-  { width: 320, height: 568 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-] as const;
-const themes = ['light', 'dark'] as const;
-const fontScales = [100, 200] as const;
 
 type Workspace = {
   id: string;
@@ -85,26 +86,15 @@ const summary = {
   fetchedAt: '2026-07-21T08:00:00.000Z',
 };
 
-type Diagnostics = { consoleErrors: string[]; requestFailures: string[] };
-
 test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
 
 async function openGit(
   page: Page,
-  theme: (typeof themes)[number],
-  fontScale: (typeof fontScales)[number],
-): Promise<Diagnostics> {
-  const diagnostics: Diagnostics = { consoleErrors: [], requestFailures: [] };
+  theme: (typeof evidenceThemes)[number],
+  fontScale: (typeof evidenceFontScales)[number],
+) {
   let cloned = false;
-  page.on('console', (message) => {
-    if (message.type() === 'error') diagnostics.consoleErrors.push(message.text());
-  });
-  page.on('requestfailed', (request) => diagnostics.requestFailures.push(request.url()));
   await mockAuthenticatedStatus(page);
-  await page.addInitScript(
-    ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
-    { selectedTheme: theme },
-  );
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -122,8 +112,7 @@ async function openGit(
     cloned = true;
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
-  await page.goto('/');
-  await page.addStyleTag({ content: `html { font-size: ${fontScale}% !important; }` });
+  const diagnostics = await openThemeEvidence(page, { theme, fontScale, url: '/' });
   await page.getByRole('button', { name: 'Git' }).click();
   await expect(
     page.getByRole('heading', { name: 'Repository and clone destination' }),
@@ -140,7 +129,8 @@ async function expectUsableLayout(page: Page): Promise<void> {
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
       .filter((button) => {
         const box = button.getBoundingClientRect();
-        if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0) return false;
+        if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0)
+          return false;
         for (let element: HTMLElement | null = button; element; element = element.parentElement) {
           const style = getComputedStyle(element);
           if (
@@ -201,9 +191,9 @@ async function expectUsableLayout(page: Page): Promise<void> {
 async function capture(
   page: Page,
   state: string,
-  viewport: (typeof viewports)[number],
-  fontScale: (typeof fontScales)[number],
-  theme: (typeof themes)[number],
+  viewport: (typeof evidenceViewports)[number],
+  fontScale: (typeof evidenceFontScales)[number],
+  theme: (typeof evidenceThemes)[number],
   focus: Locator,
   scrollBlock: ScrollLogicalPosition = 'center',
 ): Promise<void> {
@@ -211,7 +201,7 @@ async function capture(
   await expect(focus).toBeVisible();
   await expectUsableLayout(page);
   await page.screenshot({
-    path: `${evidenceDirectory}/git-${state}-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`,
+    path: `${evidenceDirectory}/${evidenceFilename('git', state, viewport, fontScale, theme)}`,
     fullPage: false,
   });
 }
@@ -245,9 +235,9 @@ async function expectActionAboveNavigation(action: Locator, navigation: Locator)
   ).toBeLessThanOrEqual(navigationBox!.y);
 }
 
-for (const viewport of viewports) {
-  for (const fontScale of fontScales) {
-    for (const theme of themes) {
+for (const viewport of evidenceViewports) {
+  for (const fontScale of evidenceFontScales) {
+    for (const theme of evidenceThemes) {
       test(`captures five Git states at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
         page,
       }) => {
@@ -314,7 +304,7 @@ for (const viewport of viewports) {
         await expectNoOverlap(successToast, page.getByLabel('Primary'));
         await capture(page, 'clone-success', viewport, fontScale, theme, clonedRepository);
 
-        expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+        expectCleanThemeDiagnostics(diagnostics);
       });
     }
   }

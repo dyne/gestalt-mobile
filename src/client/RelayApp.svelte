@@ -511,12 +511,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
     if (next === 'git' && gitWorkspaceId) void gitController.refresh();
-    if (next === 'plan') void loadPlansCatalog();
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
       void refreshSessionLists();
     }
   }
+
+  $effect(() => {
+    const workspaceId = plansWorkspaceId;
+    if (tab === 'plan') loadPlansCatalog(workspaceId);
+  });
 
   function focusNavigationTab(next: Tab): void {
     navigationFocus = next;
@@ -551,8 +555,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (swipeStart?.pointerId === event.pointerId) swipeStart = null;
   }
 
-  function loadPlansCatalog(): void {
-    const workspaceId = plansWorkspaceId;
+  function loadPlansCatalog(workspaceId = plansWorkspaceId): void {
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
     passivePlan = null;
