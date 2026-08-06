@@ -39,9 +39,10 @@ export class GitController {
 
   select(workspaceId: string | null): void {
     this.#abort();
-    const selected = workspaceId && this.isRepository(workspaceId) ? workspaceId : null;
-    this.#publish({ workspaceId: selected, summary: null, loading: Boolean(selected), refreshing: false, checkingOut: false, error: null });
-    if (selected) void this.refresh();
+    const selected = workspaceId;
+    const repository = Boolean(selected && this.isRepository(selected));
+    this.#publish({ workspaceId: selected, summary: null, loading: repository, refreshing: false, checkingOut: false, error: null });
+    if (repository) void this.refresh();
   }
 
   async refresh(): Promise<void> {
