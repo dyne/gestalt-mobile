@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { selectTheme } from './features/theme/browser-theme.js';
   import { type ThemeId } from './features/theme/theme-registry.js';
 
@@ -100,7 +100,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let tab = $state<Tab>('sessions');
   let devicesOpen = $state(false);
   let status = $state('Loading relay…');
-  let theme = $derived<ThemeId>(initialTheme);
+  let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
   const defaultSessionModel = 'gpt-5.6-terra';
   let sessionModels = $state.raw<string[]>([defaultSessionModel]);

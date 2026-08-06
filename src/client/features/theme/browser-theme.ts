@@ -37,9 +37,14 @@ function browserStorage(dependencies: ThemeBrowserDependencies): ThemeStorage | 
   }
 }
 
+function colorSchemeMeta(dependencies: ThemeBrowserDependencies): ColorSchemeMeta | null {
+  if ('meta' in dependencies) return dependencies.meta ?? null;
+  return document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
+}
+
 export function applyTheme(id: ThemeId, dependencies: ThemeBrowserDependencies = {}): ThemeId {
   const root = dependencies.root ?? document.documentElement;
-  const { meta } = dependencies;
+  const meta = colorSchemeMeta(dependencies);
   const theme = themeById(id);
   root.dataset.theme = theme.id;
   root.dataset.logoTone = theme.logoTone;

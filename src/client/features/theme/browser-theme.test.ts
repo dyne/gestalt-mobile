@@ -39,6 +39,23 @@ describe('browser theme boundary', () => {
     expect(browser.writes).toEqual([['gestalt-mobile.theme', 'minimal-dark']]);
   });
 
+  it('keeps the document color-scheme metadata in sync by default', () => {
+    const meta = document.createElement('meta');
+    meta.name = 'color-scheme';
+    meta.content = 'light dark';
+    document.head.append(meta);
+    try {
+      expect(
+        bootstrapTheme({ storage: { getItem: () => 'minimal-dark', setItem: () => undefined } }),
+      ).toBe('minimal-dark');
+      expect(meta.content).toBe('dark');
+      expect(selectTheme('minimal-light', { storage: null })).toBe('minimal-light');
+      expect(meta.content).toBe('light');
+    } finally {
+      meta.remove();
+    }
+  });
+
   it('continues when storage is unavailable or throws', () => {
     const root = document.createElement('html');
     localStorage.setItem('gestalt-mobile.theme', 'minimal-dark');
