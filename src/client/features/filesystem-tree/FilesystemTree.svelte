@@ -216,6 +216,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .tree-item.selected {
+    color: var(--theme-control-pressed-contrast);
     background: var(--theme-control-pressed);
     border-color: var(--theme-accent);
     font-weight: 650;

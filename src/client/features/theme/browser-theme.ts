@@ -28,16 +28,18 @@ function storageValue(storage: ThemeStorage | null | undefined): string | null {
   }
 }
 
-function browserDependencies(dependencies: ThemeBrowserDependencies): Required<Pick<ThemeBrowserDependencies, 'root' | 'storage'>> & ThemeBrowserDependencies {
-  return {
-    ...dependencies,
-    root: dependencies.root ?? document.documentElement,
-    storage: dependencies.storage ?? window.localStorage,
-  };
+function browserStorage(dependencies: ThemeBrowserDependencies): ThemeStorage | null {
+  if ('storage' in dependencies) return dependencies.storage ?? null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 export function applyTheme(id: ThemeId, dependencies: ThemeBrowserDependencies = {}): ThemeId {
-  const { root, meta } = browserDependencies(dependencies);
+  const root = dependencies.root ?? document.documentElement;
+  const { meta } = dependencies;
   const theme = themeById(id);
   root.dataset.theme = theme.id;
   root.dataset.logoTone = theme.logoTone;
@@ -47,14 +49,14 @@ export function applyTheme(id: ThemeId, dependencies: ThemeBrowserDependencies =
 }
 
 export function bootstrapTheme(dependencies: ThemeBrowserDependencies = {}): ThemeId {
-  const resolved = resolveStoredTheme(storageValue(browserDependencies(dependencies).storage));
+  const resolved = resolveStoredTheme(storageValue(browserStorage(dependencies)));
   return applyTheme(resolved, dependencies);
 }
 
 export function selectTheme(id: ThemeId, dependencies: ThemeBrowserDependencies = {}): ThemeId {
   const resolved = applyTheme(id, dependencies);
   try {
-    browserDependencies(dependencies).storage?.setItem(THEME_STORAGE_KEY, resolved);
+    browserStorage(dependencies)?.setItem(THEME_STORAGE_KEY, resolved);
   } catch {
     // Storage is optional: applying the choice is still useful for this page.
   }

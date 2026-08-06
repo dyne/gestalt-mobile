@@ -41,11 +41,29 @@ describe('browser theme boundary', () => {
 
   it('continues when storage is unavailable or throws', () => {
     const root = document.createElement('html');
+    localStorage.setItem('gestalt-mobile.theme', 'minimal-dark');
     expect(bootstrapTheme({ root, meta: null, storage: null })).toBe('dyne-org');
     expect(selectTheme('minimal-light', {
       root,
       meta: null,
       storage: { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } },
     })).toBe('minimal-light');
+  });
+
+  it('continues when the browser storage getter throws before mount', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new DOMException('Blocked', 'SecurityError');
+      },
+    });
+    try {
+      const root = document.createElement('html');
+      expect(bootstrapTheme({ root, meta: null })).toBe('dyne-org');
+      expect(selectTheme('minimal-dark', { root, meta: null })).toBe('minimal-dark');
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+    }
   });
 });

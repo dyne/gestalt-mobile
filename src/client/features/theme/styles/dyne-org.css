@@ -14,10 +14,11 @@
   --theme-text-muted: #5f564c;
   --theme-border: #75695b;
   --theme-focus: #5e2ca5;
-  --theme-accent: #e65013;
+  --theme-accent: #c7460c;
   --theme-accent-contrast: #fffdf8;
   --theme-control-hover: #f4ddcf;
   --theme-control-pressed: #bd3d0d;
+  --theme-control-pressed-contrast: #fffdf8;
   --theme-control-disabled: #93887b;
   --theme-success: #287a50;
   --theme-warning: #9a5a00;
