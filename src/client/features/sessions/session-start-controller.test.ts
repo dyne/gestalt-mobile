@@ -17,4 +17,18 @@ describe('SessionStartController', () => {
     expect(await first).toMatchObject({ id: 'session' }); expect(await duplicate).toBeNull();
     expect(start).toHaveBeenCalledExactlyOnceWith('workspace', {}, 'start-key');
   });
+
+  it('reuses a failed request key for a retry', async () => {
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce({ id: 'session', state: 'ready' });
+    const key = vi.fn(() => 'retry-key');
+    const controller = new SessionStartController({ start }, key, vi.fn());
+    await controller.start('workspace', {});
+    await controller.start('workspace', {});
+    expect(key).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenNthCalledWith(1, 'workspace', {}, 'retry-key');
+    expect(start).toHaveBeenNthCalledWith(2, 'workspace', {}, 'retry-key');
+  });
 });

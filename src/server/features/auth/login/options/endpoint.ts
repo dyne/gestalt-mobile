@@ -33,7 +33,7 @@ export function registerLoginOptions(
     ceremonyAttempts: CeremonyAttemptGate;
   },
 ): void {
-  app.post('/api/auth/login/options', async (request, reply) => {
+  app.post('/api/auth/login/options', { bodyLimit: 1024 }, async (request, reply) => {
     if (!deps.ceremonyAttempts.allow(`login:${request.ip}`, deps.clock.now()))
       return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
     if (deps.repository.listAuthorizedDevices().length === 0)
