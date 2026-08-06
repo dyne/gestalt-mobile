@@ -311,7 +311,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .commit-subject code {
     flex: 0 0 auto;
-    color: var(--theme-code);
+    color: var(--theme-text-muted);
     font-size: 0.875em;
   }
   .commit-meta {
