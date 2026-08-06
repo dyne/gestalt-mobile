@@ -7,20 +7,20 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import {
+  evidenceFilename,
+  evidenceFontScales,
+  evidenceThemes,
+  evidenceViewports,
+  expectCleanThemeDiagnostics,
+  openThemeEvidence,
+} from './theme-evidence.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-sessions-tree-evidence';
 
 test.beforeAll(async () => {
   await mkdir(evidenceDirectory, { recursive: true });
 });
-
-const viewports = [
-  { width: 320, height: 568 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-] as const;
-const themes = ['light', 'dark'] as const;
-const fontScales = [100, 200] as const;
 
 const workspaceTree = [
   {
@@ -71,22 +71,11 @@ const workspaceTree = [
   },
 ];
 
-type Diagnostics = { consoleErrors: string[]; requestFailures: string[] };
-
 async function openSessions(
   page: Page,
-  theme: (typeof themes)[number],
-  fontScale: (typeof fontScales)[number],
-): Promise<Diagnostics> {
-  const diagnostics: Diagnostics = { consoleErrors: [], requestFailures: [] };
-  page.on('console', (message) => {
-    if (message.type() === 'error') diagnostics.consoleErrors.push(message.text());
-  });
-  page.on('requestfailed', (request) => diagnostics.requestFailures.push(request.url()));
-  await page.addInitScript(
-    ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
-    { selectedTheme: theme },
-  );
+  theme: (typeof evidenceThemes)[number],
+  fontScale: (typeof evidenceFontScales)[number],
+) {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -115,26 +104,36 @@ async function openSessions(
   });
 
   await mockAuthenticatedStatus(page);
-  await page.goto('/');
-  await page.addStyleTag({ content: `html { font-size: ${fontScale}% !important; }` });
+  const diagnostics = await openThemeEvidence(page, { theme, fontScale, url: '/' });
   await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
   return diagnostics;
 }
 
 async function expectUsableLayout(page: Page): Promise<void> {
   const touchTargets = await page.locator('button').evaluateAll((buttons) =>
-    buttons.filter((button) => {
-      const box = button.getBoundingClientRect();
-      if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0) return false;
-      for (let element: HTMLElement | null = button; element; element = element.parentElement) {
-        const style = getComputedStyle(element);
-        if (element.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden' || style.opacity === '0') return false;
-      }
-      return true;
-    }).map((button) => {
-      const box = button.getBoundingClientRect();
-      return { width: box.width, height: box.height, name: button.getAttribute('aria-label') };
-    }),
+    buttons
+      .filter((button) => {
+        const box = button.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0 || button.getClientRects().length === 0)
+          return false;
+        for (let element: HTMLElement | null = button; element; element = element.parentElement) {
+          const style = getComputedStyle(element);
+          if (
+            element.hidden ||
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.visibility === 'collapse' ||
+            style.contentVisibility === 'hidden' ||
+            style.opacity === '0'
+          )
+            return false;
+        }
+        return true;
+      })
+      .map((button) => {
+        const box = button.getBoundingClientRect();
+        return { width: box.width, height: box.height, name: button.getAttribute('aria-label') };
+      }),
   );
   const undersizedTargets = touchTargets.filter(({ width, height }) => width < 44 || height < 44);
   expect(undersizedTargets, JSON.stringify(undersizedTargets)).toEqual([]);
@@ -152,7 +151,13 @@ async function expectUsableLayout(page: Page): Promise<void> {
     const viewportWidth = document.documentElement.clientWidth;
     const buttons = [...navigation.querySelectorAll('button')].map((button) => {
       const box = button.getBoundingClientRect();
-      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width };
+      return {
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+        width: box.width,
+      };
     });
     return {
       buttons,
@@ -222,7 +227,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
 
 test('uses the same selected highlight for pointer and keyboard interaction', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const diagnostics = await openSessions(page, 'light', 100);
+  const diagnostics = await openSessions(page, 'minimal-light', 100);
   await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
 
   const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
@@ -237,12 +242,12 @@ test('uses the same selected highlight for pointer and keyboard interaction', as
 
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
-  expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+  expectCleanThemeDiagnostics(diagnostics);
 });
 
-for (const viewport of viewports) {
-  for (const fontScale of fontScales) {
-    for (const theme of themes) {
+for (const viewport of evidenceViewports) {
+  for (const fontScale of evidenceFontScales) {
+    for (const theme of evidenceThemes) {
       test(`captures Sessions tree at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
         page,
       }) => {
@@ -251,7 +256,7 @@ for (const viewport of viewports) {
 
         await page.getByRole('button', { name: 'Collapse dyne' }).click();
         await page.screenshot({
-          path: `${evidenceDirectory}/sessions-${viewport.width}x${viewport.height}-font${fontScale}-${theme}-collapsed.png`,
+          path: `${evidenceDirectory}/${evidenceFilename('sessions', 'collapsed', viewport, fontScale, theme)}`,
           fullPage: false,
         });
 
@@ -266,11 +271,11 @@ for (const viewport of viewports) {
         await expectUsableLayout(page);
         await repository.evaluate((element) => element.scrollIntoView({ block: 'center' }));
         await page.screenshot({
-          path: `${evidenceDirectory}/sessions-${viewport.width}x${viewport.height}-font${fontScale}-${theme}-expanded-selected.png`,
+          path: `${evidenceDirectory}/${evidenceFilename('sessions', 'expanded-selected', viewport, fontScale, theme)}`,
           fullPage: false,
         });
 
-        expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+        expectCleanThemeDiagnostics(diagnostics);
       });
     }
   }
@@ -280,7 +285,7 @@ test('keeps failure feedback readable without covering the selected path or cont
   page,
 }) => {
   await page.setViewportSize({ width: 320, height: 568 });
-  const diagnostics = await openSessions(page, 'dark', 200);
+  const diagnostics = await openSessions(page, 'minimal-dark', 200);
   await page.getByRole('button', { name: 'Expand mobile-applications-and-experiments' }).click();
   const repository = page.getByRole('treeitem', { name: /^gestalt-mobile/ });
   await repository.click();

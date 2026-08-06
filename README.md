@@ -52,20 +52,51 @@ preserved. Explicit profiles take precedence over project defaults, which take
 precedence over native configuration. Gestalt Mobile never rewrites Codex
 configuration or skill files.
 
+## Themes
+
+Themes are registered once in `src/client/features/theme/theme-registry.ts`. Add a
+stable ID, user-facing label, `colorScheme`, and `logoTone` there; the Appearance
+control is registry-driven. The bootstrap boundary resolves storage before Svelte
+mounts: `light` and `dark` migrate to the Minimal themes, while missing, malformed,
+unknown, retired, and `system` values use the `dyne-org` default. Keep the
+`gestalt-mobile.theme` storage key compatible and never persist a migration until a
+user makes an explicit choice.
+
+Each registry entry needs a complete semantic-token values file under
+`src/client/features/theme/styles/`, including surfaces, text, borders, focus,
+controls, status states, code, typography, motion, and the declared color scheme.
+Components consume those shared tokens and must not branch on theme IDs. Fonts and
+branding assets are bundled locally (no runtime CDN); preserve their licenses.
+Keep normal text at 4.5:1 contrast and large text, icons, and control boundaries at
+3:1 or better. Gestalt branding remains unchanged. Dyne.org is intentionally
+light-only today; a separate light/dark mode axis requires a future product decision.
+See the authoritative [Dyne.org branding](https://dyne.org/branding/) and
+[Delta style reference](https://delta.dyne.org/899/).
+
+Before adding a fourth theme, update registry/token unit tests, selector/component
+coverage, and the Playwright evidence matrix in `test/e2e/theme-evidence.ts`: all
+themes at 390×844/100% for each representative state, plus the named dense states at
+320×568 and 768×1024 with 200% text. Verify pre-navigation storage, 44px controls,
+focus/non-color state cues, no visible horizontal overflow, zero unexpected console
+or request errors, and no failed local font/branding request. Dry-run the release
+checks with `npm run format:check`, `npm run license:check`, `npm run check`,
+`npm test`, `npm run lint`, `npm run build`, `npm run test:e2e`, and
+`npm run test:package`.
+
 ## Command-line options
 
-| Option                     | Default              | Purpose                                                           |
-| -------------------------- | -------------------- | ----------------------------------------------------------------- |
-| `--cwd <path>`             | Current directory    | Root containing selectable workspaces                             |
-| `--host <address>`         | `127.0.0.1`          | HTTP listen address                                               |
-| `--port <number>`          | `3000`               | HTTP listen port, from 1 through 65535                            |
+| Option                     | Default              | Purpose                                                            |
+| -------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `--cwd <path>`             | Current directory    | Root containing selectable workspaces                              |
+| `--host <address>`         | `127.0.0.1`          | HTTP listen address                                                |
+| `--port <number>`          | `3000`               | HTTP listen port, from 1 through 65535                             |
 | `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
-| `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly    |
-| `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                               |
-| `--skills <profile>`       |                      | Apply a saved global profile to every session                     |
-| `--skills list`            |                      | List global profiles without starting the server                  |
-| `--help`                   |                      | Print usage without starting the application                      |
-| `--version`                |                      | Print the installed package version                               |
+| `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly     |
+| `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                                |
+| `--skills <profile>`       |                      | Apply a saved global profile to every session                      |
+| `--skills list`            |                      | List global profiles without starting the server                   |
+| `--help`                   |                      | Print usage without starting the application                       |
+| `--version`                |                      | Print the installed package version                                |
 
 `--cwd` may be relative to the directory where the command is invoked. The
 resolved directory is the selectable root of a recursive workspace tree. Dot

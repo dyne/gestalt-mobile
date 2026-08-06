@@ -7,15 +7,17 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import {
+  evidenceFilename,
+  evidenceFontScales,
+  evidenceThemes,
+  evidenceViewports,
+  expectCleanThemeDiagnostics,
+  expectNoHorizontalOverflow,
+  openThemeEvidence,
+} from './theme-evidence.js';
 
 const evidenceDirectory = '/tmp/gestalt-mobile-toast-evidence';
-const viewports = [
-  { width: 320, height: 568 },
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-] as const;
-const themes = ['dyne-org', 'minimal-light', 'minimal-dark'] as const;
-const fontScales = [100, 200] as const;
 const variants = ['error', 'stacked'] as const;
 
 test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
@@ -24,26 +26,19 @@ test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 async function openEvidence(
   page: Page,
   variant: (typeof variants)[number],
-  theme: (typeof themes)[number],
-  fontScale: (typeof fontScales)[number],
+  theme: (typeof evidenceThemes)[number],
+  fontScale: (typeof evidenceFontScales)[number],
 ) {
-  const consoleErrors: string[] = [];
-  const requestFailures: string[] = [];
-  page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+  const diagnostics = await openThemeEvidence(page, {
+    theme,
+    fontScale,
+    url: `/?toast-evidence=${variant}`,
   });
-  page.on('requestfailed', (request) => requestFailures.push(request.url()));
-  await page.addInitScript(
-    ({ selectedTheme }) => localStorage.setItem('gestalt-mobile.theme', selectedTheme),
-    { selectedTheme: theme },
-  );
-  await page.goto(`/?toast-evidence=${variant}`);
-  await page.addStyleTag({ content: `html { font-size: ${fontScale}% !important; }` });
   await expect(page.getByRole('alert')).toBeVisible();
   await page
     .getByRole('button', { name: 'Dismiss error notification' })
     .evaluate((button) => (button as HTMLElement).focus({ preventScroll: true }));
-  return { consoleErrors, requestFailures };
+  return diagnostics;
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -78,13 +73,13 @@ test('announces feedback, is non-modal, keyboard-dismissible, and does not steal
   await dismiss.focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('alert')).toHaveCount(0);
-  expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+  expectCleanThemeDiagnostics(diagnostics);
 });
 
 for (const variant of variants) {
-  for (const viewport of viewports) {
-    for (const fontScale of fontScales) {
-      for (const theme of themes) {
+  for (const viewport of evidenceViewports) {
+    for (const fontScale of evidenceFontScales) {
+      for (const theme of evidenceThemes) {
         test(`captures ${variant} feedback at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
           page,
         }) => {
@@ -116,21 +111,11 @@ for (const variant of variants) {
               ),
             ).toBe(false);
           }
-          const overflow = await page.evaluate(() => ({
-            amount: document.documentElement.scrollWidth - window.innerWidth,
-            offenders: [...document.querySelectorAll<HTMLElement>('body *')]
-              .map((element) => ({
-                name: `${element.tagName.toLowerCase()}.${element.className}`,
-                box: element.getBoundingClientRect().toJSON(),
-              }))
-              .filter(({ box }) => box.left < -0.5 || box.right > window.innerWidth + 0.5)
-              .slice(0, 5),
-          }));
-          expect(overflow.offenders).toEqual([]);
+          await expectNoHorizontalOverflow(page);
 
-          const filename = `toast-${variant}-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`;
+          const filename = evidenceFilename('toast', variant, viewport, fontScale, theme);
           await page.screenshot({ path: `${evidenceDirectory}/${filename}`, fullPage: false });
-          expect(diagnostics).toEqual({ consoleErrors: [], requestFailures: [] });
+          expectCleanThemeDiagnostics(diagnostics);
         });
       }
     }
