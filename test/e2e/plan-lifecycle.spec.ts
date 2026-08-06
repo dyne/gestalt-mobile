@@ -370,7 +370,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
       )
       .toBeTruthy();
     expect(socketUrls.at(-1)).toContain(`after=${cursorBeforeOffline}`);
-    await expect(page.getByText('Current: Deliver the supervised lifecycle (WIP)')).toBeVisible();
+    await expect(page.getByText('Current: Finish after reconnect (WIP)')).toBeVisible();
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');
 
     await invokeHelper('set', 'deliver-lifecycle', 'DONE');
