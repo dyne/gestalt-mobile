@@ -7,14 +7,17 @@ import { mount } from 'svelte';
 
 import App from './App.svelte';
 import { consumeEnrollmentFragment } from './features/auth/enrollment-fragment.js';
+import { bootstrapTheme, type ThemeBrowserDependencies } from './features/theme/browser-theme.js';
 
 export function mountClient(
   target: Element,
   location: Location,
   history: History,
   mountApp: typeof mount = mount,
+  themeDependencies: ThemeBrowserDependencies = {},
 ): ReturnType<typeof mount> {
   // The app starts its auth-status fetch during mount, so remove the capability before that can run.
   const enrollmentTicket = consumeEnrollmentFragment(location, history);
-  return mountApp(App, { target, props: { enrollmentTicket } });
+  const initialTheme = bootstrapTheme(themeDependencies);
+  return mountApp(App, { target, props: { enrollmentTicket, initialTheme } });
 }

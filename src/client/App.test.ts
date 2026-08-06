@@ -40,9 +40,10 @@ describe('App auth gate', () => {
     vi.stubGlobal('fetch', fetcher);
     vi.stubGlobal('WebSocket', class { close() {} });
 
-    const view = render(App);
+    const view = render(App, { initialTheme: 'minimal-dark' });
 
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
+    expect(view.container.querySelector('nav')?.getAttribute('data-initial-theme')).toBe('minimal-dark');
     expect(screen.queryByRole('button', { name: 'Lock Gestalt Mobile' })).toBeNull();
   });
 

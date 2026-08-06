@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  type ThemePreference = 'system' | 'light' | 'dark';
+  import { themes, type ThemeId } from '../features/theme/theme-registry.js';
 
   let {
     theme,
@@ -17,12 +17,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onlock = () => {},
     ondevices = () => {},
   }: {
-    theme: ThemePreference;
+    theme: ThemeId;
     sessionPath?: string | null;
     sessionModel?: string | null;
     weeklyQuotaRemaining?: number | null;
     passkeyAuthEnabled?: boolean;
-    onthemechange: (theme: ThemePreference) => void;
+    onthemechange: (theme: ThemeId) => void;
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
   } = $props();
@@ -82,11 +82,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       id="appearance"
       aria-label="Appearance"
       value={theme}
-      onchange={(event) => onthemechange(event.currentTarget.value as ThemePreference)}
+      onchange={(event) => onthemechange(event.currentTarget.value as ThemeId)}
     >
-      <option value="system">System</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
+      {#each themes as option (option.id)}
+        <option value={option.id}>{option.label}</option>
+      {/each}
     </select>
   </label>
   {#if passkeyAuthEnabled}

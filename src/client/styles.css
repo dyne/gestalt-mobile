@@ -8,15 +8,15 @@
   --bottom-navigation-clearance: calc(4rem + env(safe-area-inset-bottom));
   --sticky-header-clearance: calc(5rem + env(safe-area-inset-top));
 
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: system-ui, sans-serif;
 }
 
-:root[data-theme='light'] {
+:root[data-theme='minimal-light'] {
   color-scheme: light;
 }
 
-:root[data-theme='dark'] {
+:root[data-theme='minimal-dark'] {
   color-scheme: dark;
 }
 
@@ -156,23 +156,14 @@ main {
   display: none;
 }
 
-:root[data-theme='dark'] .light-asset {
+:root[data-logo-tone='light'] .light-asset {
   display: none;
 }
 
-:root[data-theme='dark'] .dark-asset {
+:root[data-logo-tone='light'] .dark-asset {
   display: initial;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .light-asset {
-    display: none;
-  }
-
-  :root:not([data-theme]) .dark-asset {
-    display: initial;
-  }
-}
 
 .configuration-panel {
   position: fixed;

@@ -9,7 +9,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
 
-  let { authorizedFetch, passkeyAuthEnabled, onlock }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void } = $props();
+  import { type ThemeId } from './features/theme/theme-registry.js';
+
+  let { authorizedFetch, passkeyAuthEnabled, onlock, theme }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void; theme: ThemeId } = $props();
 
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -32,7 +34,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 </script>
 
-<nav aria-label="Relay navigation">
+<nav aria-label="Relay navigation" data-initial-theme={theme}>
   <button type="button" onclick={() => void authorizedFetch('/api/probe', { signal: request.signal })}>
     Trigger authorized request
   </button>

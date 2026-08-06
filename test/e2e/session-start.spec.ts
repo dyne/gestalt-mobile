@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
@@ -1604,7 +1604,7 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Sessions', pressed: true })).toBeFocused();
 });
 
-test('shows Gestalt branding and changes appearance from configuration', async ({ page }) => {
+test('shows Gestalt branding and persists every named appearance from configuration', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -1616,8 +1616,38 @@ test('shows Gestalt branding and changes appearance from configuration', async (
   await expect(page).toHaveTitle('Gestalt Mobile');
   await expect(page.getByRole('link', { name: 'Gestalt Mobile' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Open configuration' }).click();
-  await expect(page.locator('.configuration-brand')).toBeVisible();
-  await page.getByLabel('Appearance').selectOption('dark');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  for (const theme of ['dyne-org', 'minimal-light', 'minimal-dark']) {
+    await page.getByRole('button', { name: 'Open configuration' }).click();
+    await expect(page.locator('.configuration-brand')).toBeVisible();
+    await page.getByLabel('Appearance').selectOption(theme);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('gestalt-mobile.theme'))).toBe(theme);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+  }
+});
+
+test('captures the configuration popover across the named theme accessibility matrix', async ({ page }, testInfo: TestInfo) => {
+  await page.route('**/api/bootstrap', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ workspaces: [], profiles: [], sessions: [] }),
+  }));
+
+  for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }]) {
+    for (const fontScale of [100, 200]) {
+      for (const theme of ['dyne-org', 'minimal-light', 'minimal-dark']) {
+        await page.setViewportSize(viewport);
+        await page.goto('/');
+        await page.locator('html').evaluate((root, scale) => { root.style.fontSize = `${scale}%`; }, fontScale);
+        await page.getByRole('button', { name: 'Open configuration' }).click();
+        await page.getByLabel('Appearance').selectOption(theme);
+        const panel = page.locator('.configuration-panel');
+        await expect(panel).toBeVisible();
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+        expect(await page.locator('body').evaluate((body) => body.scrollWidth <= body.clientWidth)).toBe(true);
+        expect(await page.getByRole('button', { name: 'Open configuration' }).evaluate((button) => button.getBoundingClientRect().height >= 44)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`configuration-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`) });
+      }
+    }
+  }
 });
