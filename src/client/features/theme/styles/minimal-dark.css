@@ -1,0 +1,28 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+:root[data-theme='minimal-dark'] {
+  color-scheme: dark;
+  --theme-page: #171717;
+  --theme-canvas: #171717;
+  --theme-surface: #262626;
+  --theme-surface-subtle: #404040;
+  --theme-text: #fafafa;
+  --theme-text-muted: #d4d4d4;
+  --theme-border: #a3a3a3;
+  --theme-focus: #93c5fd;
+  --theme-accent: #fafafa;
+  --theme-accent-contrast: #171717;
+  --theme-control-hover: #404040;
+  --theme-control-pressed: #fafafa;
+  --theme-control-disabled: #a3a3a3;
+  --theme-success: #86efac;
+  --theme-warning: #fcd34d;
+  --theme-error: #fca5a5;
+  --theme-info: #93c5fd;
+  --theme-code: #262626;
+  --theme-shadow: rgb(0 0 0 / 50%);
+}

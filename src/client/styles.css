@@ -4,26 +4,26 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+@import './features/theme/styles/foundations.css';
+@import './features/theme/styles/minimal-light.css';
+@import './features/theme/styles/minimal-dark.css';
+@import './features/theme/styles/dyne-org.css';
+
 :root {
   --bottom-navigation-clearance: calc(4rem + env(safe-area-inset-bottom));
   --sticky-header-clearance: calc(5rem + env(safe-area-inset-top));
 
   color-scheme: light;
-  font-family: system-ui, sans-serif;
-}
-
-:root[data-theme='minimal-light'] {
-  color-scheme: light;
-}
-
-:root[data-theme='minimal-dark'] {
-  color-scheme: dark;
+  font-family: var(--theme-font-body);
 }
 
 body {
   min-block-size: 100vh;
   min-block-size: 100dvh;
   margin: 0;
+  color: var(--theme-text);
+  background: var(--theme-page);
+  accent-color: var(--theme-accent);
 }
 
 .visually-hidden {
@@ -70,7 +70,7 @@ main {
     1.5rem;
   padding: calc(1rem + env(safe-area-inset-top))
     calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
-  background: color-mix(in srgb, Canvas 78%, transparent);
+  background: color-mix(in srgb, var(--theme-page) 78%, transparent);
   backdrop-filter: blur(0.75rem);
 }
 
@@ -170,11 +170,11 @@ main {
   inset: 4.5rem 1rem auto auto;
   min-inline-size: min(13rem, calc(100vw - 2rem));
   padding: 0.75rem;
-  color: CanvasText;
-  background: Canvas;
-  border: 1px solid CanvasText;
-  border-radius: 0.5rem;
-  box-shadow: 0 0.5rem 1.5rem color-mix(in srgb, CanvasText 25%, transparent);
+  color: var(--theme-text);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-radius);
+  box-shadow: 0 0.5rem 1.5rem var(--theme-shadow);
 }
 
 .configuration-logo {
@@ -192,6 +192,7 @@ main {
 }
 
 .appearance-control span {
+  font-family: var(--theme-font-display);
   font-weight: 700;
   letter-spacing: -0.08em;
 }
@@ -212,8 +213,8 @@ main {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.25rem;
   padding: 0.5rem calc(0.25rem + env(safe-area-inset-right)) calc(0.5rem + env(safe-area-inset-bottom)) calc(0.25rem + env(safe-area-inset-left));
-  background: Canvas;
-  border-block-start: 1px solid CanvasText;
+  background: var(--theme-surface);
+  border-block-start: 1px solid var(--theme-border);
 }
 
 .bottom-navigation button {
@@ -223,20 +224,29 @@ main {
   overflow-wrap: anywhere;
   word-break: break-word;
   transition:
-    color 120ms ease,
-    background-color 120ms ease,
-    box-shadow 120ms ease;
+    color var(--theme-motion-fast) ease,
+    background-color var(--theme-motion-fast) ease,
+    box-shadow var(--theme-motion-fast) ease;
+}
+
+.bottom-navigation button:hover:not(:disabled) {
+  background: var(--theme-control-hover);
+}
+
+.bottom-navigation button:active:not(:disabled) {
+  background: var(--theme-control-pressed);
+  color: var(--theme-accent-contrast);
 }
 
 .bottom-navigation button[aria-pressed='true'] {
-  color: Canvas;
+  color: var(--theme-accent-contrast);
   font-weight: 700;
-  background: CanvasText;
-  box-shadow: inset 0 0.2rem 0 color-mix(in srgb, Canvas 70%, transparent);
+  background: var(--theme-accent);
+  box-shadow: inset 0 0.2rem 0 color-mix(in srgb, var(--theme-accent-contrast) 25%, transparent);
 }
 
 .bottom-navigation button:disabled {
-  color: color-mix(in srgb, CanvasText 40%, transparent);
+  color: var(--theme-control-disabled);
   cursor: not-allowed;
   opacity: 0.65;
 }
@@ -259,7 +269,16 @@ main {
 button {
   min-block-size: 44px;
   font: inherit;
+  color: var(--theme-text);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-radius);
+  cursor: pointer;
 }
+
+button:hover:not(:disabled) { background: var(--theme-control-hover); }
+button:active:not(:disabled) { background: var(--theme-control-pressed); color: var(--theme-accent-contrast); }
+button:disabled { color: var(--theme-control-disabled); cursor: not-allowed; }
 
 .git-view button {
   scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
@@ -273,10 +292,17 @@ textarea {
   min-block-size: 44px;
   font: inherit;
   font-size: max(1rem, 16px);
+  color: var(--theme-text);
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  border-radius: var(--theme-radius);
 }
 
+input::placeholder,
+textarea::placeholder { color: var(--theme-text-muted); }
+
 :focus-visible {
-  outline: 3px solid CanvasText;
+  outline: 3px solid var(--theme-focus);
   outline-offset: 3px;
 }
 

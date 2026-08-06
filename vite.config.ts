@@ -9,5 +9,6 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [svelte()],
-  build: { outDir: 'dist/client', emptyOutDir: true },
+  // Local font files must stay external so the relay's strict CSP can permit them.
+  build: { outDir: 'dist/client', emptyOutDir: true, assetsInlineLimit: 0 },
 });

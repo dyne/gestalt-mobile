@@ -86,6 +86,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
-  .auth-gate { max-width: 32rem; margin: 12vh auto; padding: 2rem; }
+  .auth-gate {
+    max-width: 32rem;
+    margin: 12vh auto;
+    padding: 2rem;
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+    box-shadow: 0 0.5rem 1.5rem var(--theme-shadow);
+  }
+  .auth-gate h1 { font-family: var(--theme-font-display); }
   button { margin-right: 0.75rem; }
 </style>

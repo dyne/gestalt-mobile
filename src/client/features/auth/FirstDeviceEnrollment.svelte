@@ -160,21 +160,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </main>
 
 <style>
-  .enrollment { box-sizing: border-box; inline-size: 100%; max-inline-size: none; min-height: 100dvh; margin: 0; padding: 1rem; display: grid; place-items: center; background: #10231e; color: #f5f6ed; }
-  .card { width: min(100%, 42rem); box-sizing: border-box; padding: clamp(1.25rem, 5vw, 3rem); background: #17352c; border: 1px solid #88bda7; border-radius: 1rem; }
-  .brand { color: #b6e6ce; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-  h1 { margin-block: .25rem 1rem; font-size: clamp(1.8rem, 7vw, 3rem); }
-  .warning { padding: 1rem; border-left: .3rem solid #f0c96a; background: #294237; }
+  .enrollment { box-sizing: border-box; inline-size: 100%; max-inline-size: none; min-height: 100dvh; margin: 0; padding: 1rem; display: grid; place-items: center; background: var(--theme-page); color: var(--theme-text); }
+  .card { width: min(100%, 42rem); box-sizing: border-box; padding: clamp(1.25rem, 5vw, 3rem); background: var(--theme-surface); border: 1px solid var(--theme-border); border-radius: calc(var(--theme-radius) * 2); box-shadow: 0 0.5rem 1.5rem var(--theme-shadow); }
+  .brand { color: var(--theme-info); font-family: var(--theme-font-display); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  h1 { margin-block: .25rem 1rem; font-family: var(--theme-font-display); font-size: clamp(1.8rem, 7vw, 3rem); }
+  .warning { padding: 1rem; border-left: .3rem solid var(--theme-warning); background: var(--theme-surface-subtle); }
   label, input { display: block; width: 100%; box-sizing: border-box; }
   label { margin-top: 1.5rem; font-weight: 700; }
   input, button { min-height: 44px; font: inherit; }
   input { margin-top: .4rem; padding: .6rem; }
   button { margin-top: 1rem; padding: .55rem 1rem; border-radius: .4rem; cursor: pointer; }
-  .authorize { width: 100%; background: #b6e6ce; color: #10231e; font-weight: 700; }
-  .feedback, .error { color: #ffd2c5; }
-  .handoff { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #88bda7; }
-  .handoff img { width: 12rem; max-width: 100%; background: white; padding: .5rem; }
-  a { color: #b6e6ce; overflow-wrap: anywhere; }
+  .authorize { width: 100%; background: var(--theme-accent); color: var(--theme-accent-contrast); border-color: var(--theme-accent); font-weight: 700; }
+  .feedback { color: var(--theme-info); font-weight: 700; }
+  .error { color: var(--theme-error); font-weight: 700; }
+  .handoff { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--theme-border); }
+  .handoff img { width: 12rem; max-width: 100%; background: var(--theme-canvas); padding: .5rem; }
+  a { color: var(--theme-info); overflow-wrap: anywhere; }
   .copy { display: block; }
   @media (min-width: 48rem) { .handoff { grid-template-columns: 12rem minmax(0, 1fr); align-items: start; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
