@@ -25,9 +25,11 @@ test('first-device enrollment is usable at mobile size', async ({ page }) => {
   await nickname.focus();
   await expect(nickname).toBeFocused();
   await expect(page.getByRole('link', { name: /bootstrap=1/ })).toBeVisible();
-  await expect(
-    page.getByText(/anyone who can reach an empty relay instance could claim first-device access/i),
-  ).toBeVisible();
+  const warning = page.locator('.warning');
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText(
+    /anyone who can reach an empty relay instance could claim\s+first-device access/i,
+  );
   for (const control of [
     nickname,
     page.getByRole('button', { name: 'Authorize this device' }),

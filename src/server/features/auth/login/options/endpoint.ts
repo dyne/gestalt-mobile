@@ -35,9 +35,19 @@ export function registerLoginOptions(
 ): void {
   app.post('/api/auth/login/options', { bodyLimit: 1024 }, async (request, reply) => {
     if (!deps.ceremonyAttempts.allow(`login:${request.ip}`, deps.clock.now()))
-      return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
+      return sendProblem(
+        reply,
+        'AUTHENTICATION_FAILED',
+        400,
+        'Authentication could not be completed.',
+      );
     if (deps.repository.listAuthorizedDevices().length === 0)
-      return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
+      return sendProblem(
+        reply,
+        'AUTHENTICATION_FAILED',
+        400,
+        'Authentication could not be completed.',
+      );
     const correlation = deps.random.bytes(32);
     const challenge = deps.random.bytes(32);
     if (correlation.length !== 32 || challenge.length !== 32)
@@ -65,7 +75,12 @@ export function registerLoginOptions(
       );
     } catch (error) {
       if (error instanceof CeremonyCapacityError)
-        return sendProblem(reply, 'AUTHENTICATION_FAILED', 400, 'Authentication could not be completed.');
+        return sendProblem(
+          reply,
+          'AUTHENTICATION_FAILED',
+          400,
+          'Authentication could not be completed.',
+        );
       throw error;
     }
     setAuthCookie(reply, 'gestalt_mobile_login', token, deps.relyingParty.publicOrigin);

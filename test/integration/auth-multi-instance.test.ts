@@ -171,35 +171,36 @@ async function runContenders(home: string, mode: ContentionMode, ids: readonly s
   );
   const stop = () => workers.forEach((worker) => worker.kill());
   try {
-    const contenders = workers.map(
-      (worker, index) => {
-        let ready: () => void;
-        let result: (outcome: string) => void;
-        let fail: (error: Error) => void;
-        const readyPromise = new Promise<void>((resolve) => {
-          ready = resolve;
-        });
-        const resultPromise = new Promise<string>((resolve, reject) => {
-          result = resolve;
-          fail = reject;
-        });
-        const timeout = setTimeout(() => fail(new Error(`contention worker ${index} timed out`)), 10_000);
-        worker.once('error', () => fail(new Error(`contention worker ${index} failed`)));
-        worker.once('exit', (code) => {
-          if (code !== 0) fail(new Error(`contention worker ${index} exited without a result`));
-        });
-        worker.on('message', (message: { type?: string; outcome?: string; reason?: string }) => {
-          if (message.type === 'ready') ready();
-          else if (message.type === 'result' && message.outcome) {
-            clearTimeout(timeout);
-            result(message.outcome);
-          } else if (message.type === 'error')
-            fail(new Error(`contention worker ${index} failed: ${message.reason ?? 'unknown'}`));
-        });
-        worker.send({ home, mode, id: ids[index] });
-        return { ready: readyPromise, result: resultPromise };
-      },
-    );
+    const contenders = workers.map((worker, index) => {
+      let ready: () => void;
+      let result: (outcome: string) => void;
+      let fail: (error: Error) => void;
+      const readyPromise = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const resultPromise = new Promise<string>((resolve, reject) => {
+        result = resolve;
+        fail = reject;
+      });
+      const timeout = setTimeout(
+        () => fail(new Error(`contention worker ${index} timed out`)),
+        10_000,
+      );
+      worker.once('error', () => fail(new Error(`contention worker ${index} failed`)));
+      worker.once('exit', (code) => {
+        if (code !== 0) fail(new Error(`contention worker ${index} exited without a result`));
+      });
+      worker.on('message', (message: { type?: string; outcome?: string; reason?: string }) => {
+        if (message.type === 'ready') ready();
+        else if (message.type === 'result' && message.outcome) {
+          clearTimeout(timeout);
+          result(message.outcome);
+        } else if (message.type === 'error')
+          fail(new Error(`contention worker ${index} failed: ${message.reason ?? 'unknown'}`));
+      });
+      worker.send({ home, mode, id: ids[index] });
+      return { ready: readyPromise, result: resultPromise };
+    });
     await Promise.all(contenders.map((contender) => contender.ready));
     workers.forEach((worker) => worker.send('go'));
     return await Promise.all(contenders.map((contender) => contender.result));
@@ -401,7 +402,8 @@ describe('shared authorization across independently composed relays', () => {
       expect(seeded.listAuthorizedDevices()).toHaveLength(1);
       const remaining = seeded.listAuthorizedDevices()[0];
       if (!remaining) throw new Error('first claim did not persist a device');
-      const other = remaining.id === authorizedDeviceId('one') ? device('two', 'Two') : device('one', 'One');
+      const other =
+        remaining.id === authorizedDeviceId('one') ? device('two', 'Two') : device('one', 'One');
       expect(seeded.authorizeDevice(other)).toBe('authorized');
       seeded.close();
 

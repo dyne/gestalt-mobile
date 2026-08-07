@@ -42,7 +42,9 @@ const l1: PlanStep = {
   state: 'TODO',
   priority: 'A',
   reviewStatus: 'UNREVIEWED',
-  description: { goal: 'A very-long-unbroken-value-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' },
+  description: {
+    goal: 'A very-long-unbroken-value-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  },
   children: [l2],
 };
 
@@ -92,17 +94,24 @@ describe('PlanView', () => {
   it('preserves ordered L1/L2 hierarchy and renders nested fields, indicators, metadata, skills, and progress', () => {
     render(PlanView, { state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
     expect(screen.getByRole('heading', { name: 'Unicode план' })).toBeTruthy();
-    expect([...document.querySelectorAll('details')].map((element) => element.dataset.stepId)).toEqual([
-      'l1-parent',
-      'l2-current',
-      'l1-manual',
-    ]);
+    expect(
+      [...document.querySelectorAll('details')].map((element) => element.dataset.stepId),
+    ).toEqual(['l1-parent', 'l2-current', 'l1-manual']);
     expect(detail(l1.id).open).toBe(true);
     expect(detail(l2.id).open).toBe(true);
     expect(screen.getByText(/TODO.*Priority A.*UNREVIEWED/)).toBeTruthy();
     expect(screen.getByText(/WIP.*Priority B.*REVIEWED/)).toBeTruthy();
     expect(screen.getByText(/DONE.*Priority C/)).toBeTruthy();
-    for (const text of ['Effort:', 'Goal:', 'Notes:', 'Why:', 'Change:', 'Tests:', 'Done when:', 'Skills:'])
+    for (const text of [
+      'Effort:',
+      'Goal:',
+      'Notes:',
+      'Why:',
+      'Change:',
+      'Tests:',
+      'Done when:',
+      'Skills:',
+    ])
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/very-long-unbroken-value/).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Unicode план' })).toBeTruthy();
@@ -117,15 +126,19 @@ describe('PlanView', () => {
   it('renders measured values and keeps unavailable measurements explicit', () => {
     const { rerender } = render(PlanView, {
       state: ready({
-        steps: [{
-          ...l1,
-          measurement: { elapsedSeconds: 65, weeklyPercentUsed: 0, tokensUsed: 1200 },
-          children: [{ ...l2, measurement: undefined }],
-        }],
+        steps: [
+          {
+            ...l1,
+            measurement: { elapsedSeconds: 65, weeklyPercentUsed: 0, tokensUsed: 1200 },
+            children: [{ ...l2, measurement: undefined }],
+          },
+        ],
       }),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('1m 5s elapsed · 0% observed account-wide usage · 1,200 tokens used')).toBeTruthy();
+    expect(
+      screen.getByText('1m 5s elapsed · 0% observed account-wide usage · 1,200 tokens used'),
+    ).toBeTruthy();
     rerender({ state: ready({ steps: [{ ...l1, children: [] }] }), onclose: vi.fn() });
     expect(screen.getByText('Measurements unavailable')).toBeTruthy();
   });
@@ -135,7 +148,13 @@ describe('PlanView', () => {
     document.body.append(focusProbe);
     focusProbe.focus();
     render(PlanView, { state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
-    await vi.waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest', inline: 'nearest' }));
+    await vi.waitFor(() =>
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'auto',
+        block: 'nearest',
+        inline: 'nearest',
+      }),
+    );
     expect(detail(l1.id).open).toBe(true);
     expect(detail(l2.id).open).toBe(true);
     expect(document.activeElement).toBe(focusProbe);
@@ -161,7 +180,13 @@ describe('PlanView', () => {
       }),
       onclose: vi.fn(),
     });
-    await vi.waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest', inline: 'nearest' }));
+    await vi.waitFor(() =>
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'auto',
+        block: 'nearest',
+        inline: 'nearest',
+      }),
+    );
     expect(detail(l1.id).open).toBe(true);
     expect(detail(replacement.id).open).toBe(true);
     expect(document.activeElement).toBe(focusProbe);
@@ -193,10 +218,16 @@ describe('PlanView', () => {
   });
 
   it('handles optional metadata, empty plans, and loading/unavailable/error states clearly', () => {
-    const { rerender } = render(PlanView, { state: ready({ subtitle: undefined, date: undefined, keywords: undefined }), onclose: vi.fn() });
+    const { rerender } = render(PlanView, {
+      state: ready({ subtitle: undefined, date: undefined, keywords: undefined }),
+      onclose: vi.fn(),
+    });
     expect(document.querySelector('.metadata')).toBeNull();
 
-    rerender({ state: ready({ steps: [], totalSteps: 0, doneSteps: 0, currentStepId: '' }), onclose: vi.fn() });
+    rerender({
+      state: ready({ steps: [], totalSteps: 0, doneSteps: 0, currentStepId: '' }),
+      onclose: vi.fn(),
+    });
     expect(screen.getByText('No plan steps have been retained yet.')).toBeTruthy();
     expect(screen.getByRole('progressbar').getAttribute('max')).toBe('1');
     expect(screen.getByRole('progressbar').getAttribute('value')).toBe('0');
@@ -224,12 +255,23 @@ describe('PlanView', () => {
     expect(screen.getByRole('button', { name: 'Close plan and return to list' })).toBeTruthy();
 
     rerender({ state: { kind: 'closing', sessionId: 'one', plan: completed }, onclose });
-    expect((screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Closing completed plan.');
+    expect(
+      (screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain(
+      'Closing completed plan.',
+    );
 
-    rerender({ state: { kind: 'error', sessionId: 'one', plan: completed, error: 'Relay is busy' }, onclose });
+    rerender({
+      state: { kind: 'error', sessionId: 'one', plan: completed, error: 'Relay is busy' },
+      onclose,
+    });
     expect(screen.getByText('Relay is busy')).toBeTruthy();
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Relay is busy');
-    expect((screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole('button', { name: 'Close plan and return to list' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 });

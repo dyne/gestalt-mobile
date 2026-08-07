@@ -90,8 +90,12 @@ class SessionResource {
     return true;
   }
 
-  get active(): boolean { return !this.disposed; }
-  attach(unregister: readonly (() => void)[]): void { this.unregister = unregister; }
+  get active(): boolean {
+    return !this.disposed;
+  }
+  attach(unregister: readonly (() => void)[]): void {
+    this.unregister = unregister;
+  }
 }
 
 export class CodexSessionRuntime {
@@ -120,7 +124,9 @@ export class CodexSessionRuntime {
     private readonly planMeasurementBaseUrl?: string,
     private readonly requestTimeoutMs = 30_000,
     private readonly maxPendingRequests = 64,
-  ) { void _legacyProcesses; }
+  ) {
+    void _legacyProcesses;
+  }
   private readonly sessions = new Map<string, SessionResource>();
 
   async start(
@@ -183,11 +189,13 @@ export class CodexSessionRuntime {
   ): Promise<RelaySessionSnapshot> {
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    const result = decodeTurnStart(await resource.process.rpc.request('turn/start', {
-      threadId: session.threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
-      ...(session.model ? { model: session.model } : {}),
-    }));
+    const result = decodeTurnStart(
+      await resource.process.rpc.request('turn/start', {
+        threadId: session.threadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        ...(session.model ? { model: session.model } : {}),
+      }),
+    );
     return RelaySession.rehydrate(session).startTurn(result, now).snapshot;
   }
 
@@ -202,7 +210,10 @@ export class CodexSessionRuntime {
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const [rateLimits, thread] = await Promise.all([
       resource.process.rpc.request('account/rateLimits/read', {}),
-      resource.process.rpc.request('thread/read', { threadId: session.threadId, includeTurns: true }),
+      resource.process.rpc.request('thread/read', {
+        threadId: session.threadId,
+        includeTurns: true,
+      }),
     ]);
     return createPlanMeasurementSnapshot({
       capturedAt: new Date().toISOString(),
@@ -222,10 +233,12 @@ export class CodexSessionRuntime {
   }> {
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    const result = decodeThreadRead(await resource.process.rpc.request('thread/read', {
-      threadId: session.threadId,
-      includeTurns: true,
-    }));
+    const result = decodeThreadRead(
+      await resource.process.rpc.request('thread/read', {
+        threadId: session.threadId,
+        includeTurns: true,
+      }),
+    );
     const rawTurns = result;
     const activeTurn = rawTurns.find(
       (turn) => turn.status === 'inProgress' && typeof turn.id === 'string',
@@ -244,7 +257,10 @@ export class CodexSessionRuntime {
     return (await this.restoreWithOutcome(session, now)).session;
   }
 
-  async restoreWithOutcome(session: RelaySessionSnapshot, now: string): Promise<RestoreSessionResult> {
+  async restoreWithOutcome(
+    session: RelaySessionSnapshot,
+    now: string,
+  ): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const resource = await this.createResource(session);
     try {
@@ -266,7 +282,9 @@ export class CodexSessionRuntime {
         };
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
-        const replacementThreadId = await this.startThread(resource.process, session, { model: session.model });
+        const replacementThreadId = await this.startThread(resource.process, session, {
+          model: session.model,
+        });
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
       resource.threadId = result.session.threadId!;
@@ -292,7 +310,14 @@ export class CodexSessionRuntime {
     const resource = this.sessions.get(sessionId);
     const threadId = resource?.threadId;
     const name = resource?.pendingThreadName;
-    if (!resource || !threadId || !name || resource.writtenThreadName === name || resource.capabilities.get('thread/name/set') === false) return;
+    if (
+      !resource ||
+      !threadId ||
+      !name ||
+      resource.writtenThreadName === name ||
+      resource.capabilities.get('thread/name/set') === false
+    )
+      return;
     try {
       await resource.process.rpc.request('thread/name/set', { threadId, name });
       if (resource.active) {
@@ -317,7 +342,8 @@ export class CodexSessionRuntime {
     const requestId = String(request.id);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        if (resource.pendingRequests.delete(requestId)) reject(new Error('CODEX_SERVER_REQUEST_TIMEOUT'));
+        if (resource.pendingRequests.delete(requestId))
+          reject(new Error('CODEX_SERVER_REQUEST_TIMEOUT'));
       }, this.requestTimeoutMs);
       resource.pendingRequests.set(requestId, { resolve, reject, timer });
     });
@@ -328,10 +354,15 @@ export class CodexSessionRuntime {
     session: RelaySessionSnapshot,
     settings: StartSessionSettings = {},
   ): Promise<string> {
-    return decodeThreadStart(await process.rpc.request('thread/start', this.threadStartParams(session, settings)));
+    return decodeThreadStart(
+      await process.rpc.request('thread/start', this.threadStartParams(session, settings)),
+    );
   }
 
-  private threadStartParams(session: RelaySessionSnapshot, settings: StartSessionSettings): Record<string, unknown> {
+  private threadStartParams(
+    session: RelaySessionSnapshot,
+    settings: StartSessionSettings,
+  ): Record<string, unknown> {
     return {
       cwd: session.workspacePath,
       approvalPolicy: settings.approvalPolicy ?? 'on-request',
@@ -354,7 +385,7 @@ export class CodexSessionRuntime {
         profile: session.profile,
         cwd: session.workspacePath,
         skillsConfig: await this.resolveSkills?.(session),
-        ...((lease || this.planMeasurementBaseUrl)
+        ...(lease || this.planMeasurementBaseUrl
           ? {
               environment: {
                 ...(lease
@@ -362,8 +393,7 @@ export class CodexSessionRuntime {
                   : {}),
                 ...(this.planMeasurementBaseUrl
                   ? {
-                      GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL:
-                        `${this.planMeasurementBaseUrl}/api/sessions/${session.id}/plan-measurement`,
+                      GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL: `${this.planMeasurementBaseUrl}/api/sessions/${session.id}/plan-measurement`,
                       GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_TOKEN: token,
                     }
                   : {}),
@@ -377,10 +407,13 @@ export class CodexSessionRuntime {
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (resource.active) this.onNotification?.(session.id, notification);
       });
-      const requestUnsubscribe = process.rpc.onServerRequest((request) => this.holdServerRequest(resource, request));
-      const exitUnsubscribe = process.onExit?.(() => {
-        if (resource.dispose()) this.onProcessExit?.(session.id);
-      }) ?? (() => {});
+      const requestUnsubscribe = process.rpc.onServerRequest((request) =>
+        this.holdServerRequest(resource, request),
+      );
+      const exitUnsubscribe =
+        process.onExit?.(() => {
+          if (resource.dispose()) this.onProcessExit?.(session.id);
+        }) ?? (() => {});
       // The resource's private unsubscribe list is populated before it is published.
       resource.attach([notificationUnsubscribe, requestUnsubscribe, exitUnsubscribe]);
       return resource;
@@ -392,7 +425,9 @@ export class CodexSessionRuntime {
 }
 
 function isMethodNotFound(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && (error as { code?: unknown }).code === -32601);
+  return Boolean(
+    error && typeof error === 'object' && (error as { code?: unknown }).code === -32601,
+  );
 }
 
 function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefined {
@@ -407,12 +442,19 @@ function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefine
       : [];
   });
 }
-function decodeRateLimits(value: unknown): { rateLimits: Array<{ windowDurationMins: number; usedPercent: number }> } | undefined {
+function decodeRateLimits(
+  value: unknown,
+): { rateLimits: Array<{ windowDurationMins: number; usedPercent: number }> } | undefined {
   const limits = asRecord(value)?.rateLimits;
   if (!Array.isArray(limits) || limits.length > 32) return undefined;
   const decoded = limits.flatMap((limit) => {
     const record = asRecord(limit);
-    return typeof record?.windowDurationMins === 'number' && Number.isFinite(record.windowDurationMins) && typeof record.usedPercent === 'number' && Number.isFinite(record.usedPercent) ? [{ windowDurationMins: record.windowDurationMins, usedPercent: record.usedPercent }] : [];
+    return typeof record?.windowDurationMins === 'number' &&
+      Number.isFinite(record.windowDurationMins) &&
+      typeof record.usedPercent === 'number' &&
+      Number.isFinite(record.usedPercent)
+      ? [{ windowDurationMins: record.windowDurationMins, usedPercent: record.usedPercent }]
+      : [];
   });
   return decoded.length === limits.length ? { rateLimits: decoded } : undefined;
 }
@@ -452,21 +494,56 @@ function decodeTurnStart(value: unknown): string {
   if (typeof id !== 'string' || !id || id.length > 256) throw new Error('CODEX_TURN_ID_MISSING');
   return id;
 }
-function decodeThreadRead(value: unknown): Array<{ id?: string; status?: string; startedAt?: number; completedAt?: number; items?: Array<Record<string, unknown>> }> {
+function decodeThreadRead(value: unknown): Array<{
+  id?: string;
+  status?: string;
+  startedAt?: number;
+  completedAt?: number;
+  items?: Array<Record<string, unknown>>;
+}> {
   const turns = asRecord(asRecord(value)?.thread)?.turns;
-  if (!Array.isArray(turns) || turns.length > 10_000) throw new Error('CODEX_THREAD_READ_MALFORMED');
+  if (!Array.isArray(turns) || turns.length > 10_000)
+    throw new Error('CODEX_THREAD_READ_MALFORMED');
   return turns.map((turn) => {
     const record = asRecord(turn);
     if (!record) throw new Error('CODEX_THREAD_READ_MALFORMED');
-    return { id: boundedString(record.id), status: boundedString(record.status), startedAt: typeof record.startedAt === 'number' ? record.startedAt : undefined, completedAt: typeof record.completedAt === 'number' ? record.completedAt : undefined, items: Array.isArray(record.items) ? record.items.flatMap(decodeHistoryItem) : undefined };
+    return {
+      id: boundedString(record.id),
+      status: boundedString(record.status),
+      startedAt: typeof record.startedAt === 'number' ? record.startedAt : undefined,
+      completedAt: typeof record.completedAt === 'number' ? record.completedAt : undefined,
+      items: Array.isArray(record.items) ? record.items.flatMap(decodeHistoryItem) : undefined,
+    };
   });
 }
-function boundedString(value: unknown, max = 64_000): string | undefined { return typeof value === 'string' && value.length <= max ? value : undefined; }
+function boundedString(value: unknown, max = 64_000): string | undefined {
+  return typeof value === 'string' && value.length <= max ? value : undefined;
+}
 function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
-  const item = asRecord(value); const id = boundedString(item?.id, 256); const type = boundedString(item?.type, 64);
+  const item = asRecord(value);
+  const id = boundedString(item?.id, 256);
+  const type = boundedString(item?.type, 64);
   if (!item || !id || !type) return [];
-  if (type === 'agentMessage') return [{ id, type, ...(boundedString(item.text) ? { text: boundedString(item.text)! } : {}), ...(boundedString(item.phase, 64) ? { phase: boundedString(item.phase, 64)! } : {}) }];
-  if (type === 'plan' && boundedString(item.text)) return [{ id, type, text: boundedString(item.text)! }];
-  if (type === 'commandExecution' && boundedString(item.command) && boundedString(item.status, 64)) return [{ id, type, command: boundedString(item.command)!, status: boundedString(item.status, 64)!, ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}) }];
+  if (type === 'agentMessage')
+    return [
+      {
+        id,
+        type,
+        ...(boundedString(item.text) ? { text: boundedString(item.text)! } : {}),
+        ...(boundedString(item.phase, 64) ? { phase: boundedString(item.phase, 64)! } : {}),
+      },
+    ];
+  if (type === 'plan' && boundedString(item.text))
+    return [{ id, type, text: boundedString(item.text)! }];
+  if (type === 'commandExecution' && boundedString(item.command) && boundedString(item.status, 64))
+    return [
+      {
+        id,
+        type,
+        command: boundedString(item.command)!,
+        status: boundedString(item.status, 64)!,
+        ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
+      },
+    ];
   return [];
 }

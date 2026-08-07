@@ -44,16 +44,22 @@ describe('SQLite relay persistence', () => {
     const sessions = new SqliteSessionRepository(database);
     sessions.save(
       RelaySession.create({
-        id: 'new', workspaceId: 'w', workspacePath: '/w', profile: 'default', now: 't',
+        id: 'new',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        now: 't',
         effectiveSkillSelection: {
           selectedProfileName: 'focused',
           skills: [{ name: 'Focused', path: '/skills/focused/SKILL.md', enabled: true }],
         },
       }).snapshot,
     );
-    database.prepare(
-      "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('old','w','/w','default','ready','active','t','t')",
-    ).run();
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('old','w','/w','default','ready','active','t','t')",
+      )
+      .run();
 
     expect(sessions.find('new')?.effectiveSkillSelection).toEqual({
       selectedProfileName: 'focused',
@@ -91,7 +97,7 @@ describe('SQLite relay persistence', () => {
     for (const id of ['session-a', 'session-b']) {
       database
         .prepare(
-          'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,?,?,\'default\',\'ready\',\'active\',\'t\',\'t\')',
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,?,?,'default','ready','active','t','t')",
         )
         .run(id, 'w', '/w');
     }
@@ -115,7 +121,12 @@ describe('SQLite relay persistence', () => {
       { sessionId: 'session-a', sequence: 2, type: 'plan.closed', payload: {} },
     ]);
     expect(journal.since('session-b', 0)).toMatchObject([
-      { sessionId: 'session-b', sequence: 1, type: 'plan.updated', payload: { title: 'Other session' } },
+      {
+        sessionId: 'session-b',
+        sequence: 1,
+        type: 'plan.updated',
+        payload: { title: 'Other session' },
+      },
     ]);
     database.close();
   });

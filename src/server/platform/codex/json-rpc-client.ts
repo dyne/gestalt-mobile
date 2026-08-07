@@ -10,9 +10,7 @@ import type { Readable, Writable } from 'node:stream';
 export const CODEX_THREAD_NOT_FOUND = 'CODEX_THREAD_NOT_FOUND';
 export const CODEX_JSON_RPC_ERROR = 'CODEX_JSON_RPC_ERROR';
 
-type CodexJsonRpcErrorKind =
-  | typeof CODEX_THREAD_NOT_FOUND
-  | typeof CODEX_JSON_RPC_ERROR;
+type CodexJsonRpcErrorKind = typeof CODEX_THREAD_NOT_FOUND | typeof CODEX_JSON_RPC_ERROR;
 
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
@@ -147,8 +145,7 @@ export class JsonRpcClient {
             typeof error.message === 'string' ? error.message : 'JSON_RPC_ERROR',
           ),
         );
-      }
-      else pending.resolve(message.result);
+      } else pending.resolve(message.result);
     } catch {
       /* malformed protocol messages are ignored at this boundary */
     }

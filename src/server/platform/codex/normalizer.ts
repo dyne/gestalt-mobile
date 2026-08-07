@@ -42,25 +42,47 @@ export function normalizeCodexNotification(
 
 type DecodedNotification =
   | { method: 'item/agentMessage/delta'; params: { delta: string } }
-  | { method: 'turn/completed'; params: { threadId?: string; turn: { id: string; status?: string } } }
+  | {
+      method: 'turn/completed';
+      params: { threadId?: string; turn: { id: string; status?: string } };
+    }
   | { method: 'item/started' | 'item/completed'; params: { item: unknown } };
 
 /** Strictly decode only consumed notification shapes; unknown/future methods stay isolated. */
-export function decodeNotification(input: { method?: string; params?: unknown }): DecodedNotification | null {
+export function decodeNotification(input: {
+  method?: string;
+  params?: unknown;
+}): DecodedNotification | null {
   if (input.method === 'item/agentMessage/delta') {
     const params = record(input.params);
     return typeof params?.delta === 'string' && params.delta.length <= 64_000
-      ? { method: input.method, params: { delta: params.delta } } : null;
+      ? { method: input.method, params: { delta: params.delta } }
+      : null;
   }
   if (input.method === 'turn/completed') {
     const params = record(input.params);
     const turn = record(params?.turn);
     if (!turn || typeof turn.id !== 'string' || turn.id.length > 256) return null;
-    return { method: input.method, params: { ...(typeof params?.threadId === 'string' && params.threadId.length <= 256 ? { threadId: params.threadId } : {}), turn: { id: turn.id, ...(typeof turn.status === 'string' && turn.status.length <= 64 ? { status: turn.status } : {}) } } };
+    return {
+      method: input.method,
+      params: {
+        ...(typeof params?.threadId === 'string' && params.threadId.length <= 256
+          ? { threadId: params.threadId }
+          : {}),
+        turn: {
+          id: turn.id,
+          ...(typeof turn.status === 'string' && turn.status.length <= 64
+            ? { status: turn.status }
+            : {}),
+        },
+      },
+    };
   }
   if (input.method === 'item/started' || input.method === 'item/completed') {
     const params = record(input.params);
-    return params && 'item' in params ? { method: input.method, params: { item: params.item } } : null;
+    return params && 'item' in params
+      ? { method: input.method, params: { item: params.item } }
+      : null;
   }
   return null;
 }
@@ -125,5 +147,7 @@ function reasoningSummary(parts: unknown[]): string[] {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }

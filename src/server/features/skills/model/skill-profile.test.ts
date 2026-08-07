@@ -99,15 +99,24 @@ describe('skill profile codec', () => {
   });
 
   it('preserves native catalog states when no profile snapshot exists', () => {
-    const discovered = [{ ...alpha, enabled: false }, { ...beta, enabled: true }];
+    const discovered = [
+      { ...alpha, enabled: false },
+      { ...beta, enabled: true },
+    ];
     expect(applySkillSelectionSnapshot(discovered)).toEqual(discovered);
   });
 
   it('prefers explicit selection, disables new paths, and warns for stale paths', () => {
     const result = compileSkillOverride({
-      discovered: [{ ...alpha, enabled: false }, { ...beta, enabled: true }],
+      discovered: [
+        { ...alpha, enabled: false },
+        { ...beta, enabled: true },
+      ],
       project: createSkillSelection([{ ...alpha, enabled: true }]),
-      explicit: createSkillSelection([{ ...beta, name: 'Renamed', enabled: false }, { name: 'Gone', path: '/skills/gone/SKILL.md', enabled: true }]),
+      explicit: createSkillSelection([
+        { ...beta, name: 'Renamed', enabled: false },
+        { name: 'Gone', path: '/skills/gone/SKILL.md', enabled: true },
+      ]),
     });
     expect(result).toEqual({
       source: 'explicit',
@@ -120,6 +129,10 @@ describe('skill profile codec', () => {
   });
 
   it('emits no override when neither explicit nor project selection exists', () => {
-    expect(compileSkillOverride({ discovered: [alpha] })).toEqual({ source: 'native', skillsConfig: undefined, warnings: [] });
+    expect(compileSkillOverride({ discovered: [alpha] })).toEqual({
+      source: 'native',
+      skillsConfig: undefined,
+      warnings: [],
+    });
   });
 });

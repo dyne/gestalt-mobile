@@ -36,7 +36,9 @@ describe('relay client', () => {
       return new Response(JSON.stringify({ id: 'session-1' }), { status: 202 });
     });
     await client.startSession('workspace-1', { skillProfile: 'focused' });
-    expect(body).toBe(JSON.stringify({ workspaceId: 'workspace-1', profile: 'default', skillProfile: 'focused' }));
+    expect(body).toBe(
+      JSON.stringify({ workspaceId: 'workspace-1', profile: 'default', skillProfile: 'focused' }),
+    );
   });
 
   it('targets every repository operation with the exact opaque catalog ID', async () => {
@@ -150,17 +152,21 @@ describe('relay client', () => {
   });
 
   it('preserves the bounded replacement recovery outcome from Open', async () => {
-    const client = createRelayClient(async () =>
-      new Response(
-        JSON.stringify({
-          id: 'session-1', state: 'ready', threadId: 'replacement-thread',
-          recovery: { historyUnavailable: true, replacementCreated: true },
-        }),
-        { status: 200 },
-      ),
+    const client = createRelayClient(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'session-1',
+            state: 'ready',
+            threadId: 'replacement-thread',
+            recovery: { historyUnavailable: true, replacementCreated: true },
+          }),
+          { status: 200 },
+        ),
     );
     await expect(client.restoreSession('session-1')).resolves.toMatchObject({
-      state: 'ready', threadId: 'replacement-thread',
+      state: 'ready',
+      threadId: 'replacement-thread',
       recovery: { historyUnavailable: true, replacementCreated: true },
     });
   });
@@ -200,14 +206,15 @@ describe('relay client', () => {
   });
 
   it('retains a stable API problem code with its diagnostic detail', async () => {
-    const client = createRelayClient(async () =>
-      new Response(
-        JSON.stringify({
-          detail: 'GET /api/sessions/:id/history requires an active Codex session process.',
-          code: 'SESSION_HISTORY_UNAVAILABLE',
-        }),
-        { status: 409, headers: { 'content-type': 'application/problem+json' } },
-      ),
+    const client = createRelayClient(
+      async () =>
+        new Response(
+          JSON.stringify({
+            detail: 'GET /api/sessions/:id/history requires an active Codex session process.',
+            code: 'SESSION_HISTORY_UNAVAILABLE',
+          }),
+          { status: 409, headers: { 'content-type': 'application/problem+json' } },
+        ),
     );
     await expect(client.getHistory('session-1')).rejects.toMatchObject({
       message: 'GET /api/sessions/:id/history requires an active Codex session process.',
@@ -230,8 +237,14 @@ describe('relay client', () => {
   it('uses typed Skills transport routes and preserves a profile failure detail', async () => {
     const requests: Array<{ url: string; method?: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {
-      requests.push({ url: String(url), method: init?.method, body: init?.body as string | undefined });
-      return new Response(JSON.stringify({ source: 'native', errors: [], skills: [] }), { status: 200 });
+      requests.push({
+        url: String(url),
+        method: init?.method,
+        body: init?.body as string | undefined,
+      });
+      return new Response(JSON.stringify({ source: 'native', errors: [], skills: [] }), {
+        status: 200,
+      });
     });
     await client.listAvailableSkills('workspace/a', 'default profile');
     await client.listSkillProfiles();
@@ -241,7 +254,11 @@ describe('relay client', () => {
     expect(requests).toEqual([
       { url: '/api/skills?workspaceId=workspace%2Fa&profile=default+profile' },
       { url: '/api/skill-profiles' },
-      { url: '/api/skill-profiles/team%20one', method: 'PUT', body: JSON.stringify({ version: 1, name: 'team one', skills: [] }) },
+      {
+        url: '/api/skill-profiles/team%20one',
+        method: 'PUT',
+        body: JSON.stringify({ version: 1, name: 'team one', skills: [] }),
+      },
       { url: '/api/skill-profiles/team%20one', method: 'DELETE' },
     ]);
   });

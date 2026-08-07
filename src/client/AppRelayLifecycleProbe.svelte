@@ -3,7 +3,6 @@ Copyright (C) 2026 Dyne.org foundation
 Designed by Denis Roio <jaromil@dyne.org>
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
-
 <svelte:options runes={true} />
 
 <script lang="ts">
@@ -11,7 +10,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   import { type ThemeId } from './features/theme/theme-registry.js';
 
-  let { authorizedFetch, passkeyAuthEnabled, onlock, theme }: { authorizedFetch: typeof fetch; passkeyAuthEnabled: boolean; onlock: () => void; theme: ThemeId } = $props();
+  let {
+    authorizedFetch,
+    passkeyAuthEnabled,
+    onlock,
+    theme,
+  }: {
+    authorizedFetch: typeof fetch;
+    passkeyAuthEnabled: boolean;
+    onlock: () => void;
+    theme: ThemeId;
+  } = $props();
 
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -35,7 +44,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <nav aria-label="Relay navigation" data-initial-theme={theme}>
-  <button type="button" onclick={() => void authorizedFetch('/api/probe', { signal: request.signal })}>
+  <button
+    type="button"
+    onclick={() => void authorizedFetch('/api/probe', { signal: request.signal })}
+  >
     Trigger authorized request
   </button>
   {#if passkeyAuthEnabled}<button type="button" onclick={onlock}>Lock Gestalt Mobile</button>{/if}

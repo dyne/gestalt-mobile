@@ -28,7 +28,11 @@ const question = (id = 'mode') => ({
 
 describe('quiz contract', () => {
   it.each([1, 3, 6])('accepts a bounded %s-question quiz', (count) => {
-    expect(parseQuiz({ questions: Array.from({ length: count }, (_, index) => question(`question-${index}`)) })).toMatchObject({
+    expect(
+      parseQuiz({
+        questions: Array.from({ length: count }, (_, index) => question(`question-${index}`)),
+      }),
+    ).toMatchObject({
       questions: expect.arrayContaining([expect.objectContaining({ allowCustom: false })]),
     });
   });
@@ -56,8 +60,19 @@ describe('quiz contract', () => {
     { questions: [] },
     { questions: Array.from({ length: 9 }, (_, index) => question(`q${index}`)) },
     { questions: [{ ...question(), choices: [question().choices[0]] }] },
-    { questions: [{ ...question(), choices: [{ label: ' ', description: 'Missing label' }, question().choices[1]] }] },
-    { questions: [{ ...question(), choices: [{ label: 'Fast', description: '' }, question().choices[1]] }] },
+    {
+      questions: [
+        {
+          ...question(),
+          choices: [{ label: ' ', description: 'Missing label' }, question().choices[1]],
+        },
+      ],
+    },
+    {
+      questions: [
+        { ...question(), choices: [{ label: 'Fast', description: '' }, question().choices[1]] },
+      ],
+    },
     { questions: [{ ...question(), allowCustom: undefined }] },
     { questions: [{ ...question(), header: 'x'.repeat(121) }] },
   ])('rejects malformed or unsafe quiz arguments', (input) => {

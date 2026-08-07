@@ -25,7 +25,10 @@ function parseCoreVersion(value: string): { major: number; minor: number } | und
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
-function coreCompatible(installed: { major: number; minor: number }, expected: { major: number; minor: number }): boolean {
+function coreCompatible(
+  installed: { major: number; minor: number },
+  expected: { major: number; minor: number },
+): boolean {
   if (installed.major !== expected.major) return false;
   if (installed.major !== 0) return installed.minor === expected.minor;
   return installed.minor >= expected.minor && installed.minor <= expected.minor + 4;

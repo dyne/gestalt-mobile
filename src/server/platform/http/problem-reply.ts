@@ -15,5 +15,8 @@ export function sendProblem(
   status: number,
   detail: string,
 ): FastifyReply {
-  return reply.code(status).type('application/problem+json').send(problem(code, status, detail));
+  return reply
+    .code(status)
+    .type('application/problem+json')
+    .send(problem(code, status, detail));
 }

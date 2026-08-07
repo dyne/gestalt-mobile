@@ -50,7 +50,8 @@ export function retainForgottenSession(
   };
 
   return [...recentSessions, fallback].sort(
-    (left, right) => (right.recencyAt ?? Number.NEGATIVE_INFINITY) - (left.recencyAt ?? Number.NEGATIVE_INFINITY),
+    (left, right) =>
+      (right.recencyAt ?? Number.NEGATIVE_INFINITY) - (left.recencyAt ?? Number.NEGATIVE_INFINITY),
   );
 }
 

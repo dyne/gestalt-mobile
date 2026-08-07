@@ -19,7 +19,10 @@ const quiz = {
       question: 'How should this plan run?',
       choices: [
         { label: 'Solo', description: 'One agent executes the plan.' },
-        { label: 'Supervised multi-agent', description: 'A supervisor coordinates parallel agents.' },
+        {
+          label: 'Supervised multi-agent',
+          description: 'A supervisor coordinates parallel agents.',
+        },
       ],
       allowCustom: false,
     },

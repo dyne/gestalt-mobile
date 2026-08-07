@@ -21,7 +21,10 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
   return {
     listAvailableSkills: vi.fn(async () => available),
     listSkillProfiles: vi.fn(async () => ({ profiles: [] })),
-    replaceSkillProfile: vi.fn(async (_name, profile) => ({ ...profile, path: '/profiles/new.yml' })),
+    replaceSkillProfile: vi.fn(async (_name, profile) => ({
+      ...profile,
+      path: '/profiles/new.yml',
+    })),
     deleteSkillProfile: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -52,7 +55,14 @@ describe('SkillsState', () => {
     const state = new SkillsState(
       client({
         listSkillProfiles: vi.fn(async () => ({
-          profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [{ name: 'Alpha', path: '/skills/beta/SKILL.md', enabled: true }] }],
+          profiles: [
+            {
+              version: 1 as const,
+              name: 'team',
+              path: '/profiles/team.yml',
+              skills: [{ name: 'Alpha', path: '/skills/beta/SKILL.md', enabled: true }],
+            },
+          ],
         })),
       }),
     );
@@ -68,11 +78,30 @@ describe('SkillsState', () => {
   });
 
   it('suppresses concurrent saves and preserves a save failure for the view', async () => {
-    let resolveSave: ((value: { version: 1; name: string; path: string; skills: Array<{ name: string; path: string; enabled: boolean }> }) => void) | undefined;
+    let resolveSave:
+      | ((value: {
+          version: 1;
+          name: string;
+          path: string;
+          skills: Array<{ name: string; path: string; enabled: boolean }>;
+        }) => void)
+      | undefined;
     const state = new SkillsState(
       client({
         replaceSkillProfile: vi.fn(
-          () => new Promise((resolve: (value: { version: 1; name: string; path: string; skills: Array<{ name: string; path: string; enabled: boolean }> }) => void) => { resolveSave = resolve; }),
+          () =>
+            new Promise(
+              (
+                resolve: (value: {
+                  version: 1;
+                  name: string;
+                  path: string;
+                  skills: Array<{ name: string; path: string; enabled: boolean }>;
+                }) => void,
+              ) => {
+                resolveSave = resolve;
+              },
+            ),
         ),
       }),
     );
@@ -89,14 +118,19 @@ describe('SkillsState', () => {
   it('deletes the selected profile once and returns to an unsaved selection', async () => {
     let resolveDelete: (() => void) | undefined;
     const deleteSkillProfile = vi.fn(
-      () => new Promise<void>((resolve) => { resolveDelete = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
     );
-    const state = new SkillsState(client({
-      listSkillProfiles: vi.fn(async () => ({
-        profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
-      })),
-      deleteSkillProfile,
-    }));
+    const state = new SkillsState(
+      client({
+        listSkillProfiles: vi.fn(async () => ({
+          profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
+        })),
+        deleteSkillProfile,
+      }),
+    );
     await state.load('workspace', 'default');
     state.selectProfile('team');
     const first = state.deleteSelectedProfile();
@@ -112,12 +146,16 @@ describe('SkillsState', () => {
   });
 
   it('keeps local profile choices when deletion fails', async () => {
-    const state = new SkillsState(client({
-      listSkillProfiles: vi.fn(async () => ({
-        profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
-      })),
-      deleteSkillProfile: vi.fn(async () => { throw new Error('Profile deletion failed.'); }),
-    }));
+    const state = new SkillsState(
+      client({
+        listSkillProfiles: vi.fn(async () => ({
+          profiles: [{ version: 1 as const, name: 'team', path: '/profiles/team.yml', skills: [] }],
+        })),
+        deleteSkillProfile: vi.fn(async () => {
+          throw new Error('Profile deletion failed.');
+        }),
+      }),
+    );
     await state.load('workspace', 'default');
     state.selectProfile('team');
     await state.deleteSelectedProfile();
@@ -143,9 +181,13 @@ describe('SkillsState', () => {
 
   it('does not publish a stale profile load after a newer workspace selection', async () => {
     const resolvers: Array<(value: typeof available) => void> = [];
-    const state = new SkillsState(client({
-      listAvailableSkills: vi.fn(() => new Promise<typeof available>((resolve) => resolvers.push(resolve))),
-    }));
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: vi.fn(
+          () => new Promise<typeof available>((resolve) => resolvers.push(resolve)),
+        ),
+      }),
+    );
     const first = state.load('first', 'default');
     const second = state.load('second', 'default');
     resolvers[0]?.(available);

@@ -18,7 +18,9 @@ describe('POST /api/sessions/:id/turns', () => {
       start: async (_session, text) =>
         ({ id: 'session-1', state: 'turnActive', activeTurnId: 'turn-1', text }) as never,
       save: () => {},
-      onStarted: (session) => { started.push(session.id); },
+      onStarted: (session) => {
+        started.push(session.id);
+      },
     });
     const response = await app.inject({
       method: 'POST',

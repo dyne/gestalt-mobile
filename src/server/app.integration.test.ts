@@ -10,18 +10,44 @@ import { buildApp } from './app.js';
 
 describe('relay application composition', () => {
   it('applies the browser policy to API and problem responses', async () => {
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: null, protocolVersion: 'test', compatible: true } }) }, logger: console });
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
     for (const response of [await app.inject('/api/health'), await app.inject('/missing')]) {
       expect(response.headers['content-security-policy']).toContain("default-src 'self'");
-      expect(response.headers['x-frame-options']).toBe('DENY'); expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['x-frame-options']).toBe('DENY');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
       expect(response.headers['permissions-policy']).toContain('publickey-credentials-get=(self)');
     }
     await app.close();
   });
   it('returns the established problem shape for an oversized body', async () => {
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: null, protocolVersion: 'test', compatible: true } }) }, logger: console });
-    const response = await app.inject({ method: 'POST', url: '/api/health', payload: 'x'.repeat(1024 * 1024 + 1), headers: { 'content-type': 'text/plain' } });
-    expect(response.statusCode).toBe(413); expect(response.json()).toMatchObject({ code: 'PAYLOAD_TOO_LARGE', status: 413 }); await app.close();
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/health',
+      payload: 'x'.repeat(1024 * 1024 + 1),
+      headers: { 'content-type': 'text/plain' },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({ code: 'PAYLOAD_TOO_LARGE', status: 413 });
+    await app.close();
   });
   it('uses a fresh Git inspection before pushing', async () => {
     let pushed = false;
@@ -43,7 +69,10 @@ describe('relay application composition', () => {
           resolve: async () => ({ id: 'workspace', name: 'workspace', realPath: '/workspace' }),
         },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
-        skillProfiles: { readGlobalProfile: async () => undefined, readWorkspaceDefault: async () => undefined },
+        skillProfiles: {
+          readGlobalProfile: async () => undefined,
+          readWorkspaceDefault: async () => undefined,
+        },
         skillCatalog: () => ({ list: async () => ({ skills: [], errors: [] }) }),
       },
       gitSummary: {
@@ -82,7 +111,8 @@ describe('relay application composition', () => {
     });
 
     expect(
-      (await app.inject({ method: 'POST', url: '/api/git/repositories/workspace/push' })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/git/repositories/workspace/push' }))
+        .statusCode,
     ).toBe(202);
     expect(pushed).toBe(true);
     await app.close();
@@ -136,7 +166,10 @@ describe('relay application composition', () => {
           }),
         },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
-        skillProfiles: { readGlobalProfile: async () => undefined, readWorkspaceDefault: async () => undefined },
+        skillProfiles: {
+          readGlobalProfile: async () => undefined,
+          readWorkspaceDefault: async () => undefined,
+        },
         skillCatalog: () => ({ list: async () => ({ skills: [], errors: [] }) }),
       },
     });

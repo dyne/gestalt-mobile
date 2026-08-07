@@ -95,7 +95,16 @@ export type RelayAvailableSkill = {
   iconLarge?: string;
   brandColor?: string;
   defaultPrompt?: string;
-  dependencies?: { tools?: Array<{ type: string; value: string; description?: string; transport?: string; command?: string; url?: string }> };
+  dependencies?: {
+    tools?: Array<{
+      type: string;
+      value: string;
+      description?: string;
+      transport?: string;
+      command?: string;
+      url?: string;
+    }>;
+  };
   path: string;
   scope?: string;
   nativeEnabled: boolean;
@@ -217,8 +226,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
     getPlan: (sessionId: string, signal: AbortSignal) =>
       getOptional<SupervisedPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/plan`, signal),
-    closePlan: (sessionId: string) =>
-      remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),
+    closePlan: (sessionId: string) => remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),
     listWorkspacePlans: (workspaceId: string, signal?: AbortSignal) =>
       get<WorkspacePlanEntry[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/plans`, signal),
     getWorkspacePlan: (workspaceId: string, planName: string, signal?: AbortSignal) =>
@@ -240,37 +248,45 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       request<void>(
         `/api/git/repositories/${encodeURIComponent(workspaceId)}/pull`,
         {},
-        key ? { 'idempotency-key': key } : {}, signal,
+        key ? { 'idempotency-key': key } : {},
+        signal,
       ),
     checkoutGitBranch: (workspaceId: string, branch: string, signal?: AbortSignal) =>
-      request<void>(`/api/git/repositories/${encodeURIComponent(workspaceId)}/checkout`, {
-        branch,
-      }, {}, signal),
+      request<void>(
+        `/api/git/repositories/${encodeURIComponent(workspaceId)}/checkout`,
+        {
+          branch,
+        },
+        {},
+        signal,
+      ),
     pushGit: (workspaceId: string, key?: string) =>
       request<void>(
         `/api/git/repositories/${encodeURIComponent(workspaceId)}/push`,
         {},
         key ? { 'idempotency-key': key } : {},
       ),
-    listAvailableSkills: (workspaceId: string, profile: string, refresh = false, signal?: AbortSignal) =>
+    listAvailableSkills: (
+      workspaceId: string,
+      profile: string,
+      refresh = false,
+      signal?: AbortSignal,
+    ) =>
       get<RelaySkillList>(
         `/api/skills?${new URLSearchParams({
           workspaceId,
           profile,
           ...(refresh ? { refresh: 'true' } : {}),
-        }).toString()}`, signal,
+        }).toString()}`,
+        signal,
       ),
-    listSkillProfiles: (signal?: AbortSignal) => get<RelaySkillProfileList>('/api/skill-profiles', signal),
+    listSkillProfiles: (signal?: AbortSignal) =>
+      get<RelaySkillProfileList>('/api/skill-profiles', signal),
     replaceSkillProfile: (
       name: string,
       profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
-    ) =>
-      put<RelaySkillProfile>(
-        `/api/skill-profiles/${encodeURIComponent(name)}`,
-        profile,
-      ),
-    deleteSkillProfile: (name: string) =>
-      remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
+    ) => put<RelaySkillProfile>(`/api/skill-profiles/${encodeURIComponent(name)}`, profile),
+    deleteSkillProfile: (name: string) => remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
     respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,

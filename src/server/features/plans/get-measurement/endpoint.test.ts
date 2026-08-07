@@ -23,16 +23,20 @@ describe('GET /api/sessions/:id/plan-measurement', () => {
     });
 
     expect(
-      (await app.inject({
-        url: '/api/sessions/one/plan-measurement',
-        headers: { authorization: 'Bearer token-one' },
-      })).json(),
+      (
+        await app.inject({
+          url: '/api/sessions/one/plan-measurement',
+          headers: { authorization: 'Bearer token-one' },
+        })
+      ).json(),
     ).toMatchObject({ weeklyRemainingPercent: 70, threadTokens: 42 });
     expect(
-      (await app.inject({
-        url: '/api/sessions/two/plan-measurement',
-        headers: { authorization: 'Bearer token-one' },
-      })).statusCode,
+      (
+        await app.inject({
+          url: '/api/sessions/two/plan-measurement',
+          headers: { authorization: 'Bearer token-one' },
+        })
+      ).statusCode,
     ).toBe(404);
     await app.close();
   });

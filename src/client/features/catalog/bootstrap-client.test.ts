@@ -5,11 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  flattenWorkspaceTree,
-  loadBootstrap,
-  type Bootstrap,
-} from './bootstrap-client.js';
+import { flattenWorkspaceTree, loadBootstrap, type Bootstrap } from './bootstrap-client.js';
 
 const bootstrap = {
   workspaces: [

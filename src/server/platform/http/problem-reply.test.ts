@@ -18,7 +18,11 @@ describe('sendProblem', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.headers['content-type']).toContain('application/problem+json');
-    expect(response.json()).toMatchObject({ code: 'INVALID_REQUEST', status: 400, detail: 'Bad input.' });
+    expect(response.json()).toMatchObject({
+      code: 'INVALID_REQUEST',
+      status: 400,
+      detail: 'Bad input.',
+    });
     await app.close();
   });
 });

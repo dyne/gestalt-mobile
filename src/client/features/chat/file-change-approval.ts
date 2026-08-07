@@ -10,7 +10,11 @@ export function readFileChangeApproval(payload: unknown): string[] | null {
   const changes = payload.changes;
   if (!Array.isArray(changes)) return null;
   const paths = changes
-    .map((change) => (isRecord(change) && typeof change.path === 'string' && change.path.trim() ? change.path : null))
+    .map((change) =>
+      isRecord(change) && typeof change.path === 'string' && change.path.trim()
+        ? change.path
+        : null,
+    )
     .filter((path): path is string => path !== null);
   return paths.length === changes.length && paths.length > 0 ? paths : null;
 }

@@ -10,10 +10,9 @@ import { readFileChangeApproval } from './file-change-approval.js';
 
 describe('file change approval', () => {
   it('preserves every supplied file path as plain text', () => {
-    expect(readFileChangeApproval({ changes: [{ path: 'src/a.ts' }, { path: '<script>.ts' }] })).toEqual([
-      'src/a.ts',
-      '<script>.ts',
-    ]);
+    expect(
+      readFileChangeApproval({ changes: [{ path: 'src/a.ts' }, { path: '<script>.ts' }] }),
+    ).toEqual(['src/a.ts', '<script>.ts']);
   });
 
   it('rejects missing or malformed details', () => {

@@ -55,10 +55,7 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     await mkdir(this.dismissalDirectory, { recursive: true, mode: 0o700 });
     await mkdir(statusDirectory, { recursive: true, mode: 0o700 });
     if (process.platform !== 'win32') {
-      await Promise.all([
-        chmod(this.dismissalDirectory, 0o700),
-        chmod(statusDirectory, 0o700),
-      ]);
+      await Promise.all([chmod(this.dismissalDirectory, 0o700), chmod(statusDirectory, 0o700)]);
     }
 
     const lease = new ActiveLease(
@@ -130,7 +127,9 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     const next = new Set(dismissed).add(identity);
     const candidate = join(this.dismissalDirectory, `.${randomUUID()}.dismissals.tmp`);
     try {
-      await this.dismissalFilesystem.writeFile(candidate, JSON.stringify([...next]), { mode: 0o600 });
+      await this.dismissalFilesystem.writeFile(candidate, JSON.stringify([...next]), {
+        mode: 0o600,
+      });
       await this.dismissalFilesystem.rename(candidate, path);
     } catch (error) {
       await rm(candidate, { force: true }).catch(() => {});
@@ -152,7 +151,8 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
       const values: unknown = JSON.parse(
         await this.planReadFilesystem.readFile(this.dismissalPath(sessionId), 'utf8'),
       );
-      if (!Array.isArray(values) || values.some((value) => typeof value !== 'string')) throw new Error();
+      if (!Array.isArray(values) || values.some((value) => typeof value !== 'string'))
+        throw new Error();
       const dismissed = new Set(values);
       this.dismissedBySession.set(sessionId, dismissed);
       return dismissed;
@@ -165,7 +165,10 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   }
 
   private dismissalPath(sessionId: string): string {
-    return join(this.dismissalDirectory, `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`);
+    return join(
+      this.dismissalDirectory,
+      `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`,
+    );
   }
 }
 
@@ -294,7 +297,8 @@ class ActiveLease implements PlanStatusLease {
         this.planReadFilesystem.realpath(signal.planPath),
         this.planReadFilesystem.realpath(this.workspacePath),
       ]);
-      if (!isPlanPathWithinWorkspace(planPath, workspacePath)) throw new Error('PATH_OUTSIDE_WORKSPACE');
+      if (!isPlanPathWithinWorkspace(planPath, workspacePath))
+        throw new Error('PATH_OUTSIDE_WORKSPACE');
       const identity = createHash('sha256').update(planPath).digest('hex');
       if (await this.isDismissed(identity)) return;
       const result = parseSupervisedPlan({
@@ -307,7 +311,13 @@ class ActiveLease implements PlanStatusLease {
           const previousStatusPath = this.activeStatusPath;
           this.activeStatusPath = statusPath;
           this.onActiveStatusPath(statusPath);
-          const update = { kind: 'updated', plan: result.plan, identity, planPath, reason: signal.reason } as const;
+          const update = {
+            kind: 'updated',
+            plan: result.plan,
+            identity,
+            planPath,
+            reason: signal.reason,
+          } as const;
           const serializedUpdate = JSON.stringify(update);
           if (serializedUpdate !== this.lastEmittedUpdate) {
             this.lastEmittedUpdate = serializedUpdate;

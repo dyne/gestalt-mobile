@@ -7,8 +7,27 @@
 import { describe, expect, it } from 'vitest';
 import { threadPlanName } from './thread-plan-name.js';
 
-const plan = (state: 'TODO' | 'WIP' | 'DONE', reviewStatus: 'UNREVIEWED' | 'REVIEWED' = 'UNREVIEWED') => ({
-  title: 'Roadmap', totalSteps: 1, doneSteps: state === 'DONE' ? 1 : 0, allDone: state === 'DONE', currentStepId: 'l1', steps: [{ id: 'l1', title: 'Ship', level: 1 as const, state, priority: 'A' as const, reviewStatus, description: {}, children: [] }],
+const plan = (
+  state: 'TODO' | 'WIP' | 'DONE',
+  reviewStatus: 'UNREVIEWED' | 'REVIEWED' = 'UNREVIEWED',
+) => ({
+  title: 'Roadmap',
+  totalSteps: 1,
+  doneSteps: state === 'DONE' ? 1 : 0,
+  allDone: state === 'DONE',
+  currentStepId: 'l1',
+  steps: [
+    {
+      id: 'l1',
+      title: 'Ship',
+      level: 1 as const,
+      state,
+      priority: 'A' as const,
+      reviewStatus,
+      description: {},
+      children: [],
+    },
+  ],
 });
 
 describe('threadPlanName', () => {

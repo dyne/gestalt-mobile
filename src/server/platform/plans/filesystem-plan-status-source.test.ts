@@ -54,20 +54,25 @@ function leaseStatusPath(lease: PlanStatusLease, planPath: string): string {
 }
 
 describe('FilesystemPlanStatusSource', () => {
-  it.each(['supervision-start', 'resync'])('retains the %s helper signal reason', async (reason) => {
-    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
-    temporaryPaths.push(root);
-    const workspace = join(root, 'workspace');
-    const planPath = join(workspace, 'plan.org');
-    await mkdir(workspace);
-    await writeFile(planPath, org('Signal vocabulary'));
-    const updates: PlanStatusUpdate[] = [];
-    const source = new FilesystemPlanStatusSource(join(root, 'state'));
-    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => updates.push(update));
-    await writeFile(leaseStatusPath(lease, planPath), signal(planPath, reason));
-    await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ kind: 'updated', reason }));
-    lease.close();
-  });
+  it.each(['supervision-start', 'resync'])(
+    'retains the %s helper signal reason',
+    async (reason) => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
+      temporaryPaths.push(root);
+      const workspace = join(root, 'workspace');
+      const planPath = join(workspace, 'plan.org');
+      await mkdir(workspace);
+      await writeFile(planPath, org('Signal vocabulary'));
+      const updates: PlanStatusUpdate[] = [];
+      const source = new FilesystemPlanStatusSource(join(root, 'state'));
+      const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
+        updates.push(update),
+      );
+      await writeFile(leaseStatusPath(lease, planPath), signal(planPath, reason));
+      await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ kind: 'updated', reason }));
+      lease.close();
+    },
+  );
 
   it('rejects an unknown helper signal reason without rejecting the plan', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
@@ -78,7 +83,9 @@ describe('FilesystemPlanStatusSource', () => {
     await writeFile(planPath, org('Unknown signal'));
     const updates: PlanStatusUpdate[] = [];
     const source = new FilesystemPlanStatusSource(join(root, 'state'));
-    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => updates.push(update));
+    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
+      updates.push(update),
+    );
     await writeFile(leaseStatusPath(lease, planPath), signal(planPath, 'unknown'));
     await vi.waitFor(() => expect(updates.at(-1)).toMatchObject({ kind: 'updated', reason: null }));
     lease.close();
@@ -206,7 +213,10 @@ describe('FilesystemPlanStatusSource', () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(updates.slice(beforeBurst)).toEqual([
-      expect.objectContaining({ kind: 'updated', plan: expect.objectContaining({ title: 'After burst' }) }),
+      expect.objectContaining({
+        kind: 'updated',
+        plan: expect.objectContaining({ title: 'After burst' }),
+      }),
     ]);
     lease.close();
   });
@@ -261,7 +271,10 @@ describe('FilesystemPlanStatusSource', () => {
       expect(updates.at(-1)).toEqual({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' }),
     );
     expect(updates).not.toContainEqual(
-      expect.objectContaining({ kind: 'updated', plan: expect.objectContaining({ title: 'Outside plan must not be exposed' }) }),
+      expect.objectContaining({
+        kind: 'updated',
+        plan: expect.objectContaining({ title: 'Outside plan must not be exposed' }),
+      }),
     );
     lease.close();
   });
@@ -274,12 +287,18 @@ describe('FilesystemPlanStatusSource', () => {
     await mkdir(workspace);
     const firstPlan = join(workspace, 'first.org');
     const secondPlan = join(workspace, 'second.org');
-    await Promise.all([writeFile(firstPlan, org('Dismissed plan')), writeFile(secondPlan, org('Next plan'))]);
+    await Promise.all([
+      writeFile(firstPlan, org('Dismissed plan')),
+      writeFile(secondPlan, org('Next plan')),
+    ]);
     let identity: string | undefined;
     const source = new FilesystemPlanStatusSource(stateDirectory);
-    const firstLease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) => {
-      if (update.kind === 'updated') identity = update.identity;
-    });
+    const firstLease = await source.open(
+      { id: 'session-a', workspacePath: workspace },
+      (update) => {
+        if (update.kind === 'updated') identity = update.identity;
+      },
+    );
     await writeFile(leaseStatusPath(firstLease, firstPlan), signal(firstPlan));
     await vi.waitFor(() => expect(identity).toBeTypeOf('string'));
     await source.remove('session-a', identity);
@@ -291,14 +310,18 @@ describe('FilesystemPlanStatusSource', () => {
     );
     const resumedUpdates: PlanStatusUpdate[] = [];
     const resumed = new FilesystemPlanStatusSource(stateDirectory);
-    const resumedLease = await resumed.open({ id: 'session-a', workspacePath: workspace }, (update) =>
-      resumedUpdates.push(update),
+    const resumedLease = await resumed.open(
+      { id: 'session-a', workspacePath: workspace },
+      (update) => resumedUpdates.push(update),
     );
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(resumedUpdates).toEqual([]);
     await writeFile(leaseStatusPath(resumedLease, secondPlan), signal(secondPlan));
     await vi.waitFor(() =>
-      expect(resumedUpdates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Next plan' } }),
+      expect(resumedUpdates.at(-1)).toMatchObject({
+        kind: 'updated',
+        plan: { title: 'Next plan' },
+      }),
     );
     resumed.closeAll();
   });
@@ -331,7 +354,10 @@ describe('FilesystemPlanStatusSource', () => {
     const updatesBeforeRetry = updates.length;
     await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.length).toBeGreaterThan(updatesBeforeRetry));
-    expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Still active after failed close' } });
+    expect(updates.at(-1)).toMatchObject({
+      kind: 'updated',
+      plan: { title: 'Still active after failed close' },
+    });
     lease.close();
   });
 
@@ -386,7 +412,9 @@ describe('FilesystemPlanStatusSource', () => {
     await vi.waitFor(() => expect(updates.at(-1)?.kind).toBe('updated'));
     const identity = (updates.at(-1) as Extract<PlanStatusUpdate, { kind: 'updated' }>).identity;
     await expect(source.remove('session-a', identity)).rejects.toThrow('status unlink failed');
-    expect(registry.find('session-a')).toMatchObject({ title: 'Still active after unlink failure' });
+    expect(registry.find('session-a')).toMatchObject({
+      title: 'Still active after unlink failure',
+    });
     const updatesBeforeRetry = updates.length;
     await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
     await vi.waitFor(() => expect(updates.length).toBeGreaterThan(updatesBeforeRetry));
@@ -394,8 +422,9 @@ describe('FilesystemPlanStatusSource', () => {
 
     const restartedUpdates: PlanStatusUpdate[] = [];
     const restarted = new FilesystemPlanStatusSource(stateDirectory);
-    const restartedLease = await restarted.open({ id: 'session-a', workspacePath: workspace }, (update) =>
-      restartedUpdates.push(update),
+    const restartedLease = await restarted.open(
+      { id: 'session-a', workspacePath: workspace },
+      (update) => restartedUpdates.push(update),
     );
     expect(restartedUpdates.at(-1)).toMatchObject({
       kind: 'updated',
@@ -419,7 +448,10 @@ describe('FilesystemPlanStatusSource', () => {
       signal(planPath),
     );
     await writeFile(
-      join(stateDirectory, `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`),
+      join(
+        stateDirectory,
+        `${createHash('sha256').update(sessionId).digest('hex')}.dismissals.json`,
+      ),
       '{interrupted',
     );
     const updates: PlanStatusUpdate[] = [];
@@ -442,18 +474,14 @@ describe('FilesystemPlanStatusSource', () => {
     await writeFile(planPath, org('Racing plan'));
     let releaseRead: (() => void) | undefined;
     let delayPlanRead = false;
-    const source = new FilesystemPlanStatusSource(
-      stateDirectory,
-      undefined,
-      {
-        readFile: (async (path, options) => {
-          if (delayPlanRead && path === planPath)
-            await new Promise<void>((resolve) => (releaseRead = resolve));
-          return readFile(path, options as never);
-        }) as typeof readFile,
-        realpath: (async (path) => String(path)) as typeof import('node:fs/promises').realpath,
-      },
-    );
+    const source = new FilesystemPlanStatusSource(stateDirectory, undefined, {
+      readFile: (async (path, options) => {
+        if (delayPlanRead && path === planPath)
+          await new Promise<void>((resolve) => (releaseRead = resolve));
+        return readFile(path, options as never);
+      }) as typeof readFile,
+      realpath: (async (path) => String(path)) as typeof import('node:fs/promises').realpath,
+    });
     const updates: PlanStatusUpdate[] = [];
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
@@ -479,18 +507,14 @@ describe('FilesystemPlanStatusSource', () => {
     await writeFile(planPath, org('Stale closed lease plan'));
     let releaseRead: (() => void) | undefined;
     let delayPlanRead = false;
-    const source = new FilesystemPlanStatusSource(
-      stateDirectory,
-      undefined,
-      {
-        readFile: (async (path, options) => {
-          if (delayPlanRead && path === planPath)
-            await new Promise<void>((resolve) => (releaseRead = resolve));
-          return readFile(path, options as never);
-        }) as typeof readFile,
-        realpath: (async (path) => String(path)) as typeof import('node:fs/promises').realpath,
-      },
-    );
+    const source = new FilesystemPlanStatusSource(stateDirectory, undefined, {
+      readFile: (async (path, options) => {
+        if (delayPlanRead && path === planPath)
+          await new Promise<void>((resolve) => (releaseRead = resolve));
+        return readFile(path, options as never);
+      }) as typeof readFile,
+      realpath: (async (path) => String(path)) as typeof import('node:fs/promises').realpath,
+    });
     const updates: PlanStatusUpdate[] = [];
     const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
       updates.push(update),
@@ -502,7 +526,10 @@ describe('FilesystemPlanStatusSource', () => {
     releaseRead?.();
     await new Promise((resolve) => setTimeout(resolve, 75));
     expect(updates).not.toContainEqual(
-      expect.objectContaining({ kind: 'updated', plan: expect.objectContaining({ title: 'Stale closed lease plan' }) }),
+      expect.objectContaining({
+        kind: 'updated',
+        plan: expect.objectContaining({ title: 'Stale closed lease plan' }),
+      }),
     );
   });
 });

@@ -14,10 +14,16 @@ declare const enrollmentTicketIdBrand: unique symbol;
 declare const authorizationSessionIdBrand: unique symbol;
 
 export type LocalOwnerId = string & { readonly [localOwnerIdBrand]: 'LocalOwnerId' };
-export type AuthorizedDeviceId = string & { readonly [authorizedDeviceIdBrand]: 'AuthorizedDeviceId' };
-export type WebAuthnCredentialId = string & { readonly [credentialIdBrand]: 'WebAuthnCredentialId' };
+export type AuthorizedDeviceId = string & {
+  readonly [authorizedDeviceIdBrand]: 'AuthorizedDeviceId';
+};
+export type WebAuthnCredentialId = string & {
+  readonly [credentialIdBrand]: 'WebAuthnCredentialId';
+};
 export type PasskeyCeremonyId = string & { readonly [ceremonyIdBrand]: 'PasskeyCeremonyId' };
-export type EnrollmentTicketId = string & { readonly [enrollmentTicketIdBrand]: 'EnrollmentTicketId' };
+export type EnrollmentTicketId = string & {
+  readonly [enrollmentTicketIdBrand]: 'EnrollmentTicketId';
+};
 export type AuthorizationSessionId = string & {
   readonly [authorizationSessionIdBrand]: 'AuthorizationSessionId';
 };

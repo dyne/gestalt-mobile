@@ -31,11 +31,13 @@ export type ThreadTokenBreakdown = Readonly<{
   outputTokens: number;
 }>;
 
-export function createPlanMeasurementSnapshot(input: Readonly<{
-  capturedAt: string;
-  rateLimits?: readonly RateLimitWindow[] | null;
-  tokenUsage?: ThreadTokenBreakdown | null;
-}>): PlanMeasurementSnapshot {
+export function createPlanMeasurementSnapshot(
+  input: Readonly<{
+    capturedAt: string;
+    rateLimits?: readonly RateLimitWindow[] | null;
+    tokenUsage?: ThreadTokenBreakdown | null;
+  }>,
+): PlanMeasurementSnapshot {
   return Object.freeze({
     capturedAt: input.capturedAt,
     weeklyRemainingPercent: weeklyRemainingPercent(input.rateLimits),
@@ -57,7 +59,8 @@ export function weeklyRateLimitWindow(
       window.usedPercent <= 100,
   );
   return valid.reduce<RateLimitWindow | null>(
-    (weekly, window) => (!weekly || window.durationSeconds > weekly.durationSeconds ? window : weekly),
+    (weekly, window) =>
+      !weekly || window.durationSeconds > weekly.durationSeconds ? window : weekly,
     null,
   );
 }

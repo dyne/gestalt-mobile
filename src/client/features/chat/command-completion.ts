@@ -12,7 +12,11 @@ export type ChatCommand = {
 
 export const CHAT_COMMANDS: readonly ChatCommand[] = [
   { name: 'model', description: 'Choose the model for the next turn', argumentPicker: 'models' },
-  { name: 'reasoning', description: 'Choose reasoning effort for the next turn', argumentPicker: 'reasoning' },
+  {
+    name: 'reasoning',
+    description: 'Choose reasoning effort for the next turn',
+    argumentPicker: 'reasoning',
+  },
 ];
 
 export function commandQuery(message: string): string | null {
@@ -31,12 +35,22 @@ export function argumentPickerFor(message: string): ChatCommand['argumentPicker'
 }
 
 export function sortModelsNewestFirst(models: readonly string[]): string[] {
-  return [...models].sort((left, right) => compareModelVersion(right, left) || right.localeCompare(left));
+  return [...models].sort(
+    (left, right) => compareModelVersion(right, left) || right.localeCompare(left),
+  );
 }
 
 function compareModelVersion(left: string, right: string): number {
-  const leftParts = left.match(/\d+(?:\.\d+)*/)?.[0].split('.').map(Number) ?? [];
-  const rightParts = right.match(/\d+(?:\.\d+)*/)?.[0].split('.').map(Number) ?? [];
+  const leftParts =
+    left
+      .match(/\d+(?:\.\d+)*/)?.[0]
+      .split('.')
+      .map(Number) ?? [];
+  const rightParts =
+    right
+      .match(/\d+(?:\.\d+)*/)?.[0]
+      .split('.')
+      .map(Number) ?? [];
   for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
     const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
     if (difference) return difference;

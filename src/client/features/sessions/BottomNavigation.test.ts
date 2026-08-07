@@ -46,5 +46,4 @@ describe('BottomNavigation', () => {
     expect(onselect).toHaveBeenLastCalledWith('plan');
     expect(document.activeElement).toBe(plan);
   });
-
 });

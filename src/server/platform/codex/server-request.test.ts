@@ -48,7 +48,13 @@ describe('Codex server request mapping', () => {
       kind: 'quiz',
       payload: expect.objectContaining({ questions: [expect.objectContaining({ id: 'mode' })] }),
     });
-    expect(toPendingInteraction({ id: 9, method: 'item/tool/call', params: { tool: 'other', arguments: {} } })).toBeNull();
+    expect(
+      toPendingInteraction({
+        id: 9,
+        method: 'item/tool/call',
+        params: { tool: 'other', arguments: {} },
+      }),
+    ).toBeNull();
     expect(
       toPendingInteraction({
         id: 10,

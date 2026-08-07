@@ -9,14 +9,21 @@ import { z } from 'zod';
 import type { AuthorizationRepository, Clock } from '../../application/ports.js';
 import { parseAuthorizationSessionId } from '../../domain/identifiers.js';
 
-const responseSchema = z.object({ status: z.enum(['none', 'pending', 'used', 'expired']) }).strict();
-export function registerEnrollmentTicketStatus(app: FastifyInstance, deps: { repository: AuthorizationRepository; clock: Clock }): void {
+const responseSchema = z
+  .object({ status: z.enum(['none', 'pending', 'used', 'expired']) })
+  .strict();
+export function registerEnrollmentTicketStatus(
+  app: FastifyInstance,
+  deps: { repository: AuthorizationRepository; clock: Clock },
+): void {
   app.get('/api/auth/enrollment-tickets/current', async (request, reply) => {
     const rawSession = request.cookies.gestalt_mobile_session;
     const session = parseAuthorizationSessionId(rawSession);
     const now = deps.clock.now().toISOString();
     if (session === null || deps.repository.sessionDevice(session, now) === null)
       return reply.code(401).send();
-    return reply.send(responseSchema.parse({ status: deps.repository.enrollmentTicketStatus(session, now) }));
+    return reply.send(
+      responseSchema.parse({ status: deps.repository.enrollmentTicketStatus(session, now) }),
+    );
   });
 }

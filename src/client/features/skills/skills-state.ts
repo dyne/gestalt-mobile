@@ -12,7 +12,12 @@ import type {
 } from '../sessions/relay-client.js';
 
 export type SkillsClient = {
-  listAvailableSkills(workspaceId: string, profile: string, refresh?: boolean, signal?: AbortSignal): Promise<RelaySkillList>;
+  listAvailableSkills(
+    workspaceId: string,
+    profile: string,
+    refresh?: boolean,
+    signal?: AbortSignal,
+  ): Promise<RelaySkillList>;
   listSkillProfiles(signal?: AbortSignal): Promise<RelaySkillProfileList>;
   replaceSkillProfile(
     name: string,
@@ -84,7 +89,10 @@ export class SkillsState {
       if (invalid && 'error' in invalid)
         this.status = { kind: 'invalid-profile', message: invalid.error.message };
       else if (available.errors.length)
-        this.status = { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') };
+        this.status = {
+          kind: 'warning',
+          message: available.errors.map((error) => error.message).join(' '),
+        };
       else this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
     } catch (error) {
       if (!this.current(generation, request) || request.signal.aborted) return;
@@ -100,7 +108,8 @@ export class SkillsState {
       const available = await this.client.listAvailableSkills(
         this.workspaceId,
         this.codexProfile,
-        true, request.signal,
+        true,
+        request.signal,
       );
       if (!this.current(generation, request)) return;
       this.applyAvailable(available);
@@ -116,7 +125,9 @@ export class SkillsState {
   }
 
   selectProfile(name: string): void {
-    const selected = this.profiles.find((profile) => !('error' in profile) && profile.name === name);
+    const selected = this.profiles.find(
+      (profile) => !('error' in profile) && profile.name === name,
+    );
     if (!selected || 'error' in selected) {
       this.status = { kind: 'invalid-profile', message: 'Select a valid saved profile.' };
       return;
@@ -124,7 +135,10 @@ export class SkillsState {
     this.selectedProfileName = selected.name;
     this.saveAsName = selected.name;
     const enabled = new Map(selected.skills.map((skill) => [skill.path, skill.enabled]));
-    this.skills = this.skills.map((skill) => ({ ...skill, enabled: enabled.get(skill.path) ?? false }));
+    this.skills = this.skills.map((skill) => ({
+      ...skill,
+      enabled: enabled.get(skill.path) ?? false,
+    }));
     this.captureBaseline();
     this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
   }
@@ -142,7 +156,10 @@ export class SkillsState {
   }
 
   reset(): void {
-    this.skills = this.skills.map((skill) => ({ ...skill, enabled: this.baseline.get(skill.path) ?? false }));
+    this.skills = this.skills.map((skill) => ({
+      ...skill,
+      enabled: this.baseline.get(skill.path) ?? false,
+    }));
   }
 
   async save(): Promise<void> {
@@ -183,7 +200,9 @@ export class SkillsState {
     this.status = { kind: 'deleting' };
     try {
       await this.client.deleteSkillProfile(name);
-      this.profiles = this.profiles.filter((profile) => 'error' in profile || profile.name !== name);
+      this.profiles = this.profiles.filter(
+        (profile) => 'error' in profile || profile.name !== name,
+      );
       this.selectedProfileName = '';
       this.saveAsName = '';
       this.captureBaseline();
@@ -213,7 +232,9 @@ export class SkillsState {
     return !this.disposed && generation === this.generation && this.request === request;
   }
 
-  savePayload(name = this.saveAsName.trim()): Pick<RelaySkillProfile, 'version' | 'name' | 'skills'> {
+  savePayload(
+    name = this.saveAsName.trim(),
+  ): Pick<RelaySkillProfile, 'version' | 'name' | 'skills'> {
     return {
       version: 1,
       name,
@@ -235,7 +256,10 @@ export class SkillsState {
       enabled: explicitEdits.get(skill.path) ?? skill.effectiveEnabled,
     }));
     this.baseline = new Map(
-      available.skills.map((skill) => [skill.path, this.baseline.get(skill.path) ?? skill.effectiveEnabled]),
+      available.skills.map((skill) => [
+        skill.path,
+        this.baseline.get(skill.path) ?? skill.effectiveEnabled,
+      ]),
     );
   }
 

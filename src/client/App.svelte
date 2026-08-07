@@ -3,7 +3,6 @@ Copyright (C) 2026 Dyne.org foundation
 Designed by Denis Roio <jaromil@dyne.org>
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
-
 <svelte:options runes={true} />
 
 <script lang="ts">
@@ -17,20 +16,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { createAuthStateMachine, type AuthState } from './features/auth/auth-state.js';
   import { type ThemeId } from './features/theme/theme-registry.js';
 
-  let { enrollmentTicket: initialEnrollmentTicket, initialTheme = 'dyne-org' }: { enrollmentTicket?: string; initialTheme?: ThemeId } = $props();
+  let {
+    enrollmentTicket: initialEnrollmentTicket,
+    initialTheme = 'dyne-org',
+  }: { enrollmentTicket?: string; initialTheme?: ThemeId } = $props();
   let localEnrollmentTicket = $state<string | undefined>(undefined);
   let enrollmentTicket = $derived(localEnrollmentTicket ?? initialEnrollmentTicket);
   let authState = $state<AuthState>({ kind: 'checking' });
   let locking = false;
   const client = createAuthClient();
   const machine = createAuthStateMachine(client, (next) => (authState = next));
-  const authorizedFetch = createAuthorizedFetch(() => machine.locked('Your session ended. Sign in with your passkey to continue.'));
+  const authorizedFetch = createAuthorizedFetch(() =>
+    machine.locked('Your session ended. Sign in with your passkey to continue.'),
+  );
 
-  onMount(() => { void machine.check(enrollmentTicket); });
+  onMount(() => {
+    void machine.check(enrollmentTicket);
+  });
 
   function createPasskeyHere(ticket: string): void {
     localEnrollmentTicket = ticket;
-    authState = { kind: 'enrollment', publicOrigin: authState.kind === 'authenticated' ? '' : 'http://localhost' };
+    authState = {
+      kind: 'enrollment',
+      publicOrigin: authState.kind === 'authenticated' ? '' : 'http://localhost',
+    };
   }
 
   async function lockRelay(): Promise<void> {
@@ -45,7 +54,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       locking = false;
     }
   }
-
 </script>
 
 {#if authState.kind === 'authenticated'}
@@ -96,6 +104,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: var(--theme-radius);
     box-shadow: 0 0.5rem 1.5rem var(--theme-shadow);
   }
-  .auth-gate h1 { font-family: var(--theme-font-display); }
-  button { margin-right: 0.75rem; }
+  .auth-gate h1 {
+    font-family: var(--theme-font-display);
+  }
+  button {
+    margin-right: 0.75rem;
+  }
 </style>

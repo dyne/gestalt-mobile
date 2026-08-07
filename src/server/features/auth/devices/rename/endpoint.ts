@@ -23,8 +23,7 @@ export function registerRenameAuthorizedDevice(
   app.patch('/api/auth/devices/:deviceId', async (request, reply) => {
     const params = parameters.safeParse(request.params);
     const body = requestBody.safeParse(request.body);
-    if (!params.success || !body.success)
-      return unavailable(reply, 400, 'INVALID_DEVICE_REQUEST');
+    if (!params.success || !body.success) return unavailable(reply, 400, 'INVALID_DEVICE_REQUEST');
     try {
       const outcome = renameAuthorizedDevice(
         deps.repository,

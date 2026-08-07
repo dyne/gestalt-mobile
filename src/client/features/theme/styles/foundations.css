@@ -9,9 +9,9 @@
 @import '@fontsource/jetbrains-mono/400.css';
 
 :root {
-  --theme-font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --theme-font-display: "Syne", var(--theme-font-body);
-  --theme-font-code: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --theme-font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --theme-font-display: 'Syne', var(--theme-font-body);
+  --theme-font-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --theme-motion-fast: 120ms;
   --theme-radius: 0.5rem;
 }

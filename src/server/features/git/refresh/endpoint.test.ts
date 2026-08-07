@@ -42,7 +42,8 @@ describe('POST /api/git/repositories/:workspaceId/refresh', () => {
       },
     });
     expect(
-      (await app.inject({ method: 'POST', url: '/api/git/repositories/repo-1/refresh' })).statusCode,
+      (await app.inject({ method: 'POST', url: '/api/git/repositories/repo-1/refresh' }))
+        .statusCode,
     ).toBe(202);
     expect(fetched).toBe(true);
     await app.close();

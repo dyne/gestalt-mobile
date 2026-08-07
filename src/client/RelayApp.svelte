@@ -85,7 +85,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { getHistoryWithRecovery } from './features/sessions/history-recovery.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
-  import { SessionStartController, type SessionStartState } from './features/sessions/session-start-controller.js';
+  import {
+    SessionStartController,
+    type SessionStartState,
+  } from './features/sessions/session-start-controller.js';
   import { nextTab, type Tab } from './features/sessions/tab-state.js';
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
   import {
@@ -164,7 +167,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : undefined,
     ),
   );
-  let gitState = $state<GitState>({ workspaceId: null, summary: null, loading: false, refreshing: false, checkingOut: false, error: null });
+  let gitState = $state<GitState>({
+    workspaceId: null,
+    summary: null,
+    loading: false,
+    refreshing: false,
+    checkingOut: false,
+    error: null,
+  });
   let gitWorkspaceId = $derived(gitState.workspaceId);
   let gitExpandedIds = $state<Set<string>>(new Set());
   let pushConfirmationOpen = $state(false);
@@ -175,7 +185,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
-  const sessionStartController = new SessionStartController({ start: relay.startSession }, createIdempotencyKey, (next) => (sessionStartState = next));
+  const sessionStartController = new SessionStartController(
+    { start: relay.startSession },
+    createIdempotencyKey,
+    (next) => (sessionStartState = next),
+  );
   const gitController = new GitController(
     { getSummary: relay.getGitSummary, pull: relay.pullGit, checkout: relay.checkoutGitBranch },
     (workspaceId) => Boolean(findTreeNode(workspaceTree, workspaceId)?.isGitRepository),
@@ -275,9 +289,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     status = 'Starting session…';
     const session = await sessionStartController.start(sessionWorkspaceId, {
-      sandbox, approvalPolicy, model: sessionModel, skillProfile: selectedSessionSkillProfile || undefined,
+      sandbox,
+      approvalPolicy,
+      model: sessionModel,
+      skillProfile: selectedSessionSkillProfile || undefined,
     });
-    if (!session) { if (sessionStartState.error) status = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED'); return; }
+    if (!session) {
+      if (sessionStartState.error)
+        status = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED');
+      return;
+    }
     try {
       sessionId = session.id;
       planController.select(session.id);
@@ -293,7 +314,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       tab = 'chat';
       scrollTabIntoInitialPosition('chat');
       status = 'Session started.';
-    } catch (error) { status = reportRelayError(error, 'SESSION_START_FAILED'); }
+    } catch (error) {
+      status = reportRelayError(error, 'SESSION_START_FAILED');
+    }
   }
 
   async function refreshSessions() {

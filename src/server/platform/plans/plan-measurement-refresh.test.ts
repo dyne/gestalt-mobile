@@ -7,10 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PlanStatusUpdate } from '../../features/plans/application/ports.js';
-import {
-  PLAN_MEASUREMENT_REFRESH_MS,
-  PlanMeasurementRefresh,
-} from './plan-measurement-refresh.js';
+import { PLAN_MEASUREMENT_REFRESH_MS, PlanMeasurementRefresh } from './plan-measurement-refresh.js';
 
 const active = (stepId = 'l2', planPath = '/work/plan.org'): PlanStatusUpdate => ({
   kind: 'updated',
@@ -19,9 +16,27 @@ const active = (stepId = 'l2', planPath = '/work/plan.org'): PlanStatusUpdate =>
   reason: null,
   plan: {
     title: 'Plan',
-    steps: [{ id: 'l1', title: 'L1', level: 1, state: 'WIP', priority: 'A', description: {}, children: [
-      { id: 'l2', title: 'L2', level: 2, state: 'WIP', priority: 'A', description: {}, children: [] },
-    ] }],
+    steps: [
+      {
+        id: 'l1',
+        title: 'L1',
+        level: 1,
+        state: 'WIP',
+        priority: 'A',
+        description: {},
+        children: [
+          {
+            id: 'l2',
+            title: 'L2',
+            level: 2,
+            state: 'WIP',
+            priority: 'A',
+            description: {},
+            children: [],
+          },
+        ],
+      },
+    ],
     totalSteps: 2,
     doneSteps: 0,
     allDone: false,
@@ -35,10 +50,16 @@ describe('PlanMeasurementRefresh', () => {
     let resolveCheckpoint: (() => void) | undefined;
     const checkpoints: string[] = [];
     const refresh = new PlanMeasurementRefresh(
-      async () => ({ capturedAt: '2026-08-02T10:00:00Z', weeklyRemainingPercent: 80, threadTokens: 10 }),
+      async () => ({
+        capturedAt: '2026-08-02T10:00:00Z',
+        weeklyRemainingPercent: 80,
+        threadTokens: 10,
+      }),
       async (_path, step) => {
         checkpoints.push(step);
-        await new Promise<void>((resolve) => { resolveCheckpoint = resolve; });
+        await new Promise<void>((resolve) => {
+          resolveCheckpoint = resolve;
+        });
       },
     );
     refresh.accept('one', active());
@@ -56,8 +77,14 @@ describe('PlanMeasurementRefresh', () => {
     vi.useFakeTimers();
     const checkpoints: Array<[string, string]> = [];
     const refresh = new PlanMeasurementRefresh(
-      async (sessionId) => ({ capturedAt: sessionId, weeklyRemainingPercent: null, threadTokens: null }),
-      async (path, step) => { checkpoints.push([path, step]); },
+      async (sessionId) => ({
+        capturedAt: sessionId,
+        weeklyRemainingPercent: null,
+        threadTokens: null,
+      }),
+      async (path, step) => {
+        checkpoints.push([path, step]);
+      },
     );
     refresh.accept('one', active('l2', '/work/first.org'));
     refresh.accept('two', active('l2', '/work/two.org'));
@@ -74,7 +101,9 @@ describe('PlanMeasurementRefresh', () => {
     const checkpoints: string[] = [];
     const refresh = new PlanMeasurementRefresh(
       async () => ({ capturedAt: 'now', weeklyRemainingPercent: 80, threadTokens: 10 }),
-      async (_path, step) => { checkpoints.push(step); },
+      async (_path, step) => {
+        checkpoints.push(step);
+      },
     );
     refresh.accept('one', active());
     refresh.refreshNow('one');

@@ -26,21 +26,33 @@ async function openChat(page: Page, pendingInteractions: unknown[]): Promise<voi
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [session(pendingInteractions)] }),
+      body: JSON.stringify({
+        workspaces: [],
+        profiles: [],
+        sessions: [session(pendingInteractions)],
+      }),
     }),
   );
   await page.route('**/api/sessions/session-1/history', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [], currentSequence: 0, activeTurnId: 'turn-1' }) }),
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], currentSequence: 0, activeTurnId: 'turn-1' }),
+    }),
   );
   await page.route('**/api/sessions/recent-threads', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
-  await page.routeWebSocket(/ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/, () => {});
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    () => {},
+  );
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
 }
 
-test('shows file targets and separately tappable approval controls at a compact viewport', async ({ page }) => {
+test('shows file targets and separately tappable approval controls at a compact viewport', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openChat(page, [
     {
@@ -50,8 +62,12 @@ test('shows file targets and separately tappable approval controls at a compact 
     },
   ]);
 
-  await expect(page.getByRole('list', { name: 'Files to change' })).toContainText('src/client/App.svelte');
-  await expect(page.getByRole('list', { name: 'Files to change' })).toContainText('src/server/app.ts');
+  await expect(page.getByRole('list', { name: 'Files to change' })).toContainText(
+    'src/client/App.svelte',
+  );
+  await expect(page.getByRole('list', { name: 'Files to change' })).toContainText(
+    'src/server/app.ts',
+  );
   const approve = page.getByRole('button', { name: 'Approve' });
   const deny = page.getByRole('button', { name: 'Deny' });
   await expect(approve).toBeVisible();
@@ -59,7 +75,9 @@ test('shows file targets and separately tappable approval controls at a compact 
   expect(await approve.boundingBox()).not.toEqual(await deny.boundingBox());
 });
 
-test('keeps quiz answers visible after a relay failure and removes them only after acceptance', async ({ page }) => {
+test('keeps quiz answers visible after a relay failure and removes them only after acceptance', async ({
+  page,
+}) => {
   await openChat(page, [
     {
       requestId: 'quiz-1',

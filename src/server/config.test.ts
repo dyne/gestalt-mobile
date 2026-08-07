@@ -73,9 +73,7 @@ describe('parseConfig', () => {
   });
 
   it('allows an unprotected non-loopback listener only with the explicit opt-out flag', () => {
-    expect(
-      parseConfig(['--host', '0.0.0.0', '--disable-passkey-auth'], '/caller'),
-    ).toMatchObject({
+    expect(parseConfig(['--host', '0.0.0.0', '--disable-passkey-auth'], '/caller')).toMatchObject({
       host: '0.0.0.0',
       passkeyAuthEnabled: false,
       relyingParty: { publicOrigin: 'http://localhost:3000' },
@@ -95,7 +93,10 @@ describe('parseConfig', () => {
     [['--port', '3.5'], 'Invalid --port: 3.5'],
     [['workspace'], 'Unexpected argument: workspace'],
     [['--cwd', '.', '--cwd', '..'], 'Duplicate option: --cwd'],
-    [['--disable-passkey-auth', '--disable-passkey-auth'], 'Duplicate option: --disable-passkey-auth'],
+    [
+      ['--disable-passkey-auth', '--disable-passkey-auth'],
+      'Duplicate option: --disable-passkey-auth',
+    ],
   ])('rejects invalid arguments %#', (args, message) => {
     expect(() => parseConfig(args, '/caller')).toThrow(new CliUsageError(message));
   });

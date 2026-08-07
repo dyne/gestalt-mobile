@@ -53,7 +53,9 @@ describe('plan measurement snapshot', () => {
     expect(snapshot.weeklyRemainingPercent).toBeNull();
     expect(snapshot.threadTokens).toBe(6);
 
-    expect(totalThreadTokens({ inputTokens: 1, cachedInputTokens: -1, outputTokens: 3 })).toBeNull();
+    expect(
+      totalThreadTokens({ inputTokens: 1, cachedInputTokens: -1, outputTokens: 3 }),
+    ).toBeNull();
     expect(totalThreadTokens(null)).toBeNull();
   });
 });

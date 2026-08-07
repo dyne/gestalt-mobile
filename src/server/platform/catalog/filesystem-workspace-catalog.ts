@@ -13,10 +13,7 @@ import type {
   WorkspaceCatalog,
   WorkspaceOption,
 } from '../../features/catalog/application/ports.js';
-import type {
-  GitWorkspace,
-  GitWorkspaceResolver,
-} from '../../features/git/application/ports.js';
+import type { GitWorkspace, GitWorkspaceResolver } from '../../features/git/application/ports.js';
 
 export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspaceResolver {
   private readonly root: Promise<string>;
@@ -102,13 +99,7 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
         // Entries may vanish or become unreadable while the tree is being discovered.
       }
     }
-    return this.entry(
-      input.realPath,
-      input.name,
-      input.relativePath,
-      false,
-      children,
-    );
+    return this.entry(input.realPath, input.name, input.relativePath, false, children);
   }
   private entry(
     realPath: string,

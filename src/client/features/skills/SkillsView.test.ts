@@ -17,7 +17,10 @@ afterEach(cleanup);
 const client: SkillsClient = {
   listAvailableSkills: vi.fn(),
   listSkillProfiles: vi.fn(),
-  replaceSkillProfile: vi.fn(async (_name, profile) => ({ ...profile, path: '/profiles/team.yml' })),
+  replaceSkillProfile: vi.fn(async (_name, profile) => ({
+    ...profile,
+    path: '/profiles/team.yml',
+  })),
   deleteSkillProfile: vi.fn(async () => undefined),
 };
 
@@ -25,7 +28,19 @@ async function rendered() {
   const state = new SkillsState(client);
   state.workspaceId = 'workspace';
   state.codexProfile = 'default';
-  state.skills = [{ name: 'Alpha', description: '<strong>Plain text only</strong>', displayName: 'Alpha tool', path: '/home/gestalt/very/long/skill/path/SKILL.md', scope: 'user', nativeEnabled: false, effectiveEnabled: true, enabled: true, dependencies: { tools: [{ type: 'mcp', value: 'filesystem' }] } }];
+  state.skills = [
+    {
+      name: 'Alpha',
+      description: '<strong>Plain text only</strong>',
+      displayName: 'Alpha tool',
+      path: '/home/gestalt/very/long/skill/path/SKILL.md',
+      scope: 'user',
+      nativeEnabled: false,
+      effectiveEnabled: true,
+      enabled: true,
+      dependencies: { tools: [{ type: 'mcp', value: 'filesystem' }] },
+    },
+  ];
   state.profiles = [{ version: 1, name: 'team', path: '/profiles/team.yml', skills: [] }];
   state.status = { kind: 'ready' };
   render(SkillsView, {
@@ -80,13 +95,18 @@ describe('SkillsView', () => {
     await fireEvent.input(saveAs, { target: { value: 'team' } });
     expect(screen.getByText('Saved the selected profile.')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
-    expect(client.replaceSkillProfile).toHaveBeenCalledWith('team', expect.objectContaining({ version: 1, name: 'team' }));
+    expect(client.replaceSkillProfile).toHaveBeenCalledWith(
+      'team',
+      expect.objectContaining({ version: 1, name: 'team' }),
+    );
     expect(screen.getByText('Profile saved.')).toBeTruthy();
   });
 
   it('offers an explicit delete confirmation only for a selected saved profile', async () => {
     await rendered();
-    const deleteButton = screen.getByRole('button', { name: 'Delete profile' }) as HTMLButtonElement;
+    const deleteButton = screen.getByRole('button', {
+      name: 'Delete profile',
+    }) as HTMLButtonElement;
     expect(deleteButton.disabled).toBe(true);
     await fireEvent.change(screen.getByLabelText('Skill profile'), { target: { value: 'team' } });
     expect(deleteButton.disabled).toBe(false);

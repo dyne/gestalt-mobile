@@ -116,9 +116,7 @@ async function expectReadableSelection(locator: Locator): Promise<void> {
         .slice(0, 3)
         .map(Number)
         .map((value) => value / 255)
-        .map((value) =>
-          value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
-        );
+        .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
     const luminance = (color: string) => {
       const values = channels(color);
       return 0.2126 * values[0]! + 0.7152 * values[1]! + 0.0722 * values[2]!;

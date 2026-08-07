@@ -37,12 +37,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </a>
   {#if sessionPath}
     <p class="session-path" title={sessionPath}>
-      {sessionPath}{#if sessionModel}<span class="session-model"><small>· {sessionModel}</small></span>{/if}
+      {sessionPath}{#if sessionModel}<span class="session-model"
+          ><small>· {sessionModel}</small></span
+        >{/if}
     </p>
   {/if}
   <div class="header-actions">
     {#if weeklyQuotaRemaining !== null}
-      <span class="weekly-quota" aria-label="Weekly quota remaining">{weeklyQuotaRemaining}% left</span>
+      <span class="weekly-quota" aria-label="Weekly quota remaining"
+        >{weeklyQuotaRemaining}% left</span
+      >
     {/if}
     <button
       class="menu-trigger"
@@ -54,26 +58,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </button>
   </div>
 </header>
-
-<style>
-  .session-path {
-    min-inline-size: 0;
-    margin: 0;
-    overflow: hidden;
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .session-model {
-    margin-inline-start: clamp(0.75rem, 3vw, 2rem);
-    color: var(--theme-text-muted);
-    font-family: var(--theme-font-code);
-  }
-
-  @media (max-width: 34rem) {
-    .session-model { display: none; }
-  }
-</style>
 
 <div id="configuration-panel" class="configuration-panel" popover="auto">
   <div class="configuration-brand" aria-label="Dyne">
@@ -94,7 +78,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </select>
   </label>
   {#if passkeyAuthEnabled}
-    <button type="button" popovertarget="configuration-panel" popovertargetaction="hide" onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button>
-    <button type="button" class="lock-relay" popovertarget="configuration-panel" popovertargetaction="hide" onclick={onlock}>Lock Gestalt Mobile</button>
+    <button
+      type="button"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
+      onclick={(event) => ondevices(event.currentTarget)}>Authorized devices</button
+    >
+    <button
+      type="button"
+      class="lock-relay"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
+      onclick={onlock}>Lock Gestalt Mobile</button
+    >
   {/if}
 </div>
+
+<style>
+  .session-path {
+    min-inline-size: 0;
+    margin: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-model {
+    margin-inline-start: clamp(0.75rem, 3vw, 2rem);
+    color: var(--theme-text-muted);
+    font-family: var(--theme-font-code);
+  }
+
+  @media (max-width: 34rem) {
+    .session-model {
+      display: none;
+    }
+  }
+</style>

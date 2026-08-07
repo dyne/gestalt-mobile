@@ -35,7 +35,9 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
       return reply
         .code(413)
         .type('application/problem+json')
-        .send(createProblem('PAYLOAD_TOO_LARGE', 413, 'The request body exceeds this endpoint limit.'));
+        .send(
+          createProblem('PAYLOAD_TOO_LARGE', 413, 'The request body exceeds this endpoint limit.'),
+        );
     }
     const problem: ProblemDetail = {
       type: 'urn:gestalt-mobile:error:internal',

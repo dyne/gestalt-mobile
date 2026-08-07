@@ -38,12 +38,19 @@ describe('App auth gate', () => {
       response({ status: 'authenticated', publicOrigin: '', passkeyAuthEnabled: false }),
     );
     vi.stubGlobal('fetch', fetcher);
-    vi.stubGlobal('WebSocket', class { close() {} });
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        close() {}
+      },
+    );
 
     const view = render(App, { initialTheme: 'minimal-dark' });
 
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
-    expect(view.container.querySelector('nav')?.getAttribute('data-initial-theme')).toBe('minimal-dark');
+    expect(view.container.querySelector('nav')?.getAttribute('data-initial-theme')).toBe(
+      'minimal-dark',
+    );
     expect(screen.queryByRole('button', { name: 'Lock Gestalt Mobile' })).toBeNull();
   });
 
@@ -88,31 +95,45 @@ describe('App auth gate', () => {
     const clearStorage = vi.spyOn(Storage.prototype, 'clear');
     const removeStorage = vi.spyOn(Storage.prototype, 'removeItem');
     let resolveLogout!: (response: Response) => void;
-    const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>((input, init) => {
-      void init;
-      const path = String(input);
-      if (path === '/api/auth/status') return Promise.resolve(authenticatedStatus());
-      if (path === '/api/auth/logout') return new Promise((resolve) => { resolveLogout = resolve; });
-      if (path === '/api/sessions/recent-threads') return Promise.resolve(new Response(JSON.stringify([])));
-      return Promise.resolve(new Response(JSON.stringify({ profiles: [] })));
-    });
+    const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      (input, init) => {
+        void init;
+        const path = String(input);
+        if (path === '/api/auth/status') return Promise.resolve(authenticatedStatus());
+        if (path === '/api/auth/logout')
+          return new Promise((resolve) => {
+            resolveLogout = resolve;
+          });
+        if (path === '/api/sessions/recent-threads')
+          return Promise.resolve(new Response(JSON.stringify([])));
+        return Promise.resolve(new Response(JSON.stringify({ profiles: [] })));
+      },
+    );
     vi.stubGlobal('fetch', fetcher);
     const view = render(App);
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
     const lock = screen.getByRole('button', { name: 'Lock Gestalt Mobile' });
     lock.click();
     lock.click();
-    expect(fetcher).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    expect(fetcher).toHaveBeenCalledWith('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeNull());
     expect(view.container.querySelector('nav')).toBeNull();
     expect(localStorage.getItem('gestalt-mobile.theme')).toBe('dark');
     expect(clearStorage).not.toHaveBeenCalled();
     expect(removeStorage).not.toHaveBeenCalled();
-    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(
+      1,
+    );
     expect(lifecycle.close).toHaveBeenCalledOnce();
     expect(lifecycle.clearIntervalSpy).toHaveBeenCalledOnce();
     expect(lifecycle.abort).toHaveBeenCalledOnce();
-    expect(lifecycle.removeDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    expect(lifecycle.removeDocumentListener).toHaveBeenCalledWith(
+      'visibilitychange',
+      expect.any(Function),
+    );
     expect(lifecycle.removeWindowListener).toHaveBeenCalledWith('focus', expect.any(Function));
     resolveLogout(new Response(null, { status: 204 }));
   });
@@ -132,11 +153,17 @@ describe('App auth gate', () => {
     const view = render(App);
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: 'Lock Gestalt Mobile' }));
-    await vi.waitFor(() => expect(screen.getByText('Relay locked. Sign in with your passkey to continue.')).toBeTruthy());
+    await vi.waitFor(() =>
+      expect(screen.getByText('Relay locked. Sign in with your passkey to continue.')).toBeTruthy(),
+    );
     expect(view.container.querySelector('nav')).toBeNull();
     expect(lifecycle.close).toHaveBeenCalledOnce();
-    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(1);
-    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/status')).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(
+      1,
+    );
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/status')).toHaveLength(
+      1,
+    );
   });
 
   it('unmounts and tears down the relay through App authorizedFetch after AUTH_REQUIRED', async () => {
@@ -152,11 +179,17 @@ describe('App auth gate', () => {
     const view = render(App);
     await vi.waitFor(() => expect(view.container.querySelector('nav')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: 'Trigger authorized request' }));
-    await vi.waitFor(() => expect(screen.getByText('Your session ended. Sign in with your passkey to continue.')).toBeTruthy());
+    await vi.waitFor(() =>
+      expect(
+        screen.getByText('Your session ended. Sign in with your passkey to continue.'),
+      ).toBeTruthy(),
+    );
     expect(view.container.querySelector('nav')).toBeNull();
     expect(lifecycle.close).toHaveBeenCalledOnce();
     expect(lifecycle.clearIntervalSpy).toHaveBeenCalledOnce();
     expect(lifecycle.abort).toHaveBeenCalledOnce();
-    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(0);
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/api/auth/logout')).toHaveLength(
+      0,
+    );
   });
 });

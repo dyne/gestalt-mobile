@@ -38,13 +38,16 @@ export class CodexModelCatalog implements ModelCatalog {
           capabilities: null,
         }),
       );
-      const result = resultSchema.safeParse(await this.withTimeout(server.rpc.request('model/list', {})));
+      const result = resultSchema.safeParse(
+        await this.withTimeout(server.rpc.request('model/list', {})),
+      );
       if (!result.success) return [];
-      const models = 'models' in result.data
-        ? result.data.models
-        : Array.isArray(result.data.data)
-          ? result.data.data
-          : result.data.data.models;
+      const models =
+        'models' in result.data
+          ? result.data.models
+          : Array.isArray(result.data.data)
+            ? result.data.data
+            : result.data.data.models;
       return [...new Set(models.map((model) => model.id))].sort((left, right) =>
         left.localeCompare(right),
       );
@@ -61,7 +64,10 @@ export class CodexModelCatalog implements ModelCatalog {
       return await Promise.race([
         promise,
         new Promise<T>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Codex model discovery timed out.')), this.timeoutMs);
+          timer = setTimeout(
+            () => reject(new Error('Codex model discovery timed out.')),
+            this.timeoutMs,
+          );
         }),
       ]);
     } finally {

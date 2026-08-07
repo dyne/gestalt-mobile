@@ -18,8 +18,7 @@ export function registerLogout(
   app.post('/api/auth/logout', async (request, reply) => {
     const token = request.cookies.gestalt_mobile_session;
     const session = parseAuthorizationSessionId(token);
-    if (session !== null)
-      deps.repository.revokeSession(session, deps.clock.now().toISOString());
+    if (session !== null) deps.repository.revokeSession(session, deps.clock.now().toISOString());
     clearAuthCookie(reply, 'gestalt_mobile_session', deps.relyingParty.publicOrigin);
     return reply.code(204).send();
   });

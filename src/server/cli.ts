@@ -101,7 +101,11 @@ export function installShutdownHandlers(
 function parseInvocation(
   args: string[],
   cwd: string,
-): { command: 'run'; config: RelayConfig } | { command: 'help' } | { command: 'version' } | { command: 'list' } {
+):
+  | { command: 'run'; config: RelayConfig }
+  | { command: 'help' }
+  | { command: 'version' }
+  | { command: 'list' } {
   if (args.includes('--help')) {
     if (args.length !== 1)
       throw new CliUsageError('--help cannot be combined with other arguments');
@@ -114,24 +118,33 @@ function parseInvocation(
   }
   const skills = args.indexOf('--skills');
   if (skills !== -1 && args[skills + 1] === 'list') {
-    if (args.length !== 2) throw new CliUsageError('--skills list cannot be combined with other arguments');
+    if (args.length !== 2)
+      throw new CliUsageError('--skills list cannot be combined with other arguments');
     return { command: 'list' };
   }
   return { command: 'run', config: parseConfig(args, cwd) };
 }
 
-async function listSkillProfiles(store: FilesystemSkillProfileStore, stdout: Output, stderr: Output): Promise<number> {
+async function listSkillProfiles(
+  store: FilesystemSkillProfileStore,
+  stdout: Output,
+  stderr: Output,
+): Promise<number> {
   let failed = false;
   for (const name of await store.listGlobalProfileNames()) {
     try {
       const profile = await store.readGlobalProfile(name);
       if (!profile) continue;
       stdout.write(`${profile.name}\n  ${store.globalProfilePath(name)}\n`);
-      for (const skill of [...profile.skills].filter((entry) => entry.enabled).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)))
+      for (const skill of [...profile.skills]
+        .filter((entry) => entry.enabled)
+        .sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)))
         stdout.write(`  ${skill.name}\t${skill.path}\n`);
     } catch (error) {
       failed = true;
-      stderr.write(`${name}: ${error instanceof Error ? error.message : 'Invalid skill profile.'}\n`);
+      stderr.write(
+        `${name}: ${error instanceof Error ? error.message : 'Invalid skill profile.'}\n`,
+      );
     }
   }
   return failed ? 1 : 0;

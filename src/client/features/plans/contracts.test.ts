@@ -8,7 +8,14 @@ import { describe, expect, it } from 'vitest';
 
 import { isRelayPlanUpdate } from './contracts.js';
 
-const plan = { title: 'Plan', steps: [], totalSteps: 0, doneSteps: 0, allDone: true, currentStepId: '' };
+const plan = {
+  title: 'Plan',
+  steps: [],
+  totalSteps: 0,
+  doneSteps: 0,
+  allDone: true,
+  currentStepId: '',
+};
 
 describe('relay plan update contract', () => {
   it.each(['supervision-start', 'resync'])('accepts %s from the current helper', (reason) => {

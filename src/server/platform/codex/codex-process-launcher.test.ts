@@ -24,9 +24,7 @@ describe('codexChildEnvironment', () => {
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE = '/ambient/session.json';
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY = '/ambient/session';
     expect(codexChildEnvironment()).not.toHaveProperty('GESTALT_MOBILE_ORG_PLAN_STATUS_FILE');
-    expect(codexChildEnvironment()).not.toHaveProperty(
-      'GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY',
-    );
+    expect(codexChildEnvironment()).not.toHaveProperty('GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY');
   });
 
   it('merges only the explicit session runtime path while retaining other inherited values', () => {

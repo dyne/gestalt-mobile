@@ -25,14 +25,29 @@ describe('skills CLI commands', () => {
     const home = await mkdtemp(join(tmpdir(), 'gestalt-skills-cli-'));
     temporaryDirectories.push(home);
     await mkdir(join(home, '.gestalt', 'skill-profiles'), { recursive: true });
-    await writeFile(join(home, '.gestalt', 'skill-profiles', 'zeta.yml'), 'version: 1\nname: zeta\nskills: []\n');
-    await writeFile(join(home, '.gestalt', 'skill-profiles', 'alpha.yml'), 'version: 1\nname: alpha\nskills: []\n');
+    await writeFile(
+      join(home, '.gestalt', 'skill-profiles', 'zeta.yml'),
+      'version: 1\nname: zeta\nskills: []\n',
+    );
+    await writeFile(
+      join(home, '.gestalt', 'skill-profiles', 'alpha.yml'),
+      'version: 1\nname: alpha\nskills: []\n',
+    );
     const stdout = output();
     const stderr = output();
     const compose = vi.fn();
     const probeCodexVersion = vi.fn();
 
-    await expect(runCli({ args: ['--skills', 'list'], homeDirectory: home, stdout: stdout.stream, stderr: stderr.stream, compose, probeCodexVersion })).resolves.toBe(0);
+    await expect(
+      runCli({
+        args: ['--skills', 'list'],
+        homeDirectory: home,
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        compose,
+        probeCodexVersion,
+      }),
+    ).resolves.toBe(0);
 
     expect(stdout.value()).toContain('alpha');
     expect(stdout.value().indexOf('alpha')).toBeLessThan(stdout.value().indexOf('zeta'));
@@ -50,7 +65,15 @@ describe('skills CLI commands', () => {
     const compose = vi.fn();
     const probeCodexVersion = vi.fn();
 
-    await expect(runCli({ args: ['--skills', 'broken'], homeDirectory: home, stderr: stderr.stream, compose, probeCodexVersion })).resolves.toBe(2);
+    await expect(
+      runCli({
+        args: ['--skills', 'broken'],
+        homeDirectory: home,
+        stderr: stderr.stream,
+        compose,
+        probeCodexVersion,
+      }),
+    ).resolves.toBe(2);
 
     expect(stderr.value()).toContain('Invalid skill profile: broken');
     expect(compose).not.toHaveBeenCalled();
@@ -162,9 +185,7 @@ describe('runCli', () => {
         probeCodexVersion: async () => null,
       }),
     ).toBe(0);
-    expect(compose).toHaveBeenCalledWith(
-      expect.objectContaining({ passkeyAuthEnabled: false }),
-    );
+    expect(compose).toHaveBeenCalledWith(expect.objectContaining({ passkeyAuthEnabled: false }));
     expect(stderr.value()).toContain(
       'WARNING: Passkey access control is disabled; anyone who can reach this server has full access.',
     );

@@ -18,7 +18,11 @@ const parameters = z.object({ deviceId: z.string().min(1).max(200) }).strict();
 
 export function registerRevokeAuthorizedDevice(
   app: FastifyInstance,
-  deps: { repository: AuthorizationRepository; clock: Clock; relyingParty: { publicOrigin: string } },
+  deps: {
+    repository: AuthorizationRepository;
+    clock: Clock;
+    relyingParty: { publicOrigin: string };
+  },
 ): void {
   app.delete('/api/auth/devices/:deviceId', async (request, reply) => {
     const params = parameters.safeParse(request.params);
@@ -31,11 +35,15 @@ export function registerRevokeAuthorizedDevice(
         return reply
           .code(409)
           .type('application/problem+json')
-          .send(problem('LAST_DEVICE_REQUIRED', 409, 'At least one authorized device is required.'));
+          .send(
+            problem('LAST_DEVICE_REQUIRED', 409, 'At least one authorized device is required.'),
+          );
       if (outcome === 'notFound') return unavailable(reply, 404, 'DEVICE_NOT_AVAILABLE');
       if (current === id)
         reply.clearCookie('gestalt_mobile_session', {
-          path: '/', httpOnly: true, sameSite: 'strict',
+          path: '/',
+          httpOnly: true,
+          sameSite: 'strict',
           secure: deps.relyingParty.publicOrigin.startsWith('https://'),
         });
       return reply.code(204).send();

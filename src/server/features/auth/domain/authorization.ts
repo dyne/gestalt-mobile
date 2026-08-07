@@ -57,7 +57,10 @@ export type AuthorizationSession = Readonly<{
   expiresAt: string;
 }>;
 
-export type FirstDeviceAuthorized = Readonly<{ kind: 'firstDeviceAuthorized'; device: AuthorizedDevice }>;
+export type FirstDeviceAuthorized = Readonly<{
+  kind: 'firstDeviceAuthorized';
+  device: AuthorizedDevice;
+}>;
 export type DeviceAuthorized = Readonly<{ kind: 'deviceAuthorized'; device: AuthorizedDevice }>;
 export type DeviceRenamed = Readonly<{ kind: 'deviceRenamed'; device: AuthorizedDevice }>;
 export type DeviceRevoked = Readonly<{ kind: 'deviceRevoked'; deviceId: AuthorizedDeviceId }>;
@@ -80,7 +83,10 @@ export class LocalOwnerAuthorization {
     });
   }
 
-  static rehydrate(owner: LocalOwner, devices: readonly AuthorizedDevice[]): LocalOwnerAuthorization {
+  static rehydrate(
+    owner: LocalOwner,
+    devices: readonly AuthorizedDevice[],
+  ): LocalOwnerAuthorization {
     if (devices.length < 1) throw new AuthorizationDomainError('AUTHORIZED_DEVICE_REQUIRED');
     assertUniqueDeviceIds(devices);
     assertUniqueCredentials(devices);
@@ -95,7 +101,9 @@ export class LocalOwnerAuthorization {
     return this.devices.map(copyDevice);
   }
 
-  authorizeDevice(device: AuthorizedDevice): LocalOwnerAuthorization & { outcome: DeviceAuthorized } {
+  authorizeDevice(
+    device: AuthorizedDevice,
+  ): LocalOwnerAuthorization & { outcome: DeviceAuthorized } {
     assertUniqueDeviceIds([...this.devices, device]);
     assertUniqueCredentials([...this.devices, device]);
     return withOutcome(
@@ -104,19 +112,31 @@ export class LocalOwnerAuthorization {
     );
   }
 
-  renameDevice(id: AuthorizedDeviceId, nickname: DeviceNickname): LocalOwnerAuthorization & { outcome: DeviceRenamed } {
+  renameDevice(
+    id: AuthorizedDeviceId,
+    nickname: DeviceNickname,
+  ): LocalOwnerAuthorization & { outcome: DeviceRenamed } {
     const device = this.requireDevice(id);
     const renamed = { ...device, nickname };
     return withOutcome(
-      new LocalOwnerAuthorization(this.ownerValue, this.devices.map((entry) => (entry.id === id ? renamed : entry))),
+      new LocalOwnerAuthorization(
+        this.ownerValue,
+        this.devices.map((entry) => (entry.id === id ? renamed : entry)),
+      ),
       { kind: 'deviceRenamed', device: copyDevice(renamed) },
     );
   }
 
-  recordAssertion(id: AuthorizedDeviceId, counter: number, usedAt: string): LocalOwnerAuthorization {
+  recordAssertion(
+    id: AuthorizedDeviceId,
+    counter: number,
+    usedAt: string,
+  ): LocalOwnerAuthorization {
     const device = this.requireDevice(id);
-    if (!Number.isInteger(counter) || counter < 0) throw new AuthorizationDomainError('CREDENTIAL_COUNTER_INVALID');
-    const allowsZeroCounter = device.counter === 0 && counter === 0 && device.deviceType === 'multiDevice';
+    if (!Number.isInteger(counter) || counter < 0)
+      throw new AuthorizationDomainError('CREDENTIAL_COUNTER_INVALID');
+    const allowsZeroCounter =
+      device.counter === 0 && counter === 0 && device.deviceType === 'multiDevice';
     if (!allowsZeroCounter && counter <= device.counter)
       throw new AuthorizationDomainError('CREDENTIAL_COUNTER_NOT_MONOTONIC');
     const updated = { ...device, counter, lastUsedAt: usedAt };
@@ -130,7 +150,10 @@ export class LocalOwnerAuthorization {
     this.requireDevice(id);
     if (this.devices.length === 1) throw new AuthorizationDomainError('AUTHORIZED_DEVICE_REQUIRED');
     return withOutcome(
-      new LocalOwnerAuthorization(this.ownerValue, this.devices.filter((device) => device.id !== id)),
+      new LocalOwnerAuthorization(
+        this.ownerValue,
+        this.devices.filter((device) => device.id !== id),
+      ),
       { kind: 'deviceRevoked', deviceId: id },
     );
   }
@@ -142,7 +165,10 @@ export class LocalOwnerAuthorization {
   }
 }
 
-function withOutcome<T extends LocalOwnerAuthorization, Outcome>(value: T, outcome: Outcome): T & { outcome: Outcome } {
+function withOutcome<T extends LocalOwnerAuthorization, Outcome>(
+  value: T,
+  outcome: Outcome,
+): T & { outcome: Outcome } {
   return Object.freeze(Object.assign(value, { outcome }));
 }
 
@@ -166,8 +192,10 @@ function copyDevice(device: AuthorizedDevice): AuthorizedDevice {
     throw new AuthorizationDomainError('CREDENTIAL_COUNTER_INVALID');
   if (device.version !== undefined && (!Number.isInteger(device.version) || device.version < 0))
     throw new AuthorizationDomainError('AUTHORIZED_DEVICE_VERSION_INVALID');
-  if (device.publicKey.length < 1) throw new AuthorizationDomainError('CREDENTIAL_PUBLIC_KEY_INVALID');
-  if (Number.isNaN(Date.parse(device.createdAt))) throw new AuthorizationDomainError('AUTHORIZED_DEVICE_TIMESTAMP_INVALID');
+  if (device.publicKey.length < 1)
+    throw new AuthorizationDomainError('CREDENTIAL_PUBLIC_KEY_INVALID');
+  if (Number.isNaN(Date.parse(device.createdAt)))
+    throw new AuthorizationDomainError('AUTHORIZED_DEVICE_TIMESTAMP_INVALID');
   if (device.lastUsedAt && Number.isNaN(Date.parse(device.lastUsedAt)))
     throw new AuthorizationDomainError('AUTHORIZED_DEVICE_TIMESTAMP_INVALID');
   return Object.freeze({

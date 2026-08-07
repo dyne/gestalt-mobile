@@ -26,10 +26,18 @@ export function profileAppServerCommand(
   skillsConfig?: readonly { path: string; enabled: boolean }[],
 ): { command: string; args: string[] } {
   void _profile;
-  const base = availability.codexProfileAvailable() && availability.gestaltHomeExists()
-    ? { command: 'codex-profile', args: ['cli', 'gestalt', 'app-server', '--stdio'] }
-    : { command: 'codex', args: ['app-server', '--stdio'] };
+  const base =
+    availability.codexProfileAvailable() && availability.gestaltHomeExists()
+      ? { command: 'codex-profile', args: ['cli', 'gestalt', 'app-server', '--stdio'] }
+      : { command: 'codex', args: ['app-server', '--stdio'] };
   return skillsConfig === undefined
     ? base
-    : { ...base, args: [...base.args, '--config', `skills.config = [${skillsConfig.map((entry) => `{ path = ${JSON.stringify(entry.path)}, enabled = ${entry.enabled} }`).join(', ')}]`] };
+    : {
+        ...base,
+        args: [
+          ...base.args,
+          '--config',
+          `skills.config = [${skillsConfig.map((entry) => `{ path = ${JSON.stringify(entry.path)}, enabled = ${entry.enabled} }`).join(', ')}]`,
+        ],
+      };
 }

@@ -14,9 +14,7 @@ describe('POST /api/sessions/recent-threads/open', () => {
     const app = fastify();
     const promote = vi.fn(async (thread) => ({ id: 'session-1', threadId: thread.id }));
     registerPromoteRecentThread(app, {
-      list: async () => [
-        { id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 100 },
-      ],
+      list: async () => [{ id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 100 }],
       promote: promote as never,
     });
 

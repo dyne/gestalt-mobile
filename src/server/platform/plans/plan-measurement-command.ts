@@ -19,9 +19,8 @@ export async function checkpointPlanMeasurement(
   stepId: string,
   snapshot: PlanMeasurementSnapshot,
 ): Promise<void> {
-  await execute(
-    helperPath,
-    ['measure', 'checkpoint', planPath, stepId, JSON.stringify(snapshot)],
-    { shell: false, timeout: PLAN_MEASUREMENT_COMMAND_TIMEOUT_MS },
-  );
+  await execute(helperPath, ['measure', 'checkpoint', planPath, stepId, JSON.stringify(snapshot)], {
+    shell: false,
+    timeout: PLAN_MEASUREMENT_COMMAND_TIMEOUT_MS,
+  });
 }

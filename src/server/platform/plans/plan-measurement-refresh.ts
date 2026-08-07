@@ -75,7 +75,8 @@ export class PlanMeasurementRefresh {
       // A transient Codex or helper failure makes this tick unavailable only.
     } finally {
       this.inFlight.delete(sessionId);
-      if (this.active.get(sessionId) === active && !this.timers.has(sessionId)) this.schedule(sessionId);
+      if (this.active.get(sessionId) === active && !this.timers.has(sessionId))
+        this.schedule(sessionId);
     }
   }
 

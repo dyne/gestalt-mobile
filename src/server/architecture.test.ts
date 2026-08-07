@@ -20,17 +20,28 @@ function sourceFiles(directory: string): string[] {
 }
 
 function runtimeImports(path: string): string[] {
-  return [...readFileSync(path, 'utf8').matchAll(/^import (?!type\b)[\s\S]*? from ['"](\.[^'"]+)['"];?$/gm)]
+  return [
+    ...readFileSync(path, 'utf8').matchAll(
+      /^import (?!type\b)[\s\S]*? from ['"](\.[^'"]+)['"];?$/gm,
+    ),
+  ]
     .map((match) => match[1])
     .map((specifier) => resolve(dirname(path), specifier.replace(/\.js$/, '.ts')))
     .filter((target) => extname(target) === '.ts');
 }
 
-function hasCycle(path: string, graph: ReadonlyMap<string, readonly string[]>, visiting = new Set<string>(), visited = new Set<string>()): boolean {
+function hasCycle(
+  path: string,
+  graph: ReadonlyMap<string, readonly string[]>,
+  visiting = new Set<string>(),
+  visited = new Set<string>(),
+): boolean {
   if (visiting.has(path)) return true;
   if (visited.has(path)) return false;
   visiting.add(path);
-  const cycle = (graph.get(path) ?? []).some((target) => graph.has(target) && hasCycle(target, graph, visiting, visited));
+  const cycle = (graph.get(path) ?? []).some(
+    (target) => graph.has(target) && hasCycle(target, graph, visiting, visited),
+  );
   visiting.delete(path);
   visited.add(path);
   return cycle;

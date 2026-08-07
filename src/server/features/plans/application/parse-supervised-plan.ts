@@ -231,7 +231,8 @@ function measurementFor(heading: ParsedHeading): PlanStepMeasurement | null | un
     }
     if (!/^\d+$/.test(value)) return null;
     const number = Number(value);
-    if (!Number.isSafeInteger(number) || (property.startsWith('WEEKLY_') && number > 100)) return null;
+    if (!Number.isSafeInteger(number) || (property.startsWith('WEEKLY_') && number > 100))
+      return null;
     measurement[field] = number;
   }
   return Object.keys(measurement).length === 0 ? undefined : (measurement as PlanStepMeasurement);

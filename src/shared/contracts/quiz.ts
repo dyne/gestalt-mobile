@@ -56,7 +56,12 @@ export const gestaltQuizDynamicTool = {
           additionalProperties: false,
           required: ['id', 'header', 'question', 'choices', 'allowCustom'],
           properties: {
-            id: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z][A-Za-z0-9_-]*$' },
+            id: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 64,
+              pattern: '^[A-Za-z][A-Za-z0-9_-]*$',
+            },
             header: { type: 'string', minLength: 1, maxLength: 120 },
             question: { type: 'string', minLength: 1, maxLength: 600 },
             choices: {
@@ -90,26 +95,32 @@ export function parseQuiz(value: unknown, minimumChoices = 2): Quiz | null {
   const questions = value.questions.map((question) => parseQuestion(question, minimumChoices));
   if (questions.some((question) => question === null)) return null;
   const parsed = questions as QuizQuestion[];
-  return new Set(parsed.map((question) => question.id)).size === parsed.length ? { questions: parsed } : null;
+  return new Set(parsed.map((question) => question.id)).size === parsed.length
+    ? { questions: parsed }
+    : null;
 }
 
 /** Maps Codex's experimental native request shape into the common quiz value. */
 export function mapNativeUserInputToQuiz(value: unknown): Quiz | null {
-  if (!isRecord(value) || !Array.isArray(value.questions) || value.questions.length > 3) return null;
-  return parseQuiz({
-    questions: value.questions.map((question) =>
-      isRecord(question)
-        ? {
-            id: question.id,
-            header: question.header,
-            question: question.question,
-            choices: question.options,
-            allowCustom: question.isOther === true,
-            isSecret: question.isSecret === true,
-          }
-        : question,
-    ),
-  }, 1);
+  if (!isRecord(value) || !Array.isArray(value.questions) || value.questions.length > 3)
+    return null;
+  return parseQuiz(
+    {
+      questions: value.questions.map((question) =>
+        isRecord(question)
+          ? {
+              id: question.id,
+              header: question.header,
+              question: question.question,
+              choices: question.options,
+              allowCustom: question.isOther === true,
+              isSecret: question.isSecret === true,
+            }
+          : question,
+      ),
+    },
+    1,
+  );
 }
 
 /** Converts a completed quiz into the app-server dynamic-tool response shape. */
@@ -123,7 +134,9 @@ export function toQuizToolResponse(answers: QuizAnswer[]): {
         type: 'input_text',
         text: JSON.stringify({
           answers: Object.fromEntries(
-            answers.filter((answer) => answer.answer.trim()).map((answer) => [answer.id, answer.answer]),
+            answers
+              .filter((answer) => answer.answer.trim())
+              .map((answer) => [answer.id, answer.answer]),
           ),
         }),
       },
@@ -133,9 +146,15 @@ export function toQuizToolResponse(answers: QuizAnswer[]): {
 }
 
 export function isQuizToolResponseForQuiz(quiz: Quiz, value: unknown): boolean {
-  if (!isRecord(value) || value.success !== true || !Array.isArray(value.contentItems)) return false;
+  if (!isRecord(value) || value.success !== true || !Array.isArray(value.contentItems))
+    return false;
   const item = value.contentItems[0];
-  if (value.contentItems.length !== 1 || !isRecord(item) || item.type !== 'input_text' || typeof item.text !== 'string')
+  if (
+    value.contentItems.length !== 1 ||
+    !isRecord(item) ||
+    item.type !== 'input_text' ||
+    typeof item.text !== 'string'
+  )
     return false;
   try {
     const response = parseQuizResponse(JSON.parse(item.text));
@@ -146,9 +165,19 @@ export function isQuizToolResponseForQuiz(quiz: Quiz, value: unknown): boolean {
 }
 
 function parseQuestion(value: unknown, minimumChoices: number): QuizQuestion | null {
-  if (!isRecord(value) || !Array.isArray(value.choices) || value.choices.length < minimumChoices || value.choices.length > 5)
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.choices) ||
+    value.choices.length < minimumChoices ||
+    value.choices.length > 5
+  )
     return null;
-  if (!isQuestionId(value.id) || !isBoundedText(value.header, 120) || !isBoundedText(value.question, 600)) return null;
+  if (
+    !isQuestionId(value.id) ||
+    !isBoundedText(value.header, 120) ||
+    !isBoundedText(value.question, 600)
+  )
+    return null;
   if (typeof value.allowCustom !== 'boolean') return null;
 
   const choices = value.choices.map(parseChoice);
@@ -164,20 +193,32 @@ function parseQuestion(value: unknown, minimumChoices: number): QuizQuestion | n
 }
 
 function parseChoice(value: unknown): QuizChoice | null {
-  if (!isRecord(value) || !isBoundedText(value.label, 160) || !isBoundedText(value.description, 600)) return null;
+  if (
+    !isRecord(value) ||
+    !isBoundedText(value.label, 160) ||
+    !isBoundedText(value.description, 600)
+  )
+    return null;
   return { label: value.label, description: value.description };
 }
 
 function parseQuizResponse(value: unknown): QuizResponse | null {
   if (!isRecord(value) || !isRecord(value.answers)) return null;
   const entries = Object.entries(value.answers);
-  if (entries.length === 0 || entries.some(([id, answer]) => !isQuestionId(id) || !isBoundedText(answer, 2_000))) return null;
+  if (
+    entries.length === 0 ||
+    entries.some(([id, answer]) => !isQuestionId(id) || !isBoundedText(answer, 2_000))
+  )
+    return null;
   return { answers: Object.fromEntries(entries) as Record<string, string> };
 }
 
 function isCompleteQuizResponse(quiz: Quiz, response: QuizResponse): boolean {
   const ids = Object.keys(response.answers);
-  if (ids.length !== quiz.questions.length || ids.some((id) => !quiz.questions.some((question) => question.id === id)))
+  if (
+    ids.length !== quiz.questions.length ||
+    ids.some((id) => !quiz.questions.some((question) => question.id === id))
+  )
     return false;
   return quiz.questions.every((question) => {
     const answer = response.answers[question.id];

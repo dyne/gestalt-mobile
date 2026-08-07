@@ -86,7 +86,9 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
 
 export function normalizePublicOrigin(value: string): string {
   if (!/^[a-z][a-z\d+.-]*:\/\/[^/?#\s\\\\]+\/?$/i.test(value))
-    throw new CliUsageError('--public-origin must be a bare origin without a path, query, or fragment');
+    throw new CliUsageError(
+      '--public-origin must be a bare origin without a path, query, or fragment',
+    );
 
   let url: URL;
   try {
@@ -98,10 +100,13 @@ export function normalizePublicOrigin(value: string): string {
   if (url.username || url.password)
     throw new CliUsageError('--public-origin must not include credentials');
   if (url.pathname !== '/' || url.search || url.hash)
-    throw new CliUsageError('--public-origin must be a bare origin without a path, query, or fragment');
+    throw new CliUsageError(
+      '--public-origin must be a bare origin without a path, query, or fragment',
+    );
 
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  if (isIP(hostname)) throw new CliUsageError('--public-origin must use a hostname, not an IP address');
+  if (isIP(hostname))
+    throw new CliUsageError('--public-origin must use a hostname, not an IP address');
   if (url.protocol === 'http:' && url.hostname === 'localhost') return url.origin;
   if (url.protocol !== 'https:')
     throw new CliUsageError('--public-origin must use HTTPS, except for http://localhost');

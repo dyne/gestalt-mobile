@@ -94,9 +94,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
-  .plans { min-inline-size: 0; overflow-wrap: anywhere; }
-  h2 { margin-block: .4rem; }
-  ul { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
-  button { display: grid; inline-size: 100%; min-block-size: 2.75rem; gap: .2rem; padding: .75rem; text-align: start; }
-  button:focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+  .plans {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+  h2 {
+    margin-block: 0.4rem;
+  }
+  ul {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  button {
+    display: grid;
+    inline-size: 100%;
+    min-block-size: 2.75rem;
+    gap: 0.2rem;
+    padding: 0.75rem;
+    text-align: start;
+  }
+  button:focus-visible {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+  }
 </style>
