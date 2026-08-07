@@ -27,6 +27,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Check formatting
+        run: npm run format:check
       - name: Audit production dependencies
         run: npm run audit:prod
       - name: Install Playwright Chromium

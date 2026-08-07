@@ -18,8 +18,14 @@ describe('device client mutations', () => {
   });
 
   it('keeps stable problem codes and malformed-error fallbacks', async () => {
-    const problem = createDeviceClient(vi.fn(async () => new Response(JSON.stringify({ code: 'LAST_DEVICE_REQUIRED' }), { status: 409 })) as typeof fetch);
-    const malformed = createDeviceClient(vi.fn(async () => new Response('not json', { status: 500 })) as typeof fetch);
+    const problem = createDeviceClient(
+      vi.fn(
+        async () => new Response(JSON.stringify({ code: 'LAST_DEVICE_REQUIRED' }), { status: 409 }),
+      ) as typeof fetch,
+    );
+    const malformed = createDeviceClient(
+      vi.fn(async () => new Response('not json', { status: 500 })) as typeof fetch,
+    );
 
     await expect(problem.revoke('device')).rejects.toThrow('LAST_DEVICE_REQUIRED');
     await expect(malformed.revoke('device')).rejects.toThrow('AUTH_REQUEST_FAILED_500');

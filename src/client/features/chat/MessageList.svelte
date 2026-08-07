@@ -12,7 +12,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
 
-  let { messages, activities }: { messages: ChatMessage[]; activities: HistoryActivity[] } = $props();
+  let { messages, activities }: { messages: ChatMessage[]; activities: HistoryActivity[] } =
+    $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
   let latestAnswerId = $derived(
@@ -89,11 +90,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 type="button"
                 aria-expanded={Boolean(expandedCommentary[group.id])}
                 aria-controls={`commentary-${group.id}`}
-                onclick={() =>
-                  (expandedCommentary[group.id] = !expandedCommentary[group.id])}
+                onclick={() => (expandedCommentary[group.id] = !expandedCommentary[group.id])}
               >
-                <span aria-hidden="true">{expandedCommentary[group.id] ? '⌄' : '>'}</span
-                >commentary
+                <span aria-hidden="true">{expandedCommentary[group.id] ? '⌄' : '>'}</span>commentary
               </button>
             {/if}
             {#if group.id === latestAnswerId}
@@ -157,7 +156,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: 0.375rem;
   }
 
-  .answer-turn { border-inline-start: 0.25rem solid var(--theme-border); padding-inline-start: 0.625rem; }
+  .answer-turn {
+    border-inline-start: 0.25rem solid var(--theme-border);
+    padding-inline-start: 0.625rem;
+  }
 
   .commentary-turn,
   .commentary-content {
@@ -189,7 +191,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-size: 0.875em;
   }
 
-  .commentary-content { margin-block: 0.25rem 0.5rem; }
+  .commentary-content {
+    margin-block: 0.25rem 0.5rem;
+  }
 
   .entry-content {
     margin-block: 0.125rem 0;
@@ -210,9 +214,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: var(--theme-radius);
   }
 
-  :not(pre) > code { padding-inline: 0.2em; background: var(--theme-code); border-radius: 0.2rem; }
+  :not(pre) > code {
+    padding-inline: 0.2em;
+    background: var(--theme-code);
+    border-radius: 0.2rem;
+  }
 
-  a { color: var(--theme-info); }
+  a {
+    color: var(--theme-info);
+  }
 
   .table-scroll {
     overflow-x: auto;

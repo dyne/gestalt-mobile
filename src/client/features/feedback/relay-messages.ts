@@ -35,6 +35,6 @@ export function relayFeedback(
     ? (problemCode as RelayFeedbackCode)
     : Object.hasOwn(relayMessages, candidate)
       ? (candidate as RelayFeedbackCode)
-    : fallbackCode;
+      : fallbackCode;
   return { code, message: relayMessages[code] };
 }

@@ -66,10 +66,8 @@ main {
   flex-wrap: wrap;
   gap: 1rem;
   /* Match the chat column's outer edge while keeping header controls aligned with page content. */
-  margin: calc(-1rem - env(safe-area-inset-top)) calc(0.25rem - var(--page-inline-padding))
-    1.5rem;
-  padding: calc(1rem + env(safe-area-inset-top))
-    calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
+  margin: calc(-1rem - env(safe-area-inset-top)) calc(0.25rem - var(--page-inline-padding)) 1.5rem;
+  padding: calc(1rem + env(safe-area-inset-top)) calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
   background: color-mix(in srgb, var(--theme-page) 78%, transparent);
   backdrop-filter: blur(0.75rem);
 }
@@ -164,7 +162,6 @@ main {
   display: initial;
 }
 
-
 .configuration-panel {
   position: fixed;
   inset: 4.5rem 1rem auto auto;
@@ -220,7 +217,8 @@ main {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.25rem;
-  padding: 0.5rem calc(0.25rem + env(safe-area-inset-right)) calc(0.5rem + env(safe-area-inset-bottom)) calc(0.25rem + env(safe-area-inset-left));
+  padding: 0.5rem calc(0.25rem + env(safe-area-inset-right))
+    calc(0.5rem + env(safe-area-inset-bottom)) calc(0.25rem + env(safe-area-inset-left));
   background: var(--theme-surface);
   border-block-start: 1px solid var(--theme-border);
 }
@@ -284,9 +282,17 @@ button {
   cursor: pointer;
 }
 
-button:hover:not(:disabled) { background: var(--theme-control-hover); }
-button:active:not(:disabled) { background: var(--theme-control-pressed); color: var(--theme-control-pressed-contrast); }
-button:disabled { color: var(--theme-control-disabled); cursor: not-allowed; }
+button:hover:not(:disabled) {
+  background: var(--theme-control-hover);
+}
+button:active:not(:disabled) {
+  background: var(--theme-control-pressed);
+  color: var(--theme-control-pressed-contrast);
+}
+button:disabled {
+  color: var(--theme-control-disabled);
+  cursor: not-allowed;
+}
 
 .git-view button {
   scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
@@ -307,7 +313,9 @@ textarea {
 }
 
 input::placeholder,
-textarea::placeholder { color: var(--theme-text-muted); }
+textarea::placeholder {
+  color: var(--theme-text-muted);
+}
 
 :focus-visible {
   outline: 3px solid var(--theme-focus);

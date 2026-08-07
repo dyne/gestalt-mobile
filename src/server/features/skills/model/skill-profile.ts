@@ -50,7 +50,22 @@ export const availableSkillSchema = z
         defaultPrompt: z.string().optional(),
       })
       .optional(),
-    dependencies: z.object({ tools: z.array(z.object({ type: z.string(), value: z.string(), description: z.string().optional(), transport: z.string().optional(), command: z.string().optional(), url: z.string().optional() })).optional() }).optional(),
+    dependencies: z
+      .object({
+        tools: z
+          .array(
+            z.object({
+              type: z.string(),
+              value: z.string(),
+              description: z.string().optional(),
+              transport: z.string().optional(),
+              command: z.string().optional(),
+              url: z.string().optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
     scope: z.string().optional(),
   })
   .strict();
@@ -81,7 +96,10 @@ export type SkillProfile = {
  * is deliberately narrow so a profile name can never become a path traversal.
  */
 export function normalizeSkillProfileName(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-');
   if (!profileNamePattern.test(normalized)) {
     throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Invalid skill profile name.');
   }
@@ -90,7 +108,10 @@ export function normalizeSkillProfileName(value: string): string {
 
 function canonicalSkillPath(value: string): string {
   if (!isAbsolute(value) || normalize(value) !== value) {
-    throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Skill paths must be canonical absolute paths.');
+    throw new SkillProfileError(
+      'INVALID_SKILL_PROFILE',
+      'Skill paths must be canonical absolute paths.',
+    );
   }
   return value;
 }
@@ -138,7 +159,9 @@ export function applySkillSelectionSnapshot(
     return catalog;
   }
 
-  const enabledByPath = new Map(createSkillSelection(selection).map((entry) => [entry.path, entry.enabled]));
+  const enabledByPath = new Map(
+    createSkillSelection(selection).map((entry) => [entry.path, entry.enabled]),
+  );
   return catalog.map((skill) => ({ ...skill, enabled: enabledByPath.get(skill.path) ?? false }));
 }
 
@@ -152,8 +175,10 @@ export function selectEffectiveSkillSelection(input: {
   explicit?: SkillSelection;
   project?: SkillSelection;
 }): EffectiveSkillSelection {
-  if (input.explicit !== undefined) return { source: 'explicit', selection: createSkillSelection(input.explicit) };
-  if (input.project !== undefined) return { source: 'project', selection: createSkillSelection(input.project) };
+  if (input.explicit !== undefined)
+    return { source: 'explicit', selection: createSkillSelection(input.explicit) };
+  if (input.project !== undefined)
+    return { source: 'project', selection: createSkillSelection(input.project) };
   return { source: 'native', selection: undefined };
 }
 
@@ -174,7 +199,8 @@ export function compileSkillOverride(input: {
   project?: SkillSelection;
 }): CompiledSkillOverride {
   const effective = selectEffectiveSkillSelection(input);
-  if (effective.selection === undefined) return { source: 'native', skillsConfig: undefined, warnings: [] };
+  if (effective.selection === undefined)
+    return { source: 'native', skillsConfig: undefined, warnings: [] };
   const discoveredPaths = new Set(input.discovered.map((skill) => canonicalSkillPath(skill.path)));
   const warnings = effective.selection
     .filter((entry) => !discoveredPaths.has(entry.path))
@@ -194,7 +220,11 @@ export function createSkillProfile(input: {
   name: string;
   skills: readonly SkillSelectionEntry[];
 }): SkillProfile {
-  return { version: 1, name: normalizeSkillProfileName(input.name), skills: createSkillSelection(input.skills) };
+  return {
+    version: 1,
+    name: normalizeSkillProfileName(input.name),
+    skills: createSkillSelection(input.skills),
+  };
 }
 
 /** Parse the version-1 YAML document without performing filesystem access. */

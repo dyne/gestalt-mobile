@@ -36,14 +36,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : undefined,
   );
   let currentStep = $derived(plan ? findStep(plan.steps, plan.currentStepId) : undefined);
-  let automaticOpenIds = $derived(plan ? currentPath(plan.steps, plan.currentStepId) : new Set<string>());
+  let automaticOpenIds = $derived(
+    plan ? currentPath(plan.steps, plan.currentStepId) : new Set<string>(),
+  );
   let announcement = $derived.by(() => {
     if (viewState.kind === 'loading') return 'Loading plan.';
     if (viewState.kind === 'unavailable') return 'No retained plan for this session.';
     if (viewState.kind === 'error' && !plan) return viewState.error;
     if (viewState.kind === 'closing') return 'Closing completed plan.';
     if (!plan) return '';
-    if (!currentStep) return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
+    if (!currentStep)
+      return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
     return `Current step: ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
   });
 
@@ -55,7 +58,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const generation = ++scrollGeneration;
     void tick().then(() => {
       if (generation !== scrollGeneration || plan?.currentStepId !== currentStepId) return;
-      detailsById[currentStepId]?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+      detailsById[currentStepId]?.scrollIntoView({
+        behavior: 'auto',
+        block: 'nearest',
+        inline: 'nearest',
+      });
     });
   });
 
@@ -68,7 +75,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return undefined;
   }
 
-  function currentPath(steps: readonly PlanStep[], id: string, ancestors: readonly string[] = []): Set<string> {
+  function currentPath(
+    steps: readonly PlanStep[],
+    id: string,
+    ancestors: readonly string[] = [],
+  ): Set<string> {
     for (const step of steps) {
       if (step.id === id) return new Set([...ancestors, step.id]);
       const path = currentPath(step.children, id, [...ancestors, step.id]);
@@ -94,7 +105,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (!measurement) return 'Measurements unavailable';
     const values: string[] = [];
     if (measurement.elapsedSeconds !== undefined)
-      values.push(`${Math.floor(measurement.elapsedSeconds / 60)}m ${measurement.elapsedSeconds % 60}s elapsed`);
+      values.push(
+        `${Math.floor(measurement.elapsedSeconds / 60)}m ${measurement.elapsedSeconds % 60}s elapsed`,
+      );
     if (measurement.weeklyPercentUsed !== undefined)
       values.push(`${measurement.weeklyPercentUsed}% observed account-wide usage`);
     if (measurement.tokensUsed !== undefined)
@@ -117,11 +130,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
 
 {#if viewState.kind === 'loading'}
-  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>Loading plan…</p></section>
+  <section aria-labelledby="plan-title">
+    <h2 id="plan-title">Plan</h2>
+    <p>Loading plan…</p>
+  </section>
 {:else if viewState.kind === 'unavailable'}
-  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>No retained plan for this session.</p></section>
+  <section aria-labelledby="plan-title">
+    <h2 id="plan-title">Plan</h2>
+    <p>No retained plan for this session.</p>
+  </section>
 {:else if viewState.kind === 'error' && !plan}
-  <section aria-labelledby="plan-title"><h2 id="plan-title">Plan</h2><p>{viewState.error}</p></section>
+  <section aria-labelledby="plan-title">
+    <h2 id="plan-title">Plan</h2>
+    <p>{viewState.error}</p>
+  </section>
 {:else if plan}
   <section class="plan" aria-labelledby="plan-title">
     <header>
@@ -129,24 +151,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <h2 id="plan-title">{plan.title}</h2>
         <p>{plan.doneSteps} / {plan.totalSteps} complete</p>
       </div>
-      <button
-        class="close"
-        aria-label="Close plan and return to list"
-        onclick={onclose}>×</button
-      >
+      <button class="close" aria-label="Close plan and return to list" onclick={onclose}>×</button>
     </header>
     <progress aria-label="Plan progress" value={plan.doneSteps} max={progressMax(plan)}>
       {plan.doneSteps} of {plan.totalSteps} complete
     </progress>
-    <p>Current: {currentStep ? `${currentStep.title} (${currentStep.state})` : 'No current step'}</p>
+    <p>
+      Current: {currentStep ? `${currentStep.title} (${currentStep.state})` : 'No current step'}
+    </p>
     {#if viewState.kind === 'error'}
       <p>{viewState.error}</p>
     {/if}
     {#if plan.subtitle || plan.date || plan.keywords}
       <dl class="metadata">
-        {#if plan.subtitle}<div><dt>Subtitle</dt><dd>{plan.subtitle}</dd></div>{/if}
-        {#if plan.date}<div><dt>Date</dt><dd>{plan.date}</dd></div>{/if}
-        {#if plan.keywords}<div><dt>Keywords</dt><dd>{plan.keywords}</dd></div>{/if}
+        {#if plan.subtitle}<div>
+            <dt>Subtitle</dt>
+            <dd>{plan.subtitle}</dd>
+          </div>{/if}
+        {#if plan.date}<div>
+            <dt>Date</dt>
+            <dd>{plan.date}</dd>
+          </div>{/if}
+        {#if plan.keywords}<div>
+            <dt>Keywords</dt>
+            <dd>{plan.keywords}</dd>
+          </div>{/if}
       </dl>
     {/if}
     {#if plan.steps.length === 0}
@@ -163,7 +192,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
               <summary>
                 <strong>{step.title}</strong>
-                <span>{step.state} · Priority {step.priority}{step.reviewStatus ? ` · ${step.reviewStatus}` : ''}</span>
+                <span
+                  >{step.state} · Priority {step.priority}{step.reviewStatus
+                    ? ` · ${step.reviewStatus}`
+                    : ''}</span
+                >
                 <span>{summary(step)}</span>
                 <span class="measurement">{measurementSummary(step)}</span>
               </summary>
@@ -183,13 +216,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                       >
                         <summary>
                           <strong>{child.title}</strong>
-                          <span>{child.state} · Priority {child.priority}{child.reviewStatus ? ` · ${child.reviewStatus}` : ''}</span>
+                          <span
+                            >{child.state} · Priority {child.priority}{child.reviewStatus
+                              ? ` · ${child.reviewStatus}`
+                              : ''}</span
+                          >
                           <span>{summary(child)}</span>
                         </summary>
                         {#each descriptionEntries(child) as [label, value] (label)}
                           <p><strong>{label}:</strong> {value}</p>
                         {/each}
-                        {#if child.skills?.length}<p><strong>Skills:</strong> {child.skills.join(', ')}</p>{/if}
+                        {#if child.skills?.length}<p>
+                            <strong>Skills:</strong>
+                            {child.skills.join(', ')}
+                          </p>{/if}
                       </details>
                     </li>
                   {/each}
@@ -204,18 +244,63 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
-  .plan { min-inline-size: 0; overflow-wrap: anywhere; }
-  header { display: flex; gap: 1rem; justify-content: space-between; align-items: start; }
-  h2, p { margin-block: .4rem; }
-  progress { inline-size: 100%; }
-  ol { padding-inline-start: 1.25rem; }
-  details { margin-block: .5rem; }
-  summary { cursor: pointer; display: grid; gap: .2rem; }
-  .measurement { color: var(--muted, currentColor); font-variant-numeric: tabular-nums; }
-  .metadata { display: grid; gap: .25rem; }
-  .metadata div { display: flex; gap: .5rem; }
-  .metadata dd { margin: 0; }
-  .close { inline-size: 2.75rem; block-size: 2.75rem; flex: 0 0 auto; font-size: 1.5rem; }
-  button:focus-visible, summary:focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+  .plan {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+  header {
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    align-items: start;
+  }
+  h2,
+  p {
+    margin-block: 0.4rem;
+  }
+  progress {
+    inline-size: 100%;
+  }
+  ol {
+    padding-inline-start: 1.25rem;
+  }
+  details {
+    margin-block: 0.5rem;
+  }
+  summary {
+    cursor: pointer;
+    display: grid;
+    gap: 0.2rem;
+  }
+  .measurement {
+    color: var(--muted, currentColor);
+    font-variant-numeric: tabular-nums;
+  }
+  .metadata {
+    display: grid;
+    gap: 0.25rem;
+  }
+  .metadata div {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .metadata dd {
+    margin: 0;
+  }
+  .close {
+    inline-size: 2.75rem;
+    block-size: 2.75rem;
+    flex: 0 0 auto;
+    font-size: 1.5rem;
+  }
+  button:focus-visible,
+  summary:focus-visible {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      scroll-behavior: auto;
+    }
+  }
 </style>

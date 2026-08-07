@@ -10,21 +10,46 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import QuizForm from './QuizForm.svelte';
   import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
   type Interaction = { requestId: string; kind: string; payload: unknown };
-  type Props = { interactions: Interaction[]; answers: Record<string, string>; onanswer(requestId: string, id: string, value: string): void; onquiz(interaction: Interaction): void; onpermission(interaction: Interaction): void; ondecision(id: string, decision: 'accept' | 'decline'): void };
+  type Props = {
+    interactions: Interaction[];
+    answers: Record<string, string>;
+    onanswer(requestId: string, id: string, value: string): void;
+    onquiz(interaction: Interaction): void;
+    onpermission(interaction: Interaction): void;
+    ondecision(id: string, decision: 'accept' | 'decline'): void;
+  };
   let { interactions, answers, onanswer, onquiz, onpermission, ondecision }: Props = $props();
-  const scopedAnswers = (requestId: string) => Object.fromEntries(Object.entries(answers).filter(([key]) => key.startsWith(`${requestId}:`)).map(([key, value]) => [key.slice(requestId.length + 1), value]));
+  const scopedAnswers = (requestId: string) =>
+    Object.fromEntries(
+      Object.entries(answers)
+        .filter(([key]) => key.startsWith(`${requestId}:`))
+        .map(([key, value]) => [key.slice(requestId.length + 1), value]),
+    );
 </script>
+
 {#if interactions.length}
-  <section aria-labelledby="interactions-title"><h3 id="interactions-title">Codex needs your decision</h3>
+  <section aria-labelledby="interactions-title">
+    <h3 id="interactions-title">Codex needs your decision</h3>
     {#each interactions as interaction (interaction.requestId)}
-      <article><p>{interaction.kind}</p>
+      <article>
+        <p>{interaction.kind}</p>
         {#if interaction.kind === 'userInput' || interaction.kind === 'quiz'}
-          {@const quiz = interaction.kind === 'quiz' ? parseQuiz(interaction.payload) : mapNativeUserInputToQuiz(interaction.payload)}
+          {@const quiz =
+            interaction.kind === 'quiz'
+              ? parseQuiz(interaction.payload)
+              : mapNativeUserInputToQuiz(interaction.payload)}
           {#if quiz}
-            <QuizForm requestId={interaction.requestId} {quiz} answers={scopedAnswers(interaction.requestId)} onanswer={(id, value) => onanswer(interaction.requestId, id, value)} onsubmit={() => onquiz(interaction)} />
+            <QuizForm
+              requestId={interaction.requestId}
+              {quiz}
+              answers={scopedAnswers(interaction.requestId)}
+              onanswer={(id, value) => onanswer(interaction.requestId, id, value)}
+              onsubmit={() => onquiz(interaction)}
+            />
           {:else}<p>Codex sent an invalid quiz request.</p>{/if}
         {:else if interaction.kind === 'permissionsApproval'}
-          <p>Grant the requested permissions for this turn only.</p><button type="button" onclick={() => onpermission(interaction)}>Approve</button>
+          <p>Grant the requested permissions for this turn only.</p>
+          <button type="button" onclick={() => onpermission(interaction)}>Approve</button>
         {:else if interaction.kind === 'commandApproval'}
           {@const command = readCommandApproval(interaction.payload)}
           <p>Approve this command?</p>
@@ -34,8 +59,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <p class="command-approval-missing">Command details were not provided.</p>
           {/if}
           <div class="approval-actions">
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button>
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
+              >Approve</button
+            >
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
+              >Deny</button
+            >
           </div>
         {:else if interaction.kind === 'fileChangeApproval'}
           {@const paths = readFileChangeApproval(interaction.payload)}
@@ -50,11 +79,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <p class="file-change-approval-missing">File details were not provided.</p>
           {/if}
           <div class="approval-actions">
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button>
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
+              >Approve</button
+            >
+            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
+              >Deny</button
+            >
           </div>
         {:else}
-          <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}>Approve</button><button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}>Deny</button>
+          <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
+            >Approve</button
+          ><button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
+            >Deny</button
+          >
         {/if}
       </article>
     {/each}
@@ -73,8 +110,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 1px solid var(--theme-border);
     border-radius: 0.375rem;
   }
-  .command-approval-missing { margin-block: 0.5rem 0.75rem; }
-  .file-change-approval-targets { margin-block: 0.5rem 0.75rem; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
-  .file-change-approval-missing { margin-block: 0.5rem 0.75rem; }
-  .approval-actions { display: flex; flex-wrap: wrap; gap: clamp(0.5rem, 2vw, 1rem); }
+  .command-approval-missing {
+    margin-block: 0.5rem 0.75rem;
+  }
+  .file-change-approval-targets {
+    margin-block: 0.5rem 0.75rem;
+    padding-inline-start: 1.5rem;
+    overflow-wrap: anywhere;
+  }
+  .file-change-approval-missing {
+    margin-block: 0.5rem 0.75rem;
+  }
+  .approval-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: clamp(0.5rem, 2vw, 1rem);
+  }
 </style>

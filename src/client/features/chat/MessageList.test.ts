@@ -32,9 +32,7 @@ describe('MessageList', () => {
           complete: true,
         },
       ],
-      activities: [
-        { id: 'command', label: 'Command · completed', detail: 'git status' },
-      ],
+      activities: [{ id: 'command', label: 'Command · completed', detail: 'git status' }],
     });
 
     const heading = screen.getByText('answer').parentElement;
@@ -55,9 +53,7 @@ describe('MessageList', () => {
           complete: false,
         },
       ],
-      activities: [
-        { id: 'command', label: 'Command · in_progress', detail: 'git status' },
-      ],
+      activities: [{ id: 'command', label: 'Command · in_progress', detail: 'git status' }],
     });
 
     expect(screen.getByText('commentary').closest('details')).not.toBeNull();

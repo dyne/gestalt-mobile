@@ -15,7 +15,8 @@ const authModules = [
   new URL('./domain/identifiers.ts', import.meta.url),
   new URL('./application/ports.ts', import.meta.url),
 ];
-const forbiddenImports = /from\s+['"](?:fastify|@fastify\/|node:(?:fs|child_process)|better-sqlite3|sqlite|svelte|@simplewebauthn\/)/;
+const forbiddenImports =
+  /from\s+['"](?:fastify|@fastify\/|node:(?:fs|child_process)|better-sqlite3|sqlite|svelte|@simplewebauthn\/)/;
 
 describe('auth domain and application boundary', () => {
   it('does not depend on framework, storage, filesystem, or WebAuthn integration modules', async () => {

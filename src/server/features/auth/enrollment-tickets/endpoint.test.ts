@@ -7,7 +7,11 @@ import cookie from '@fastify/cookie';
 import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
-import { authorizationSessionId, type AuthorizationSessionId, type EnrollmentTicketId } from '../domain/identifiers.js';
+import {
+  authorizationSessionId,
+  type AuthorizationSessionId,
+  type EnrollmentTicketId,
+} from '../domain/identifiers.js';
 import { registerCreateEnrollmentTicket } from './endpoint.js';
 import { registerEnrollmentTicketStatus } from './status/endpoint.js';
 import { registerCancelEnrollmentTicket } from './cancel/endpoint.js';
@@ -19,14 +23,23 @@ describe('create enrollment ticket endpoint', () => {
     const issued: Array<{ ticket: string; session: string; expiresAt: string }> = [];
     registerCreateEnrollmentTicket(app, {
       repository: {
-        sessionDevice: (session: AuthorizationSessionId) => session === authorizationSessionId('creator-secret') ? ('device' as never) : null,
-        issueEnrollmentTicket: (ticket: EnrollmentTicketId, session: AuthorizationSessionId, expiresAt: string) => issued.push({ ticket, session, expiresAt }),
+        sessionDevice: (session: AuthorizationSessionId) =>
+          session === authorizationSessionId('creator-secret') ? ('device' as never) : null,
+        issueEnrollmentTicket: (
+          ticket: EnrollmentTicketId,
+          session: AuthorizationSessionId,
+          expiresAt: string,
+        ) => issued.push({ ticket, session, expiresAt }),
       } as never,
       clock: { now: () => new Date('2026-08-02T00:00:00.000Z') },
       random: { bytes: (length) => new Uint8Array(length).map((_, index) => index) },
       relyingParty: { publicOrigin: 'https://relay.example:8443' },
     });
-    const response = await app.inject({ method: 'POST', url: '/api/auth/enrollment-tickets', headers: { cookie: 'gestalt_mobile_session=creator-secret' } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/enrollment-tickets',
+      headers: { cookie: 'gestalt_mobile_session=creator-secret' },
+    });
     expect(response.statusCode).toBe(201);
     const body = response.json() as { ticket: string; url: string; expiresAt: string };
     expect(Buffer.from(body.ticket, 'base64url')).toHaveLength(32);
@@ -34,7 +47,9 @@ describe('create enrollment ticket endpoint', () => {
     expect(new URL(body.url).search).toBe('');
     expect(new URL(body.url).hash).toBe(`#enroll=${body.ticket}`);
     expect(body.expiresAt).toBe('2026-08-02T00:10:00.000Z');
-    expect(issued).toEqual([{ ticket: body.ticket, session: 'creator-secret', expiresAt: body.expiresAt }]);
+    expect(issued).toEqual([
+      { ticket: body.ticket, session: 'creator-secret', expiresAt: body.expiresAt },
+    ]);
     await app.close();
   });
 
@@ -43,12 +58,19 @@ describe('create enrollment ticket endpoint', () => {
     await app.register(cookie);
     let issued = false;
     registerCreateEnrollmentTicket(app, {
-      repository: { sessionDevice: () => null, issueEnrollmentTicket: () => { issued = true; } } as never,
+      repository: {
+        sessionDevice: () => null,
+        issueEnrollmentTicket: () => {
+          issued = true;
+        },
+      } as never,
       clock: { now: () => new Date('2026-08-02T00:00:00.000Z') },
       random: { bytes: (length) => new Uint8Array(length) },
       relyingParty: { publicOrigin: 'https://relay.example' },
     });
-    expect((await app.inject({ method: 'POST', url: '/api/auth/enrollment-tickets' })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/auth/enrollment-tickets' })).statusCode,
+    ).toBe(401);
     expect(issued).toBe(false);
     await app.close();
   });
@@ -61,10 +83,21 @@ describe('create enrollment ticket endpoint', () => {
     });
     let repositoryCalls = 0;
     const repository = {
-      sessionDevice: () => { repositoryCalls++; return null; },
-      issueEnrollmentTicket: () => { repositoryCalls++; },
-      enrollmentTicketStatus: () => { repositoryCalls++; return 'none' as const; },
-      cancelEnrollmentTicket: () => { repositoryCalls++; return false; },
+      sessionDevice: () => {
+        repositoryCalls++;
+        return null;
+      },
+      issueEnrollmentTicket: () => {
+        repositoryCalls++;
+      },
+      enrollmentTicketStatus: () => {
+        repositoryCalls++;
+        return 'none' as const;
+      },
+      cancelEnrollmentTicket: () => {
+        repositoryCalls++;
+        return false;
+      },
     };
     const deps = {
       repository: repository as never,
@@ -94,25 +127,51 @@ describe('create enrollment ticket endpoint', () => {
     let status: 'none' | 'pending' | 'used' | 'expired' = 'pending';
     let cancelled = false;
     const repository = {
-      sessionDevice: (session: AuthorizationSessionId) => session === authorizationSessionId('creator-secret') ? ('device' as never) : null,
+      sessionDevice: (session: AuthorizationSessionId) =>
+        session === authorizationSessionId('creator-secret') ? ('device' as never) : null,
       enrollmentTicketStatus: () => status,
-      cancelEnrollmentTicket: () => { cancelled = true; if (status === 'pending') status = 'none'; return status === 'none'; },
+      cancelEnrollmentTicket: () => {
+        cancelled = true;
+        if (status === 'pending') status = 'none';
+        return status === 'none';
+      },
     };
-    const deps = { repository: repository as never, clock: { now: () => new Date('2026-08-02T00:00:00.000Z') } };
+    const deps = {
+      repository: repository as never,
+      clock: { now: () => new Date('2026-08-02T00:00:00.000Z') },
+    };
     registerEnrollmentTicketStatus(app, deps);
     registerCancelEnrollmentTicket(app, deps);
     const headers = { cookie: 'gestalt_mobile_session=creator-secret' };
-    expect((await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current', headers })).json()).toEqual({ status: 'pending' });
-    const cancelledResponse = await app.inject({ method: 'DELETE', url: '/api/auth/enrollment-tickets/current', headers });
+    expect(
+      (
+        await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current', headers })
+      ).json(),
+    ).toEqual({ status: 'pending' });
+    const cancelledResponse = await app.inject({
+      method: 'DELETE',
+      url: '/api/auth/enrollment-tickets/current',
+      headers,
+    });
     expect(cancelledResponse.json()).toEqual({ status: 'none' });
     expect(cancelled).toBe(true);
-    expect((await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current', headers })).json()).toEqual({ status: 'none' });
+    expect(
+      (
+        await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current', headers })
+      ).json(),
+    ).toEqual({ status: 'none' });
     for (const unchanged of ['used', 'expired', 'none'] as const) {
       status = unchanged;
-      const response = await app.inject({ method: 'DELETE', url: '/api/auth/enrollment-tickets/current', headers });
+      const response = await app.inject({
+        method: 'DELETE',
+        url: '/api/auth/enrollment-tickets/current',
+        headers,
+      });
       expect(response.json()).toEqual({ status: unchanged });
     }
-    expect((await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current' })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/auth/enrollment-tickets/current' })).statusCode,
+    ).toBe(401);
     await app.close();
   });
 });

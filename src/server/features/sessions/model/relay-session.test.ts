@@ -26,7 +26,9 @@ const session = () =>
 describe('RelaySession', () => {
   it('keeps a copied effective skill selection through lifecycle transitions', () => {
     const original = session().snapshot;
-    const changed = RelaySession.rehydrate(original).beginRecovery(createdAt).restore(createdAt).snapshot;
+    const changed = RelaySession.rehydrate(original)
+      .beginRecovery(createdAt)
+      .restore(createdAt).snapshot;
     expect(changed.effectiveSkillSelection).toEqual(original.effectiveSkillSelection);
     const leaked = changed.effectiveSkillSelection!;
     (leaked.skills as unknown as Array<{ enabled: boolean }>)[0]!.enabled = false;

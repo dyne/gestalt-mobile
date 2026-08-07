@@ -153,7 +153,9 @@ describe('production composition', () => {
       passkeyAuthEnabled: false,
     });
     expect((await app.inject('/api/bootstrap')).statusCode).toBe(200);
-    expect((await app.inject({ method: 'POST', url: '/api/auth/login/options' })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/login/options' })).statusCode).toBe(
+      404,
+    );
     expect(authorizationRandomBytes).not.toHaveBeenCalled();
     await app.close();
   });
@@ -181,9 +183,24 @@ describe('production composition', () => {
       ['HEAD', '/api/auth/status', '/api/auth/status', 'protected'],
       ['POST', '/api/auth/logout', '/api/auth/logout', 'public'],
       ['POST', '/api/auth/enrollment-tickets', '/api/auth/enrollment-tickets', 'protected'],
-      ['GET', '/api/auth/enrollment-tickets/current', '/api/auth/enrollment-tickets/current', 'protected'],
-      ['HEAD', '/api/auth/enrollment-tickets/current', '/api/auth/enrollment-tickets/current', 'protected'],
-      ['DELETE', '/api/auth/enrollment-tickets/current', '/api/auth/enrollment-tickets/current', 'protected'],
+      [
+        'GET',
+        '/api/auth/enrollment-tickets/current',
+        '/api/auth/enrollment-tickets/current',
+        'protected',
+      ],
+      [
+        'HEAD',
+        '/api/auth/enrollment-tickets/current',
+        '/api/auth/enrollment-tickets/current',
+        'protected',
+      ],
+      [
+        'DELETE',
+        '/api/auth/enrollment-tickets/current',
+        '/api/auth/enrollment-tickets/current',
+        'protected',
+      ],
       ['GET', '/api/auth/devices', '/api/auth/devices', 'protected'],
       ['HEAD', '/api/auth/devices', '/api/auth/devices', 'protected'],
       ['PATCH', '/api/auth/devices/:deviceId', '/api/auth/devices/device-1', 'protected'],
@@ -201,16 +218,66 @@ describe('production composition', () => {
       ['GET', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['HEAD', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['DELETE', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
-      ['GET', '/api/workspaces/:workspaceId/plans', '/api/workspaces/workspace-1/plans', 'protected'],
-      ['HEAD', '/api/workspaces/:workspaceId/plans', '/api/workspaces/workspace-1/plans', 'protected'],
-      ['GET', '/api/workspaces/:workspaceId/plans/:planName', '/api/workspaces/workspace-1/plans/plan.org', 'protected'],
-      ['HEAD', '/api/workspaces/:workspaceId/plans/:planName', '/api/workspaces/workspace-1/plans/plan.org', 'protected'],
-      ['GET', '/api/git/repositories/:workspaceId', '/api/git/repositories/workspace-1', 'protected'],
-      ['HEAD', '/api/git/repositories/:workspaceId', '/api/git/repositories/workspace-1', 'protected'],
-      ['POST', '/api/git/repositories/:workspaceId/push', '/api/git/repositories/workspace-1/push', 'protected'],
-      ['POST', '/api/git/repositories/:workspaceId/refresh', '/api/git/repositories/workspace-1/refresh', 'protected'],
-      ['POST', '/api/git/repositories/:workspaceId/pull', '/api/git/repositories/workspace-1/pull', 'protected'],
-      ['POST', '/api/git/repositories/:workspaceId/checkout', '/api/git/repositories/workspace-1/checkout', 'protected'],
+      [
+        'GET',
+        '/api/workspaces/:workspaceId/plans',
+        '/api/workspaces/workspace-1/plans',
+        'protected',
+      ],
+      [
+        'HEAD',
+        '/api/workspaces/:workspaceId/plans',
+        '/api/workspaces/workspace-1/plans',
+        'protected',
+      ],
+      [
+        'GET',
+        '/api/workspaces/:workspaceId/plans/:planName',
+        '/api/workspaces/workspace-1/plans/plan.org',
+        'protected',
+      ],
+      [
+        'HEAD',
+        '/api/workspaces/:workspaceId/plans/:planName',
+        '/api/workspaces/workspace-1/plans/plan.org',
+        'protected',
+      ],
+      [
+        'GET',
+        '/api/git/repositories/:workspaceId',
+        '/api/git/repositories/workspace-1',
+        'protected',
+      ],
+      [
+        'HEAD',
+        '/api/git/repositories/:workspaceId',
+        '/api/git/repositories/workspace-1',
+        'protected',
+      ],
+      [
+        'POST',
+        '/api/git/repositories/:workspaceId/push',
+        '/api/git/repositories/workspace-1/push',
+        'protected',
+      ],
+      [
+        'POST',
+        '/api/git/repositories/:workspaceId/refresh',
+        '/api/git/repositories/workspace-1/refresh',
+        'protected',
+      ],
+      [
+        'POST',
+        '/api/git/repositories/:workspaceId/pull',
+        '/api/git/repositories/workspace-1/pull',
+        'protected',
+      ],
+      [
+        'POST',
+        '/api/git/repositories/:workspaceId/checkout',
+        '/api/git/repositories/workspace-1/checkout',
+        'protected',
+      ],
       ['POST', '/api/git/clone', '/api/git/clone', 'protected'],
       ['GET', '/api/skills', '/api/skills', 'protected'],
       ['HEAD', '/api/skills', '/api/skills', 'protected'],

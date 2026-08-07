@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FilesystemWorkspacePlanCatalog } from './filesystem-workspace-plan-catalog.js';
 
 const roots: string[] = [];
-afterEach(async () => Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
+afterEach(async () =>
+  Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))),
+);
 
 async function workspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'gestalt-workspace-plans-'));
@@ -54,7 +56,12 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     const entries = await new FilesystemWorkspacePlanCatalog().list(root);
 
     expect(entries).toEqual([
-      expect.objectContaining({ planName: 'alpha.org', title: 'Alpha', totalSteps: 1, doneSteps: 0 }),
+      expect.objectContaining({
+        planName: 'alpha.org',
+        title: 'Alpha',
+        totalSteps: 1,
+        doneSteps: 0,
+      }),
       expect.objectContaining({ planName: 'zeta.org', title: 'Zeta', totalSteps: 1, doneSteps: 0 }),
     ]);
     expect(JSON.stringify(entries)).not.toContain(root);
@@ -107,7 +114,10 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     const second = await workspace();
     await Promise.all([
       ...Array.from({ length: 101 }, (_, index) =>
-        writeFile(join(first, '.gestalt', `${String(index).padStart(3, '0')}.org`), plan(`Plan ${index}`)),
+        writeFile(
+          join(first, '.gestalt', `${String(index).padStart(3, '0')}.org`),
+          plan(`Plan ${index}`),
+        ),
       ),
       writeFile(join(first, '.gestalt', 'oversized.org'), 'x'.repeat(1_048_577)),
       writeFile(join(second, '.gestalt', 'shared.org'), plan('Second workspace')),
@@ -119,10 +129,12 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     expect(listed).toHaveLength(100);
     await expect(catalog.read(first, 'oversized.org')).resolves.toEqual({ kind: 'unavailable' });
     await expect(catalog.read(first, 'shared.org')).resolves.toMatchObject({
-      kind: 'available', plan: { title: 'First workspace' },
+      kind: 'available',
+      plan: { title: 'First workspace' },
     });
     await expect(catalog.read(second, 'shared.org')).resolves.toMatchObject({
-      kind: 'available', plan: { title: 'Second workspace' },
+      kind: 'available',
+      plan: { title: 'Second workspace' },
     });
   });
 });

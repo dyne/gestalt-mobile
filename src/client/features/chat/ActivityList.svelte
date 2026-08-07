@@ -26,16 +26,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <details id="chat-activity" open={hasInProgressActivity}>
     <summary>activity</summary>
     <ul class="activity-list">
-    {#each visibleActivities as activity (activity.id)}
-      <li
-        class="activity-row"
-        data-activity-kind={activity.kind.toLowerCase().replaceAll(' ', '-')}
-        data-activity-status={activity.status}
-      >
-        <small class="activity-type">{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small>
-        <span class="activity-content">{activity.content}</span>
-      </li>
-    {/each}
+      {#each visibleActivities as activity (activity.id)}
+        <li
+          class="activity-row"
+          data-activity-kind={activity.kind.toLowerCase().replaceAll(' ', '-')}
+          data-activity-status={activity.status}
+        >
+          <small class="activity-type"
+            >{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small
+          >
+          <span class="activity-content">{activity.content}</span>
+        </li>
+      {/each}
     </ul>
   </details>
 {/if}
@@ -68,9 +70,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     align-items: baseline;
   }
 
-  .activity-row[data-activity-status='failed'] { border-inline-start: 0.25rem solid var(--theme-error); padding-inline-start: 0.375rem; }
-  .activity-row[data-activity-status='completed'] { border-inline-start: 0.25rem solid var(--theme-success); padding-inline-start: 0.375rem; }
-  .activity-row[data-activity-status]:not([data-activity-status='completed']):not([data-activity-status='failed']) { border-inline-start: 0.25rem solid var(--theme-info); padding-inline-start: 0.375rem; }
+  .activity-row[data-activity-status='failed'] {
+    border-inline-start: 0.25rem solid var(--theme-error);
+    padding-inline-start: 0.375rem;
+  }
+  .activity-row[data-activity-status='completed'] {
+    border-inline-start: 0.25rem solid var(--theme-success);
+    padding-inline-start: 0.375rem;
+  }
+  .activity-row[data-activity-status]:not([data-activity-status='completed']):not(
+      [data-activity-status='failed']
+    ) {
+    border-inline-start: 0.25rem solid var(--theme-info);
+    padding-inline-start: 0.375rem;
+  }
 
   .activity-type {
     color: var(--activity-type-color);

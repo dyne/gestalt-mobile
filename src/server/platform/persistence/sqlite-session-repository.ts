@@ -74,10 +74,12 @@ export class SqliteSessionRepository {
 }
 function map(row: Row): RelaySessionSnapshot {
   const effectiveSkillSelection = row.effective_skill_selection_json
-    ? createEffectiveSkillSelection(JSON.parse(row.effective_skill_selection_json) as {
-        selectedProfileName?: string;
-        skills: Array<{ name: string; path: string; enabled: boolean }>;
-      })
+    ? createEffectiveSkillSelection(
+        JSON.parse(row.effective_skill_selection_json) as {
+          selectedProfileName?: string;
+          skills: Array<{ name: string; path: string; enabled: boolean }>;
+        },
+      )
     : undefined;
   const lastOrgPlan = row.last_org_plan_json
     ? (JSON.parse(row.last_org_plan_json) as RelaySessionSnapshot['lastOrgPlan'])

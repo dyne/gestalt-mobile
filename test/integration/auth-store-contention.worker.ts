@@ -44,8 +44,10 @@ process.once('message', (value: Config) => {
       try {
         const outcome =
           value.mode === 'first-claim'
-            ? store
-                .claimFirstDevice(store.initializeOwner(new Uint8Array(32).fill(1)), device(value.id))
+            ? store.claimFirstDevice(
+                store.initializeOwner(new Uint8Array(32).fill(1)),
+                device(value.id),
+              )
             : store.revokeDevice(authorizedDeviceId(value.id), '2026-08-02T01:00:00.000Z');
         process.send?.({ type: 'result', outcome });
       } catch {
@@ -58,7 +60,10 @@ process.once('message', (value: Config) => {
       store?.close();
       process.send?.({
         type: 'error',
-        reason: error instanceof Error && error.message.includes('database is locked') ? 'database locked' : 'store operation failed',
+        reason:
+          error instanceof Error && error.message.includes('database is locked')
+            ? 'database locked'
+            : 'store operation failed',
       });
       process.disconnect();
     }

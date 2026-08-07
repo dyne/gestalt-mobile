@@ -36,7 +36,11 @@ export class SimpleWebAuthnAdapter implements WebAuthnCeremonyService {
       challenge: new Uint8Array(input.challenge),
       attestationType: 'none',
       excludeCredentials: input.excludeCredentialIds.map((id) => ({ id })),
-      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+      authenticatorSelection: {
+        residentKey: 'required',
+        requireResidentKey: true,
+        userVerification: 'required',
+      },
       supportedAlgorithmIDs: [-7, -257],
     });
   }
@@ -50,32 +54,80 @@ export class SimpleWebAuthnAdapter implements WebAuthnCeremonyService {
     });
   }
 
-  async verifyRegistration(input: { response: unknown; challenge: Uint8Array; expectedOrigin: string; rpId: string }): Promise<RegistrationVerification> {
-    let result; try { result = await verifyRegistrationResponse({
-      response: input.response as RegistrationResponseJSON,
-      expectedChallenge: Buffer.from(input.challenge).toString('base64url'),
-      expectedOrigin: input.expectedOrigin,
-      expectedRPID: input.rpId,
-      requireUserVerification: true,
-      supportedAlgorithmIDs: [-7, -257],
-    }); } catch { throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED'); }
-    if (!result.verified || !result.registrationInfo?.userVerified) throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+  async verifyRegistration(input: {
+    response: unknown;
+    challenge: Uint8Array;
+    expectedOrigin: string;
+    rpId: string;
+  }): Promise<RegistrationVerification> {
+    let result;
+    try {
+      result = await verifyRegistrationResponse({
+        response: input.response as RegistrationResponseJSON,
+        expectedChallenge: Buffer.from(input.challenge).toString('base64url'),
+        expectedOrigin: input.expectedOrigin,
+        expectedRPID: input.rpId,
+        requireUserVerification: true,
+        supportedAlgorithmIDs: [-7, -257],
+      });
+    } catch {
+      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+    }
+    if (!result.verified || !result.registrationInfo?.userVerified)
+      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
     const credential = result.registrationInfo.credential;
     return {
       credentialId: webAuthnCredentialId(credential.id),
       publicKey: new Uint8Array(credential.publicKey),
       counter: credential.counter,
       userVerified: result.registrationInfo.userVerified,
-      transports: (credential.transports ?? []).filter((value): value is 'ble' | 'hybrid' | 'internal' | 'nfc' | 'usb' => transports.has(value)),
+      transports: (credential.transports ?? []).filter(
+        (value): value is 'ble' | 'hybrid' | 'internal' | 'nfc' | 'usb' => transports.has(value),
+      ),
       deviceType: result.registrationInfo.credentialDeviceType,
       backedUp: result.registrationInfo.credentialBackedUp,
     };
   }
 
   async verifyAuthentication(input: unknown) {
-    const value = input as { response: AuthenticationResponseJSON; challenge: Uint8Array; expectedOrigin: string; rpId: string; credential: { id: string; publicKey: Uint8Array; counter: number; transports: readonly ('ble' | 'hybrid' | 'internal' | 'nfc' | 'usb')[] } };
-    let result; try { result = await verifyAuthenticationResponse({ response: value.response, expectedChallenge: Buffer.from(value.challenge).toString('base64url'), expectedOrigin: value.expectedOrigin, expectedRPID: value.rpId, requireUserVerification: true, credential: { id: value.credential.id, publicKey: new Uint8Array(value.credential.publicKey) as import('@simplewebauthn/server').Uint8Array_, counter: value.credential.counter, transports: [...value.credential.transports] } }); } catch { throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED'); }
-    if (!result.verified || !result.authenticationInfo?.userVerified) throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
-    return { credentialId: webAuthnCredentialId(value.response.id), counter: result.authenticationInfo.newCounter, userVerified: result.authenticationInfo.userVerified };
+    const value = input as {
+      response: AuthenticationResponseJSON;
+      challenge: Uint8Array;
+      expectedOrigin: string;
+      rpId: string;
+      credential: {
+        id: string;
+        publicKey: Uint8Array;
+        counter: number;
+        transports: readonly ('ble' | 'hybrid' | 'internal' | 'nfc' | 'usb')[];
+      };
+    };
+    let result;
+    try {
+      result = await verifyAuthenticationResponse({
+        response: value.response,
+        expectedChallenge: Buffer.from(value.challenge).toString('base64url'),
+        expectedOrigin: value.expectedOrigin,
+        expectedRPID: value.rpId,
+        requireUserVerification: true,
+        credential: {
+          id: value.credential.id,
+          publicKey: new Uint8Array(
+            value.credential.publicKey,
+          ) as import('@simplewebauthn/server').Uint8Array_,
+          counter: value.credential.counter,
+          transports: [...value.credential.transports],
+        },
+      });
+    } catch {
+      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+    }
+    if (!result.verified || !result.authenticationInfo?.userVerified)
+      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+    return {
+      credentialId: webAuthnCredentialId(value.response.id),
+      counter: result.authenticationInfo.newCounter,
+      userVerified: result.authenticationInfo.userVerified,
+    };
   }
 }

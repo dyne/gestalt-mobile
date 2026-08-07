@@ -5,7 +5,10 @@
  */
 
 import type { SupervisedPlan } from '../domain/supervised-plan.js';
-import type { WorkspacePlanEntry, WorkspacePlanReadResult } from '../domain/workspace-plan-catalog.js';
+import type {
+  WorkspacePlanEntry,
+  WorkspacePlanReadResult,
+} from '../domain/workspace-plan-catalog.js';
 import type { PlanMeasurementSnapshot } from './measurement-snapshot.js';
 import type { PlanSignalReason } from '../../../../shared/contracts/plan-signal.js';
 

@@ -58,10 +58,7 @@ import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-sta
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
-import {
-  createRelyingPartyConfig,
-  type RelyingPartyConfig,
-} from './config.js';
+import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -282,7 +279,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let authorization: SqliteAuthorizationStore | undefined;
   if (passkeyAuthEnabled) {
     try {
-      authorization = new SqliteAuthorizationStore(options.homeDirectory ?? homedir(), relyingParty);
+      authorization = new SqliteAuthorizationStore(
+        options.homeDirectory ?? homedir(),
+        relyingParty,
+      );
       authorization.initializeOwner(ownerHandle!);
     } catch (error) {
       database.close();
@@ -292,188 +292,196 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let app;
   try {
     app = await buildApp({
-    ...(authorization ? { auth: {
-      repository: authorization,
-      clock: { now: options.authorizationClock ?? (() => new Date()) },
-      random: {
-        bytes: (length) => {
-          const value = authorizationRandom(length);
-          if (length !== 32 || value.length !== 32)
-            throw new Error('Authorization randomness must return exactly 32 bytes');
-          return value;
-        },
-      },
-      identifiers: {
-        sessionId: () => {
-          const value = authorizationRandom(32);
-          if (value.length !== 32) throw new Error('Authorization randomness must return exactly 32 bytes');
-          return authorizationSessionId(Buffer.from(value).toString('base64url'));
-        },
-        deviceId: () => authorizedDeviceId(randomUUID()),
-      },
-      webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
-      relyingParty,
-    } } : { passkeyAuthDisabled: true }),
-    health: {
-      async read() {
-        return {
-          status: protocol.compatible ? 'ok' : 'degraded',
-          version: '0.1.0',
-          codex: {
-            installedVersion: options.installedCodexVersion,
-            protocolVersion: generatedProtocolVersion,
-            compatible: protocol.compatible,
-          },
-        };
-      },
-    },
-    skills: {
-      workspaces,
-      profiles: options.profiles,
-      catalog: editorSkillCatalog,
-      selections: skillProfiles,
-      listGlobalProfileNames: () => skillProfiles.listGlobalProfileNames(),
-      readGlobalProfile: (name) => skillProfiles.readGlobalProfile(name),
-      replaceGlobalProfile: (profile) => skillProfiles.replaceGlobalProfile(profile),
-      deleteGlobalProfile: (name) => skillProfiles.deleteGlobalProfile(name),
-      profilePath: (name) => skillProfiles.globalProfilePath(name),
-    },
-    logger: console,
-    staticDir: options.staticDir,
-    recentThreads,
-    bootstrap: {
-      workspaces,
-      profiles: options.profiles,
-      models,
-      sessions: {
-        list: () => sessions.list().map((session) => withPendingInteractions(session)!),
-      },
-      protocolCompatible: protocol.compatible,
-    },
-    sessionRoutes: {
-      createId: randomUUID,
-      now: () => new Date().toISOString(),
-      save: saveSession,
-      find: (id) => withPendingInteractions(sessions.find(id)),
-      list: () => sessions.list().map((session) => withPendingInteractions(session)!),
-      workspaces,
-      profiles: options.profiles,
-      skillProfiles,
-      skillCatalog,
-      defaultSkillProfile: options.explicitSkillProfile,
-      activate: runtime
-        ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
-        : undefined,
-      startTurn: runtime
-        ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
-        : undefined,
-      onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
-      models,
-      readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
-      currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
-      interruptTurn: runtime
-        ? (session, turnId) => runtime.interruptTurn(session, turnId)
-        : undefined,
-      restore: runtime
-        ? (session) => runtime.restoreWithOutcome(session, new Date().toISOString())
-        : undefined,
-      promoteRecent: runtime
-        ? (thread) =>
-            promoteRecentThread(thread, {
-              createId: randomUUID,
-              now: () => new Date().toISOString(),
-              list: () => sessions.list(),
-              save: saveSession,
-              restore: (session) => runtime.restore(session, new Date().toISOString()),
-            })
-        : undefined,
-      release: (session) =>
-        RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
-      remove: (id) => sessions.remove(id),
-      idempotency,
-      close: runtime
-        ? (id) => {
-            planMeasurementRefresh?.stop(id);
-            return runtime.release(id);
-          }
-        : undefined,
-      replyInteraction: runtime
-        ? (sessionId, requestId, value) => runtime.resolveServerRequest(sessionId, requestId, value)
-        : undefined,
-      interactionResolved: (sessionId, requestId, occurredAt) => {
-        events.publish(
-          journal.append(sessionId, 'interaction.resolved', { requestId }, occurredAt),
-        );
-      },
-    },
-    sessionEvents: {
-      exists: (id) => sessions.find(id) !== null,
-      since: (id, after) => journal.since(id, after),
-      subscribe: (id, listener) => events.subscribe(id, listener),
-    },
-    planRoutes: {
-      exists: (id) => sessions.find(id) !== null,
-      find: (id) => supervisedPlans.find(id),
-      removeStatus: (id) => planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
-      clear: (id) => supervisedPlans.clear(id),
-      closed: (id) => {
-        planMeasurementRefresh?.stop(id);
-        const occurredAt = new Date().toISOString();
-        events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
-      },
-    },
-    workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
-    ...(runtime
-      ? {
-          planMeasurementRoutes: {
-            exists: (id: string) => sessions.find(id) !== null,
-            authorize: (id: string, authorization: string | undefined) =>
-              runtime.authorizePlanMeasurement(id, authorization),
-            read: async (id: string) => {
-              const session = sessions.find(id);
-              if (!session) throw new Error('CODEX_SESSION_NOT_RUNNING');
-              return runtime.readPlanMeasurement(session);
+      ...(authorization
+        ? {
+            auth: {
+              repository: authorization,
+              clock: { now: options.authorizationClock ?? (() => new Date()) },
+              random: {
+                bytes: (length) => {
+                  const value = authorizationRandom(length);
+                  if (length !== 32 || value.length !== 32)
+                    throw new Error('Authorization randomness must return exactly 32 bytes');
+                  return value;
+                },
+              },
+              identifiers: {
+                sessionId: () => {
+                  const value = authorizationRandom(32);
+                  if (value.length !== 32)
+                    throw new Error('Authorization randomness must return exactly 32 bytes');
+                  return authorizationSessionId(Buffer.from(value).toString('base64url'));
+                },
+                deviceId: () => authorizedDeviceId(randomUUID()),
+              },
+              webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
+              relyingParty,
             },
-          },
-        }
-      : {}),
-    interactions: {
-      resolve: (sessionId, requestId, resolvedAt) =>
-        interactions.resolve(sessionId, requestId, resolvedAt),
-      validate: (sessionId, requestId, value) => {
-        const interaction = interactions.find(sessionId, requestId);
-        if (!interaction) return false;
-        if (interaction.kind === 'quiz') return isValidQuizInteractionResponse(interaction.payload, value);
-        return isValidInteractionResponse(interaction.kind, value);
+          }
+        : { passkeyAuthDisabled: true }),
+      health: {
+        async read() {
+          return {
+            status: protocol.compatible ? 'ok' : 'degraded',
+            version: '0.1.0',
+            codex: {
+              installedVersion: options.installedCodexVersion,
+              protocolVersion: generatedProtocolVersion,
+              compatible: protocol.compatible,
+            },
+          };
+        },
       },
-    },
-    gitSummary: {
-      workspaces,
-      inspect: async (path) => {
-        const summary = await gitSummaries.inspect(path);
-        const fetchedAt = gitFetches.lastSuccessfulAt(path);
-        return { ...summary, fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null };
+      skills: {
+        workspaces,
+        profiles: options.profiles,
+        catalog: editorSkillCatalog,
+        selections: skillProfiles,
+        listGlobalProfileNames: () => skillProfiles.listGlobalProfileNames(),
+        readGlobalProfile: (name) => skillProfiles.readGlobalProfile(name),
+        replaceGlobalProfile: (profile) => skillProfiles.replaceGlobalProfile(profile),
+        deleteGlobalProfile: (name) => skillProfiles.deleteGlobalProfile(name),
+        profilePath: (name) => skillProfiles.globalProfilePath(name),
       },
-      inspectForPush: inspectGit,
-      push: async (path, upstream) => {
-        await pushUpstream(path, upstream);
-        gitSummaries.invalidate(path);
+      logger: console,
+      staticDir: options.staticDir,
+      recentThreads,
+      bootstrap: {
+        workspaces,
+        profiles: options.profiles,
+        models,
+        sessions: {
+          list: () => sessions.list().map((session) => withPendingInteractions(session)!),
+        },
+        protocolCompatible: protocol.compatible,
       },
-      refresh: async (path) => {
-        await gitFetches.refresh(path);
-        gitSummaries.invalidate(path);
+      sessionRoutes: {
+        createId: randomUUID,
+        now: () => new Date().toISOString(),
+        save: saveSession,
+        find: (id) => withPendingInteractions(sessions.find(id)),
+        list: () => sessions.list().map((session) => withPendingInteractions(session)!),
+        workspaces,
+        profiles: options.profiles,
+        skillProfiles,
+        skillCatalog,
+        defaultSkillProfile: options.explicitSkillProfile,
+        activate: runtime
+          ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
+          : undefined,
+        startTurn: runtime
+          ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
+          : undefined,
+        onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
+        models,
+        readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
+        currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
+        interruptTurn: runtime
+          ? (session, turnId) => runtime.interruptTurn(session, turnId)
+          : undefined,
+        restore: runtime
+          ? (session) => runtime.restoreWithOutcome(session, new Date().toISOString())
+          : undefined,
+        promoteRecent: runtime
+          ? (thread) =>
+              promoteRecentThread(thread, {
+                createId: randomUUID,
+                now: () => new Date().toISOString(),
+                list: () => sessions.list(),
+                save: saveSession,
+                restore: (session) => runtime.restore(session, new Date().toISOString()),
+              })
+          : undefined,
+        release: (session) =>
+          RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
+        remove: (id) => sessions.remove(id),
+        idempotency,
+        close: runtime
+          ? (id) => {
+              planMeasurementRefresh?.stop(id);
+              return runtime.release(id);
+            }
+          : undefined,
+        replyInteraction: runtime
+          ? (sessionId, requestId, value) =>
+              runtime.resolveServerRequest(sessionId, requestId, value)
+          : undefined,
+        interactionResolved: (sessionId, requestId, occurredAt) => {
+          events.publish(
+            journal.append(sessionId, 'interaction.resolved', { requestId }, occurredAt),
+          );
+        },
       },
-      pull: async (path) => {
-        await pullRebase(path);
-        gitSummaries.invalidate(path);
+      sessionEvents: {
+        exists: (id) => sessions.find(id) !== null,
+        since: (id, after) => journal.since(id, after),
+        subscribe: (id, listener) => events.subscribe(id, listener),
       },
-      checkout: async (path, branch) => {
-        await checkoutBranch(path, branch);
-        gitSummaries.invalidate(path);
+      planRoutes: {
+        exists: (id) => sessions.find(id) !== null,
+        find: (id) => supervisedPlans.find(id),
+        removeStatus: (id) =>
+          planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
+        clear: (id) => supervisedPlans.clear(id),
+        closed: (id) => {
+          planMeasurementRefresh?.stop(id);
+          const occurredAt = new Date().toISOString();
+          events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
+        },
       },
-      clone: cloneRepository,
-      idempotency,
-    },
+      workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
+      ...(runtime
+        ? {
+            planMeasurementRoutes: {
+              exists: (id: string) => sessions.find(id) !== null,
+              authorize: (id: string, authorization: string | undefined) =>
+                runtime.authorizePlanMeasurement(id, authorization),
+              read: async (id: string) => {
+                const session = sessions.find(id);
+                if (!session) throw new Error('CODEX_SESSION_NOT_RUNNING');
+                return runtime.readPlanMeasurement(session);
+              },
+            },
+          }
+        : {}),
+      interactions: {
+        resolve: (sessionId, requestId, resolvedAt) =>
+          interactions.resolve(sessionId, requestId, resolvedAt),
+        validate: (sessionId, requestId, value) => {
+          const interaction = interactions.find(sessionId, requestId);
+          if (!interaction) return false;
+          if (interaction.kind === 'quiz')
+            return isValidQuizInteractionResponse(interaction.payload, value);
+          return isValidInteractionResponse(interaction.kind, value);
+        },
+      },
+      gitSummary: {
+        workspaces,
+        inspect: async (path) => {
+          const summary = await gitSummaries.inspect(path);
+          const fetchedAt = gitFetches.lastSuccessfulAt(path);
+          return { ...summary, fetchedAt: fetchedAt ? new Date(fetchedAt).toISOString() : null };
+        },
+        inspectForPush: inspectGit,
+        push: async (path, upstream) => {
+          await pushUpstream(path, upstream);
+          gitSummaries.invalidate(path);
+        },
+        refresh: async (path) => {
+          await gitFetches.refresh(path);
+          gitSummaries.invalidate(path);
+        },
+        pull: async (path) => {
+          await pullRebase(path);
+          gitSummaries.invalidate(path);
+        },
+        checkout: async (path, branch) => {
+          await checkoutBranch(path, branch);
+          gitSummaries.invalidate(path);
+        },
+        clone: cloneRepository,
+        idempotency,
+      },
     });
   } catch (error) {
     authorization?.close();

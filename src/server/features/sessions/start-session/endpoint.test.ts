@@ -14,7 +14,10 @@ const skills = {
     readWorkspaceDefault: async () => undefined,
   },
   skillCatalog: () => ({
-    list: async () => ({ skills: [{ name: 'Native', path: '/skills/native/SKILL.md', enabled: true }], errors: [] }),
+    list: async () => ({
+      skills: [{ name: 'Native', path: '/skills/native/SKILL.md', enabled: true }],
+      errors: [],
+    }),
   }),
 };
 
@@ -124,13 +127,16 @@ describe('POST /api/sessions', () => {
   it('rejects an unknown named skill profile', async () => {
     const app = fastify();
     registerStartSession(app, {
-      createId: () => 's', now: () => 't', save: () => {},
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
       workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
       ...skills,
     });
     const response = await app.inject({
-      method: 'POST', url: '/api/sessions',
+      method: 'POST',
+      url: '/api/sessions',
       payload: { workspaceId: 'w', profile: 'default', skillProfile: 'missing' },
     });
     expect(response.statusCode).toBe(400);

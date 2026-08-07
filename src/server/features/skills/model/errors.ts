@@ -12,7 +12,10 @@ export type SkillProfileErrorCode =
 
 /** A stable, transport-independent failure in the skill selection bounded context. */
 export class SkillProfileError extends Error {
-  constructor(public readonly code: SkillProfileErrorCode, message: string = code) {
+  constructor(
+    public readonly code: SkillProfileErrorCode,
+    message: string = code,
+  ) {
     super(message);
     this.name = 'SkillProfileError';
   }

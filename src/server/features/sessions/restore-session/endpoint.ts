@@ -33,7 +33,9 @@ export function registerRestoreSession(
     const session = deps.find(id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     if (!canRestore(session)) return reply.code(409).send({ code: 'SESSION_CANNOT_RESTORE' });
-    const recovering = RelaySession.rehydrate(session).beginRecovery(new Date().toISOString()).snapshot;
+    const recovering = RelaySession.rehydrate(session).beginRecovery(
+      new Date().toISOString(),
+    ).snapshot;
     deps.save(recovering);
     let restored: RestoreSessionResult | RelaySessionSnapshot;
     try {
@@ -44,14 +46,15 @@ export function registerRestoreSession(
       deps.save(session);
       return reply.code(502).send({ code: 'RESTORE_FAILED' });
     }
-    const response = 'session' in restored
-      ? {
-          ...restored.session,
-          ...(restored.replacementCreated
-            ? { recovery: { historyUnavailable: true, replacementCreated: true } }
-            : {}),
-        }
-      : restored;
+    const response =
+      'session' in restored
+        ? {
+            ...restored.session,
+            ...(restored.replacementCreated
+              ? { recovery: { historyUnavailable: true, replacementCreated: true } }
+              : {}),
+          }
+        : restored;
     deps.save(response);
     if (key) deps.idempotency?.put(scope, key, 200, JSON.stringify(response));
     return reply.send(response);

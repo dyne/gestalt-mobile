@@ -12,7 +12,8 @@ export class SupervisedPlanRegistry {
   private readonly plans = new Map<string, Readonly<{ plan: SupervisedPlan; identity: string }>>();
 
   accept(sessionId: string, update: PlanStatusUpdate): void {
-    if (update.kind === 'updated') this.plans.set(sessionId, { plan: update.plan, identity: update.identity });
+    if (update.kind === 'updated')
+      this.plans.set(sessionId, { plan: update.plan, identity: update.identity });
   }
 
   find(sessionId: string): SupervisedPlan | null {

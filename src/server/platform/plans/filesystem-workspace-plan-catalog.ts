@@ -10,12 +10,18 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { WorkspacePlanCatalogSource } from '../../features/plans/application/ports.js';
 import { parseSupervisedPlan } from '../../features/plans/application/parse-supervised-plan.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
-import type { WorkspacePlanEntry, WorkspacePlanReadResult } from '../../features/plans/domain/workspace-plan-catalog.js';
+import type {
+  WorkspacePlanEntry,
+  WorkspacePlanReadResult,
+} from '../../features/plans/domain/workspace-plan-catalog.js';
 
 const maximumPlans = 100;
 const maximumBytes = 1_048_576;
 
-type Filesystem = Pick<typeof import('node:fs/promises'), 'lstat' | 'readdir' | 'readFile' | 'realpath' | 'stat'>;
+type Filesystem = Pick<
+  typeof import('node:fs/promises'),
+  'lstat' | 'readdir' | 'readFile' | 'realpath' | 'stat'
+>;
 
 /**
  * Bounded, passive access to direct `.gestalt/*.org` children. Every path is
@@ -23,7 +29,9 @@ type Filesystem = Pick<typeof import('node:fs/promises'), 'lstat' | 'readdir' | 
  * replacement races.
  */
 export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSource {
-  constructor(private readonly filesystem: Filesystem = { lstat, readdir, readFile, realpath, stat }) {}
+  constructor(
+    private readonly filesystem: Filesystem = { lstat, readdir, readFile, realpath, stat },
+  ) {}
 
   async list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]> {
     const directory = await this.directory(workspacePath);
@@ -85,7 +93,12 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
         return { kind: 'unavailable' };
       const source = await this.filesystem.readFile(canonical, 'utf8');
       const after = await this.filesystem.stat(canonical);
-      if (!after.isFile() || after.size !== before.size || after.ino !== before.ino || after.dev !== before.dev)
+      if (
+        !after.isFile() ||
+        after.size !== before.size ||
+        after.ino !== before.ino ||
+        after.dev !== before.dev
+      )
         return { kind: 'unavailable' };
       const parsed = parseSupervisedPlan({ source, planPath: canonical, workspacePath });
       return parsed.kind === 'available' ? parsed : { kind: 'unavailable' };

@@ -36,16 +36,31 @@ export function registerRegistrationOptions(
 ): void {
   app.post('/api/auth/register/options', { bodyLimit: 4 * 1024 }, async (request, reply) => {
     if (!deps.ceremonyAttempts.allow(`register:${request.ip}`, deps.clock.now()))
-      return sendProblem(reply, 'REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.');
+      return sendProblem(
+        reply,
+        'REGISTRATION_NOT_AVAILABLE',
+        400,
+        'Registration could not be completed.',
+      );
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success)
-      return sendProblem(reply, 'INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.');
+      return sendProblem(
+        reply,
+        'INVALID_REGISTRATION_REQUEST',
+        400,
+        'The registration request is invalid.',
+      );
     const ticket =
       parsed.data.enrollmentTicket === undefined
         ? undefined
         : parseEnrollmentTicketId(parsed.data.enrollmentTicket);
     if (ticket === null)
-      return sendProblem(reply, 'INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.');
+      return sendProblem(
+        reply,
+        'INVALID_REGISTRATION_REQUEST',
+        400,
+        'The registration request is invalid.',
+      );
     const owner = deps.repository.readOwner();
     const devices = deps.repository.listAuthorizedDevices();
     const now = deps.clock.now();
@@ -53,7 +68,12 @@ export function registerRegistrationOptions(
       devices.length > 0 &&
       (!ticket || !deps.repository.ticketAvailable(ticket, now.toISOString()))
     )
-      return sendProblem(reply, 'ENROLLMENT_NOT_AUTHORIZED', 403, 'Registration is not authorized.');
+      return sendProblem(
+        reply,
+        'ENROLLMENT_NOT_AUTHORIZED',
+        403,
+        'Registration is not authorized.',
+      );
     const ownerHandle = owner ? undefined : deps.random.bytes(32);
     if (ownerHandle && ownerHandle.length !== 32)
       throw new Error('AUTHORIZATION_RANDOMNESS_INVALID');
@@ -88,7 +108,12 @@ export function registerRegistrationOptions(
       );
     } catch (error) {
       if (error instanceof CeremonyCapacityError)
-        return sendProblem(reply, 'REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.');
+        return sendProblem(
+          reply,
+          'REGISTRATION_NOT_AVAILABLE',
+          400,
+          'Registration could not be completed.',
+        );
       throw error;
     }
     setAuthCookie(reply, 'gestalt_mobile_registration', token, deps.relyingParty.publicOrigin);

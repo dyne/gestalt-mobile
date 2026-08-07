@@ -16,7 +16,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     heading?: string;
   };
 
-  let { skillsState, onrefresh, onprofileschange, heading = 'Manage skill profiles' }: Props = $props();
+  let {
+    skillsState,
+    onrefresh,
+    onprofileschange,
+    heading = 'Manage skill profiles',
+  }: Props = $props();
   let revision = $state(0);
   let saveError = $state<HTMLElement | null>(null);
   let savedProfileSelect = $state<HTMLSelectElement | null>(null);
@@ -41,7 +46,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function selectSavedProfile(event: Event): void {
     profileChoice = (event.currentTarget as HTMLSelectElement).value;
-    if (profileChoice === '__new__' || profileChoice === '__default__') snapshot.selectDefaultProfile();
+    if (profileChoice === '__new__' || profileChoice === '__default__')
+      snapshot.selectDefaultProfile();
     else snapshot.selectProfile(profileChoice);
     changed();
   }
@@ -130,15 +136,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </div>
 
     <p class="save-intent" aria-live="polite">
-      {snapshot.saveIntent === 'replace' ? 'Saved the selected profile.' : 'Creating a new saved profile.'}
+      {snapshot.saveIntent === 'replace'
+        ? 'Saved the selected profile.'
+        : 'Creating a new saved profile.'}
     </p>
     <div class="profile-actions">
       <button
         type="button"
         bind:this={deleteTrigger}
         disabled={!snapshot.selectedProfileName || snapshot.status.kind === 'deleting'}
-        onclick={requestDelete}
-      >Delete profile</button>
+        onclick={requestDelete}>Delete profile</button
+      >
       <button type="submit" disabled={snapshot.status.kind === 'saving'}>
         {snapshot.status.kind === 'saving' ? 'Saving profile…' : 'Save profile'}
       </button>
@@ -159,11 +167,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if snapshot.status.kind === 'empty'}
     <p id="skills-status">No skills were discovered for this workspace and Codex profile.</p>
   {:else if snapshot.status.kind === 'warning'}
-    <p id="skills-status" class="notice" role="status">Discovery warning: {snapshot.status.message}</p>
+    <p id="skills-status" class="notice" role="status">
+      Discovery warning: {snapshot.status.message}
+    </p>
   {:else if snapshot.status.kind === 'invalid-profile' || snapshot.status.kind === 'error'}
     <p id="skills-status" class="error" role="alert">{snapshot.status.message}</p>
   {:else if snapshot.status.kind === 'save-failed'}
-    <p id="skills-status" class="error" role="alert" tabindex="-1" bind:this={saveError}>{snapshot.status.message}</p>
+    <p id="skills-status" class="error" role="alert" tabindex="-1" bind:this={saveError}>
+      {snapshot.status.message}
+    </p>
   {:else if snapshot.status.kind === 'saved'}
     <p id="skills-status" role="status">Profile saved.</p>
   {:else if snapshot.status.kind === 'deleted'}
@@ -174,7 +186,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   {#if snapshot.skills.length > 0}
     <div class="skills-toolbar">
-      <button type="button" class="refresh-skills" onclick={() => void refreshSkills()} aria-label="Refresh skills">
+      <button
+        type="button"
+        class="refresh-skills"
+        onclick={() => void refreshSkills()}
+        aria-label="Refresh skills"
+      >
         <span aria-hidden="true">↻</span><span>Refresh</span>
       </button>
       <p class="summary">{snapshot.enabledCount} of {snapshot.skills.length} skills enabled.</p>
@@ -200,10 +217,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {#if skill.description}<p>{skill.description}</p>{/if}
             {#if skill.shortDescription}<p>{skill.shortDescription}</p>{/if}
             <dl>
-              <dt>Path</dt><dd class="path">{displaySkillPath(skill.path)}</dd>
+              <dt>Path</dt>
+              <dd class="path">{displaySkillPath(skill.path)}</dd>
               {#if skill.dependencies?.tools?.length}
                 <dt>Tool dependencies</dt>
-                <dd><ul>{#each skill.dependencies.tools as tool (`${tool.type}:${tool.value}`)}<li>{tool.type}: {tool.value}{tool.description ? ` — ${tool.description}` : ''}</li>{/each}</ul></dd>
+                <dd>
+                  <ul>
+                    {#each skill.dependencies.tools as tool (`${tool.type}:${tool.value}`)}<li>
+                        {tool.type}: {tool.value}{tool.description ? ` — ${tool.description}` : ''}
+                      </li>{/each}
+                  </ul>
+                </dd>
               {/if}
             </dl>
           </div>
@@ -214,38 +238,163 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </section>
 
 <style>
-  .skills-view { min-inline-size: 0; padding: 1rem max(1rem, env(safe-area-inset-right)) calc(5rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
-  .intro, .save-intent, .summary { max-inline-size: 70ch; }
-  form, .field-grid { display: grid; gap: .65rem; }
-  .field-grid { grid-template-columns: minmax(0, 1fr); }
-  label { font-weight: 650; }
-  select, input, button { box-sizing: border-box; min-block-size: 3rem; inline-size: 100%; font: inherit; }
-  dialog { max-inline-size: min(100% - 2rem, 32rem); }
-  .dialog-actions { display: grid; gap: .65rem; }
-  input, select { padding-inline: .7rem; font-size: 1rem; }
-  button { padding-inline: 1rem; }
-  .profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
-  .skills-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin-block: 1rem; }
-  .refresh-skills { flex: 0 0 auto; inline-size: auto; min-block-size: 2.25rem; padding-inline: .65rem; }
-  .refresh-skills span:first-child { font-size: 1.2em; line-height: 1; }
-  .summary { min-inline-size: 0; margin: 0; overflow-wrap: anywhere; }
-  .notice { border-inline-start: .3rem solid var(--theme-warning); padding-inline-start: .7rem; color: var(--theme-warning); }
-  .error { border-inline-start: .3rem solid var(--theme-error); padding-inline-start: .7rem; color: var(--theme-error); }
-  .skill-list { display: grid; gap: .75rem; padding: 0; list-style: none; }
-  .skill-card { min-inline-size: 0; scroll-margin-block: 1rem; border: 1px solid var(--theme-border); border-radius: .5rem; padding: .75rem; }
-  .skill-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; min-block-size: 3rem; }
-  .skill-toggle > span { min-inline-size: 0; overflow-wrap: anywhere; }
-  .skill-toggle input { flex: 0 0 auto; inline-size: 1.25rem; min-block-size: 1.25rem; }
-  .state { margin-inline-start: auto; font-weight: 500; }
-  .skill-details { overflow-wrap: anywhere; padding-inline-start: 1.9rem; }
-  .skill-details > :first-child { margin-block-start: .25rem; }
-  .skill-details > :last-child { margin-block-end: 0; }
-  dl { display: grid; grid-template-columns: minmax(7rem, auto) minmax(0, 1fr); gap: .45rem .75rem; }
-  dt { font-weight: 650; }
-  dd { min-inline-size: 0; margin: 0; }
-  dd ul { margin: 0; padding-inline-start: 1.25rem; }
-  .path { overflow-wrap: anywhere; }
-  :where(button, input, select):focus-visible { outline: 3px solid var(--theme-focus); outline-offset: 2px; }
-  @media (min-width: 42rem) { .field-grid { grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr); align-items: center; } }
-  @media (max-width: 30rem) { dl { grid-template-columns: 1fr; gap: .2rem; } }
+  .skills-view {
+    min-inline-size: 0;
+    padding: 1rem max(1rem, env(safe-area-inset-right)) calc(5rem + env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
+  }
+  .intro,
+  .save-intent,
+  .summary {
+    max-inline-size: 70ch;
+  }
+  form,
+  .field-grid {
+    display: grid;
+    gap: 0.65rem;
+  }
+  .field-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  label {
+    font-weight: 650;
+  }
+  select,
+  input,
+  button {
+    box-sizing: border-box;
+    min-block-size: 3rem;
+    inline-size: 100%;
+    font: inherit;
+  }
+  dialog {
+    max-inline-size: min(100% - 2rem, 32rem);
+  }
+  .dialog-actions {
+    display: grid;
+    gap: 0.65rem;
+  }
+  input,
+  select {
+    padding-inline: 0.7rem;
+    font-size: 1rem;
+  }
+  button {
+    padding-inline: 1rem;
+  }
+  .profile-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+  .skills-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+    margin-block: 1rem;
+  }
+  .refresh-skills {
+    flex: 0 0 auto;
+    inline-size: auto;
+    min-block-size: 2.25rem;
+    padding-inline: 0.65rem;
+  }
+  .refresh-skills span:first-child {
+    font-size: 1.2em;
+    line-height: 1;
+  }
+  .summary {
+    min-inline-size: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .notice {
+    border-inline-start: 0.3rem solid var(--theme-warning);
+    padding-inline-start: 0.7rem;
+    color: var(--theme-warning);
+  }
+  .error {
+    border-inline-start: 0.3rem solid var(--theme-error);
+    padding-inline-start: 0.7rem;
+    color: var(--theme-error);
+  }
+  .skill-list {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0;
+    list-style: none;
+  }
+  .skill-card {
+    min-inline-size: 0;
+    scroll-margin-block: 1rem;
+    border: 1px solid var(--theme-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+  }
+  .skill-toggle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+    min-block-size: 3rem;
+  }
+  .skill-toggle > span {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+  }
+  .skill-toggle input {
+    flex: 0 0 auto;
+    inline-size: 1.25rem;
+    min-block-size: 1.25rem;
+  }
+  .state {
+    margin-inline-start: auto;
+    font-weight: 500;
+  }
+  .skill-details {
+    overflow-wrap: anywhere;
+    padding-inline-start: 1.9rem;
+  }
+  .skill-details > :first-child {
+    margin-block-start: 0.25rem;
+  }
+  .skill-details > :last-child {
+    margin-block-end: 0;
+  }
+  dl {
+    display: grid;
+    grid-template-columns: minmax(7rem, auto) minmax(0, 1fr);
+    gap: 0.45rem 0.75rem;
+  }
+  dt {
+    font-weight: 650;
+  }
+  dd {
+    min-inline-size: 0;
+    margin: 0;
+  }
+  dd ul {
+    margin: 0;
+    padding-inline-start: 1.25rem;
+  }
+  .path {
+    overflow-wrap: anywhere;
+  }
+  :where(button, input, select):focus-visible {
+    outline: 3px solid var(--theme-focus);
+    outline-offset: 2px;
+  }
+  @media (min-width: 42rem) {
+    .field-grid {
+      grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr);
+      align-items: center;
+    }
+  }
+  @media (max-width: 30rem) {
+    dl {
+      grid-template-columns: 1fr;
+      gap: 0.2rem;
+    }
+  }
 </style>

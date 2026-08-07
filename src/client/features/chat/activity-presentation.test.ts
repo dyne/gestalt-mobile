@@ -31,7 +31,11 @@ describe('activity presentation', () => {
 
   it('hides context-mode tool calls when only the tool name is available', () => {
     expect(
-      presentActivity({ id: 'ctx', label: 'Tool · completed', detail: 'mcp__context_mode__ctx_execute' }),
+      presentActivity({
+        id: 'ctx',
+        label: 'Tool · completed',
+        detail: 'mcp__context_mode__ctx_execute',
+      }),
     ).toBeNull();
   });
 

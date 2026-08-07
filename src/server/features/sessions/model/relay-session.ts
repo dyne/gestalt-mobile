@@ -45,7 +45,9 @@ export type LastOrgPlan = {
   title: string;
 };
 
-export function createEffectiveSkillSelection(input: EffectiveSkillSelection): EffectiveSkillSelection {
+export function createEffectiveSkillSelection(
+  input: EffectiveSkillSelection,
+): EffectiveSkillSelection {
   return {
     ...(input.selectedProfileName === undefined
       ? {}
@@ -250,7 +252,9 @@ function copy(snapshot: RelaySessionSnapshot): RelaySessionSnapshot {
     ...snapshot,
     ...(snapshot.effectiveSkillSelection === undefined
       ? {}
-      : { effectiveSkillSelection: createEffectiveSkillSelection(snapshot.effectiveSkillSelection) }),
+      : {
+          effectiveSkillSelection: createEffectiveSkillSelection(snapshot.effectiveSkillSelection),
+        }),
     pendingInteractions: snapshot.pendingInteractions.map((item) => ({ ...item })),
   };
 }

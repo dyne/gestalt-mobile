@@ -13,18 +13,52 @@ import PlansView from './PlansView.svelte';
 
 afterEach(cleanup);
 
-const entry = { planName: 'roadmap.org', title: 'Roadmap', subtitle: 'Local', totalSteps: 2, doneSteps: 1, allDone: false };
-const plan = { title: 'Roadmap', steps: [], totalSteps: 2, doneSteps: 1, allDone: false, currentStepId: 'one' };
+const entry = {
+  planName: 'roadmap.org',
+  title: 'Roadmap',
+  subtitle: 'Local',
+  totalSteps: 2,
+  doneSteps: 1,
+  allDone: false,
+};
+const plan = {
+  title: 'Roadmap',
+  steps: [],
+  totalSteps: 2,
+  doneSteps: 1,
+  allDone: false,
+  currentStepId: 'one',
+};
 
 describe('PlansView', () => {
   it('renders no-workspace, loading, empty, and error catalog states', () => {
-    const { rerender } = render(PlansView, { catalog: { kind: 'no-workspace' }, state: null, onopen: vi.fn(), onclose: vi.fn() });
+    const { rerender } = render(PlansView, {
+      catalog: { kind: 'no-workspace' },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
     expect(screen.getByText('Select a workspace to browse its local plans.')).toBeTruthy();
-    rerender({ catalog: { kind: 'loading', workspaceId: 'one' }, state: null, onopen: vi.fn(), onclose: vi.fn() });
+    rerender({
+      catalog: { kind: 'loading', workspaceId: 'one' },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
     expect(screen.getByText('Loading workspace plans…')).toBeTruthy();
-    rerender({ catalog: { kind: 'ready', workspaceId: 'one', entries: [] }, state: null, onopen: vi.fn(), onclose: vi.fn() });
+    rerender({
+      catalog: { kind: 'ready', workspaceId: 'one', entries: [] },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
     expect(screen.getByText('No local plans are available in this workspace.')).toBeTruthy();
-    rerender({ catalog: { kind: 'error', workspaceId: 'one', error: 'Offline' }, state: null, onopen: vi.fn(), onclose: vi.fn() });
+    rerender({
+      catalog: { kind: 'error', workspaceId: 'one', error: 'Offline' },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
     expect(screen.getByText('Offline')).toBeTruthy();
   });
 
@@ -41,11 +75,25 @@ describe('PlansView', () => {
     await fireEvent.click(item);
     expect(onopen).toHaveBeenCalledWith('roadmap.org');
 
-    rerender({ catalog: { kind: 'ready', workspaceId: 'one', entries: [entry] }, state: { kind: 'ready', sessionId: 'catalog', plan }, onopen, onclose });
+    rerender({
+      catalog: { kind: 'ready', workspaceId: 'one', entries: [entry] },
+      state: { kind: 'ready', sessionId: 'catalog', plan },
+      onopen,
+      onclose,
+    });
     await fireEvent.click(screen.getByRole('button', { name: 'Close plan and return to list' }));
     expect(onclose).toHaveBeenCalledTimes(1);
-    rerender({ catalog: { kind: 'ready', workspaceId: 'one', entries: [entry] }, state: null, onopen, onclose });
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /Roadmap.*roadmap.org.*1 \/ 2 complete/ })));
+    rerender({
+      catalog: { kind: 'ready', workspaceId: 'one', entries: [entry] },
+      state: null,
+      onopen,
+      onclose,
+    });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /Roadmap.*roadmap.org.*1 \/ 2 complete/ }),
+      ),
+    );
   });
 
   it('preserves closing and error plan states for the plan viewer', () => {
@@ -58,7 +106,10 @@ describe('PlansView', () => {
     const { container, rerender } = render(PlansView, props);
     expect(screen.getByText('Closing completed plan.')).toBeTruthy();
 
-    rerender({ ...props, state: { kind: 'error', sessionId: 'one', plan, error: 'Close failed.' } });
+    rerender({
+      ...props,
+      state: { kind: 'error', sessionId: 'one', plan, error: 'Close failed.' },
+    });
     expect(screen.getByText('Close failed.')).toBeTruthy();
     expect(container.querySelector('[aria-live]')?.textContent).toContain('Close failed.');
   });

@@ -32,7 +32,8 @@ function isContextModeTool(activity: HistoryActivity): boolean {
 
 function formatContent(kind: string, detail: string): string {
   if (kind === 'Command') return unwrapBashLoginCommand(detail);
-  if (kind === 'File change' || kind === 'fileChange') return detail.split('\n').filter(Boolean).join(', ');
+  if (kind === 'File change' || kind === 'fileChange')
+    return detail.split('\n').filter(Boolean).join(', ');
   return detail;
 }
 

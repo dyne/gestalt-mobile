@@ -71,7 +71,15 @@ function renderView(overrides: Record<string, unknown> = {}) {
     onstart,
     ...overrides,
   });
-  return { ...result, onworkspacechange, onexpandedchange, onskillprofilechange, onmanageprofiles, onselectopen, onstart };
+  return {
+    ...result,
+    onworkspacechange,
+    onexpandedchange,
+    onskillprofilechange,
+    onmanageprofiles,
+    onselectopen,
+    onstart,
+  };
 }
 
 describe('SessionsView session base tree', () => {
@@ -137,8 +145,12 @@ describe('SessionsView session base tree', () => {
       ],
       openingSessionId: 'opening',
     });
-    expect((screen.getByRole('button', { name: 'Opening…' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Opening…' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'Open' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it('selects a named profile only for new sessions and opens its manager', async () => {
@@ -147,20 +159,39 @@ describe('SessionsView session base tree', () => {
     expect((select as HTMLSelectElement).value).toBe('');
     expect((select as HTMLSelectElement).options[0]?.text).toBe('Default');
     expect((screen.getByLabelText('Sandbox') as HTMLSelectElement).value).toBe('workspace-write');
-    expect(screen.queryByText('The selected skill set is fixed after this session is created.')).toBeNull();
+    expect(
+      screen.queryByText('The selected skill set is fixed after this session is created.'),
+    ).toBeNull();
     await fireEvent.change(select, { target: { value: 'focused' } });
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
     await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));
     expect(onmanageprofiles).toHaveBeenCalledOnce();
-    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).disabled).toBe(
+      true,
+    );
   });
 
   it('shows a badge only for managed sessions with a named profile snapshot', () => {
     renderView({
       sessions: [
-        { id: 'named', state: 'ready', workspacePath: '/named', effectiveSkillSelection: { selectedProfileName: 'focused', skills: [] } },
-        { id: 'saved-named', state: 'released', workspacePath: '/saved-named', effectiveSkillSelection: { selectedProfileName: 'team', skills: [] } },
-        { id: 'default', state: 'released', workspacePath: '/default', effectiveSkillSelection: { skills: [] } },
+        {
+          id: 'named',
+          state: 'ready',
+          workspacePath: '/named',
+          effectiveSkillSelection: { selectedProfileName: 'focused', skills: [] },
+        },
+        {
+          id: 'saved-named',
+          state: 'released',
+          workspacePath: '/saved-named',
+          effectiveSkillSelection: { selectedProfileName: 'team', skills: [] },
+        },
+        {
+          id: 'default',
+          state: 'released',
+          workspacePath: '/default',
+          effectiveSkillSelection: { skills: [] },
+        },
       ],
     });
     expect(screen.getByText('Skills profile: focused')).toBeTruthy();

@@ -18,9 +18,8 @@ export function registerGetPlanMeasurement(
 ): void {
   app.get('/api/sessions/:id/plan-measurement', async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    const authorization = typeof request.headers.authorization === 'string'
-      ? request.headers.authorization
-      : undefined;
+    const authorization =
+      typeof request.headers.authorization === 'string' ? request.headers.authorization : undefined;
     if (!deps.exists(id) || !deps.authorize(id, authorization))
       return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     try {

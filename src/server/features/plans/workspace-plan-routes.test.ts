@@ -10,16 +10,33 @@ import { describe, expect, it } from 'vitest';
 import { registerGetWorkspacePlan } from './get-workspace-plan/endpoint.js';
 import { registerListWorkspacePlans } from './list-workspace-plans/endpoint.js';
 
-const plan = { title: 'Catalog plan', steps: [], totalSteps: 1, doneSteps: 0, allDone: false, currentStepId: 'one' };
+const plan = {
+  title: 'Catalog plan',
+  steps: [],
+  totalSteps: 1,
+  doneSteps: 0,
+  allDone: false,
+  currentStepId: 'one',
+};
 
 describe('workspace plan catalog routes', () => {
   it('resolves an opaque workspace, returns a sorted catalog, and decodes opaque filenames', async () => {
     const app = fastify();
     const reads: string[] = [];
     const deps = {
-      workspaces: { resolve: async (id: string) => ({ id, name: 'workspace', realPath: '/workspace' }) },
+      workspaces: {
+        resolve: async (id: string) => ({ id, name: 'workspace', realPath: '/workspace' }),
+      },
       plans: {
-        list: async () => [{ planName: 'roadmap space.org', title: 'Roadmap', totalSteps: 1, doneSteps: 0, allDone: false }],
+        list: async () => [
+          {
+            planName: 'roadmap space.org',
+            title: 'Roadmap',
+            totalSteps: 1,
+            doneSteps: 0,
+            allDone: false,
+          },
+        ],
         read: async (_path: string, planName: string) => {
           reads.push(planName);
           return { kind: 'available' as const, plan };
@@ -42,13 +59,19 @@ describe('workspace plan catalog routes', () => {
   it('maps unknown workspaces, missing files, and invalid plans without session routes', async () => {
     const app = fastify();
     const deps = {
-      workspaces: { resolve: async () => { throw new Error('WORKSPACE_NOT_FOUND'); } },
+      workspaces: {
+        resolve: async () => {
+          throw new Error('WORKSPACE_NOT_FOUND');
+        },
+      },
       plans: { list: async () => [], read: async () => ({ kind: 'missing' as const }) },
     };
     registerListWorkspacePlans(app, deps);
     registerGetWorkspacePlan(app, deps);
     expect((await app.inject('/api/workspaces/nope/plans')).statusCode).toBe(404);
-    expect((await app.inject('/api/workspaces/nope/plans/nope.org')).json()).toEqual({ code: 'WORKSPACE_NOT_FOUND' });
+    expect((await app.inject('/api/workspaces/nope/plans/nope.org')).json()).toEqual({
+      code: 'WORKSPACE_NOT_FOUND',
+    });
     await app.close();
 
     const invalid = fastify();
@@ -57,7 +80,9 @@ describe('workspace plan catalog routes', () => {
       plans: { list: async () => [], read: async () => ({ kind: 'unavailable' }) },
     });
     expect((await invalid.inject('/api/workspaces/one/plans/bad.org')).statusCode).toBe(422);
-    expect((await invalid.inject('/api/workspaces/one/plans/bad.org')).json()).toEqual({ code: 'PLAN_UNAVAILABLE' });
+    expect((await invalid.inject('/api/workspaces/one/plans/bad.org')).json()).toEqual({
+      code: 'PLAN_UNAVAILABLE',
+    });
     await invalid.close();
   });
 });

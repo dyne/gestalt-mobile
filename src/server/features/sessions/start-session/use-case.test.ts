@@ -86,21 +86,30 @@ describe('startSession', () => {
     const result = await startSession(
       { workspaceId: 'w', profile: 'default', skillProfile: 'focused' },
       {
-        createId: () => 's', now: () => 't', save: () => {},
-        workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }) },
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
         profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
         skillProfiles: {
           readGlobalProfile: async () => ({
-            version: 1, name: 'focused',
+            version: 1,
+            name: 'focused',
             skills: [{ name: 'Enabled', path: '/skills/enabled/SKILL.md', enabled: false }],
           }),
           readWorkspaceDefault: async () => ({
-            version: 1, name: 'workspace',
+            version: 1,
+            name: 'workspace',
             skills: [{ name: 'Disabled', path: '/skills/disabled/SKILL.md', enabled: true }],
           }),
         },
         skillCatalog: skills.skillCatalog,
-        activate: async (session) => { activated = session; return session; },
+        activate: async (session) => {
+          activated = session;
+          return session;
+        },
       },
     );
     expect(result.effectiveSkillSelection).toEqual({

@@ -23,7 +23,10 @@ type RecentThreadMetadata = {
 
 export function registerListRecentThreads(
   app: FastifyInstance,
-  deps: { list(): Promise<RecentThread[]>; metadata?(threadId: string): RecentThreadMetadata | null },
+  deps: {
+    list(): Promise<RecentThread[]>;
+    metadata?(threadId: string): RecentThreadMetadata | null;
+  },
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
@@ -35,7 +38,9 @@ export function registerListRecentThreads(
         recencyAt,
         ...(metadata?.model === undefined ? {} : { model: metadata.model }),
         ...(metadata?.skillProfile === undefined ? {} : { skillProfile: metadata.skillProfile }),
-        ...(metadata?.orgPlanFilename === undefined ? {} : { orgPlanFilename: metadata.orgPlanFilename }),
+        ...(metadata?.orgPlanFilename === undefined
+          ? {}
+          : { orgPlanFilename: metadata.orgPlanFilename }),
         resumeCommand: buildResumeCommand({ profile, threadId: id, workspacePath: cwd }),
       };
     });

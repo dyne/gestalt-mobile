@@ -54,7 +54,9 @@ describe('GET /api/sessions/recent-threads', () => {
   it('adds managed-session metadata when it is available', async () => {
     const app = fastify();
     registerListRecentThreads(app, {
-      list: async () => [{ id: 'thread-1', cwd: '/projects/work', profile: 'work', recencyAt: 200 }],
+      list: async () => [
+        { id: 'thread-1', cwd: '/projects/work', profile: 'work', recencyAt: 200 },
+      ],
       metadata: () => ({
         model: 'gpt-5.4',
         skillProfile: 'focused',

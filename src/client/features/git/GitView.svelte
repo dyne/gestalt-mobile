@@ -69,7 +69,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <section class="git-tree" aria-labelledby="git-tree-title">
     <div class="section-heading">
       <h3 id="git-tree-title">Repository and clone destination</h3>
-      <p>Select any folder. Git repositories enable repository actions; other folders are clone destinations.</p>
+      <p>
+        Select any folder. Git repositories enable repository actions; other folders are clone
+        destinations.
+      </p>
     </div>
     <FilesystemTree
       roots={workspaceTree}
@@ -85,7 +88,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <div class="clone-field clone-destination">
         <span class="field-label">Destination</span>
         <output aria-live="polite">
-          {cloneDestination ? `~/${cloneDestination.relativePath}` : 'Select a non-repository folder'}
+          {cloneDestination
+            ? `~/${cloneDestination.relativePath}`
+            : 'Select a non-repository folder'}
         </output>
       </div>
       <div class="clone-field">
@@ -102,9 +107,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           aria-describedby="clone-help"
         />
       </div>
-      <button type="submit" disabled={cloning}
-        >{cloning ? 'Cloning…' : 'Clone'}</button
-      >
+      <button type="submit" disabled={cloning}>{cloning ? 'Cloning…' : 'Clone'}</button>
     </div>
     <p id="clone-help">The repository is cloned inside the selected workspace.</p>
     {#if cloneStatus}<p class="clone-status" role="status">{cloneStatus}</p>{/if}
@@ -113,82 +116,84 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <h3 id="repository-details-title">Repository details</h3>
     {#if selectedWorkspace?.isGitRepository}
       {#if summary}
-      {#if summary.available}
-        <div class="git-overview">
-          <div class="git-status">
-            <label for="git-branch">Branch</label>
-            <select
-              id="git-branch"
-              value={summary.branch ?? ''}
-              disabled={refreshing || checkingOut || !summary.branches?.length}
-              onchange={(event) => oncheckout(event.currentTarget.value)}
-            >
-              {#each summary.branches ?? [] as branch (branch)}
-                <option value={branch}>{branch}</option>
-              {/each}
-            </select>
-            <p>Upstream: {summary.upstream ?? 'none'}</p>
-            <p>Ahead {summary.ahead}; behind {summary.behind}.</p>
-            <p>
-              <time datetime={summary.fetchedAt ?? undefined}>{fetchAge(summary.fetchedAt)}</time>
-            </p>
-            <p>
-              Changes: {summary.dirty.staged} staged, {summary.dirty.unstaged} unstaged, {summary
-                .dirty.untracked} untracked.
-            </p>
+        {#if summary.available}
+          <div class="git-overview">
+            <div class="git-status">
+              <label for="git-branch">Branch</label>
+              <select
+                id="git-branch"
+                value={summary.branch ?? ''}
+                disabled={refreshing || checkingOut || !summary.branches?.length}
+                onchange={(event) => oncheckout(event.currentTarget.value)}
+              >
+                {#each summary.branches ?? [] as branch (branch)}
+                  <option value={branch}>{branch}</option>
+                {/each}
+              </select>
+              <p>Upstream: {summary.upstream ?? 'none'}</p>
+              <p>Ahead {summary.ahead}; behind {summary.behind}.</p>
+              <p>
+                <time datetime={summary.fetchedAt ?? undefined}>{fetchAge(summary.fetchedAt)}</time>
+              </p>
+              <p>
+                Changes: {summary.dirty.staged} staged, {summary.dirty.unstaged} unstaged, {summary
+                  .dirty.untracked} untracked.
+              </p>
+            </div>
+            <div class="git-actions">
+              <button
+                type="button"
+                disabled={refreshing ||
+                  checkingOut ||
+                  !summary.upstream ||
+                  summary.ahead < 1 ||
+                  summary.behind > 0}
+                onclick={onopenpushconfirmation}><span aria-hidden="true">↑</span> Push</button
+              >
+              <button type="button" disabled={refreshing || checkingOut} onclick={onpull}
+                ><span aria-hidden="true">↓</span> {refreshing ? 'Pulling…' : 'Pull'}</button
+              >
+            </div>
           </div>
-          <div class="git-actions">
-            <button
-              type="button"
-              disabled={refreshing ||
-                checkingOut ||
-                !summary.upstream ||
-                summary.ahead < 1 ||
-                summary.behind > 0}
-              onclick={onopenpushconfirmation}><span aria-hidden="true">↑</span> Push</button
-            >
-            <button type="button" disabled={refreshing || checkingOut} onclick={onpull}
-              ><span aria-hidden="true">↓</span> {refreshing ? 'Pulling…' : 'Pull'}</button
-            >
-          </div>
-        </div>
-        {#if confirmingPush}
-          <section aria-label="Confirm push">
-            <p>Push HEAD to {summary.upstream}?</p>
-            <button type="button" onclick={onpush}>Confirm push</button>
-            <button type="button" onclick={oncancelpush}>Cancel</button>
-          </section>
-        {/if}
-        {#if summary.commits.length}
-          <section class="commit-history" aria-labelledby="recent-commits-title">
-            <h3 id="recent-commits-title">Recent commits</h3>
-            <ol class="commit-list" aria-label="Recent commits">
-              {#each summary.commits as commit (commit.hash)}
-                <li class="commit-entry">
-                  <div class="commit-subject">
-                    <code title={commit.hash}>{commit.shortHash}</code><span>{commit.subject}</span>
-                  </div>
-                  <div class="commit-meta">
-                    <span>{commit.author}</span><time
-                      datetime={commit.authoredAt}
-                      title={commit.authoredAt}>{relativeTime(commit.authoredAt)}</time
-                    >
-                  </div>
-                </li>
-              {/each}
-            </ol>
-          </section>
-        {/if}
+          {#if confirmingPush}
+            <section aria-label="Confirm push">
+              <p>Push HEAD to {summary.upstream}?</p>
+              <button type="button" onclick={onpush}>Confirm push</button>
+              <button type="button" onclick={oncancelpush}>Cancel</button>
+            </section>
+          {/if}
+          {#if summary.commits.length}
+            <section class="commit-history" aria-labelledby="recent-commits-title">
+              <h3 id="recent-commits-title">Recent commits</h3>
+              <ol class="commit-list" aria-label="Recent commits">
+                {#each summary.commits as commit (commit.hash)}
+                  <li class="commit-entry">
+                    <div class="commit-subject">
+                      <code title={commit.hash}>{commit.shortHash}</code><span
+                        >{commit.subject}</span
+                      >
+                    </div>
+                    <div class="commit-meta">
+                      <span>{commit.author}</span><time
+                        datetime={commit.authoredAt}
+                        title={commit.authoredAt}>{relativeTime(commit.authoredAt)}</time
+                      >
+                    </div>
+                  </li>
+                {/each}
+              </ol>
+            </section>
+          {/if}
         {:else}
-        <p>This workspace is not a Git repository.</p>
+          <p>This workspace is not a Git repository.</p>
         {/if}
       {:else if !error}
         <p role="status">Loading repository status…</p>
       {/if}
     {:else if selectedWorkspace}
       <p>
-        <strong>{selectedWorkspace.name}</strong> is available as a Clone destination. Select a Git
-        repository to inspect branches and enable repository actions.
+        <strong>{selectedWorkspace.name}</strong> is available as a Clone destination. Select a Git repository
+        to inspect branches and enable repository actions.
       </p>
       <div class="git-actions" aria-label="Repository actions unavailable">
         <button type="button" disabled><span aria-hidden="true">↑</span> Push</button>

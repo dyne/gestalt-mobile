@@ -46,7 +46,8 @@ function repository(overrides: Partial<AuthorizationRepository> = {}): Authoriza
     readCeremony: () => null,
     saveTicket: () => {},
     issueEnrollmentTicket: () => {},
-    enrollmentTicketStatus: () => 'none', cancelEnrollmentTicket: () => false,
+    enrollmentTicketStatus: () => 'none',
+    cancelEnrollmentTicket: () => false,
     consumeTicket: () => false,
     ticketAvailable: () => false,
     completeRegistration: () => 'ceremonyUnavailable',
@@ -88,7 +89,9 @@ async function buildApp(deps: Parameters<typeof createApp>[0]) {
   const app = await createApp(deps);
   const inject = app.inject.bind(app) as (options: unknown) => Promise<unknown>;
   const origin = deps.auth?.relyingParty.publicOrigin;
-  app.inject = ((options: string | { headers?: Record<string, string>; [key: string]: unknown }) => {
+  app.inject = ((
+    options: string | { headers?: Record<string, string>; [key: string]: unknown },
+  ) => {
     if (typeof options === 'string') return inject(options);
     return inject({
       ...options,

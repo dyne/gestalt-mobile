@@ -7,10 +7,7 @@
 import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { ModelCatalog } from '../../catalog/application/ports.js';
-import {
-  DEFAULT_SESSION_MODEL,
-  type StartSessionSettings,
-} from '../application/start-settings.js';
+import { DEFAULT_SESSION_MODEL, type StartSessionSettings } from '../application/start-settings.js';
 import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
 import {
   applySkillSelectionSnapshot,
@@ -50,7 +47,10 @@ export async function startSession(
     ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
     : deps.defaultSkillProfile;
   if (input.skillProfile && !selectedProfile)
-    throw new SkillProfileError('UNKNOWN_SKILL_PROFILE', 'The selected skill profile does not exist.');
+    throw new SkillProfileError(
+      'UNKNOWN_SKILL_PROFILE',
+      'The selected skill profile does not exist.',
+    );
   const [projectProfile, catalog] = await Promise.all([
     deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
     deps.skillCatalog(input.profile).list(workspace.realPath),

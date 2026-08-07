@@ -73,7 +73,10 @@ describe('AppHeader', () => {
   it('renders the registry options in stable order and reports their stable IDs', async () => {
     const onthemechange = vi.fn();
     render(AppHeader, { theme: 'minimal-light', onthemechange });
-    const appearance = screen.getByRole('combobox', { name: 'Appearance', hidden: true }) as HTMLSelectElement;
+    const appearance = screen.getByRole('combobox', {
+      name: 'Appearance',
+      hidden: true,
+    }) as HTMLSelectElement;
     expect([...appearance.options].map((option) => [option.value, option.text])).toEqual([
       ['dyne-org', 'Dyne.org'],
       ['minimal-light', 'Minimal light'],

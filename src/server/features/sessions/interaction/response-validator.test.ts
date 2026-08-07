@@ -6,7 +6,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isValidInteractionResponse, isValidQuizInteractionResponse } from './response-validator.js';
+import {
+  isValidInteractionResponse,
+  isValidQuizInteractionResponse,
+} from './response-validator.js';
 import { toQuizToolResponse } from '../../../../shared/contracts/quiz.js';
 
 describe('isValidInteractionResponse', () => {
@@ -54,8 +57,12 @@ describe('isValidInteractionResponse', () => {
         },
       ],
     };
-    expect(isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Fast' }]))).toBe(true);
-    expect(isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Other' }]))).toBe(false);
+    expect(
+      isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Fast' }])),
+    ).toBe(true);
+    expect(
+      isValidQuizInteractionResponse(quiz, toQuizToolResponse([{ id: 'mode', answer: 'Other' }])),
+    ).toBe(false);
     expect(isValidInteractionResponse('quiz', { success: true, contentItems: [] })).toBe(false);
   });
 
@@ -68,7 +75,10 @@ describe('isValidInteractionResponse', () => {
           question: 'How should this plan run?',
           choices: [
             { label: 'Solo', description: 'One agent executes the plan.' },
-            { label: 'Supervised multi-agent', description: 'A supervisor coordinates parallel agents.' },
+            {
+              label: 'Supervised multi-agent',
+              description: 'A supervisor coordinates parallel agents.',
+            },
           ],
           allowCustom: false,
         },

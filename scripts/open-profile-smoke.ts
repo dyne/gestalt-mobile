@@ -41,7 +41,10 @@ async function main(): Promise<void> {
     app = await composeRelayApp({
       root: workspace,
       dataDir,
-      profiles: { list: async () => [{ name: profile, state: 'ok', status: 'ready' }], require: async () => ({ name: profile, state: 'ok', status: 'ready' }) },
+      profiles: {
+        list: async () => [{ name: profile, state: 'ok', status: 'ready' }],
+        require: async () => ({ name: profile, state: 'ok', status: 'ready' }),
+      },
       installedCodexVersion,
       startAppServers: true,
       launchAppServer: tracedAppServer(rpcLifecycle),
@@ -52,7 +55,8 @@ async function main(): Promise<void> {
       models: string[];
     };
     const model = bootstrap.models[0];
-    if (!bootstrap.workspaces[0] || !model) throw new Error('isolated profile did not expose a workspace model');
+    if (!bootstrap.workspaces[0] || !model)
+      throw new Error('isolated profile did not expose a workspace model');
     const normal = await create(app, bootstrap.workspaces[0].id, model);
     if (normal.threadId) smokeThreadIds.add(normal.threadId);
     await persistMinimalHistory(app, normal.id);
@@ -73,7 +77,8 @@ async function main(): Promise<void> {
       replaced.state !== 'ready' ||
       !replaced.threadId ||
       replaced.threadId === absentThreadId ||
-      JSON.stringify(replaced.recovery) !== JSON.stringify({ historyUnavailable: true, replacementCreated: true })
+      JSON.stringify(replaced.recovery) !==
+        JSON.stringify({ historyUnavailable: true, replacementCreated: true })
     )
       throw new Error('missing rollout Open did not create and bind a replacement thread');
     smokeThreadIds.add(replaced.threadId);
@@ -124,7 +129,10 @@ function isolatedProfileCodexVersion(): string | null {
   return /^codex-cli \d+\.\d+\.\d+$/.test(version) ? version : null;
 }
 
-async function deleteSmokeThreads(workspace: string, threadIds: ReadonlySet<string>): Promise<void> {
+async function deleteSmokeThreads(
+  workspace: string,
+  threadIds: ReadonlySet<string>,
+): Promise<void> {
   if (!threadIds.size) return;
   const server = launchCodexAppServer({ profile, cwd: workspace });
   try {
@@ -162,13 +170,18 @@ async function create(
     url: '/api/sessions',
     payload: { workspaceId, profile, model, sandbox: 'workspace-write', approvalPolicy: 'never' },
   });
-  if (response.statusCode !== 202) throw new Error(`session creation failed (${response.statusCode})`);
+  if (response.statusCode !== 202)
+    throw new Error(`session creation failed (${response.statusCode})`);
   return response.json() as Session;
 }
 
-async function release(app: Awaited<ReturnType<typeof composeRelayApp>>, id: string): Promise<void> {
+async function release(
+  app: Awaited<ReturnType<typeof composeRelayApp>>,
+  id: string,
+): Promise<void> {
   const response = await app.inject({ method: 'POST', url: `/api/sessions/${id}/release` });
-  if (response.statusCode !== 202) throw new Error(`session release failed (${response.statusCode})`);
+  if (response.statusCode !== 202)
+    throw new Error(`session release failed (${response.statusCode})`);
 }
 
 /** Creates the smallest durable local history allowed for this isolated smoke only. */
@@ -182,7 +195,8 @@ async function persistMinimalHistory(
     // This is deliberately harmless and has no workspace action or sensitive content.
     payload: { text: 'Compatibility smoke: acknowledge without performing work.' },
   });
-  if (started.statusCode !== 202) throw new Error(`bounded smoke turn failed (${started.statusCode})`);
+  if (started.statusCode !== 202)
+    throw new Error(`bounded smoke turn failed (${started.statusCode})`);
   for (let attempt = 0; attempt < 60; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const response = await app.inject({ method: 'GET', url: `/api/sessions/${id}` });
@@ -207,7 +221,12 @@ async function restore(
   return response.json() as Session;
 }
 
-function seedAbsentRollout(databasePath: string, sourceId: string, targetId: string, absentThreadId: string): void {
+function seedAbsentRollout(
+  databasePath: string,
+  sourceId: string,
+  targetId: string,
+  absentThreadId: string,
+): void {
   const database = new DatabaseSync(databasePath);
   try {
     database

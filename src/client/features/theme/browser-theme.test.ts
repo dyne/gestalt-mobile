@@ -16,13 +16,20 @@ function dependencies(stored: string | null = null) {
     root,
     meta,
     writes,
-    storage: { getItem: () => stored, setItem: (key: string, value: string) => writes.push([key, value]) },
+    storage: {
+      getItem: () => stored,
+      setItem: (key: string, value: string) => writes.push([key, value]),
+    },
   };
 }
 
 describe('browser theme boundary', () => {
   it.each([
-    [null, 'dyne-org'], ['minimal-dark', 'minimal-dark'], ['light', 'minimal-light'], ['system', 'dyne-org'], ['retired', 'dyne-org'],
+    [null, 'dyne-org'],
+    ['minimal-dark', 'minimal-dark'],
+    ['light', 'minimal-light'],
+    ['system', 'dyne-org'],
+    ['retired', 'dyne-org'],
   ])('applies resolved stored theme %# before mount', (stored, expected) => {
     const browser = dependencies(stored);
     expect(bootstrapTheme(browser)).toBe(expected);
@@ -60,11 +67,20 @@ describe('browser theme boundary', () => {
     const root = document.createElement('html');
     localStorage.setItem('gestalt-mobile.theme', 'minimal-dark');
     expect(bootstrapTheme({ root, meta: null, storage: null })).toBe('dyne-org');
-    expect(selectTheme('minimal-light', {
-      root,
-      meta: null,
-      storage: { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } },
-    })).toBe('minimal-light');
+    expect(
+      selectTheme('minimal-light', {
+        root,
+        meta: null,
+        storage: {
+          getItem: () => {
+            throw new Error('blocked');
+          },
+          setItem: () => {
+            throw new Error('blocked');
+          },
+        },
+      }),
+    ).toBe('minimal-light');
   });
 
   it('continues when the browser storage getter throws before mount', () => {

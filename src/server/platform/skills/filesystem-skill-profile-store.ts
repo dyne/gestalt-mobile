@@ -26,7 +26,12 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
 
   /** Absolute canonical location of one normalized global profile. */
   globalProfilePath(name: string): string {
-    return join(resolve(this.homeDirectory), '.gestalt', 'skill-profiles', `${normalizeSkillProfileName(name)}.yml`);
+    return join(
+      resolve(this.homeDirectory),
+      '.gestalt',
+      'skill-profiles',
+      `${normalizeSkillProfileName(name)}.yml`,
+    );
   }
 
   async listGlobalProfileNames(): Promise<string[]> {
@@ -37,7 +42,11 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
         .filter((entry) => entry.isFile() && entry.name.endsWith('.yml'))
         .map((entry) => entry.name.slice(0, -4))
         .filter((name) => {
-          try { return normalizeSkillProfileName(name) === name; } catch { return false; }
+          try {
+            return normalizeSkillProfileName(name) === name;
+          } catch {
+            return false;
+          }
         })
         .sort((left, right) => left.localeCompare(right));
     } catch (error) {
@@ -58,7 +67,11 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
     const destination = join(root, `${name}.yml`);
     const temporary = join(root, `.${name}.${randomUUID()}.tmp`);
     try {
-      await writeFile(temporary, serializeSkillProfileYaml(profile), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      await writeFile(temporary, serializeSkillProfileYaml(profile), {
+        encoding: 'utf8',
+        mode: 0o600,
+        flag: 'wx',
+      });
       await rename(temporary, destination);
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);
@@ -100,7 +113,10 @@ export class FilesystemSkillProfileStore implements SkillProfileStore {
     try {
       const stat = await lstat(root);
       if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        throw new SkillProfileError('INVALID_SKILL_PROFILE', 'Global profile root must be a directory.');
+        throw new SkillProfileError(
+          'INVALID_SKILL_PROFILE',
+          'Global profile root must be a directory.',
+        );
       }
     } catch (error) {
       if (!missing(error)) throw error;

@@ -8,7 +8,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
   import { findTreeNode, treeNodePolicies } from '../filesystem-tree/tree-state.js';
-  import type { RecentSession, RelaySession, RelaySkillProfile, StartSessionSettings } from './relay-client.js';
+  import type {
+    RecentSession,
+    RelaySession,
+    RelaySkillProfile,
+    StartSessionSettings,
+  } from './relay-client.js';
   import { formatRelativeTime } from './relative-time.js';
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
 
@@ -98,7 +103,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ul class="session-list" aria-label="Open sessions">
         {#each openSessions as session (session.id)}
           {@const details = managedSessionDetails(session)}
-          <li class:current-session={session.id === selectedSessionId} class="managed-session open-session">
+          <li
+            class:current-session={session.id === selectedSessionId}
+            class="managed-session open-session"
+          >
             <div class="session-actions">
               <button type="button" onclick={() => onclose(session.id)}>Close</button>
             </div>
@@ -109,27 +117,29 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 aria-current={session.id === selectedSessionId ? 'page' : undefined}
                 onclick={() => onselectopen(session.id)}
               >
-              {#if details.updatedAt !== null}
-                <time datetime={new Date(details.updatedAt).toISOString()}>
-                  {formatRelativeTime(details.updatedAt)}
-                </time>
-              {:else}
-                <div>{formatRelativeTime(null)}</div>
-              {/if}
-              <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
-              {#if session.model}
-                <span class="profile-badge">Model: {session.model}</span>
-              {/if}
-              {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
-              {#if session.effectiveSkillSelection?.selectedProfileName}
-                <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
-              {/if}
-              {#if session.lastOrgPlan}
-                <span class="org-plan-metadata">
-                  <span class="org-plan-title">{session.lastOrgPlan.title}</span>
-                  <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
-                </span>
-              {/if}
+                {#if details.updatedAt !== null}
+                  <time datetime={new Date(details.updatedAt).toISOString()}>
+                    {formatRelativeTime(details.updatedAt)}
+                  </time>
+                {:else}
+                  <div>{formatRelativeTime(null)}</div>
+                {/if}
+                <div class="workspace-path">{displayWorkspacePath(details.workspacePath)}</div>
+                {#if session.model}
+                  <span class="profile-badge">Model: {session.model}</span>
+                {/if}
+                {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
+                {#if session.effectiveSkillSelection?.selectedProfileName}
+                  <span class="profile-badge"
+                    >Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span
+                  >
+                {/if}
+                {#if session.lastOrgPlan}
+                  <span class="org-plan-metadata">
+                    <span class="org-plan-title">{session.lastOrgPlan.title}</span>
+                    <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
+                  </span>
+                {/if}
               </button>
             </div>
           </li>
@@ -143,7 +153,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {@const details = managedSessionDetails(session)}
         <li class="managed-session">
           <div class="session-actions">
-            <button type="button" disabled={openingSessionId === session.id} onclick={() => onopen(session.id)}>
+            <button
+              type="button"
+              disabled={openingSessionId === session.id}
+              onclick={() => onopen(session.id)}
+            >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </button>
             <button type="button" onclick={() => onforget(session.id)}>Forget</button>
@@ -162,7 +176,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {/if}
             {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
             {#if session.effectiveSkillSelection?.selectedProfileName}
-              <span class="profile-badge">Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span>
+              <span class="profile-badge"
+                >Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span
+              >
             {/if}
           </div>
         </li>
@@ -215,7 +231,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           id="sandbox"
           value={sandbox}
           onchange={(event) =>
-            onsandboxchange(event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>)}
+            onsandboxchange(
+              event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
+            )}
         >
           <option value="workspace-write">workspace-write</option>
           <option value="read-only">read-only</option>
@@ -235,10 +253,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <option value="never">Approve everything</option>
         </select>
       </div>
-      <p id="approval-policy-help">This controls when Codex asks; it does not expand the sandbox's technical permissions.</p>
-      {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
+      <p id="approval-policy-help">
+        This controls when Codex asks; it does not expand the sandbox's technical permissions.
+      </p>
+      {#if skillProfileError}<p class="skills-profile-error" role="alert">
+          {skillProfileError}
+        </p>{/if}
       <div class="session-secondary-actions">
-        <button id="manage-skill-profiles" type="button" onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button>
+        <button
+          id="manage-skill-profiles"
+          type="button"
+          onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button
+        >
         <div class="model-control">
           <label for="model">Model</label>
           <select
@@ -278,8 +304,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {/if}
               <div class="workspace-path">{displayWorkspacePath(session.cwd)}</div>
               {#if session.model}<span class="profile-badge">Model: {session.model}</span>{/if}
-              {#if session.skillProfile}<span class="profile-badge">Skills profile: {session.skillProfile}</span>{/if}
-              {#if session.orgPlanFilename}<span class="profile-badge">Org plan: {session.orgPlanFilename}</span>{/if}
+              {#if session.skillProfile}<span class="profile-badge"
+                  >Skills profile: {session.skillProfile}</span
+                >{/if}
+              {#if session.orgPlanFilename}<span class="profile-badge"
+                  >Org plan: {session.orgPlanFilename}</span
+                >{/if}
             </div>
             <div class="session-actions">
               <button type="button" onclick={() => onopenrecent(session)}>Open</button>
@@ -305,8 +335,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     list-style: none;
   }
 
-  .current-session { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
-  .session-select { display: block; inline-size: 100%; color: inherit; font: inherit; text-align: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
+  .current-session {
+    outline: 2px solid var(--theme-accent);
+    outline-offset: 2px;
+  }
+  .session-select {
+    display: block;
+    inline-size: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
 
   .managed-session {
     display: grid;
@@ -344,9 +387,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-wrap: anywhere;
   }
 
-  .org-plan-metadata { display: grid; gap: 0.125rem; margin-block-start: 0.35rem; }
-  .org-plan-title { font-weight: 600; }
-  .org-plan-filename { overflow-wrap: anywhere; color: var(--theme-text-muted); }
+  .org-plan-metadata {
+    display: grid;
+    gap: 0.125rem;
+    margin-block-start: 0.35rem;
+  }
+  .org-plan-title {
+    font-weight: 600;
+  }
+  .org-plan-filename {
+    overflow-wrap: anywhere;
+    color: var(--theme-text-muted);
+  }
 
   .session-actions {
     display: flex;
@@ -462,6 +514,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       padding: 0.2rem;
     }
 
-    .model-control { margin-inline-start: 0; }
+    .model-control {
+      margin-inline-start: 0;
+    }
   }
 </style>

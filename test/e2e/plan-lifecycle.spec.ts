@@ -127,11 +127,14 @@ function fakeAppServer(input: AppServerLaunchInput, launches: AppServerLaunchInp
   };
 }
 
-async function seedAuthenticatedRelay(homeDirectory: string, relyingParty: {
-  publicOrigin: string;
-  rpId: string;
-  rpName: 'Gestalt Mobile';
-}): Promise<void> {
+async function seedAuthenticatedRelay(
+  homeDirectory: string,
+  relyingParty: {
+    publicOrigin: string;
+    rpId: string;
+    rpName: 'Gestalt Mobile';
+  },
+): Promise<void> {
   const store = new SqliteAuthorizationStore(homeDirectory, relyingParty);
   const device = {
     id: authorizedDeviceId('plan-lifecycle-device'),
@@ -145,7 +148,10 @@ async function seedAuthenticatedRelay(homeDirectory: string, relyingParty: {
     createdAt: '2026-08-02T00:00:00.000Z',
   };
   store.initializeOwner(new Uint8Array(32).fill(1));
-  store.claimFirstDevice({ id: localOwnerId('local-owner'), userHandle: new Uint8Array(32).fill(1) }, device);
+  store.claimFirstDevice(
+    { id: localOwnerId('local-owner'), userHandle: new Uint8Array(32).fill(1) },
+    device,
+  );
   store.saveSession(authorizationSessionId('plan-lifecycle-session'), {
     deviceId: device.id,
     expiresAt: '2026-09-01T00:00:00.000Z',
@@ -212,7 +218,10 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     return relyingParty.publicOrigin;
   };
   const invokeHelper = async (...args: string[]) => {
-    expect(owningStatusDirectory, 'the relay injects a session-owned helper status path').toBeTruthy();
+    expect(
+      owningStatusDirectory,
+      'the relay injects a session-owned helper status path',
+    ).toBeTruthy();
     const [command, id, value] = args;
     await updateFixturePlan(owningStatusDirectory!, planPath, command!, id, value);
   };
@@ -222,7 +231,11 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await writeFile(planPath, fixturePlan);
     await seedAuthenticatedRelay(homeDirectory, relyingParty);
     let relayUrl = await startRelay();
-    await page.context().addCookies([{ name: 'gestalt_mobile_session', value: 'plan-lifecycle-session', url: relayUrl }]);
+    await page
+      .context()
+      .addCookies([
+        { name: 'gestalt_mobile_session', value: 'plan-lifecycle-session', url: relayUrl },
+      ]);
     const bootstrap = (await authorizedFetch(`${relayUrl}/api/bootstrap`).then((response) =>
       response.json(),
     )) as {
@@ -246,7 +259,8 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     const owningSession = await createSession();
     const sessionLaunches = launches.filter((launch) => launch.environment);
     expect(sessionLaunches).toHaveLength(2);
-    owningStatusDirectory = sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY!;
+    owningStatusDirectory =
+      sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY!;
     expect(sessionLaunches[0]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY).not.toBe(
       sessionLaunches[1]!.environment!.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY,
     );
@@ -297,7 +311,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
         authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`)
           .then(async (response) => {
             const body = await response.text();
-            return body ? JSON.parse(body) as { title?: string } : null;
+            return body ? (JSON.parse(body) as { title?: string }) : null;
           })
           .then((plan) => plan?.title),
       )
@@ -447,7 +461,9 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
             .__planSeenDuringIsolation,
       ),
     ).toBe(false);
-    const isolatedPlan = await authorizedFetch(`${relayUrl}/api/sessions/${isolatedSession.id}/plan`);
+    const isolatedPlan = await authorizedFetch(
+      `${relayUrl}/api/sessions/${isolatedSession.id}/plan`,
+    );
     expect(isolatedPlan.status).toBe(204);
 
     await navigation.getByRole('button', { name: 'Sessions' }).click();

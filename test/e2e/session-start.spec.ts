@@ -101,18 +101,31 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
 test('sends a selected named skill profile only when creating a new session', async ({ page }) => {
   let requestBody: unknown;
-  await page.route('**/api/bootstrap', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [] }),
-  }));
-  await page.route('**/api/skill-profiles', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }] }),
-  }));
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree(),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        profiles: [{ version: 1, name: 'focused', path: '/profiles/focused.yml', skills: [] }],
+      }),
+    }),
+  );
   await page.route('**/api/sessions', async (route) => {
     if (route.request().method() === 'POST') {
       requestBody = route.request().postDataJSON();
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'session-1', state: 'ready' }) });
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'session-1', state: 'ready' }),
+      });
     }
     return route.fulfill({ contentType: 'application/json', body: '[]' });
   });
@@ -120,14 +133,16 @@ test('sends a selected named skill profile only when creating a new session', as
   await page.goto('/');
   await page.getByLabel('Skills profile').selectOption('focused');
   await page.getByRole('button', { name: 'Create session' }).click();
-  await expect.poll(() => requestBody).toEqual({
-    workspaceId: 'workspace-1',
-    profile: 'default',
-    model: 'gpt-5.6-terra',
-    sandbox: 'workspace-write',
-    approvalPolicy: 'on-request',
-    skillProfile: 'focused',
-  });
+  await expect
+    .poll(() => requestBody)
+    .toEqual({
+      workspaceId: 'workspace-1',
+      profile: 'default',
+      model: 'gpt-5.6-terra',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'on-request',
+      skillProfile: 'focused',
+    });
 });
 
 test('labels relay threads as sessions and shows recent sessions from Codex', async ({ page }) => {
@@ -304,9 +319,10 @@ test('separates open and saved sessions and retains forgotten threads in recent 
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(
-        (closed && !reopened ? [{ ...sessions[0], state: 'released' }, sessions[1]] : sessions).filter(
-          (session) => !forgotten || session.id !== 'stopped-session',
-        ),
+        (closed && !reopened
+          ? [{ ...sessions[0], state: 'released' }, sessions[1]]
+          : sessions
+        ).filter((session) => !forgotten || session.id !== 'stopped-session'),
       ),
     }),
   );
@@ -346,40 +362,68 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(openSessions.getByText('/projects/running')).toBeVisible();
 });
 
-test('Open announces replacement history loss while selecting the ready session at mobile and desktop sizes', async ({ page }) => {
+test('Open announces replacement history loss while selecting the ready session at mobile and desktop sizes', async ({
+  page,
+}) => {
   const saved = {
-    id: 'saved-session', state: 'released', threadId: 'missing-thread', workspacePath: '/projects/saved',
-    workspaceId: 'workspace-1', profile: 'work', activeTurnId: null,
+    id: 'saved-session',
+    state: 'released',
+    threadId: 'missing-thread',
+    workspacePath: '/projects/saved',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
   };
   const replacement = {
-    ...saved, state: 'ready', threadId: 'replacement-thread',
+    ...saved,
+    state: 'ready',
+    threadId: 'replacement-thread',
     recovery: { historyUnavailable: true, replacementCreated: true },
   };
   let restored = false;
-  await page.route('**/api/bootstrap', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [saved] }),
-  }));
-  await page.route('**/api/sessions/recent-threads', (route) => route.fulfill({ contentType: 'application/json', body: '[]' }));
-  await page.route('**/api/sessions', (route) => route.fulfill({
-    contentType: 'application/json', body: JSON.stringify(restored ? [replacement] : [saved]),
-  }));
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree(),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [saved],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(restored ? [replacement] : [saved]),
+    }),
+  );
   await page.route('**/api/sessions/saved-session/restore', async (route) => {
     restored = true;
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(replacement) });
   });
-  await page.route('**/api/sessions/saved-session/history', (route) => route.fulfill({
-    contentType: 'application/json', body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
-  }));
+  await page.route('**/api/sessions/saved-session/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+    }),
+  );
 
-  for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 800 },
+  ]) {
     restored = false;
     await page.setViewportSize(viewport);
     await page.goto('/');
     await page.getByRole('button', { name: 'Sessions' }).click();
     await page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' }).click();
     await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-    const recoveryNotice = page.getByRole('status').filter({ hasText: 'prior Codex history was unavailable' });
+    const recoveryNotice = page
+      .getByRole('status')
+      .filter({ hasText: 'prior Codex history was unavailable' });
     await expect(recoveryNotice).toContainText('prior Codex history was unavailable');
     await expect(recoveryNotice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
   }
@@ -387,27 +431,52 @@ test('Open announces replacement history loss while selecting the ready session 
 
 test('Open re-enables retry after a bounded restore failure', async ({ page }) => {
   const saved = {
-    id: 'retry-session', state: 'released', threadId: 'old-thread', workspacePath: '/projects/retry',
-    workspaceId: 'workspace-1', profile: 'work', activeTurnId: null,
+    id: 'retry-session',
+    state: 'released',
+    threadId: 'old-thread',
+    workspacePath: '/projects/retry',
+    workspaceId: 'workspace-1',
+    profile: 'work',
+    activeTurnId: null,
   };
   let attempts = 0;
-  await page.route('**/api/bootstrap', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ workspaces: workspaceTree(), profiles: [{ name: 'work', state: 'ok', status: 'ready' }], sessions: [saved] }),
-  }));
-  await page.route('**/api/sessions/recent-threads', (route) => route.fulfill({ contentType: 'application/json', body: '[]' }));
-  await page.route('**/api/sessions', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify([saved]) }));
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree(),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [saved],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify([saved]) }),
+  );
   await page.route('**/api/sessions/retry-session/restore', async (route) => {
     attempts += 1;
     if (attempts === 1) {
-      await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ code: 'RESTORE_FAILED' }) });
+      await route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'RESTORE_FAILED' }),
+      });
       return;
     }
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...saved, state: 'ready' }) });
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ ...saved, state: 'ready' }),
+    });
   });
-  await page.route('**/api/sessions/retry-session/history', (route) => route.fulfill({
-    contentType: 'application/json', body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
-  }));
+  await page.route('**/api/sessions/retry-session/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+    }),
+  );
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
@@ -584,9 +653,9 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
   await openChat(page);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   const ready = page.getByRole('status', { name: 'Ready.' });
-  expect(await ready.evaluate((element) => parseFloat(getComputedStyle(element).marginTop))).toBeGreaterThan(
-    0,
-  );
+  expect(
+    await ready.evaluate((element) => parseFloat(getComputedStyle(element).marginTop)),
+  ).toBeGreaterThan(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -1286,28 +1355,31 @@ test('projects a live activity update from the relay socket', async ({ page }) =
       body: JSON.stringify({ items: [], currentSequence: 0 }),
     }),
   );
-  await page.routeWebSocket('ws://127.0.0.1:4173/api/sessions/session-1/events?after=0', (socket) => {
-    socket.send(
-      JSON.stringify({
-        type: 'relay.event',
-        event: {
-          sequence: 1,
-          type: 'agentMessageDelta',
-          payload: { text: 'Inspecting the repository.' },
-        },
-      }),
-    );
-    socket.send(
-      JSON.stringify({
-        type: 'relay.event',
-        event: {
-          sequence: 2,
-          type: 'activity.updated',
-          payload: { id: 'item-1', label: 'Command · completed', detail: 'git status' },
-        },
-      }),
-    );
-  });
+  await page.routeWebSocket(
+    'ws://127.0.0.1:4173/api/sessions/session-1/events?after=0',
+    (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: {
+            sequence: 1,
+            type: 'agentMessageDelta',
+            payload: { text: 'Inspecting the repository.' },
+          },
+        }),
+      );
+      socket.send(
+        JSON.stringify({
+          type: 'relay.event',
+          event: {
+            sequence: 2,
+            type: 'activity.updated',
+            payload: { id: 'item-1', label: 'Command · completed', detail: 'git status' },
+          },
+        }),
+      );
+    },
+  );
 
   await page.goto('/');
   await openChat(page);
@@ -1604,7 +1676,9 @@ test('switches primary navigation with arrow keys', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Sessions', pressed: true })).toBeFocused();
 });
 
-test('shows Gestalt branding and persists every named appearance from configuration', async ({ page }) => {
+test('shows Gestalt branding and persists every named appearance from configuration', async ({
+  page,
+}) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -1621,34 +1695,47 @@ test('shows Gestalt branding and persists every named appearance from configurat
     await expect(page.locator('.configuration-brand')).toBeVisible();
     await page.getByLabel('Appearance').selectOption(theme);
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-    await expect.poll(() => page.evaluate(() => localStorage.getItem('gestalt-mobile.theme'))).toBe(theme);
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('gestalt-mobile.theme')))
+      .toBe(theme);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
   }
 });
 
-test('captures the configuration popover across the named theme accessibility matrix', async ({ page }, testInfo: TestInfo) => {
-  await page.route('**/api/bootstrap', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify({ workspaces: [], profiles: [], sessions: [] }),
-  }));
+test('captures the configuration popover across the named theme accessibility matrix', async ({
+  page,
+}, testInfo: TestInfo) => {
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [] }),
+    }),
+  );
 
-  for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }]) {
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 390, height: 844 },
+  ]) {
     for (const fontScale of [100, 200]) {
       for (const theme of ['dyne-org', 'minimal-light', 'minimal-dark']) {
         await page.setViewportSize(viewport);
         await page.goto('/');
-        await page.locator('html').evaluate((root, scale) => { root.style.fontSize = `${scale}%`; }, fontScale);
+        await page.locator('html').evaluate((root, scale) => {
+          root.style.fontSize = `${scale}%`;
+        }, fontScale);
         await page.getByRole('button', { name: 'Open configuration' }).click();
         await page.getByLabel('Appearance').selectOption(theme);
         const panel = page.locator('.configuration-panel');
         await expect(panel).toBeVisible();
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
         const viewportContainment = await panel.evaluate((element) => {
-          const boxes = [element, ...element.querySelectorAll('select, button')].map((candidate) => {
-            const box = candidate.getBoundingClientRect();
-            return { left: box.left, right: box.right };
-          });
+          const boxes = [element, ...element.querySelectorAll('select, button')].map(
+            (candidate) => {
+              const box = candidate.getBoundingClientRect();
+              return { left: box.left, right: box.right };
+            },
+          );
           return {
             documentFits:
               document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -1681,8 +1768,16 @@ test('captures the configuration popover across the named theme accessibility ma
         expect(lastActionBox!.y + lastActionBox!.height).toBeLessThanOrEqual(
           viewportContainment.viewportHeight + 0.5,
         );
-        expect(await page.getByRole('button', { name: 'Open configuration' }).evaluate((button) => button.getBoundingClientRect().height >= 44)).toBe(true);
-        await page.screenshot({ path: testInfo.outputPath(`configuration-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`) });
+        expect(
+          await page
+            .getByRole('button', { name: 'Open configuration' })
+            .evaluate((button) => button.getBoundingClientRect().height >= 44),
+        ).toBe(true);
+        await page.screenshot({
+          path: testInfo.outputPath(
+            `configuration-${viewport.width}x${viewport.height}-font${fontScale}-${theme}.png`,
+          ),
+        });
       }
     }
   }

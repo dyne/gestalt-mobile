@@ -88,12 +88,31 @@ describe('parseSupervisedPlan', () => {
   it('rejects invalid measurement values while allowing fresh and reset quota states', () => {
     expect(parse()).toEqual(expect.objectContaining({ kind: 'available' }));
     expect(parse()).not.toHaveProperty('plan.steps.0.measurement');
-    expect(parse(plan().replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: UNREVIEWED\n:WEEKLY_REMAINING_START: 10\n:WEEKLY_REMAINING_CURRENT: 90\n:WEEKLY_PERCENT_USED: 0'))).toMatchObject({ kind: 'available' });
-    expect(parse(plan().replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: UNREVIEWED\n:ELAPSED_SECONDS: -1'))).toEqual({ kind: 'unavailable', reason: 'MISSING_REQUIRED_FIELD' });
+    expect(
+      parse(
+        plan().replace(
+          ':REVIEW_STATUS: UNREVIEWED',
+          ':REVIEW_STATUS: UNREVIEWED\n:WEEKLY_REMAINING_START: 10\n:WEEKLY_REMAINING_CURRENT: 90\n:WEEKLY_PERCENT_USED: 0',
+        ),
+      ),
+    ).toMatchObject({ kind: 'available' });
+    expect(
+      parse(
+        plan().replace(
+          ':REVIEW_STATUS: UNREVIEWED',
+          ':REVIEW_STATUS: UNREVIEWED\n:ELAPSED_SECONDS: -1',
+        ),
+      ),
+    ).toEqual({ kind: 'unavailable', reason: 'MISSING_REQUIRED_FIELD' });
   });
 
   it('projects completion snapshots independently from active and unavailable measurements', () => {
-    const result = parse(plan().replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: UNREVIEWED\n:STARTED_AT: 2026-08-01T10:00:00Z\n:COMPLETED_AT: 2026-08-01T10:02:00Z\n:ELAPSED_SECONDS: 120\n:WEEKLY_REMAINING_END: 60\n:TOKENS_END: 160\n:TOKENS_USED: 60'));
+    const result = parse(
+      plan().replace(
+        ':REVIEW_STATUS: UNREVIEWED',
+        ':REVIEW_STATUS: UNREVIEWED\n:STARTED_AT: 2026-08-01T10:00:00Z\n:COMPLETED_AT: 2026-08-01T10:02:00Z\n:ELAPSED_SECONDS: 120\n:WEEKLY_REMAINING_END: 60\n:TOKENS_END: 160\n:TOKENS_USED: 60',
+      ),
+    );
     expect(result.kind).toBe('available');
     if (result.kind !== 'available') return;
     expect(result.plan.steps[0]?.measurement).toMatchObject({

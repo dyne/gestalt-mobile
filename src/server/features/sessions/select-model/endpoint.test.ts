@@ -15,13 +15,30 @@ describe('POST /api/sessions/:id/model', () => {
     let saved: unknown;
     registerSelectModel(app, {
       find: () => ({
-        id: 's', workspaceId: 'workspace', workspacePath: '/workspace', profile: 'default', model: 'old',
-        threadId: 'thread', state: 'ready', desiredState: 'active', activeTurnId: null,
-        protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+        id: 's',
+        workspaceId: 'workspace',
+        workspacePath: '/workspace',
+        profile: 'default',
+        model: 'old',
+        threadId: 'thread',
+        state: 'ready',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
       }),
-      models: async () => ['gpt-5.6-terra'], now: () => 'after', save: (session) => (saved = session),
+      models: async () => ['gpt-5.6-terra'],
+      now: () => 'after',
+      save: (session) => (saved = session),
     });
-    const response = await app.inject({ method: 'POST', url: '/api/sessions/s/model', payload: { model: 'gpt-5.6-terra' } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/model',
+      payload: { model: 'gpt-5.6-terra' },
+    });
     expect(response.statusCode).toBe(200);
     expect(saved).toMatchObject({ model: 'gpt-5.6-terra', updatedAt: 'after' });
     await app.close();

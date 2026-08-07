@@ -3,7 +3,10 @@
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-export function consumeEnrollmentFragment(location: Location, history: History): string | undefined {
+export function consumeEnrollmentFragment(
+  location: Location,
+  history: History,
+): string | undefined {
   const fragment = location.hash;
   if (!fragment.startsWith('#enroll=')) return undefined;
   const match = /^#enroll=([^&]+)$/.exec(fragment);

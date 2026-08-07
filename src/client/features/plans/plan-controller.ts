@@ -81,12 +81,25 @@ export function createPlanController(
       .then((plan) => {
         if (loadGeneration !== generation || selectedSessionId !== sessionId) return;
         if (lastPlanSequence !== sequenceAtRequest) return;
-        publish(plan ? { kind: 'ready', sessionId, plan: clonePlan(plan) } : { kind: 'unavailable', sessionId });
+        publish(
+          plan
+            ? { kind: 'ready', sessionId, plan: clonePlan(plan) }
+            : { kind: 'unavailable', sessionId },
+        );
       })
       .catch((error: unknown) => {
-        if (request?.signal.aborted || loadGeneration !== generation || selectedSessionId !== sessionId)
+        if (
+          request?.signal.aborted ||
+          loadGeneration !== generation ||
+          selectedSessionId !== sessionId
+        )
           return;
-        publish({ kind: 'error', sessionId, error: errorMessage(error), ...(preserve ? { plan: preserve } : {}) });
+        publish({
+          kind: 'error',
+          sessionId,
+          error: errorMessage(error),
+          ...(preserve ? { plan: preserve } : {}),
+        });
       });
   };
 
@@ -104,15 +117,23 @@ export function createPlanController(
     },
     refresh(sessionId) {
       if (selectedSessionId !== sessionId) return;
-      const plan = state.kind === 'ready' || state.kind === 'closing' ? state.plan : state.kind === 'error' ? state.plan : undefined;
+      const plan =
+        state.kind === 'ready' || state.kind === 'closing'
+          ? state.plan
+          : state.kind === 'error'
+            ? state.plan
+            : undefined;
       load(sessionId, plan);
     },
     applyEvent(sessionId, event) {
       if (selectedSessionId !== sessionId || event.sequence <= lastPlanSequence) return;
-    if (event.type === 'plan.updated' && (isSupervisedPlan(event.payload) || isRelayPlanUpdate(event.payload))) {
-      const plan = isRelayPlanUpdate(event.payload) ? event.payload.plan : event.payload;
-      lastPlanSequence = event.sequence;
-      publish({ kind: 'ready', sessionId, plan: clonePlan(plan) });
+      if (
+        event.type === 'plan.updated' &&
+        (isSupervisedPlan(event.payload) || isRelayPlanUpdate(event.payload))
+      ) {
+        const plan = isRelayPlanUpdate(event.payload) ? event.payload.plan : event.payload;
+        lastPlanSequence = event.sequence;
+        publish({ kind: 'ready', sessionId, plan: clonePlan(plan) });
       }
       if (event.type === 'plan.closed') {
         lastPlanSequence = event.sequence;

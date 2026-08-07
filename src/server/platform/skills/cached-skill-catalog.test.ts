@@ -12,8 +12,14 @@ describe('CachedSkillCatalog', () => {
   it('serves a startup refresh from memory until an explicit refresh', async () => {
     const discover = vi
       .fn()
-      .mockResolvedValueOnce({ skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true }], errors: [] })
-      .mockResolvedValueOnce({ skills: [{ name: 'Beta', path: '/skills/b/SKILL.md', enabled: false }], errors: [] });
+      .mockResolvedValueOnce({
+        skills: [{ name: 'Alpha', path: '/skills/a/SKILL.md', enabled: true }],
+        errors: [],
+      })
+      .mockResolvedValueOnce({
+        skills: [{ name: 'Beta', path: '/skills/b/SKILL.md', enabled: false }],
+        errors: [],
+      });
     const catalog = new CachedSkillCatalog(discover);
 
     await catalog.refresh('default', '/workspace');

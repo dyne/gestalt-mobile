@@ -72,7 +72,9 @@ export type RelayPlanUpdate = Readonly<{ plan: SupervisedPlan; reason: PlanSigna
 export function isRelayPlanUpdate(value: unknown): value is RelayPlanUpdate {
   if (!value || typeof value !== 'object') return false;
   const update = value as Partial<RelayPlanUpdate>;
-  return isSupervisedPlan(update.plan) && (update.reason === null || isPlanSignalReason(update.reason));
+  return (
+    isSupervisedPlan(update.plan) && (update.reason === null || isPlanSignalReason(update.reason))
+  );
 }
 
 export function isSupervisedPlan(value: unknown): value is SupervisedPlan {

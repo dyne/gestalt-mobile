@@ -132,7 +132,9 @@ describe('session plan REPR routes', () => {
     };
     registerGetPlan(app, deps);
     registerClosePlan(app, deps);
-    expect((await app.inject('/api/sessions/one/plan')).json()).toMatchObject({ title: 'Complete' });
+    expect((await app.inject('/api/sessions/one/plan')).json()).toMatchObject({
+      title: 'Complete',
+    });
     expect((await app.inject('/api/sessions/two/plan')).json()).toMatchObject({
       title: 'Other session plan',
     });

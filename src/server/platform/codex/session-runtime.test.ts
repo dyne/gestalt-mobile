@@ -7,7 +7,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PlanStatusSource, PlanStatusUpdate } from '../../features/plans/application/ports.js';
-import { GESTALT_QUIZ_TOOL_NAME, gestaltQuizDynamicTool, toQuizToolResponse } from '../../../shared/contracts/quiz.js';
+import {
+  GESTALT_QUIZ_TOOL_NAME,
+  gestaltQuizDynamicTool,
+  toQuizToolResponse,
+} from '../../../shared/contracts/quiz.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
@@ -55,14 +59,53 @@ describe('CodexSessionRuntime', () => {
           calls.push({ method, params });
           return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
         },
-        onNotification: () => () => {}, onServerRequest: () => () => {},
-      }, close: () => {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
     }));
-    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
-    const plan = { title: 'Roadmap', totalSteps: 1, doneSteps: 0, allDone: false, currentStepId: 'l1', steps: [{ id: 'l1', title: 'Ship', level: 1 as const, state: 'WIP' as const, priority: 'A' as const, reviewStatus: 'UNREVIEWED' as const, description: {}, children: [] }] };
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    const plan = {
+      title: 'Roadmap',
+      totalSteps: 1,
+      doneSteps: 0,
+      allDone: false,
+      currentStepId: 'l1',
+      steps: [
+        {
+          id: 'l1',
+          title: 'Ship',
+          level: 1 as const,
+          state: 'WIP' as const,
+          priority: 'A' as const,
+          reviewStatus: 'UNREVIEWED' as const,
+          description: {},
+          children: [],
+        },
+      ],
+    };
     await runtime.syncThreadPlanName('session-1', plan);
     await runtime.syncThreadPlanName('session-1', plan);
-    expect(calls.filter((call) => call.method === 'thread/name/set')).toEqual([{ method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Roadmap — L1 1/1' } }]);
+    expect(calls.filter((call) => call.method === 'thread/name/set')).toEqual([
+      { method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Roadmap — L1 1/1' } },
+    ]);
   });
 
   it('applies the resolved override to both new and restored child launches', async () => {
@@ -481,9 +524,20 @@ describe('CodexSessionRuntime', () => {
       }));
       const outcome = await runtime.restoreWithOutcome(
         {
-          id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
-          model: 'gpt-5.4', threadId: 'old-thread', state, desiredState: 'stopped', activeTurnId: null,
-          protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+          id: 'session-1',
+          workspaceId: 'workspace-1',
+          workspacePath: '/workspace',
+          profile: 'default',
+          model: 'gpt-5.4',
+          threadId: 'old-thread',
+          state,
+          desiredState: 'stopped',
+          activeTurnId: null,
+          protocolVersion: null,
+          failureCount: 0,
+          pendingInteractions: [],
+          createdAt: 'before',
+          updatedAt: 'before',
           effectiveSkillSelection: { selectedProfileName: 'focused', skills: [] },
           lastOrgPlan: { filename: 'plan.org', title: 'Plan' },
         },
@@ -495,9 +549,16 @@ describe('CodexSessionRuntime', () => {
         replacementCreated: true,
         session: { state: 'ready', threadId: 'replacement-thread', model: 'gpt-5.4' },
       });
-      expect(calls.map((call) => call.method)).toEqual(['initialize', 'thread/resume', 'thread/start']);
+      expect(calls.map((call) => call.method)).toEqual([
+        'initialize',
+        'thread/resume',
+        'thread/start',
+      ]);
       expect(calls.at(-1)?.params).toEqual({
-        cwd: '/workspace', approvalPolicy: 'on-request', model: 'gpt-5.4', dynamicTools: [gestaltQuizDynamicTool],
+        cwd: '/workspace',
+        approvalPolicy: 'on-request',
+        model: 'gpt-5.4',
+        dynamicTools: [gestaltQuizDynamicTool],
       });
     },
   );
@@ -512,17 +573,32 @@ describe('CodexSessionRuntime', () => {
           if (method === 'thread/resume') throw new CodexJsonRpcError(-32600, 'invalid parameters');
           return {};
         },
-        onNotification: () => () => {}, onServerRequest: () => () => {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
       },
-      close: () => { closed += 1; },
+      close: () => {
+        closed += 1;
+      },
     }));
     const original = {
-      id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
-      threadId: 'old-thread', state: 'released' as const, desiredState: 'stopped' as const, activeTurnId: null,
-      protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
+      id: 'session-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'old-thread',
+      state: 'released' as const,
+      desiredState: 'stopped' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
     };
 
-    await expect(runtime.restoreWithOutcome(original, 'after')).rejects.toThrow('invalid parameters');
+    await expect(runtime.restoreWithOutcome(original, 'after')).rejects.toThrow(
+      'invalid parameters',
+    );
     expect(calls).toEqual(['initialize', 'thread/resume']);
     expect(closed).toBe(1);
     expect(original.threadId).toBe('old-thread');
@@ -531,28 +607,55 @@ describe('CodexSessionRuntime', () => {
   it('cleans a failed replacement child and its status lease', async () => {
     const closed: string[] = [];
     const source: PlanStatusSource = {
-      open: async () => ({ statusDirectory: '/private/session-1', close: () => closed.push('lease'), remove: async () => {} }),
-      remove: async () => {}, closeAll: () => {},
+      open: async () => ({
+        statusDirectory: '/private/session-1',
+        close: () => closed.push('lease'),
+        remove: async () => {},
+      }),
+      remove: async () => {},
+      closeAll: () => {},
     };
     const runtime = new CodexSessionRuntime(
       () => ({
         rpc: {
           request: async (method) => {
-            if (method === 'thread/resume') throw new CodexJsonRpcError(-32600, 'no rollout found for thread id old-thread');
+            if (method === 'thread/resume')
+              throw new CodexJsonRpcError(-32600, 'no rollout found for thread id old-thread');
             if (method === 'thread/start') throw new Error('replacement failed');
             return {};
           },
-          onNotification: () => () => {}, onServerRequest: () => () => {},
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
         },
         close: () => closed.push('process'),
       }),
-      undefined, undefined, undefined, undefined, undefined, source,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
     );
-    await expect(runtime.restoreWithOutcome({
-      id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default',
-      threadId: 'old-thread', state: 'attentionRequired', desiredState: 'stopped', activeTurnId: null,
-      protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before',
-    }, 'after')).rejects.toThrow('replacement failed');
+    await expect(
+      runtime.restoreWithOutcome(
+        {
+          id: 'session-1',
+          workspaceId: 'workspace-1',
+          workspacePath: '/workspace',
+          profile: 'default',
+          threadId: 'old-thread',
+          state: 'attentionRequired',
+          desiredState: 'stopped',
+          activeTurnId: null,
+          protocolVersion: null,
+          failureCount: 0,
+          pendingInteractions: [],
+          createdAt: 'before',
+          updatedAt: 'before',
+        },
+        'after',
+      ),
+    ).rejects.toThrow('replacement failed');
     expect(closed).toEqual(['process', 'lease']);
   });
 
@@ -640,7 +743,11 @@ describe('CodexSessionRuntime', () => {
             currentStepId: 'current',
           },
         });
-        return { statusDirectory: `/private/${session.id}.json`, close: () => {}, remove: async () => {} };
+        return {
+          statusDirectory: `/private/${session.id}.json`,
+          close: () => {},
+          remove: async () => {},
+        };
       },
       remove: async () => {},
       closeAll: () => {},
@@ -748,7 +855,10 @@ describe('CodexSessionRuntime', () => {
               question: 'How should this plan run?',
               choices: [
                 { label: 'Solo', description: 'One agent executes the plan.' },
-                { label: 'Supervised multi-agent', description: 'A supervisor coordinates agents.' },
+                {
+                  label: 'Supervised multi-agent',
+                  description: 'A supervisor coordinates agents.',
+                },
               ],
               allowCustom: false,
             },
@@ -762,7 +872,9 @@ describe('CodexSessionRuntime', () => {
         request: expect.objectContaining({ id: 7, method: 'item/tool/call' }),
       },
     ]);
-    const response = toQuizToolResponse([{ id: 'execution_mode', answer: 'Supervised multi-agent' }]);
+    const response = toQuizToolResponse([
+      { id: 'execution_mode', answer: 'Supervised multi-agent' },
+    ]);
     expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(true);
     expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(false);
     await expect(result).resolves.toEqual(response);
@@ -914,20 +1026,54 @@ describe('CodexSessionRuntime', () => {
 
   it('bounds server requests, times them out, and makes late resolutions harmless', async () => {
     vi.useFakeTimers();
-    let requestListener: ((request: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    let requestListener:
+      ((request: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
     const runtime = new CodexSessionRuntime(
       () => ({
         rpc: {
-          request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
           onNotification: () => () => {},
-          onServerRequest: (listener) => { requestListener = listener; return () => {}; },
-        }, close: () => {},
+          onServerRequest: (listener) => {
+            requestListener = listener;
+            return () => {};
+          },
+        },
+        close: () => {},
       }),
-      undefined, undefined, () => true, undefined, undefined, undefined, undefined, undefined, 10, 1,
+      undefined,
+      undefined,
+      () => true,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      10,
+      1,
     );
-    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
     const pending = requestListener!({ id: 1, method: 'item/tool/call', params: {} });
-    await expect(requestListener!({ id: 2, method: 'item/tool/call', params: {} })).rejects.toThrow('CODEX_SERVER_REQUEST_LIMIT');
+    await expect(requestListener!({ id: 2, method: 'item/tool/call', params: {} })).rejects.toThrow(
+      'CODEX_SERVER_REQUEST_LIMIT',
+    );
     const timeout = expect(pending).rejects.toThrow('CODEX_SERVER_REQUEST_TIMEOUT');
     await vi.advanceTimersByTimeAsync(10);
     await timeout;
@@ -940,20 +1086,68 @@ describe('CodexSessionRuntime', () => {
     let listeners = 0;
     let leases = 0;
     const source: PlanStatusSource = {
-      open: async () => ({ statusDirectory: '/private/session-1', close: () => { leases += 1; }, remove: async () => {} }),
-      remove: async () => {}, closeAll: () => {},
+      open: async () => ({
+        statusDirectory: '/private/session-1',
+        close: () => {
+          leases += 1;
+        },
+        remove: async () => {},
+      }),
+      remove: async () => {},
+      closeAll: () => {},
     };
     const runtime = new CodexSessionRuntime(
       () => ({
         rpc: {
-          request: async (method) => method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
-          onNotification: () => { listeners += 1; return () => { listeners -= 1; }; },
-          onServerRequest: () => { listeners += 1; return () => { listeners -= 1; }; },
-        }, close: () => {}, onExit: (listener) => { exit = listener; listeners += 1; return () => { listeners -= 1; }; },
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => {
+            listeners += 1;
+            return () => {
+              listeners -= 1;
+            };
+          },
+          onServerRequest: () => {
+            listeners += 1;
+            return () => {
+              listeners -= 1;
+            };
+          },
+        },
+        close: () => {},
+        onExit: (listener) => {
+          exit = listener;
+          listeners += 1;
+          return () => {
+            listeners -= 1;
+          };
+        },
       }),
-      undefined, undefined, undefined, undefined, undefined, source,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      source,
     );
-    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
     exit?.();
     await runtime.release('session-1');
     expect({ listeners, leases }).toEqual({ listeners: 0, leases: 1 });
@@ -965,13 +1159,54 @@ describe('CodexSessionRuntime', () => {
       rpc: {
         request: async (method) => {
           if (method === 'thread/start') return { thread: { id: 'thread-1' } };
-          if (method === 'thread/name/set') { nameCalls += 1; throw new CodexJsonRpcError(-32601, 'method not found'); }
+          if (method === 'thread/name/set') {
+            nameCalls += 1;
+            throw new CodexJsonRpcError(-32601, 'method not found');
+          }
           return {};
-        }, onNotification: () => () => {}, onServerRequest: () => () => {},
-      }, close: () => {},
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
     }));
-    await runtime.start({ id: 'session-1', workspaceId: 'workspace-1', workspacePath: '/workspace', profile: 'default', threadId: null, state: 'starting', desiredState: 'active', activeTurnId: null, protocolVersion: null, failureCount: 0, pendingInteractions: [], createdAt: 'before', updatedAt: 'before' }, 'after');
-    const plan = { title: 'Plan', totalSteps: 1, doneSteps: 0, allDone: false, currentStepId: 'l1', steps: [{ id: 'l1', title: 'Ship', level: 1 as const, state: 'WIP' as const, priority: 'A' as const, reviewStatus: 'UNREVIEWED' as const, description: {}, children: [] }] };
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    const plan = {
+      title: 'Plan',
+      totalSteps: 1,
+      doneSteps: 0,
+      allDone: false,
+      currentStepId: 'l1',
+      steps: [
+        {
+          id: 'l1',
+          title: 'Ship',
+          level: 1 as const,
+          state: 'WIP' as const,
+          priority: 'A' as const,
+          reviewStatus: 'UNREVIEWED' as const,
+          description: {},
+          children: [],
+        },
+      ],
+    };
     await runtime.syncThreadPlanName('session-1', plan);
     await runtime.syncThreadPlanName('session-1', plan);
     expect(nameCalls).toBe(1);
