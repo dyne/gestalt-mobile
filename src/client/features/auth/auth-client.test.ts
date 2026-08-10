@@ -44,4 +44,22 @@ describe('auth client', () => {
     );
     await expect(client.status()).rejects.toThrow('AUTH_RESPONSE_INVALID');
   });
+
+  it('preserves a structured server problem code and falls back to the HTTP status', async () => {
+    const coded = createAuthClient(
+      async () =>
+        new Response(JSON.stringify({ code: 'REGISTRATION_VERIFICATION_FAILED' }), {
+          status: 400,
+          headers: { 'content-type': 'application/problem+json' },
+        }),
+    );
+    await expect(coded.registrationOptions()).rejects.toThrow(
+      'REGISTRATION_VERIFICATION_FAILED',
+    );
+
+    const malformed = createAuthClient(
+      async () => new Response('not json', { status: 502 }),
+    );
+    await expect(malformed.registrationOptions()).rejects.toThrow('AUTH_REQUEST_FAILED_502');
+  });
 });

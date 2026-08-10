@@ -433,6 +433,7 @@ describe('registration endpoints', () => {
     let reads = 0;
     let completed = 0;
     let verified = 0;
+    const warnings: string[] = [];
     const app = await buildApp({
       health: {
         read: async () => ({
@@ -441,7 +442,7 @@ describe('registration endpoints', () => {
           codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
         }),
       },
-      logger: console,
+      logger: { ...console, warn: (message: string) => warnings.push(message) },
       auth: {
         repository: repository({
           readCeremony: () => {
@@ -460,7 +461,9 @@ describe('registration endpoints', () => {
           ...webauthn,
           verifyRegistration: async () => {
             verified++;
-            throw new (await import('../application/ports.js')).PasskeyVerificationError('failed');
+            throw new (await import('../application/ports.js')).PasskeyVerificationError(
+              'ORIGIN_MISMATCH',
+            );
           },
         },
         relyingParty: rp,
@@ -484,6 +487,9 @@ describe('registration endpoints', () => {
     expect(completed).toBe(0);
     expect(badNickname.headers['set-cookie']).toBeUndefined();
     expect(failedVerification.headers['set-cookie']).toBeUndefined();
+    expect(warnings).toEqual([
+      'Passkey registration verification failed: WEBAUTHN_ORIGIN_MISMATCH',
+    ]);
     await app.close();
   });
 

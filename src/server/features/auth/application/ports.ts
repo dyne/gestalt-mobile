@@ -144,8 +144,26 @@ export interface WebAuthnCeremonyService {
   verifyAuthentication(input: unknown): Promise<PasskeyVerification>;
 }
 
-/** Expected proof failure; adapters must translate library-specific failures to this type. */
-export class PasskeyVerificationError extends Error {}
+export type PasskeyVerificationFailure =
+  | 'CHALLENGE_MISMATCH'
+  | 'ORIGIN_MISMATCH'
+  | 'RP_ID_MISMATCH'
+  | 'USER_PRESENCE_REQUIRED'
+  | 'USER_VERIFICATION_REQUIRED'
+  | 'CREDENTIAL_ENCODING_INVALID'
+  | 'CREDENTIAL_MATERIAL_MISSING'
+  | 'ALGORITHM_UNSUPPORTED'
+  | 'ATTESTATION_UNSUPPORTED'
+  | 'SIGNATURE_INVALID'
+  | 'VERIFIER_REJECTED';
+
+/** Expected proof failure; adapters translate library details to a safe diagnostic category. */
+export class PasskeyVerificationError extends Error {
+  constructor(readonly reason: PasskeyVerificationFailure = 'VERIFIER_REJECTED') {
+    super('PASSKEY_VERIFICATION_FAILED');
+    this.name = 'PasskeyVerificationError';
+  }
+}
 
 export interface AuthorizationSessionCookieDelivery {
   deliver(session: AuthorizationSession): void;

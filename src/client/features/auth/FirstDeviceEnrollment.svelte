@@ -121,7 +121,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       stopPolling();
       onAuthenticated();
     } catch (error) {
-      if (error instanceof Error && error.message === 'AUTH_REQUEST_FAILED_409') {
+      if (
+        error instanceof Error &&
+        ['AUTH_REQUEST_FAILED_409', 'BOOTSTRAP_ALREADY_CLAIMED'].includes(error.message)
+      ) {
         stopPolling();
         onLocked('Another device completed setup first. Sign in with that device’s passkey.');
         return;

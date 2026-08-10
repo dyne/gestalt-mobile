@@ -24,7 +24,7 @@ import { registerAuthStatus, registerDisabledAuthStatus } from './status/endpoin
 /** Registers the complete passkey surface; authorization hooks are composed by app.ts first. */
 export function registerAuthRoutes(
   app: FastifyInstance,
-  deps: Pick<AppDependencies, 'auth' | 'passkeyAuthDisabled'>,
+  deps: Pick<AppDependencies, 'auth' | 'logger' | 'passkeyAuthDisabled'>,
 ): void {
   if (deps.auth) {
     const auth = {
@@ -32,7 +32,11 @@ export function registerAuthRoutes(
       ceremonyAttempts: deps.auth.ceremonyAttempts ?? new ExpiringCeremonyAttemptGate(),
     };
     registerRegistrationOptions(app, auth);
-    registerRegistrationVerification(app, deps.auth);
+    registerRegistrationVerification(app, {
+      ...deps.auth,
+      reportVerificationFailure: (reason) =>
+        deps.logger.warn(`Passkey registration verification failed: ${reason}`),
+    });
     registerLoginOptions(app, auth);
     registerLoginVerification(app, deps.auth);
     registerAuthStatus(app, deps.auth);

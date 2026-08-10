@@ -27,7 +27,22 @@ function malformed(): never {
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
-  if (!response.ok) throw new Error(`AUTH_REQUEST_FAILED_${response.status}`);
+  if (!response.ok) {
+    let code: string | undefined;
+    try {
+      const value: unknown = await response.json();
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        'code' in value &&
+        typeof value.code === 'string'
+      )
+        code = value.code;
+    } catch {
+      /* A malformed error body must not hide the stable HTTP failure. */
+    }
+    throw new Error(code ?? `AUTH_REQUEST_FAILED_${response.status}`);
+  }
   return response.json() as Promise<T>;
 }
 

@@ -73,7 +73,7 @@ export function registerLoginVerification(
         },
       });
       if (!verified.userVerified || verified.credentialId !== device.credentialId)
-        throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+        throw new PasskeyVerificationError('USER_VERIFICATION_REQUIRED');
       const session = deps.identifiers.sessionId();
       if (Buffer.from(session, 'base64url').length !== 32)
         throw new Error('AUTHORIZATION_RANDOMNESS_INVALID');
