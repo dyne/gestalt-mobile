@@ -16,7 +16,10 @@ test('the relay exposes an installable standalone web app', async ({ page, reque
 
   await page.goto('/');
 
-  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', '/manifest.webmanifest');
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute(
+    'href',
+    '/manifest.webmanifest',
+  );
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#141414');
 
   const manifestResponse = await request.get('/manifest.webmanifest');

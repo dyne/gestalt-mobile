@@ -18,11 +18,15 @@ function currentBrowser(): InstallabilityBrowser {
   };
 }
 
-export function registerInstallabilityWorker(browser: InstallabilityBrowser = currentBrowser()): void {
+export function registerInstallabilityWorker(
+  browser: InstallabilityBrowser = currentBrowser(),
+): void {
   if (!browser.serviceWorker) return;
 
   const register = (): void => {
-    void browser.serviceWorker?.register('/service-worker.js', { scope: '/' }).catch(() => undefined);
+    void browser.serviceWorker
+      ?.register('/service-worker.js', { scope: '/' })
+      .catch(() => undefined);
   };
 
   if (browser.readyState === 'complete') {
