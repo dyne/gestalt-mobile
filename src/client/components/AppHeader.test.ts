@@ -59,6 +59,15 @@ describe('AppHeader', () => {
     expect(ondevices).toHaveBeenCalledWith(action);
   });
 
+  it('opens the scratchpad from the burger popover', async () => {
+    const onscratchpad = vi.fn();
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onscratchpad });
+    const action = screen.getByRole('button', { name: 'Scratchpad', hidden: true });
+    expect(action.getAttribute('popovertargetaction')).toBe('hide');
+    await fireEvent.click(action);
+    expect(onscratchpad).toHaveBeenCalledOnce();
+  });
+
   it('omits passkey-only actions when passkey access control is disabled', () => {
     render(AppHeader, {
       theme: 'dyne-org',
