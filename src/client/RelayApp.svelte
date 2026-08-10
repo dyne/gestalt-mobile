@@ -99,9 +99,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { SkillsState } from './features/skills/skills-state.js';
   import AuthorizedDevicesView from './features/auth/AuthorizedDevicesView.svelte';
   import { createDeviceClient } from './features/auth/device-client.js';
+  import Scratchpad from './features/scratchpad/Scratchpad.svelte';
 
   let tab = $state<Tab>('sessions');
   let devicesOpen = $state(false);
+  let scratchpadOpen = $state(false);
   let status = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
@@ -216,6 +218,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const toastQueue = createToastQueue();
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
+
+  function openScratchpad(): void {
+    scratchpadOpen = true;
+  }
+
+  function closeScratchpad(): void {
+    scratchpadOpen = false;
+    void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
+  }
 
   onMount(async () => {
     if (
@@ -974,6 +985,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {passkeyAuthEnabled}
         {onlock}
         ondevices={() => (devicesOpen = true)}
+        onscratchpad={openScratchpad}
         onthemechange={setTheme}
       />{/if}
     {#if devicesOpen && passkeyAuthEnabled}
@@ -1123,6 +1135,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       />
     {/if}
   </main>
+  {#if scratchpadOpen}<Scratchpad onclose={closeScratchpad} />{/if}
 {/if}
 {#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}
   <ToastViewport queue={toastQueue} />
