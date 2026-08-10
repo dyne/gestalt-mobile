@@ -145,11 +145,11 @@ describe('SimpleWebAuthnAdapter', () => {
     async (_caseName, arrange, reason) => {
       arrange();
       const failure = new SimpleWebAuthnAdapter().verifyRegistration({
-          response: {},
-          challenge: new Uint8Array([1]),
-          expectedOrigin: 'https://gestalt.example',
-          rpId: 'gestalt.example',
-        });
+        response: {},
+        challenge: new Uint8Array([1]),
+        expectedOrigin: 'https://gestalt.example',
+        rpId: 'gestalt.example',
+      });
       await expect(failure).rejects.toBeInstanceOf(PasskeyVerificationError);
       await expect(failure).rejects.toMatchObject({ reason });
     },

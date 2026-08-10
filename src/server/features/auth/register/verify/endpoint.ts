@@ -110,8 +110,7 @@ export function registerRegistrationVerification(
         expectedOrigin: ceremony.expectedOrigin,
         rpId: ceremony.rpId,
       });
-      if (!verified.userVerified)
-        throw new PasskeyVerificationError('USER_VERIFICATION_REQUIRED');
+      if (!verified.userVerified) throw new PasskeyVerificationError('USER_VERIFICATION_REQUIRED');
       const device = {
         id: deps.identifiers.deviceId(),
         credentialId: verified.credentialId,

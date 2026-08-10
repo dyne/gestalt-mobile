@@ -53,13 +53,9 @@ describe('auth client', () => {
           headers: { 'content-type': 'application/problem+json' },
         }),
     );
-    await expect(coded.registrationOptions()).rejects.toThrow(
-      'REGISTRATION_VERIFICATION_FAILED',
-    );
+    await expect(coded.registrationOptions()).rejects.toThrow('REGISTRATION_VERIFICATION_FAILED');
 
-    const malformed = createAuthClient(
-      async () => new Response('not json', { status: 502 }),
-    );
+    const malformed = createAuthClient(async () => new Response('not json', { status: 502 }));
     await expect(malformed.registrationOptions()).rejects.toThrow('AUTH_REQUEST_FAILED_502');
   });
 });
