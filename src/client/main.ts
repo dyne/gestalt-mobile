@@ -5,9 +5,11 @@
  */
 
 import { mountClient } from './bootstrap.js';
+import { registerInstallabilityWorker } from './features/installability/register-service-worker.js';
 import './styles.css';
 
 const target = document.getElementById('app');
 if (!target) throw new Error('Missing application mount target');
 
 mountClient(target, window.location, window.history);
+registerInstallabilityWorker();
