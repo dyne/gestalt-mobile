@@ -46,6 +46,14 @@ const requestSchema = z
 const successSchema = z.object({ status: z.literal('authenticated') }).strict();
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
+export type RegistrationFailure =
+  | 'INVALID_RESPONSE_SHAPE'
+  | 'MISSING_CEREMONY_COOKIE'
+  | 'CEREMONY_NOT_AVAILABLE'
+  | 'USER_VERIFICATION_REQUIRED'
+  | 'AUTHORIZATION_REJECTED'
+  | `WEBAUTHN_${import('../../application/ports.js').PasskeyVerificationFailure}`;
+
 export function registerRegistrationVerification(
   app: FastifyInstance,
   deps: {
@@ -55,16 +63,26 @@ export function registerRegistrationVerification(
     identifiers: AuthorizationIdentifiers;
     webauthn: WebAuthnCeremonyService;
     relyingParty: { publicOrigin: string; rpId: string };
+    reportVerificationFailure?: (reason: RegistrationFailure) => void;
   },
 ): void {
   app.post('/api/auth/register/verify', { bodyLimit: 128 * 1024 }, async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body);
     const token = request.cookies.gestalt_mobile_registration;
-    if (!parsed.success || typeof token !== 'string')
+    if (!parsed.success) {
+      deps.reportVerificationFailure?.('INVALID_RESPONSE_SHAPE');
       return reply
         .code(400)
         .type('application/problem+json')
         .send(problem('INVALID_REGISTRATION_REQUEST', 400, 'The registration request is invalid.'));
+    }
+    if (typeof token !== 'string') {
+      deps.reportVerificationFailure?.('MISSING_CEREMONY_COOKIE');
+      return reply
+        .code(400)
+        .type('application/problem+json')
+        .send(problem('REGISTRATION_COOKIE_MISSING', 400, 'The registration cookie is missing.'));
+    }
     let nickname;
     try {
       nickname = deviceNickname(parsed.data.nickname);
@@ -78,11 +96,13 @@ export function registerRegistrationVerification(
     }
     const now = deps.clock.now();
     const ceremony = deps.repository.readCeremony(passkeyCeremonyId(token), now.toISOString());
-    if (!ceremony || ceremony.purpose !== 'registration')
+    if (!ceremony || ceremony.purpose !== 'registration') {
+      deps.reportVerificationFailure?.('CEREMONY_NOT_AVAILABLE');
       return reply
         .code(400)
         .type('application/problem+json')
         .send(problem('REGISTRATION_NOT_AVAILABLE', 400, 'Registration could not be completed.'));
+    }
     try {
       const verified = await deps.webauthn.verifyRegistration({
         response: parsed.data.response,
@@ -90,7 +110,8 @@ export function registerRegistrationVerification(
         expectedOrigin: ceremony.expectedOrigin,
         rpId: ceremony.rpId,
       });
-      if (!verified.userVerified) throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+      if (!verified.userVerified)
+        throw new PasskeyVerificationError('USER_VERIFICATION_REQUIRED');
       const device = {
         id: deps.identifiers.deviceId(),
         credentialId: verified.credentialId,
@@ -129,7 +150,12 @@ export function registerRegistrationVerification(
       clearAuthCookie(reply, 'gestalt_mobile_registration', deps.relyingParty.publicOrigin);
       return reply.code(201).send(successSchema.parse({ status: 'authenticated' }));
     } catch (error) {
-      if (error instanceof PasskeyVerificationError || error instanceof AuthorizationDomainError)
+      if (error instanceof PasskeyVerificationError || error instanceof AuthorizationDomainError) {
+        deps.reportVerificationFailure?.(
+          error instanceof PasskeyVerificationError
+            ? `WEBAUTHN_${error.reason}`
+            : 'AUTHORIZATION_REJECTED',
+        );
         return reply
           .code(400)
           .type('application/problem+json')
@@ -140,6 +166,7 @@ export function registerRegistrationVerification(
               'Registration could not be completed.',
             ),
           );
+      }
       throw error;
     }
   });

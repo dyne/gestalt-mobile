@@ -108,8 +108,70 @@ describe('auth state machine', () => {
     ],
     ['AbortError', 'The passkey request was cancelled. You can safely try again.'],
     ['SecurityError', 'Passkeys require this device to use the configured secure site.'],
-    ['UnknownError', 'We could not complete authentication. Please try again.'],
+    [
+      'UnknownError',
+      'This browser or passkey provider could not finish the passkey request after device verification. Try again or use another browser on this device.',
+    ],
+    [
+      'DataError',
+      'This browser could not use the passkey options supplied by the relay. Refresh the page and try again.',
+    ],
+    [
+      'NetworkError',
+      'The connection was interrupted while completing the passkey request. Check the connection and try again.',
+    ],
   ])('maps %s calmly', (name, expected) => {
     expect(webAuthnMessage(Object.assign(new Error('detail'), { name }))).toBe(expected);
+  });
+
+  it.each([
+    [
+      'INVALID_REGISTRATION_REQUEST',
+      'The relay did not understand the passkey response from this browser. Refresh the page and try again.',
+    ],
+    [
+      'REGISTRATION_COOKIE_MISSING',
+      'The registration session cookie was not returned by this browser. Allow site cookies, refresh, and try again.',
+    ],
+    [
+      'REGISTRATION_NOT_AVAILABLE',
+      'This registration attempt expired or is no longer available. Refresh the page and start again.',
+    ],
+    [
+      'REGISTRATION_VERIFICATION_FAILED',
+      'Your device created the passkey, but the relay could not verify it. Try again and check the relay diagnostics if it persists.',
+    ],
+    [
+      'ORIGIN_NOT_ALLOWED',
+      'This page is not using the relay’s configured public address. Open the canonical HTTPS address and try again.',
+    ],
+  ])('maps the server problem %s to an actionable message', (code, expected) => {
+    expect(webAuthnMessage(new Error(code))).toBe(expected);
+  });
+
+  it.each([
+    [
+      'ERROR_AUTHENTICATOR_GENERAL_ERROR',
+      /accepted device verification but could not create the credential.*ERROR_AUTHENTICATOR_GENERAL_ERROR/i,
+    ],
+    ['ERROR_INVALID_RP_ID', /rejected this site’s domain identity/i],
+    ['ERROR_AUTHENTICATOR_NO_SUPPORTED_PUBKEYCREDPARAMS_ALG', /cryptographic algorithms/i],
+  ])('maps the SimpleWebAuthn code %s without relying on Error instanceof', (code, expected) => {
+    expect(webAuthnMessage({ code })).toMatch(expected);
+  });
+
+  it('maps a passthrough SimpleWebAuthn error from its DOM exception cause', () => {
+    expect(
+      webAuthnMessage({
+        code: 'ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY',
+        cause: { name: 'NotAllowedError' },
+      }),
+    ).toBe('The passkey request was cancelled or timed out. Try again when ready.');
+  });
+
+  it('reports a safe raw DOM exception name even when it is not an Error instance', () => {
+    expect(webAuthnMessage({ name: 'NotReadableError' })).toBe(
+      'The passkey request failed inside this browser (NotReadableError). Try another browser or passkey provider on this device.',
+    );
   });
 });

@@ -15,6 +15,7 @@ import {
 
 import type {
   PasskeyOptions,
+  PasskeyVerificationFailure,
   RegistrationOptionsInput,
   RegistrationVerification,
   WebAuthnCeremonyService,
@@ -23,6 +24,27 @@ import { PasskeyVerificationError } from '../../features/auth/application/ports.
 import { webAuthnCredentialId } from '../../features/auth/domain/identifiers.js';
 
 const transports = new Set(['ble', 'hybrid', 'internal', 'nfc', 'usb']);
+
+function verificationFailure(error: unknown): PasskeyVerificationFailure {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  if (message.includes('challenge')) return 'CHALLENGE_MISMATCH';
+  if (message.includes('origin')) return 'ORIGIN_MISMATCH';
+  if (message.includes('rp id') || message.includes('rpid')) return 'RP_ID_MISMATCH';
+  if (message.includes('user presence')) return 'USER_PRESENCE_REQUIRED';
+  if (message.includes('user verification')) return 'USER_VERIFICATION_REQUIRED';
+  if (message.includes('credential id') || message.includes('base64'))
+    return 'CREDENTIAL_ENCODING_INVALID';
+  if (message.includes('alg') || message.includes('cose')) return 'ALGORITHM_UNSUPPORTED';
+  if (
+    message.includes('public key') ||
+    message.includes('aaguid') ||
+    message.includes('authenticator data')
+  )
+    return 'CREDENTIAL_MATERIAL_MISSING';
+  if (message.includes('attestation')) return 'ATTESTATION_UNSUPPORTED';
+  if (message.includes('signature')) return 'SIGNATURE_INVALID';
+  return 'VERIFIER_REJECTED';
+}
 
 /** Translates SimpleWebAuthn DTOs at the platform boundary. */
 export class SimpleWebAuthnAdapter implements WebAuthnCeremonyService {
@@ -70,11 +92,11 @@ export class SimpleWebAuthnAdapter implements WebAuthnCeremonyService {
         requireUserVerification: true,
         supportedAlgorithmIDs: [-7, -257],
       });
-    } catch {
-      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+    } catch (error) {
+      throw new PasskeyVerificationError(verificationFailure(error));
     }
     if (!result.verified || !result.registrationInfo?.userVerified)
-      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+      throw new PasskeyVerificationError('VERIFIER_REJECTED');
     const credential = result.registrationInfo.credential;
     return {
       credentialId: webAuthnCredentialId(credential.id),
@@ -119,11 +141,11 @@ export class SimpleWebAuthnAdapter implements WebAuthnCeremonyService {
           transports: [...value.credential.transports],
         },
       });
-    } catch {
-      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+    } catch (error) {
+      throw new PasskeyVerificationError(verificationFailure(error));
     }
     if (!result.verified || !result.authenticationInfo?.userVerified)
-      throw new PasskeyVerificationError('PASSKEY_VERIFICATION_FAILED');
+      throw new PasskeyVerificationError('VERIFIER_REJECTED');
     return {
       credentialId: webAuthnCredentialId(value.response.id),
       counter: result.authenticationInfo.newCounter,

@@ -468,7 +468,7 @@ describe('login endpoints', () => {
       {
         ...webauthn,
         verifyAuthentication: async () => {
-          throw new PasskeyVerificationError('invalid');
+          throw new PasskeyVerificationError('VERIFIER_REJECTED');
         },
       },
     ],

@@ -109,10 +109,12 @@ describe('SimpleWebAuthnAdapter', () => {
     [
       'a thrown verifier failure',
       () => mocks.verifyRegistrationResponse.mockRejectedValueOnce(new Error('library failure')),
+      'VERIFIER_REJECTED',
     ],
     [
       'an unverified result',
       () => mocks.verifyRegistrationResponse.mockResolvedValueOnce({ verified: false } as never),
+      'VERIFIER_REJECTED',
     ],
     [
       'missing user verification',
@@ -124,6 +126,7 @@ describe('SimpleWebAuthnAdapter', () => {
             userVerified: undefined,
           },
         } as never),
+      'VERIFIER_REJECTED',
     ],
     [
       'false user verification',
@@ -135,21 +138,41 @@ describe('SimpleWebAuthnAdapter', () => {
             userVerified: false,
           },
         } as never),
+      'VERIFIER_REJECTED',
     ],
   ])(
     'returns PasskeyVerificationError without mapping a credential for %s',
-    async (_caseName, arrange) => {
+    async (_caseName, arrange, reason) => {
       arrange();
-      await expect(
-        new SimpleWebAuthnAdapter().verifyRegistration({
+      const failure = new SimpleWebAuthnAdapter().verifyRegistration({
           response: {},
           challenge: new Uint8Array([1]),
           expectedOrigin: 'https://gestalt.example',
           rpId: 'gestalt.example',
-        }),
-      ).rejects.toBeInstanceOf(PasskeyVerificationError);
+        });
+      await expect(failure).rejects.toBeInstanceOf(PasskeyVerificationError);
+      await expect(failure).rejects.toMatchObject({ reason });
     },
   );
+
+  it.each([
+    ['Unexpected registration response challenge', 'CHALLENGE_MISMATCH'],
+    ['Unexpected registration response origin', 'ORIGIN_MISMATCH'],
+    ['User verification was required', 'USER_VERIFICATION_REQUIRED'],
+    ['Credential ID was not base64url-encoded', 'CREDENTIAL_ENCODING_INVALID'],
+    ['Unexpected public key alg', 'ALGORITHM_UNSUPPORTED'],
+    ['Unsupported Attestation Format', 'ATTESTATION_UNSUPPORTED'],
+  ])('categorizes verifier detail without exposing it: %s', async (message, reason) => {
+    mocks.verifyRegistrationResponse.mockRejectedValueOnce(new Error(message));
+    await expect(
+      new SimpleWebAuthnAdapter().verifyRegistration({
+        response: {},
+        challenge: new Uint8Array([1]),
+        expectedOrigin: 'https://gestalt.example',
+        rpId: 'gestalt.example',
+      }),
+    ).rejects.toMatchObject({ reason });
+  });
 
   it('supplies exact server-held authentication policy and stored credential material', async () => {
     mocks.verifyAuthenticationResponse.mockResolvedValueOnce({
