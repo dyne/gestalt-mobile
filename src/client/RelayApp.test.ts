@@ -9,6 +9,7 @@ let fakeController: {
   select(id: string | null): void;
   emit(id: string, view: unknown): void;
 } | null = null;
+const originalScrollIntoView = Element.prototype.scrollIntoView;
 vi.mock('./features/chat/chat-controller.js', () => ({
   ChatController: class {
     selected: string | null = null;
@@ -64,10 +65,20 @@ describe('RelayApp chat controller composition', () => {
     controllerOptions = null;
     fakeController = null;
     vi.unstubAllGlobals();
+    if (originalScrollIntoView) Element.prototype.scrollIntoView = originalScrollIntoView;
+    else delete (Element.prototype as Partial<Element>).scrollIntoView;
   });
   it('renders controller view after session switch and ignores late old-session content', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: false }));
     vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
     const authorizedFetch = vi.fn(
       async (input: RequestInfo | URL) =>
         new Response(

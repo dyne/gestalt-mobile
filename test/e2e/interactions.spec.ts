@@ -128,13 +128,11 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
 
   await page.getByRole('radio', { name: /Solo/ }).click();
   await page.getByRole('button', { name: 'Send answers' }).click();
-  await expect(page.getByRole('button', { name: 'Send answers' })).toBeVisible();
+  const retry = page.getByRole('button', { name: 'Retry' });
+  await expect(retry).toBeVisible();
 
-  await page.getByRole('button', { name: 'Send answers' }).click();
-  await expect(page.getByRole('button', { name: 'Send answers' })).toBeVisible();
-  expect(attempts).toBe(2);
-
-  await page.getByRole('button', { name: 'Send answers' }).click();
-  await page.waitForTimeout(100);
+  await retry.click();
+  await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Answers sent');
+  await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
   expect(attempts).toBe(2);
 });

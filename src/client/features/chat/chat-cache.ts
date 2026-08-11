@@ -17,12 +17,19 @@ export const serializeChatCache = (projection: ChatProjection) => ({
   activities: [],
   prompts: projection.prompts.slice(-200),
   interactions: projection.interactions
-    .map(({ requestId, key, kind, state, operationId, attemptedOutcome }) => ({
+    .map(({ requestId, key, kind, turnId, state, operationId, attemptedOutcome }) => ({
       requestId,
       key,
       kind,
+      ...(turnId ? { turnId } : {}),
       state,
       ...(operationId ? { operationId } : {}),
+      ...(state === 'resolved' &&
+      (attemptedOutcome === 'approved' ||
+        attemptedOutcome === 'denied' ||
+        attemptedOutcome === 'answered')
+        ? { attemptedOutcome }
+        : {}),
       ...(typeof attemptedOutcome === 'object' &&
       attemptedOutcome !== null &&
       ((attemptedOutcome as { decision?: unknown }).decision === 'accept' ||

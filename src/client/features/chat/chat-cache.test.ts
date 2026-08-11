@@ -2,6 +2,7 @@
 import { expect, it } from 'vitest';
 import { serializeChatCache } from './chat-cache.js';
 import { createChatProjection, failInteraction, hydrateCache } from './chat-projection.js';
+import { resolveInteraction } from './chat-projection.js';
 it('redacts assistant output, arbitrary interaction payloads, and secret retry values', () => {
   const projection = failInteraction(
     {
@@ -83,4 +84,23 @@ it('redacts quiz answers so reload requires re-entry', () => {
   expect(
     hydrateCache('s', serializeChatCache(projection)).interactions[0]?.attemptedOutcome,
   ).toBeUndefined();
+});
+it('retains only safe resolved denial and answer outcomes across reload', () => {
+  const projection = {
+    ...createChatProjection('s'),
+    interactions: [
+      { requestId: 'd', key: 'd', kind: 'commandApproval', payload: {}, state: 'pending' as const },
+      { requestId: 'a', key: 'a', kind: 'quiz', payload: {}, state: 'pending' as const },
+    ],
+  };
+  const resolved = resolveInteraction(
+    resolveInteraction(projection, 'd', { decision: 'decline' }),
+    'a',
+    { answer: 'secret' },
+  );
+  const cached = JSON.stringify(serializeChatCache(resolved));
+  expect(cached).not.toContain('secret');
+  expect(
+    hydrateCache('s', JSON.parse(cached)).interactions.map((item) => item.attemptedOutcome),
+  ).toEqual(['denied', 'answered']);
 });

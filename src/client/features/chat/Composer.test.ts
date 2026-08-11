@@ -60,7 +60,7 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
-  it('requests a bottom scroll while typing and after accepting a completion', async () => {
+  it('does not request a bottom scroll while typing but does after accepting a completion', async () => {
     const onchange = vi.fn();
     const onscrollbottom = vi.fn();
     const { rerender } = render(Composer, {
@@ -76,7 +76,7 @@ describe('Composer', () => {
 
     const prompt = screen.getByRole('textbox', { name: 'Prompt' });
     await fireEvent.input(prompt, { target: { value: '/' } });
-    expect(onscrollbottom).toHaveBeenCalledTimes(1);
+    expect(onscrollbottom).not.toHaveBeenCalled();
     rerender({
       status: 'Ready.',
       message: '/',
@@ -89,11 +89,12 @@ describe('Composer', () => {
     });
 
     await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: false });
-    expect(onscrollbottom).toHaveBeenCalledTimes(2);
+    expect(onscrollbottom).toHaveBeenCalledTimes(1);
   });
 
   it('keeps models visible after command completion and sorts newest first', async () => {
     const onmodelselect = vi.fn();
+    const onscrollbottom = vi.fn();
     render(Composer, {
       status: 'Ready.',
       message: '/model ',
@@ -102,6 +103,7 @@ describe('Composer', () => {
       models: ['gpt-5.4', 'gpt-5.6-terra'],
       onchange: () => {},
       onmodelselect,
+      onscrollbottom,
       onsend: () => {},
       oninterrupt: () => {},
     });
@@ -111,6 +113,7 @@ describe('Composer', () => {
     );
     await fireEvent.click(screen.getByRole('button', { name: 'gpt-5.6-terra' }));
     expect(onmodelselect).toHaveBeenCalledWith('gpt-5.6-terra');
+    expect(onscrollbottom).toHaveBeenCalledOnce();
   });
 
   it('keeps reasoning choices visible after command completion adds a space', () => {

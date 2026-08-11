@@ -5,11 +5,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { tick } from 'svelte';
   import { readCommandApproval } from './command-approval.js';
   import { readFileChangeApproval } from './file-change-approval.js';
   import QuizForm from './QuizForm.svelte';
   import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
-  type Interaction = { requestId: string; kind: string; payload: unknown };
+  type Interaction = {
+    requestId: string;
+    key?: string;
+    kind: string;
+    payload: unknown;
+    state?: 'pending' | 'submitting' | 'resolved' | 'failed';
+    attemptedOutcome?: unknown;
+  };
   type Props = {
     interactions: Interaction[];
     answers: Record<string, string>;
@@ -17,88 +25,167 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onquiz(interaction: Interaction): void;
     onpermission(interaction: Interaction): void;
     ondecision(id: string, decision: 'accept' | 'decline'): void;
+    onretry?(interaction: Interaction): void;
   };
-  let { interactions, answers, onanswer, onquiz, onpermission, ondecision }: Props = $props();
+  let {
+    interactions,
+    answers,
+    onanswer,
+    onquiz,
+    onpermission,
+    ondecision,
+    onretry = () => {},
+  }: Props = $props();
+  let focusRequestId = $state<string | null>(null);
+  let resultElements = $state<Record<string, HTMLElement | undefined>>({});
   const scopedAnswers = (requestId: string) =>
     Object.fromEntries(
       Object.entries(answers)
         .filter(([key]) => key.startsWith(`${requestId}:`))
         .map(([key, value]) => [key.slice(requestId.length + 1), value]),
     );
+  function submit(interaction: Interaction, action: () => void): void {
+    focusRequestId = interaction.requestId;
+    action();
+  }
+  $effect(() => {
+    const interaction = interactions.find((item) => item.requestId === focusRequestId);
+    if (interaction?.state === 'resolved') {
+      void tick().then(() => resultElements[interaction.requestId]?.focus());
+      focusRequestId = null;
+    }
+  });
 </script>
 
-{#if interactions.length}
-  <section aria-labelledby="interactions-title">
-    <h3 id="interactions-title">Codex needs your decision</h3>
-    {#each interactions as interaction (interaction.requestId)}
-      <article>
-        <p>{interaction.kind}</p>
-        {#if interaction.kind === 'userInput' || interaction.kind === 'quiz'}
-          {@const quiz =
-            interaction.kind === 'quiz'
-              ? parseQuiz(interaction.payload)
-              : mapNativeUserInputToQuiz(interaction.payload)}
-          {#if quiz}
-            <QuizForm
-              requestId={interaction.requestId}
-              {quiz}
-              answers={scopedAnswers(interaction.requestId)}
-              onanswer={(id, value) => onanswer(interaction.requestId, id, value)}
-              onsubmit={() => onquiz(interaction)}
-            />
-          {:else}<p>Codex sent an invalid quiz request.</p>{/if}
-        {:else if interaction.kind === 'permissionsApproval'}
-          <p>Grant the requested permissions for this turn only.</p>
-          <button type="button" onclick={() => onpermission(interaction)}>Approve</button>
-        {:else if interaction.kind === 'commandApproval'}
-          {@const command = readCommandApproval(interaction.payload)}
-          <p>Approve this command?</p>
-          {#if command}
-            <pre class="command-approval-command"><code>{command}</code></pre>
-          {:else}
-            <p class="command-approval-missing">Command details were not provided.</p>
-          {/if}
-          <div class="approval-actions">
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
-              >Approve</button
-            >
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
-              >Deny</button
-            >
-          </div>
-        {:else if interaction.kind === 'fileChangeApproval'}
-          {@const paths = readFileChangeApproval(interaction.payload)}
-          <p>Approve changes to these files?</p>
-          {#if paths}
-            <ul class="file-change-approval-targets" aria-label="Files to change">
-              {#each paths as path (path)}
-                <li><code>{path}</code></li>
-              {/each}
-            </ul>
-          {:else}
-            <p class="file-change-approval-missing">File details were not provided.</p>
-          {/if}
-          <div class="approval-actions">
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
-              >Approve</button
-            >
-            <button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
-              >Deny</button
-            >
-          </div>
+{#each interactions as interaction (interaction.key ?? interaction.requestId)}
+  {@const submitting = interaction.state === 'submitting'}
+  <article class:resolved={interaction.state === 'resolved'}>
+    <p class="interaction-kind">{interaction.kind}</p>
+    {#if interaction.state === 'resolved'}
+      <p
+        class="interaction-result"
+        data-interaction-state="resolved"
+        tabindex="-1"
+        bind:this={resultElements[interaction.requestId]}
+      >
+        {interaction.attemptedOutcome === 'denied'
+          ? 'Denied'
+          : interaction.attemptedOutcome === 'answered'
+            ? 'Answers sent'
+            : 'Approved'}
+      </p>
+    {:else}
+      {#if submitting}<p class="interaction-submitting" data-interaction-state="submitting">
+          Submitting…
+        </p>{/if}
+      {#if interaction.kind === 'userInput' || interaction.kind === 'quiz'}
+        {@const quiz =
+          interaction.kind === 'quiz'
+            ? parseQuiz(interaction.payload)
+            : mapNativeUserInputToQuiz(interaction.payload)}
+        {#if quiz}
+          <QuizForm
+            requestId={interaction.requestId}
+            {quiz}
+            answers={scopedAnswers(interaction.requestId)}
+            disabled={submitting}
+            onanswer={(id, value) => onanswer(interaction.requestId, id, value)}
+            onsubmit={() => submit(interaction, () => onquiz(interaction))}
+          />
+        {:else}<p>Codex sent an invalid quiz request.</p>{/if}
+      {:else if interaction.kind === 'permissionsApproval'}
+        <p>Grant the requested permissions for this turn only.</p>
+        <button
+          type="button"
+          disabled={submitting}
+          onclick={() => submit(interaction, () => onpermission(interaction))}>Approve</button
+        >
+      {:else if interaction.kind === 'commandApproval'}
+        {@const command = readCommandApproval(interaction.payload)}
+        <p>Approve this command?</p>
+        {#if command}
+          <pre class="command-approval-command"><code>{command}</code></pre>
         {:else}
-          <button type="button" onclick={() => ondecision(interaction.requestId, 'accept')}
+          <p class="command-approval-missing">Command details were not provided.</p>
+        {/if}
+        <div class="approval-actions">
+          <button
+            type="button"
+            disabled={submitting}
+            onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'accept'))}
             >Approve</button
-          ><button type="button" onclick={() => ondecision(interaction.requestId, 'decline')}
+          >
+          <button
+            type="button"
+            disabled={submitting}
+            onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'decline'))}
             >Deny</button
           >
+        </div>
+      {:else if interaction.kind === 'fileChangeApproval'}
+        {@const paths = readFileChangeApproval(interaction.payload)}
+        <p>Approve changes to these files?</p>
+        {#if paths}
+          <ul class="file-change-approval-targets" aria-label="Files to change">
+            {#each paths as path (path)}
+              <li><code>{path}</code></li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="file-change-approval-missing">File details were not provided.</p>
         {/if}
-      </article>
-    {/each}
-  </section>
-{/if}
+        <div class="approval-actions">
+          <button
+            type="button"
+            disabled={submitting}
+            onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'accept'))}
+            >Approve</button
+          >
+          <button
+            type="button"
+            disabled={submitting}
+            onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'decline'))}
+            >Deny</button
+          >
+        </div>
+      {:else}
+        <button
+          type="button"
+          disabled={submitting}
+          onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'accept'))}
+          >Approve</button
+        ><button
+          type="button"
+          disabled={submitting}
+          onclick={() => submit(interaction, () => ondecision(interaction.requestId, 'decline'))}
+          >Deny</button
+        >
+      {/if}
+      {#if interaction.state === 'failed'}
+        <p class="interaction-failed" data-interaction-state="failed">Could not send. Try again.</p>
+        <button type="button" onclick={() => onretry(interaction)}>Retry</button>
+      {/if}
+    {/if}
+  </article>
+{/each}
 
 <style>
+  article {
+    margin-block: 0.75rem;
+    padding: 0.75rem;
+    background: var(--theme-surface-subtle);
+    border-inline-start: 0.25rem solid var(--theme-info);
+    border-radius: 0.375rem;
+  }
+  .interaction-kind,
+  .interaction-submitting,
+  .interaction-result,
+  .interaction-failed {
+    margin-block: 0 0.5rem;
+  }
+  .interaction-result {
+    font-weight: 600;
+  }
   .command-approval-command {
     max-inline-size: 100%;
     margin-block: 0.5rem 0.75rem;

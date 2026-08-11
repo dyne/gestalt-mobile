@@ -92,13 +92,16 @@ test('opens Chat at the bottom and every other tab at the top', async ({ page })
   const chat = navigation.getByRole('button', { name: 'Chat' });
   await chat.click();
   await expect(chat).toBeFocused();
+  const tailGutter = await page.evaluate(() =>
+    Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+  );
   await expect
     .poll(() =>
       page.evaluate(
         () => document.documentElement.scrollHeight - window.innerHeight - window.scrollY,
       ),
     )
-    .toBeLessThanOrEqual(1);
+    .toBeLessThanOrEqual(tailGutter);
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 
   await navigation.getByRole('button', { name: 'Sessions' }).click();

@@ -25,13 +25,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
-  import InteractionList from './features/chat/InteractionList.svelte';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createChatCache } from './features/chat/chat-cache.js';
   import { ChatController, type ChatViewState } from './features/chat/chat-controller.js';
+  import { ChatFollowTail } from './features/chat/chat-follow-tail.js';
+  import { ChatTailScheduler } from './features/chat/chat-tail-scheduler.js';
   import type { ProjectionEvent } from './features/chat/chat-projection.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
   import { createToastQueue } from './features/feedback/toast-queue.js';
@@ -171,6 +172,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
   let userInputAnswers = $state<Record<string, string>>({});
+  let chatTail = $state<HTMLElement | null>(null);
+  let presentationSignal = '';
+  const followTail = new ChatFollowTail({
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (frame) => cancelAnimationFrame(frame),
+    reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    scrollTail: (behavior) => chatTail?.scrollIntoView({ block: 'end', behavior }),
+  });
+  const tailScheduler = new ChatTailScheduler(
+    (fn) => void tick().then(fn),
+    (reason) => { if (tab === 'chat') followTail.request(reason); },
+  );
+  let interactionAnnouncement = $derived.by(() => {
+    const interaction = chatView?.interactions.findLast((item) => item.state !== 'pending');
+    if (!interaction) return '';
+    if (interaction.state === 'submitting') return 'Sending decision.';
+    if (interaction.state === 'failed') return 'Could not send decision. Retry is available.';
+    if (interaction.state === 'resolved') {
+      return interaction.attemptedOutcome === 'denied'
+        ? 'Decision denied.'
+        : interaction.attemptedOutcome === 'answered'
+          ? 'Answers sent.'
+          : 'Decision approved.';
+    }
+    return '';
+  });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
   const chatController = new ChatController({
     relay,
@@ -247,11 +274,54 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   });
 
+  $effect(() => {
+    if (!chatTail) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => followTail.observeTail(entry?.isIntersecting ?? false),
+      { root: null },
+    );
+    observer.observe(chatTail);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    const view = chatView;
+    const currentTab = tab;
+    const nextSignal = view
+      ? JSON.stringify({
+          messages: view.messages.map(({ id, text, complete }) => [id, text, complete]),
+          activities: view.activities.map(({ id, label, detail }) => [id, label, detail]),
+          interactions: view.interactions.map(({ key, state, attemptedOutcome }) => [
+            key,
+            state,
+            attemptedOutcome,
+          ]),
+        })
+      : '';
+    if (!nextSignal || nextSignal === presentationSignal) return;
+    presentationSignal = nextSignal;
+    if (currentTab !== 'chat') return;
+    scheduleTail('content');
+  });
+
+  function scheduleTail(reason: 'content' | 'explicit' | 'initial'): void {
+    tailScheduler.schedule(reason);
+  }
+  function enterChatContext(): void {
+    tailScheduler.invalidate();
+    followTail.reset();
+    tab = 'chat';
+    scrollTabIntoInitialPosition('chat');
+    scheduleTail('initial');
+  }
+
   function setTheme(value: ThemeId): void {
     theme = selectTheme(value);
   }
 
   onDestroy(() => {
+    tailScheduler.invalidate();
+    followTail.cancel();
     chatController.dispose();
     planController.dispose();
     gitController.dispose();
@@ -289,8 +359,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await refreshSessions();
       message = await sessionCache.readDraft(session.id);
       chatController.select(session.id);
-      tab = 'chat';
-      scrollTabIntoInitialPosition('chat');
+      enterChatContext();
       shellStatus = 'Session started.';
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
@@ -334,9 +403,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       planController.select(id);
       void sessionCache.saveSelectedSession(id);
       message = await sessionCache.readDraft(id);
-      tab = 'chat';
-      scrollTabIntoInitialPosition('chat');
       chatController.select(id);
+      enterChatContext();
     } catch (error) {
       shellStatus = `Could not open session: ${errorMessage(error)}`;
     } finally {
@@ -411,8 +479,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function sendMessage() {
-    await chatController.send(message);
+    void chatController.send(message);
     message = '';
+    scheduleTail('explicit');
     if (sessionId) void sessionCache.saveDraft(sessionId, '');
   }
 
@@ -427,10 +496,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function selectTab(next: Tab, focusChatPrompt = false): void {
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
+    if (tab === 'chat' && next !== 'chat') { tailScheduler.invalidate(); followTail.cancel(); }
     tab = next;
     scrollTabIntoInitialPosition(next);
     if (next === 'chat') {
       reconcileVisibleHistory();
+      followTail.reset();
+      scheduleTail('initial');
       if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
     if (next === 'git' && gitWorkspaceId) void gitController.refresh();
@@ -585,18 +657,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function scrollTabIntoInitialPosition(target: Tab): void {
     requestAnimationFrame(() => {
       if (tab !== target) return;
-      window.scrollTo({ top: target === 'chat' ? document.documentElement.scrollHeight : 0 });
-    });
-  }
-
-  let chatScrollPending = false;
-
-  function scrollChatToBottom(): void {
-    if (chatScrollPending) return;
-    chatScrollPending = true;
-    requestAnimationFrame(() => {
-      chatScrollPending = false;
-      if (tab === 'chat') window.scrollTo({ top: document.documentElement.scrollHeight });
+      if (target !== 'chat') window.scrollTo({ top: 0 });
     });
   }
 
@@ -685,6 +746,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function resolveInteraction(requestId: string, decision: 'accept' | 'decline') {
+    scheduleTail('explicit');
     await chatController.respond(requestId, { decision });
   }
 
@@ -693,6 +755,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kind: string;
     payload: unknown;
   }) {
+    scheduleTail('explicit');
     const quiz =
       interaction.kind === 'quiz'
         ? parseQuiz(interaction.payload)
@@ -717,7 +780,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       shellStatus = 'Codex sent an invalid permission request.';
       return;
     }
+    scheduleTail('explicit');
     await chatController.respond(interaction.requestId, response);
+  }
+
+  function retryInteraction(interaction: { requestId: string; kind: string; payload: unknown }) {
+    if (interaction.kind === 'quiz' || interaction.kind === 'userInput') {
+      void resolveUserInput(interaction);
+    } else if (interaction.kind === 'permissionsApproval') {
+      void resolvePermissions(interaction);
+    } else {
+      void chatController.retryInteraction(interaction.requestId);
+    }
   }
 
   function setUserInputAnswer(requestId: string, questionId: string, answer: string) {
@@ -835,18 +909,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if tab === 'chat'}
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
+          <p class="visually-hidden" aria-live="polite" aria-atomic="true">
+            {interactionAnnouncement}
+          </p>
           {#if sessionId}
             <MessageList
               messages={chatView ? [...chatView.messages] : []}
               activities={chatView ? [...chatView.activities] : []}
-            />
-            <InteractionList
               interactions={chatView ? [...chatView.interactions] : []}
               answers={userInputAnswers}
               onanswer={setUserInputAnswer}
               onquiz={(interaction) => void resolveUserInput(interaction)}
               onpermission={(interaction) => void resolvePermissions(interaction)}
               ondecision={(id, decision) => void resolveInteraction(id, decision)}
+              onretry={retryInteraction}
             />
             <Composer
               status={chatView?.status ?? shellStatus}
@@ -855,11 +931,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               starting={chatView?.starting ?? false}
               models={sessionModels}
               onchange={updateDraft}
-              onscrollbottom={scrollChatToBottom}
+              onscrollbottom={() => scheduleTail('explicit')}
               onmodelselect={(model) => void selectSessionModel(model)}
               onsend={() => void sendMessage()}
               oninterrupt={() => void interruptTurn()}
             />
+            <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
           {:else}
             <p>Start a session from the Sessions tab to chat with Codex.</p>
           {/if}
@@ -971,6 +1048,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   .chat-view {
     margin-inline: calc(0.25rem - var(--page-inline-padding));
+  }
+
+  .chat-tail {
+    block-size: 1px;
+    scroll-margin-block-end: var(--bottom-navigation-clearance);
   }
 
   .swipe-surface {

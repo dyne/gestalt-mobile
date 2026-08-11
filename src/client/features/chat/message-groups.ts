@@ -7,7 +7,7 @@
 import type { ChatMessage } from './message-store.js';
 
 export type MessageGroup =
-  | { id: string; kind: 'user'; text: string; occurredAt?: number }
+  | { id: string; kind: 'user'; text: string; turnId?: string; occurredAt?: number }
   | {
       id: string;
       kind: 'assistant';
@@ -39,6 +39,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         id: message.id,
         kind: 'user',
         text: message.text,
+        ...(message.turnId ? { turnId: message.turnId } : {}),
         ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
       });
       continue;

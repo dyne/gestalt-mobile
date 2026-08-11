@@ -51,17 +51,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sortedModels = $derived(sortModelsNewestFirst(models));
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
 
-  function updateMessage(value: string): void {
+  function updateMessage(value: string, requestTail = false): void {
     dismissedCommandQuery = null;
     selectedCommandIndex = 0;
     onchange(value);
-    onscrollbottom();
+    if (requestTail) onscrollbottom();
   }
 
   function chooseCommand(index = selectedCommandIndex): void {
     const command = commandMatches[index];
     if (!command) return;
-    updateMessage(`/${command.name} `);
+    updateMessage(`/${command.name} `, true);
   }
 
   function keydown(event: KeyboardEvent): void {
@@ -123,7 +123,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <ul class="command-menu" aria-label="Available models">
       {#each sortedModels as model (model)}
         <li>
-          <button type="button" onclick={() => onmodelselect(model)}><code>{model}</code></button>
+          <button
+            type="button"
+            onclick={() => {
+              onmodelselect(model);
+              onscrollbottom();
+            }}><code>{model}</code></button
+          >
         </li>
       {/each}
     </ul>
@@ -132,7 +138,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <ul class="command-menu" aria-label="Reasoning efforts">
       {#each ['low', 'medium', 'high'] as effort (effort)}
         <li>
-          <button type="button" onclick={() => updateMessage(`/reasoning ${effort} `)}
+          <button type="button" onclick={() => updateMessage(`/reasoning ${effort} `, true)}
             ><code>{effort}</code></button
           >
         </li>

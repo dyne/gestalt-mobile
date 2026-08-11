@@ -553,7 +553,7 @@ describe('production composition', () => {
     await app.close();
   });
 
-  it('journals and replays a session-owned plan replacement before streaming its close event', async () => {
+  it('hands a replayed session-owned plan replacement off to its live close event exactly once', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
@@ -649,6 +649,13 @@ describe('production composition', () => {
       event: { type: 'plan.closed', payload: {} },
     });
     expect(closedIndex).toBeGreaterThan(updatedIndex);
+    const replayedSequence = messages[updatedIndex]!.event.sequence;
+    const liveSequence = messages[closedIndex]!.event.sequence;
+    expect(replayedSequence).toBeGreaterThan(0);
+    expect(liveSequence).toBe(replayedSequence + 1);
+    expect(new Set([replayedSequence, liveSequence]).size).toBe(2);
+    expect(messages.filter((message) => message.event.type === 'plan.updated')).toHaveLength(1);
+    expect(messages.filter((message) => message.event.type === 'plan.closed')).toHaveLength(1);
     const updatesBeforeResync = messages.filter(
       (message) => message.event.type === 'plan.updated',
     ).length;

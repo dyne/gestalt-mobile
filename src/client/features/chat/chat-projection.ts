@@ -14,18 +14,20 @@ import type { ChatMessage } from './message-store.js';
 export type PromptState = 'submitting' | 'accepted' | 'failed' | 'canonical';
 export type TurnLifecycle = 'starting' | 'working' | 'finished' | 'interrupted' | 'recoverable';
 export type InteractionState = 'pending' | 'submitting' | 'resolved' | 'failed';
+export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered';
 
 export type ProjectedPrompt = Readonly<{
   operationId: string;
   key: string;
   text: string;
   state: PromptState;
-  turnId: string | null;
+  turnId?: string | null;
 }>;
 export type ProjectedInteraction = Readonly<{
   requestId: string;
   key: string;
   kind: string;
+  turnId?: string | null;
   payload: unknown;
   state: InteractionState;
   operationId?: string;
@@ -75,6 +77,7 @@ function messageFromItem(item: ChatItem): ChatMessage | null {
     text: item.text,
     ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}),
     ...(typeof item.occurredAt === 'number' ? { occurredAt: item.occurredAt } : {}),
+    ...(typeof item.turnId === 'string' ? { turnId: item.turnId } : {}),
     complete: true,
   };
 }
@@ -83,10 +86,30 @@ function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
     requestId: snapshot.requestId,
     key: `interaction:${snapshot.requestId}`,
     kind: snapshot.kind,
+    turnId: snapshot.turnId,
     payload: 'payload' in snapshot ? snapshot.payload : null,
     state: snapshot.resolvedAt ? 'resolved' : 'pending',
     ...(snapshot.resolvedAt ? { attemptedOutcome: snapshot.outcome } : {}),
   };
+}
+function safeOutcome(
+  interaction: ProjectedInteraction | undefined,
+  attemptedOutcome: unknown,
+): SafeInteractionOutcome | undefined {
+  if (
+    attemptedOutcome === 'approved' ||
+    attemptedOutcome === 'denied' ||
+    attemptedOutcome === 'answered'
+  )
+    return attemptedOutcome;
+  if (interaction?.kind === 'quiz' || interaction?.kind === 'userInput') return 'answered';
+  if (
+    typeof attemptedOutcome === 'object' &&
+    attemptedOutcome !== null &&
+    (attemptedOutcome as { decision?: unknown }).decision === 'decline'
+  )
+    return 'denied';
+  return interaction ? 'approved' : undefined;
 }
 function lifecycle(activeTurnId: string | null, previous: TurnLifecycle): TurnLifecycle {
   if (activeTurnId)
@@ -127,7 +150,9 @@ function mergeMessages(
         unmatched.delete(prompt.operationId);
         const existing = old.get(prompt.key);
         return [
-          existing && existing.text === message.text ? existing : { ...message, id: prompt.key },
+          existing && existing.text === message.text
+            ? existing
+            : { ...message, id: prompt.key, turnId: prompt.turnId ?? message.turnId },
         ];
       }
     }
@@ -137,7 +162,7 @@ function mergeMessages(
         return [
           live.text === message.text && live.phase === message.phase
             ? live
-            : { ...message, id: live.id },
+            : { ...message, id: live.id, turnId: message.turnId ?? live.turnId },
         ];
     }
     return [message];
@@ -151,6 +176,7 @@ function mergeMessages(
           role: 'user' as const,
           text: prompt.text,
           complete: prompt.state === 'failed',
+          ...(prompt.turnId ? { turnId: prompt.turnId } : {}),
         },
     );
   const live = previous.filter(
@@ -224,6 +250,7 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           typeof item.requestId === 'string' &&
           typeof item.key === 'string' &&
           typeof item.kind === 'string' &&
+          (item.turnId === undefined || item.turnId === null || typeof item.turnId === 'string') &&
           interactionStates.includes(item.state),
         ),
       )
@@ -321,7 +348,9 @@ export function promotePrompt(
       prompt.operationId === operationId ? { ...prompt, state: 'accepted', turnId } : prompt,
     ),
     messages: current.messages.map((message) =>
-      message.id === `prompt:${operationId}` ? { ...message, complete: true } : message,
+      message.id === `prompt:${operationId}`
+        ? { ...message, complete: true, ...(turnId ? { turnId } : {}) }
+        : message,
     ),
   };
 }
@@ -377,7 +406,9 @@ export function resolveInteraction(
         ? {
             ...item,
             state: 'resolved',
-            ...(attemptedOutcome === undefined ? {} : { attemptedOutcome }),
+            ...(safeOutcome(item, attemptedOutcome)
+              ? { attemptedOutcome: safeOutcome(item, attemptedOutcome) }
+              : {}),
           }
         : item,
     ),
@@ -454,13 +485,14 @@ export function applyProjectionEvent(
             requestId: payload.requestId,
             key: `interaction:${payload.requestId}`,
             kind: payload.kind,
+            turnId: typeof payload.turnId === 'string' ? payload.turnId : next.activeTurnId,
             payload: payload.payload,
             state: 'pending',
           },
         ],
       };
   } else if (event.type === 'interaction.resolved' && typeof payload?.requestId === 'string')
-    next = resolveInteraction(next, payload.requestId);
+    next = resolveInteraction(next, payload.requestId, payload.outcome);
   else if (
     event.type === 'activity.updated' &&
     typeof payload?.id === 'string' &&

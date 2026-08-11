@@ -7,6 +7,7 @@
 /* @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import InteractionList from './InteractionList.svelte';
@@ -78,5 +79,63 @@ describe('InteractionList', () => {
       ondecision: () => {},
     });
     expect(screen.getByText('File details were not provided.')).toBeTruthy();
+  });
+
+  it('keeps one keyed card through submitting and resolved states without exposing answers', async () => {
+    const ondecision = vi.fn();
+    const view = render(InteractionList, {
+      interactions: [
+        {
+          requestId: 'request-state',
+          key: 'interaction:request-state',
+          kind: 'commandApproval',
+          payload: { command: 'git status' },
+          state: 'pending',
+        },
+      ],
+      answers: {},
+      onanswer: () => {},
+      onquiz: () => {},
+      onpermission: () => {},
+      ondecision,
+    });
+    const card = screen.getByText('commandApproval').closest('article');
+    await fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(ondecision).toHaveBeenCalledTimes(1);
+
+    await view.rerender({
+      interactions: [
+        {
+          requestId: 'request-state',
+          key: 'interaction:request-state',
+          kind: 'commandApproval',
+          payload: { command: 'git status' },
+          state: 'submitting',
+        },
+      ],
+    });
+    expect(screen.getByText('Submitting…')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(screen.getByText('commandApproval').closest('article')).toBe(card);
+
+    await view.rerender({
+      interactions: [
+        {
+          requestId: 'request-state',
+          key: 'interaction:request-state',
+          kind: 'quiz',
+          payload: { secret: 'never-rendered' },
+          state: 'resolved',
+          attemptedOutcome: 'answered',
+        },
+      ],
+    });
+    expect(screen.getByText('Answers sent')).toBeTruthy();
+    expect(screen.queryByText('never-rendered')).toBeNull();
+    expect(screen.getByText('quiz').closest('article')).toBe(card);
+    await tick();
+    expect(document.activeElement).toBe(screen.getByText('Answers sent'));
   });
 });

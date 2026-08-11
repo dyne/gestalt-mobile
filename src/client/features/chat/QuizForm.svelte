@@ -12,10 +12,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     requestId: string;
     quiz: Quiz;
     answers: Record<string, string>;
+    disabled?: boolean;
     onanswer(id: string, value: string): void;
     onsubmit(): void;
   };
-  let { requestId, quiz, answers, onanswer, onsubmit }: Props = $props();
+  let { requestId, quiz, answers, disabled = false, onanswer, onsubmit }: Props = $props();
   let customInputs = $state<Record<string, HTMLInputElement | undefined>>({});
   let customSelected = $state<Record<string, boolean>>({});
   let complete = $derived(
@@ -37,67 +38,69 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (complete) onsubmit();
   }}
 >
-  {#each quiz.questions as question (question.id)}
-    {@const inputId = `${requestId}-${question.id}-custom`}
-    {@const selectedChoice = question.choices.some(
-      (choice) => choice.label === answers[question.id],
-    )}
-    <fieldset>
-      <legend><strong>{question.header}</strong><span>{question.question}</span></legend>
-      <div class="choices">
-        {#each question.choices as choice (`${question.id}-${choice.label}`)}
-          {@const choiceId = `${requestId}-${question.id}-${choice.label}`}
-          <div class="choice">
-            <input
-              id={choiceId}
-              name={`${requestId}-${question.id}`}
-              type="radio"
-              checked={answers[question.id] === choice.label}
-              onchange={() => {
-                customSelected[question.id] = false;
-                onanswer(question.id, choice.label);
-              }}
-            />
-            <label for={choiceId}
-              ><strong>{choice.label}</strong><span>{choice.description}</span></label
-            >
-          </div>
-        {/each}
-        {#if question.allowCustom}
-          <div class="choice">
-            <input
-              id={inputId}
-              name={`${requestId}-${question.id}`}
-              type="radio"
-              checked={customSelected[question.id] ||
-                (Boolean(answers[question.id]) && !selectedChoice)}
-              onchange={() => chooseCustom(question.id)}
-              onclick={() => {
-                if (customSelected[question.id]) void chooseCustom(question.id);
-              }}
-            />
-            <label for={inputId}
-              ><strong>Custom answer</strong><span>Provide your own response.</span></label
-            >
-          </div>
-          {#if customSelected[question.id] || (Boolean(answers[question.id]) && !selectedChoice)}
-            <label class="custom" for={`${inputId}-text`}
-              >Your custom answer
+  <fieldset class="questions" {disabled}>
+    {#each quiz.questions as question (question.id)}
+      {@const inputId = `${requestId}-${question.id}-custom`}
+      {@const selectedChoice = question.choices.some(
+        (choice) => choice.label === answers[question.id],
+      )}
+      <fieldset>
+        <legend><strong>{question.header}</strong><span>{question.question}</span></legend>
+        <div class="choices">
+          {#each question.choices as choice (`${question.id}-${choice.label}`)}
+            {@const choiceId = `${requestId}-${question.id}-${choice.label}`}
+            <div class="choice">
               <input
-                bind:this={customInputs[question.id]}
-                id={`${inputId}-text`}
-                type={question.isSecret ? 'password' : 'text'}
-                value={answers[question.id]}
-                required
-                oninput={(event) => onanswer(question.id, event.currentTarget.value)}
+                id={choiceId}
+                name={`${requestId}-${question.id}`}
+                type="radio"
+                checked={answers[question.id] === choice.label}
+                onchange={() => {
+                  customSelected[question.id] = false;
+                  onanswer(question.id, choice.label);
+                }}
               />
-            </label>
+              <label for={choiceId}
+                ><strong>{choice.label}</strong><span>{choice.description}</span></label
+              >
+            </div>
+          {/each}
+          {#if question.allowCustom}
+            <div class="choice">
+              <input
+                id={inputId}
+                name={`${requestId}-${question.id}`}
+                type="radio"
+                checked={customSelected[question.id] ||
+                  (Boolean(answers[question.id]) && !selectedChoice)}
+                onchange={() => chooseCustom(question.id)}
+                onclick={() => {
+                  if (customSelected[question.id]) void chooseCustom(question.id);
+                }}
+              />
+              <label for={inputId}
+                ><strong>Custom answer</strong><span>Provide your own response.</span></label
+              >
+            </div>
+            {#if customSelected[question.id] || (Boolean(answers[question.id]) && !selectedChoice)}
+              <label class="custom" for={`${inputId}-text`}
+                >Your custom answer
+                <input
+                  bind:this={customInputs[question.id]}
+                  id={`${inputId}-text`}
+                  type={question.isSecret ? 'password' : 'text'}
+                  value={answers[question.id]}
+                  required
+                  oninput={(event) => onanswer(question.id, event.currentTarget.value)}
+                />
+              </label>
+            {/if}
           {/if}
-        {/if}
-      </div>
-    </fieldset>
-  {/each}
-  <button type="submit" disabled={!complete}>Send answers</button>
+        </div>
+      </fieldset>
+    {/each}
+  </fieldset>
+  <button type="submit" disabled={disabled || !complete}>Send answers</button>
 </form>
 
 <style>
@@ -110,6 +113,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin: 0;
     padding: 0;
     border: 0;
+  }
+  .questions {
+    display: grid;
+    gap: 1rem;
   }
   legend {
     display: grid;
