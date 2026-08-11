@@ -412,9 +412,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               runtime.resolveServerRequest(sessionId, requestId, value)
           : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
-          const interaction = interactions.snapshot(sessionId).find((item) => item.requestId === requestId);
+          const interaction = interactions
+            .snapshot(sessionId)
+            .find((item) => item.requestId === requestId);
           events.publish(
-            journal.append(sessionId, 'interaction.resolved', { requestId, turnId: interaction?.turnId ?? null, resolvedAt: occurredAt, outcome }, occurredAt),
+            journal.append(
+              sessionId,
+              'interaction.resolved',
+              { requestId, turnId: interaction?.turnId ?? null, resolvedAt: occurredAt, outcome },
+              occurredAt,
+            ),
           );
         },
       },

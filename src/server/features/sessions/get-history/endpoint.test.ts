@@ -97,14 +97,42 @@ describe('GET /api/sessions/:id/history', () => {
       currentSequence: () => 3,
       read: async () => ({ turns: [], activeTurnId: null }),
       interactions: () => [
-        { requestId: 'pending', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: null, payload: { question: 'safe prompt' } },
-        { requestId: 'resolved', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: 'u', outcome: 'answered' },
+        {
+          requestId: 'pending',
+          kind: 'quiz',
+          turnId: 'turn-1',
+          requestedAt: 't',
+          resolvedAt: null,
+          payload: { question: 'safe prompt' },
+        },
+        {
+          requestId: 'resolved',
+          kind: 'quiz',
+          turnId: 'turn-1',
+          requestedAt: 't',
+          resolvedAt: 'u',
+          outcome: 'answered',
+        },
       ],
     });
     const response = await app.inject({ method: 'GET', url: '/api/sessions/s/history' });
     expect(response.json().interactions).toEqual([
-      { requestId: 'pending', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: null, payload: { question: 'safe prompt' } },
-      { requestId: 'resolved', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: 'u', outcome: 'answered' },
+      {
+        requestId: 'pending',
+        kind: 'quiz',
+        turnId: 'turn-1',
+        requestedAt: 't',
+        resolvedAt: null,
+        payload: { question: 'safe prompt' },
+      },
+      {
+        requestId: 'resolved',
+        kind: 'quiz',
+        turnId: 'turn-1',
+        requestedAt: 't',
+        resolvedAt: 'u',
+        outcome: 'answered',
+      },
     ]);
     expect(response.body).not.toContain('secret-native-answer');
     await app.close();
@@ -116,17 +144,52 @@ describe('GET /api/sessions/:id/history', () => {
       find: () => ({ id: 's' }) as never,
       currentSequence: () => 40,
       read: async () => ({
-        turns: [{ id: 'turn-1', items: [{ id: 'final', type: 'agentMessage', text: 'final', phase: 'final_answer' }], startedAt: 1, completedAt: 2 }],
+        turns: [
+          {
+            id: 'turn-1',
+            items: [{ id: 'final', type: 'agentMessage', text: 'final', phase: 'final_answer' }],
+            startedAt: 1,
+            completedAt: 2,
+          },
+        ],
         activeTurnId: null,
       }),
       interactions: () => [
-        { requestId: 'pending', kind: 'userInput', turnId: 'turn-1', requestedAt: 't', resolvedAt: null, payload: {} },
-        { requestId: 'resolved', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: 'u', outcome: 'answered' },
+        {
+          requestId: 'pending',
+          kind: 'userInput',
+          turnId: 'turn-1',
+          requestedAt: 't',
+          resolvedAt: null,
+          payload: {},
+        },
+        {
+          requestId: 'resolved',
+          kind: 'quiz',
+          turnId: 'turn-1',
+          requestedAt: 't',
+          resolvedAt: 'u',
+          outcome: 'answered',
+        },
       ],
     });
     const snapshot = (await app.inject({ method: 'GET', url: '/api/sessions/s/history' })).json();
-    expect(snapshot).toMatchObject({ baseSequence: 40, activeTurnId: null, turns: [{ id: 'turn-1', items: [{ id: 'final', text: 'final' }] }], interactions: [{ requestId: 'pending', resolvedAt: null }, { requestId: 'resolved', outcome: 'answered' }] });
-    const replayable = [{ sequence: 41, type: 'interaction.resolved', payload: { requestId: 'resolved', turnId: 'turn-1', resolvedAt: 'u', outcome: 'answered' } }];
+    expect(snapshot).toMatchObject({
+      baseSequence: 40,
+      activeTurnId: null,
+      turns: [{ id: 'turn-1', items: [{ id: 'final', text: 'final' }] }],
+      interactions: [
+        { requestId: 'pending', resolvedAt: null },
+        { requestId: 'resolved', outcome: 'answered' },
+      ],
+    });
+    const replayable = [
+      {
+        sequence: 41,
+        type: 'interaction.resolved',
+        payload: { requestId: 'resolved', turnId: 'turn-1', resolvedAt: 'u', outcome: 'answered' },
+      },
+    ];
     expect(replayable.filter((event) => event.sequence > snapshot.baseSequence)).toHaveLength(1);
     expect(JSON.stringify(replayable)).not.toContain('secret-native-answer');
     await app.close();

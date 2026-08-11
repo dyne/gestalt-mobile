@@ -86,7 +86,12 @@ export type AppDependencies = {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
-    interactionResolved?(sessionId: string, requestId: string, occurredAt: string, outcome: 'approved' | 'denied' | 'answered'): void;
+    interactionResolved?(
+      sessionId: string,
+      requestId: string,
+      occurredAt: string,
+      outcome: 'approved' | 'denied' | 'answered',
+    ): void;
   };
   sessionEvents?: {
     exists(id: string): boolean;
@@ -114,9 +119,17 @@ export type AppDependencies = {
     >;
   };
   interactions?: {
-    resolve(sessionId: string, requestId: string, resolvedAt: string, outcome: 'approved' | 'denied' | 'answered'): boolean;
+    resolve(
+      sessionId: string,
+      requestId: string,
+      resolvedAt: string,
+      outcome: 'approved' | 'denied' | 'answered',
+    ): boolean;
     validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
-    alreadyResolved?(sessionId: string, requestId: string): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null;
+    alreadyResolved?(
+      sessionId: string,
+      requestId: string,
+    ): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null;
     snapshot?(sessionId: string): SafeInteractionSnapshot[];
     pending?(sessionId: string, requestId: string): boolean;
   };

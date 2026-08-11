@@ -16,9 +16,21 @@ export class SqlitePendingInteractionStore {
       .prepare(
         'INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at) VALUES (?,?,?,?,?,?)',
       )
-      .run(sessionId, interaction.requestId, interaction.kind, JSON.stringify(interaction.payload), interaction.turnId ?? null, interaction.requestedAt ?? null);
+      .run(
+        sessionId,
+        interaction.requestId,
+        interaction.kind,
+        JSON.stringify(interaction.payload),
+        interaction.turnId ?? null,
+        interaction.requestedAt ?? null,
+      );
   }
-  resolve(sessionId: string, requestId: string, resolvedAt: string, outcome: 'approved' | 'denied' | 'answered' = 'answered'): boolean {
+  resolve(
+    sessionId: string,
+    requestId: string,
+    resolvedAt: string,
+    outcome: 'approved' | 'denied' | 'answered' = 'answered',
+  ): boolean {
     return (
       this.db
         .prepare(
@@ -51,17 +63,55 @@ export class SqlitePendingInteractionStore {
   find(sessionId: string, requestId: string): PendingInteraction | null {
     return this.list(sessionId).find((interaction) => interaction.requestId === requestId) ?? null;
   }
-  resolved(sessionId: string, requestId: string): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null {
+  resolved(
+    sessionId: string,
+    requestId: string,
+  ): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null {
     const row = this.db
-      .prepare('SELECT resolved_at,outcome FROM pending_interactions WHERE session_id = ? AND request_id = ? AND resolved_at IS NOT NULL')
+      .prepare(
+        'SELECT resolved_at,outcome FROM pending_interactions WHERE session_id = ? AND request_id = ? AND resolved_at IS NOT NULL',
+      )
       .get(sessionId, requestId) as { resolved_at: string; outcome: string | null } | undefined;
-    return row ? { resolvedAt: row.resolved_at, outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered' } : null;
+    return row
+      ? {
+          resolvedAt: row.resolved_at,
+          outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered',
+        }
+      : null;
   }
   snapshot(sessionId: string): SafeInteractionSnapshot[] {
-    return (this.db.prepare(
-      'SELECT request_id,kind,payload_json,turn_id,requested_at,resolved_at,outcome FROM pending_interactions WHERE session_id = ? ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END, requested_at, rowid',
-    ).all(sessionId) as Array<{ request_id: string; kind: PendingInteraction['kind']; payload_json: string; turn_id: string | null; requested_at: string | null; resolved_at: string | null; outcome: string | null }>).map((row) => row.resolved_at
-      ? { requestId: row.request_id, kind: row.kind, turnId: row.turn_id, requestedAt: row.requested_at, resolvedAt: row.resolved_at, outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered' }
-      : { requestId: row.request_id, kind: row.kind, turnId: row.turn_id, requestedAt: row.requested_at, resolvedAt: null, payload: JSON.parse(row.payload_json) });
+    return (
+      this.db
+        .prepare(
+          'SELECT request_id,kind,payload_json,turn_id,requested_at,resolved_at,outcome FROM pending_interactions WHERE session_id = ? ORDER BY CASE WHEN resolved_at IS NULL THEN 0 ELSE 1 END, requested_at, rowid',
+        )
+        .all(sessionId) as Array<{
+        request_id: string;
+        kind: PendingInteraction['kind'];
+        payload_json: string;
+        turn_id: string | null;
+        requested_at: string | null;
+        resolved_at: string | null;
+        outcome: string | null;
+      }>
+    ).map((row) =>
+      row.resolved_at
+        ? {
+            requestId: row.request_id,
+            kind: row.kind,
+            turnId: row.turn_id,
+            requestedAt: row.requested_at,
+            resolvedAt: row.resolved_at,
+            outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered',
+          }
+        : {
+            requestId: row.request_id,
+            kind: row.kind,
+            turnId: row.turn_id,
+            requestedAt: row.requested_at,
+            resolvedAt: null,
+            payload: JSON.parse(row.payload_json),
+          },
+    );
   }
 }

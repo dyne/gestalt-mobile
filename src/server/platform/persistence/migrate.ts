@@ -20,7 +20,9 @@ export function migrate(database: DatabaseSync): void {
     database.exec('ALTER TABLE relay_sessions ADD COLUMN model TEXT');
   if (!columns.some((column) => column.name === 'branch'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN branch TEXT');
-  const interactionColumns = database.prepare('PRAGMA table_info(pending_interactions)').all() as Array<{ name: string }>;
+  const interactionColumns = database
+    .prepare('PRAGMA table_info(pending_interactions)')
+    .all() as Array<{ name: string }>;
   if (!interactionColumns.some((column) => column.name === 'turn_id'))
     database.exec('ALTER TABLE pending_interactions ADD COLUMN turn_id TEXT');
   if (!interactionColumns.some((column) => column.name === 'requested_at'))

@@ -129,39 +129,107 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
     registerRespondInteraction(app, {
       exists: () => true,
       validate: () => true,
-      reply: () => { replies++; return true; },
-      resolve: () => { if (resolved) return false; resolved = true; return true; },
+      reply: () => {
+        replies++;
+        return true;
+      },
+      resolve: () => {
+        if (resolved) return false;
+        resolved = true;
+        return true;
+      },
       alreadyResolved: () => (resolved ? { resolvedAt: 'now', outcome: 'approved' } : null),
       now: () => 'now',
     });
-    const request = { method: 'POST' as const, url: '/api/sessions/session-1/interactions/request-1', payload: { decision: 'approved' } };
+    const request = {
+      method: 'POST' as const,
+      url: '/api/sessions/session-1/interactions/request-1',
+      payload: { decision: 'approved' },
+    };
     expect((await app.inject(request)).statusCode).toBe(202);
-    expect((await app.inject(request)).json()).toEqual({ accepted: true, resolvedAt: 'now', outcome: 'approved' });
+    expect((await app.inject(request)).json()).toEqual({
+      accepted: true,
+      resolvedAt: 'now',
+      outcome: 'approved',
+    });
     expect(replies).toBe(1);
     await app.close();
   });
 
   it('replays a resolved safe outcome before the pending-only validator', async () => {
-    const app = fastify(); let replies = 0; let validations = 0;
-    registerRespondInteraction(app, { exists: () => true, pending: () => false, validate: () => { validations++; return false; }, alreadyResolved: () => ({ resolvedAt: 'first', outcome: 'denied' }), reply: () => { replies++; return true; }, resolve: () => false, now: () => 'second' });
-    const result = await app.inject({ method: 'POST', url: '/api/sessions/s/interactions/i', payload: { decision: 'approved' } });
-    expect(result.statusCode).toBe(202); expect(result.json()).toEqual({ accepted: true, resolvedAt: 'first', outcome: 'denied' }); expect(validations).toBe(0); expect(replies).toBe(0); await app.close();
+    const app = fastify();
+    let replies = 0;
+    let validations = 0;
+    registerRespondInteraction(app, {
+      exists: () => true,
+      pending: () => false,
+      validate: () => {
+        validations++;
+        return false;
+      },
+      alreadyResolved: () => ({ resolvedAt: 'first', outcome: 'denied' }),
+      reply: () => {
+        replies++;
+        return true;
+      },
+      resolve: () => false,
+      now: () => 'second',
+    });
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/interactions/i',
+      payload: { decision: 'approved' },
+    });
+    expect(result.statusCode).toBe(202);
+    expect(result.json()).toEqual({ accepted: true, resolvedAt: 'first', outcome: 'denied' });
+    expect(validations).toBe(0);
+    expect(replies).toBe(0);
+    await app.close();
   });
 
   it('publishes only safe resolution metadata, never the submitted answer', async () => {
     const app = fastify();
     const events: unknown[] = [];
-    registerRespondInteraction(app, { exists: () => true, validate: () => true, reply: () => true, resolve: () => true, resolved: (sessionId, requestId, occurredAt) => events.push({ sessionId, requestId, occurredAt }), now: () => 'now' });
-    await app.inject({ method: 'POST', url: '/api/sessions/s/interactions/i', payload: { answer: 'secret-native-answer' } });
+    registerRespondInteraction(app, {
+      exists: () => true,
+      validate: () => true,
+      reply: () => true,
+      resolve: () => true,
+      resolved: (sessionId, requestId, occurredAt) =>
+        events.push({ sessionId, requestId, occurredAt }),
+      now: () => 'now',
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/interactions/i',
+      payload: { answer: 'secret-native-answer' },
+    });
     expect(events).toEqual([{ sessionId: 's', requestId: 'i', occurredAt: 'now' }]);
     expect(JSON.stringify(events)).not.toContain('secret-native-answer');
     await app.close();
   });
 
   it('rejects an unknown interaction without invoking the adapter', async () => {
-    const app = fastify(); let replies = 0;
-    registerRespondInteraction(app, { exists: () => true, pending: () => false, validate: () => true, reply: () => { replies++; return false; }, resolve: () => false, now: () => 'now' });
-    const result = await app.inject({ method: 'POST', url: '/api/sessions/s/interactions/missing', payload: { decision: 'approved' } });
-    expect(result.statusCode).toBe(409); expect(replies).toBe(0); await app.close();
+    const app = fastify();
+    let replies = 0;
+    registerRespondInteraction(app, {
+      exists: () => true,
+      pending: () => false,
+      validate: () => true,
+      reply: () => {
+        replies++;
+        return false;
+      },
+      resolve: () => false,
+      now: () => 'now',
+    });
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/interactions/missing',
+      payload: { decision: 'approved' },
+    });
+    expect(result.statusCode).toBe(409);
+    expect(replies).toBe(0);
+    await app.close();
   });
 });
