@@ -244,6 +244,47 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it('normalizes malformed persisted interaction outcomes at every read boundary', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const store = new SqlitePendingInteractionStore(database);
+    store.add('s', {
+      requestId: 'malformed',
+      kind: 'userInput',
+      payload: { answer: 'must-not-be-exposed' },
+    });
+    expect(store.resolve('s', 'malformed', 'resolved', 'approved')).toBe(true);
+    database
+      .prepare(
+        "UPDATE pending_interactions SET outcome = 'unexpected' WHERE session_id = 's' AND request_id = 'malformed'",
+      )
+      .run();
+
+    expect(store.resolved('s', 'malformed')).toEqual({
+      resolvedAt: 'resolved',
+      outcome: 'answered',
+    });
+    expect(store.snapshot('s')).toEqual([
+      {
+        requestId: 'malformed',
+        kind: 'userInput',
+        turnId: null,
+        requestedAt: null,
+        resolvedAt: 'resolved',
+        outcome: 'answered',
+      },
+    ]);
+    expect(JSON.stringify(store.snapshot('s'))).not.toContain('must-not-be-exposed');
+    database.close();
+  });
+
   it('migrates the prior interaction schema and preserves immutable safe outcomes after reload', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
