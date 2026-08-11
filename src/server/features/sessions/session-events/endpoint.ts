@@ -47,11 +47,16 @@ export function registerSessionEvents(
       const send = (event: SessionEvent) => {
         // A subscription intentionally overlaps the durable replay.  The sequence
         // is the authoritative identity of an event, so overlap is harmless.
-        if (event.sessionId !== sessionId || !Number.isSafeInteger(event.sequence) || event.sequence < 1)
+        if (
+          event.sessionId !== sessionId ||
+          !Number.isSafeInteger(event.sequence) ||
+          event.sequence < 1
+        )
           return;
         if (sent.has(event.sequence)) return;
         sent.add(event.sequence);
-        if (isSlowClient(deps.bufferedAmount?.(connection) ?? connection.bufferedAmount)) return connection.close(1013, 'slow client');
+        if (isSlowClient(deps.bufferedAmount?.(connection) ?? connection.bufferedAmount))
+          return connection.close(1013, 'slow client');
         connection.send(JSON.stringify({ type: 'relay.event', event }));
       };
       let unsubscribe: (() => void) | undefined;

@@ -204,9 +204,13 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         key ? { 'idempotency-key': key } : {},
       ),
     startTurn: (sessionId: string, text: string, key?: string) =>
-      request<{ activeTurnId?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, {
-        text,
-      }, key ? { 'idempotency-key': key } : {}),
+      request<{ activeTurnId?: string }>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/turns`,
+        {
+          text,
+        },
+        key ? { 'idempotency-key': key } : {},
+      ),
     selectModel: (sessionId: string, model: string) =>
       request<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { model }),
     interruptTurn: (sessionId: string, turnId: string) =>

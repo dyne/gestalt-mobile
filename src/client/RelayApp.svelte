@@ -182,7 +182,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
   const tailScheduler = new ChatTailScheduler(
     (fn) => void tick().then(fn),
-    (reason) => { if (tab === 'chat') followTail.request(reason); },
+    (reason) => {
+      if (tab === 'chat') followTail.request(reason);
+    },
   );
   let interactionAnnouncement = $derived.by(() => {
     const interaction = chatView?.interactions.findLast((item) => item.state !== 'pending');
@@ -496,7 +498,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function selectTab(next: Tab, focusChatPrompt = false): void {
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
-    if (tab === 'chat' && next !== 'chat') { tailScheduler.invalidate(); followTail.cancel(); }
+    if (tab === 'chat' && next !== 'chat') {
+      tailScheduler.invalidate();
+      followTail.cancel();
+    }
     tab = next;
     scrollTabIntoInitialPosition(next);
     if (next === 'chat') {

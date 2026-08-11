@@ -5,7 +5,10 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import type { ChatSnapshot, SafeInteractionSnapshot } from '../../../../shared/contracts/chat-snapshot.js';
+import type {
+  ChatSnapshot,
+  SafeInteractionSnapshot,
+} from '../../../../shared/contracts/chat-snapshot.js';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { toChatItems, toChatTurns, type ChatItem, type HistoryTurn } from './history-mapper.js';

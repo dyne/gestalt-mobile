@@ -248,7 +248,12 @@ describe('relay client', () => {
       });
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
-    await client.respondInteraction('session-1', 'request-1', { decision: 'approved' }, 'interaction-key');
+    await client.respondInteraction(
+      'session-1',
+      'request-1',
+      { decision: 'approved' },
+      'interaction-key',
+    );
     expect(requests).toEqual([
       {
         url: '/api/sessions/session-1/interactions/request-1',

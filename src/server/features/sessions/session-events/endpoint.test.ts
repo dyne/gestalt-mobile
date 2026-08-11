@@ -288,13 +288,41 @@ describe('session event WebSocket', () => {
   });
 
   it('subscribes before replay and emits an overlap exactly once in ascending sequence', async () => {
-    let listener: ((event: { sessionId: string; sequence: number; type: string; occurredAt: string; payload: unknown }) => void) | undefined;
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true } }) }, logger: console });
+    let listener:
+      | ((event: {
+          sessionId: string;
+          sequence: number;
+          type: string;
+          occurredAt: string;
+          payload: unknown;
+        }) => void)
+      | undefined;
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
     registerSessionEvents(app, {
       exists: () => true,
-      subscribe: (_id, next) => { listener = next; return () => { listener = undefined; }; },
+      subscribe: (_id, next) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
       since: () => {
-        listener?.({ sessionId: 'session-1', sequence: 2, type: 'handoff', occurredAt: 't', payload: {} });
+        listener?.({
+          sessionId: 'session-1',
+          sequence: 2,
+          type: 'handoff',
+          occurredAt: 't',
+          payload: {},
+        });
         return [
           { sessionId: 'session-1', sequence: 1, type: 'replay', occurredAt: 't', payload: {} },
           { sessionId: 'session-1', sequence: 2, type: 'handoff', occurredAt: 't', payload: {} },
@@ -304,7 +332,9 @@ describe('session event WebSocket', () => {
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=0`);
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=0`,
+    );
     const sequences: number[] = [];
     socket.on('message', (data) => sequences.push(JSON.parse(String(data)).event.sequence));
     await once(socket, 'open');
@@ -345,46 +375,131 @@ describe('session event WebSocket', () => {
 
   it('disposes exactly once on resync and never forwards another session event', async () => {
     let disposed = 0;
-    let listener: ((event: { sessionId: string; sequence: number; type: string; occurredAt: string; payload: unknown }) => void) | undefined;
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true } }) }, logger: console });
+    let listener:
+      | ((event: {
+          sessionId: string;
+          sequence: number;
+          type: string;
+          occurredAt: string;
+          payload: unknown;
+        }) => void)
+      | undefined;
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [{ sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} }],
-      subscribe: (_id, next) => { listener = next; return () => { disposed++; listener = undefined; }; },
+      since: () => [
+        { sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} },
+      ],
+      subscribe: (_id, next) => {
+        listener = next;
+        return () => {
+          disposed++;
+          listener = undefined;
+        };
+      },
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=1`);
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=1`,
+    );
     const messages: unknown[] = [];
     socket.on('message', (data) => messages.push(JSON.parse(String(data))));
     await once(socket, 'close');
-    listener?.({ sessionId: 'session-2', sequence: 5, type: 'foreign', occurredAt: 't', payload: {} });
+    listener?.({
+      sessionId: 'session-2',
+      sequence: 5,
+      type: 'foreign',
+      occurredAt: 't',
+      payload: {},
+    });
     expect(messages).toEqual([{ type: 'relay.resyncRequired', currentSequence: 4 }]);
     expect(disposed).toBe(1);
     await app.close();
   });
 
   it('keeps an already-current cursor live for the next event', async () => {
-    let listener: ((event: { sessionId: string; sequence: number; type: string; occurredAt: string; payload: unknown }) => void) | undefined;
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true } }) }, logger: console });
-    registerSessionEvents(app, { exists: () => true, since: () => [], subscribe: (_id, next) => { listener = next; return () => {}; } });
+    let listener:
+      | ((event: {
+          sessionId: string;
+          sequence: number;
+          type: string;
+          occurredAt: string;
+          payload: unknown;
+        }) => void)
+      | undefined;
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
+    registerSessionEvents(app, {
+      exists: () => true,
+      since: () => [],
+      subscribe: (_id, next) => {
+        listener = next;
+        return () => {};
+      },
+    });
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.server.address(); if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
-    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=9`);
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/session-1/events?after=9`,
+    );
     const message = once(socket, 'message').then(([data]) => JSON.parse(String(data)));
     await once(socket, 'open');
-    listener?.({ sessionId: 'session-1', sequence: 10, type: 'live', occurredAt: 't', payload: {} });
+    listener?.({
+      sessionId: 'session-1',
+      sequence: 10,
+      type: 'live',
+      occurredAt: 't',
+      payload: {},
+    });
     expect(await message).toMatchObject({ event: { sequence: 10 } });
-    socket.close(); await app.close();
+    socket.close();
+    await app.close();
   });
 
   it('cleans up once when replay setup throws after subscription', async () => {
     let disposed = 0;
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true } }) }, logger: console });
-    registerSessionEvents(app, { exists: () => true, since: () => { throw new Error('journal unavailable'); }, subscribe: () => () => { disposed++; } });
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
+    registerSessionEvents(app, {
+      exists: () => true,
+      since: () => {
+        throw new Error('journal unavailable');
+      },
+      subscribe: () => () => {
+        disposed++;
+      },
+    });
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.server.address(); if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
     const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events`);
     await once(socket, 'close');
     expect(disposed).toBe(1);
@@ -392,12 +507,40 @@ describe('session event WebSocket', () => {
   });
 
   it('closes a slow client and disposes its subscription once', async () => {
-    let listener: ((event: { sessionId: string; sequence: number; type: string; occurredAt: string; payload: unknown }) => void) | undefined;
+    let listener:
+      | ((event: {
+          sessionId: string;
+          sequence: number;
+          type: string;
+          occurredAt: string;
+          payload: unknown;
+        }) => void)
+      | undefined;
     let disposed = 0;
-    const app = await buildApp({ health: { read: async () => ({ status: 'ok', version: 'test', codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true } }) }, logger: console });
-    registerSessionEvents(app, { exists: () => true, since: () => [], subscribe: (_id, next) => { listener = next; return () => { disposed++; }; }, bufferedAmount: () => 2_000_000 });
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+    });
+    registerSessionEvents(app, {
+      exists: () => true,
+      since: () => [],
+      subscribe: (_id, next) => {
+        listener = next;
+        return () => {
+          disposed++;
+        };
+      },
+      bufferedAmount: () => 2_000_000,
+    });
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.server.address(); if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
     const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/session-1/events`);
     await once(socket, 'open');
     const closed = once(socket, 'close');

@@ -40,17 +40,19 @@ export function registerStartTurn(
       const cached = deps.idempotency.get(scope, key);
       if (cached) return replay(cached, fingerprint, reply);
       const inflightKey = `${scope}:${key}`;
-      const operation = inflight.get(inflightKey) ?? (async () => {
-        const started = await deps.start(session, text);
-        deps.save(started);
-        deps.onStarted?.(started);
-        const result = {
-          statusCode: 202,
-          body: JSON.stringify({ fingerprint, response: started }),
-        };
-        deps.idempotency!.put(scope, key, result.statusCode, result.body);
-        return result;
-      })();
+      const operation =
+        inflight.get(inflightKey) ??
+        (async () => {
+          const started = await deps.start(session, text);
+          deps.save(started);
+          deps.onStarted?.(started);
+          const result = {
+            statusCode: 202,
+            body: JSON.stringify({ fingerprint, response: started }),
+          };
+          deps.idempotency!.put(scope, key, result.statusCode, result.body);
+          return result;
+        })();
       inflight.set(inflightKey, operation);
       try {
         return replay(await operation, fingerprint, reply);
