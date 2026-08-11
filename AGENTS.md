@@ -14,7 +14,7 @@ The relay uses a narrow handwritten Codex app-server adapter rather than checked
 
 ## Completion rules
 
-Use Node.js 24 or newer. Before completion and before opening or updating a pull request, run `npm run format:check`, `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows. If `npm run format:check` fails, run `npm run format`, inspect the resulting scope, and rerun the formatting check before committing.
+Use Node.js 24 or newer. Before completion and before opening or updating a pull request, run `npm run format:check`, `npm run license:check`, `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows. If `npm run format:check` fails, run `npm run format`, inspect the resulting scope, and rerun the formatting check before committing. If `npm run license:check` fails, run `npm run license:apply`, inspect the resulting scope, and rerun both formatting and license checks before committing.
 
 Do not log prompts, model output, secrets, or environment values. Every accepted file-changing Org L1 has exactly one conventional commit, unless it has no changes.
 

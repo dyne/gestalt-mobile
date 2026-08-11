@@ -1,4 +1,8 @@
-/* Copyright (C) 2026 Dyne.org foundation SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
