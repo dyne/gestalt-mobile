@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 import {
   evidenceFilename,
   evidenceFontScales,
@@ -172,7 +173,7 @@ test('captures every responsive Plan state with executable accessibility evidenc
   await page.route(`**/api/sessions/${session.id}/history`, (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
   await page.route(`**/api/sessions/${session.id}/plan`, (route) => {

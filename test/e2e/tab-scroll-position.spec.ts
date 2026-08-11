@@ -6,6 +6,7 @@
 
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
@@ -30,7 +31,7 @@ test('focuses the prompt when Chat is selected on desktop', async ({ page }) => 
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
   await page.route('**/api/sessions/session-1/plan', (route) => route.fulfill({ status: 204 }));
@@ -62,15 +63,16 @@ test('opens Chat at the bottom and every other tab at the top', async ({ page })
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        items: Array.from({ length: 40 }, (_, index) => ({
-          id: `message-${index + 1}`,
-          kind: index % 2 === 0 ? 'user' : 'agent',
-          text: `Message ${index + 1}: enough content to keep the Chat view scrollable.`,
-          occurredAt: index + 1,
-        })),
-        currentSequence: 0,
-      }),
+      body: JSON.stringify(
+        chatSnapshot({
+          items: Array.from({ length: 40 }, (_, index) => ({
+            id: `message-${index + 1}`,
+            kind: index % 2 === 0 ? 'user' : 'agent',
+            text: `Message ${index + 1}: enough content to keep the Chat view scrollable.`,
+            occurredAt: index + 1,
+          })),
+        }),
+      ),
     }),
   );
   await page.route('**/api/sessions/session-1/plan', (route) => route.fulfill({ status: 204 }));

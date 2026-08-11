@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -159,6 +160,20 @@ async function seedAuthenticatedRelay(
   store.close();
 }
 
+async function reserveLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port: 0 }, resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  return address.port;
+}
+
 test('runs the reviewed helper through the real relay and selected mobile session lifecycle', async ({
   page,
 }) => {
@@ -175,7 +190,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
   const connectedSockets: Array<{ client: WebSocketRoute; server: WebSocketRoute }> = [];
   let blockSockets = false;
   let app: RelayApp | undefined;
-  let relayPort = 0;
+  const relayPort = await reserveLoopbackPort();
   let owningStatusDirectory = '';
 
   const profiles = {
@@ -183,7 +198,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
   };
   const relyingParty = {
-    publicOrigin: 'http://localhost:3000',
+    publicOrigin: `http://localhost:${relayPort}`,
     rpId: 'localhost',
     rpName: 'Gestalt Mobile' as const,
   };
@@ -199,7 +214,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
       },
     });
   };
-  const startRelay = async (port = 3000) => {
+  const startRelay = async (port = relayPort) => {
     app = await composeRelayApp({
       root,
       dataDir,
@@ -214,7 +229,6 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await app.listen({ host: '127.0.0.1', port });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
-    relayPort = address.port;
     return relyingParty.publicOrigin;
   };
   const invokeHelper = async (...args: string[]) => {

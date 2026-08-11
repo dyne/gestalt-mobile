@@ -6,6 +6,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 const session = (id: string, workspacePath: string) => ({
   id,
@@ -49,7 +50,7 @@ async function routeSessionHistory(page: Page, id: string): Promise<void> {
   await page.route(`**/api/sessions/${id}/history`, (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
 }
