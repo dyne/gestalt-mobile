@@ -195,4 +195,45 @@ describe('SQLite relay persistence', () => {
     expect(store.resolve('s', 'i', 'again')).toBe(false);
     database.close();
   });
+
+  it('migrates interaction correlation and exposes resolved rows without response content', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database.prepare("INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')").run();
+    const store = new SqlitePendingInteractionStore(database);
+    store.add('s', { requestId: 'pending', kind: 'quiz', payload: { question: 'safe' }, turnId: 'turn-1', requestedAt: 't' });
+    store.add('s', { requestId: 'resolved', kind: 'quiz', payload: { internal: 'secret-native-answer' }, turnId: 'turn-1', requestedAt: 't' });
+    expect(store.resolve('s', 'resolved', 'u', 'denied')).toBe(true);
+    expect(store.snapshot('s')).toEqual([
+      { requestId: 'pending', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: null, payload: { question: 'safe' } },
+      { requestId: 'resolved', kind: 'quiz', turnId: 'turn-1', requestedAt: 't', resolvedAt: 'u', outcome: 'denied' },
+    ]);
+    expect(JSON.stringify(store.snapshot('s'))).not.toContain('secret-native-answer');
+    database.close();
+  });
+
+  it('migrates the prior interaction schema and preserves immutable safe outcomes after reload', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = openRelayDatabase(path);
+    database.exec("CREATE TABLE relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, last_org_plan_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE pending_interactions (session_id TEXT NOT NULL, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, resolved_at TEXT, PRIMARY KEY (session_id,request_id)); INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')");
+    migrate(database);
+    expect((database.prepare('PRAGMA table_info(pending_interactions)').all() as Array<{ name: string }>).some((column) => column.name === 'outcome')).toBe(true);
+    const store = new SqlitePendingInteractionStore(database);
+    for (const [id, outcome] of [['approved', 'approved'], ['denied', 'denied'], ['answered', 'answered']] as const) {
+      store.add('s', { requestId: id, kind: 'userInput', payload: { prompt: 'safe' } });
+      expect(store.resolve('s', id, 'first', outcome)).toBe(true);
+      expect(store.resolve('s', id, 'second', 'answered')).toBe(false);
+      expect(store.resolved('s', id)).toEqual({ resolvedAt: 'first', outcome });
+    }
+    database.close();
+    const reopened = openRelayDatabase(path); migrate(reopened);
+    const snapshot = new SqlitePendingInteractionStore(reopened).snapshot('s');
+    expect(snapshot.flatMap((item) => item.resolvedAt === null ? [] : [item.outcome])).toEqual(['approved', 'denied', 'answered']);
+    expect(JSON.stringify(snapshot)).not.toContain('secret-native-answer');
+    reopened.close();
+  });
 });

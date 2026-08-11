@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../plans/contracts.js';
+import type { ChatSnapshot } from '../../../shared/contracts/chat-snapshot.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -62,9 +63,10 @@ export type RelayHistoryItem = Record<string, unknown> & {
   text?: string;
   occurredAt?: number;
 };
-export type RelayHistory = {
+export type RelayHistory = Partial<Omit<ChatSnapshot, 'items'>> & {
   items: RelayHistoryItem[];
-  activeTurnId?: string | null;
+  /** Lower-bound sequence captured before the history read. */
+  baseSequence?: number;
   currentSequence?: number;
 };
 export type RelayGitSummary = {
@@ -201,10 +203,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         { workspaceId, profile: 'default', ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
-    startTurn: (sessionId: string, text: string) =>
+    startTurn: (sessionId: string, text: string, key?: string) =>
       request<{ activeTurnId?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, {
         text,
-      }),
+      }, key ? { 'idempotency-key': key } : {}),
     selectModel: (sessionId: string, model: string) =>
       request<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { model }),
     interruptTurn: (sessionId: string, turnId: string) =>

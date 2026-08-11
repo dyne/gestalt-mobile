@@ -22,6 +22,7 @@ export function registerSessionEvents(
     publicOrigin?: string;
     authorized?: (cookieHeader: string | undefined) => boolean;
     heartbeatIntervalMs?: number;
+    bufferedAmount?: (connection: { bufferedAmount: number }) => number;
   },
 ): void {
   const server = new WebSocketServer({ noServer: true });
@@ -42,28 +43,56 @@ export function registerSessionEvents(
     }
     server.handleUpgrade(request, socket, head, (connection) => {
       const sessionId = match[1]!;
+      const sent = new Set<number>();
       const send = (event: SessionEvent) => {
-        if (isSlowClient(connection.bufferedAmount)) return connection.close(1013, 'slow client');
+        // A subscription intentionally overlaps the durable replay.  The sequence
+        // is the authoritative identity of an event, so overlap is harmless.
+        if (event.sessionId !== sessionId || !Number.isSafeInteger(event.sequence) || event.sequence < 1)
+          return;
+        if (sent.has(event.sequence)) return;
+        sent.add(event.sequence);
+        if (isSlowClient(deps.bufferedAmount?.(connection) ?? connection.bufferedAmount)) return connection.close(1013, 'slow client');
         connection.send(JSON.stringify({ type: 'relay.event', event }));
       };
-      const replay = replayOrResync(deps.since(sessionId, after), after);
-      if (replay.kind === 'resync') {
-        const currentSequence = deps.since(sessionId, 0).at(-1)?.sequence ?? after;
-        connection.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence }));
+      let unsubscribe: (() => void) | undefined;
+      let removeHeartbeat: (() => void) | undefined;
+      let replaying = true;
+      const liveDuringReplay: SessionEvent[] = [];
+      const cleanup = () => {
+        removeHeartbeat?.();
+        removeHeartbeat = undefined;
+        unsubscribe?.();
+        unsubscribe = undefined;
+      };
+      try {
+        // Subscribe before reading the journal: every event after this point is
+        // either in replay or delivered live, and the sequence de-duplicates it.
+        unsubscribe = deps.subscribe(sessionId, (event) => {
+          if (replaying) liveDuringReplay.push(event);
+          else send(event);
+        });
+        const replay = replayOrResync(deps.since(sessionId, after), after);
+        if (replay.kind === 'resync') {
+          const currentSequence = deps.since(sessionId, 0).at(-1)?.sequence ?? after;
+          connection.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence }));
+          cleanup();
+          connection.close();
+          return;
+        }
+        replay.events.forEach(send);
+        replaying = false;
+        liveDuringReplay.sort((left, right) => left.sequence - right.sequence).forEach(send);
+      } catch {
+        cleanup();
         connection.close();
         return;
       }
-      replay.events.forEach(send);
-      const unsubscribe = deps.subscribe(sessionId, send);
-      const removeHeartbeat = installWebSocketHeartbeat(
+      removeHeartbeat = installWebSocketHeartbeat(
         connection,
         deps.heartbeatIntervalMs ?? 25_000,
         () => deps.authorized?.(request.headers.cookie) ?? true,
       );
-      connection.on('close', () => {
-        removeHeartbeat();
-        unsubscribe();
-      });
+      connection.on('close', cleanup);
     });
   });
   app.addHook('onClose', async () => server.close());

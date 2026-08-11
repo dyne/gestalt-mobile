@@ -41,6 +41,16 @@ describe('relay client', () => {
     );
   });
 
+  it('sends a turn idempotency header without exposing its body to headers', async () => {
+    let headers: HeadersInit | undefined;
+    const client = createRelayClient(async (_url, init) => {
+      headers = init?.headers;
+      return new Response(JSON.stringify({ activeTurnId: 'turn-1' }), { status: 202 });
+    });
+    await client.startTurn('session-1', 'private prompt', 'turn-key');
+    expect(headers).toEqual({ 'content-type': 'application/json', 'idempotency-key': 'turn-key' });
+  });
+
   it('targets every repository operation with the exact opaque catalog ID', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {

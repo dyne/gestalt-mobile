@@ -20,10 +20,21 @@ export type ChatItem =
   | { id: string; kind: 'tool'; name: string; status: string };
 
 export type HistoryTurn = {
+  id?: string;
   items: Array<Record<string, unknown>>;
   startedAt: number | null;
   completedAt: number | null;
 };
+
+/** Canonical grouping preserves the upstream Codex turn identity across reloads. */
+export function toChatTurns(turns: HistoryTurn[]): Array<{ id: string; items: ChatItem[]; startedAt: number | null; completedAt: number | null }> {
+  return turns.map((turn, index) => ({
+    id: turn.id ?? `history-turn-${index}`,
+    items: turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn))),
+    startedAt: turn.startedAt,
+    completedAt: turn.completedAt,
+  }));
+}
 
 export function toChatItems(turns: HistoryTurn[]): ChatItem[] {
   return turns.flatMap((turn) =>

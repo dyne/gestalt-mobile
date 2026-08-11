@@ -25,6 +25,7 @@ import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js'
 import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
+import type { SafeInteractionSnapshot } from '../shared/contracts/chat-snapshot.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import { registerAuthorizationBoundary } from './platform/http/authorization-boundary.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
@@ -85,7 +86,7 @@ export type AppDependencies = {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
     };
-    interactionResolved?(sessionId: string, requestId: string, occurredAt: string): void;
+    interactionResolved?(sessionId: string, requestId: string, occurredAt: string, outcome: 'approved' | 'denied' | 'answered'): void;
   };
   sessionEvents?: {
     exists(id: string): boolean;
@@ -113,8 +114,11 @@ export type AppDependencies = {
     >;
   };
   interactions?: {
-    resolve(sessionId: string, requestId: string, resolvedAt: string): boolean;
+    resolve(sessionId: string, requestId: string, resolvedAt: string, outcome: 'approved' | 'denied' | 'answered'): boolean;
     validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
+    alreadyResolved?(sessionId: string, requestId: string): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null;
+    snapshot?(sessionId: string): SafeInteractionSnapshot[];
+    pending?(sessionId: string, requestId: string): boolean;
   };
   gitSummary?: {
     workspaces: GitWorkspaceResolver;

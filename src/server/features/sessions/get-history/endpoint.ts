@@ -5,9 +5,16 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import type { ChatSnapshot, SafeInteractionSnapshot } from '../../../../shared/contracts/chat-snapshot.js';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
-import { toChatItems, type ChatItem, type HistoryTurn } from './history-mapper.js';
+import { toChatItems, toChatTurns, type ChatItem, type HistoryTurn } from './history-mapper.js';
+
+/**
+ * ChatSnapshot is a lower-bound cut: baseSequence is sampled before the
+ * upstream read, therefore every event with a higher sequence remains eligible
+ * for ordered replay even when its effect is already visible in the snapshot.
+ */
 
 export function registerGetHistory(
   app: FastifyInstance,
@@ -18,11 +25,13 @@ export function registerGetHistory(
       activeTurnId: string | null;
     }>;
     currentSequence(sessionId: string): number;
+    interactions?(sessionId: string): SafeInteractionSnapshot[];
   },
 ): void {
   app.get('/api/sessions/:id/history', async (request, reply) => {
     const session = deps.find((request.params as { id: string }).id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
+    const baseSequence = deps.currentSequence(session.id);
     let history: Awaited<ReturnType<typeof deps.read>>;
     try {
       history = await deps.read(session);
@@ -48,10 +57,15 @@ export function registerGetHistory(
       });
     }
     const items: ChatItem[] = toChatItems(history.turns);
-    return reply.send({
+    const snapshot: ChatSnapshot = {
       items,
+      turns: toChatTurns(history.turns),
       activeTurnId: history.activeTurnId,
-      currentSequence: deps.currentSequence(session.id),
-    });
+      interactions: deps.interactions?.(session.id) ?? [],
+      baseSequence,
+      // Temporary compatibility for clients which have not adopted ChatSnapshot.
+      currentSequence: baseSequence,
+    };
+    return reply.send(snapshot);
   });
 }

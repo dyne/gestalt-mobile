@@ -245,6 +245,7 @@ export class CodexSessionRuntime {
     );
     return {
       turns: rawTurns.map((turn) => ({
+        ...(typeof turn.id === 'string' ? { id: turn.id } : {}),
         items: turn.items ?? [],
         startedAt: typeof turn.startedAt === 'number' ? turn.startedAt : null,
         completedAt: typeof turn.completedAt === 'number' ? turn.completedAt : null,
