@@ -7,6 +7,7 @@
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
+  turnId?: string;
   phase?: 'commentary' | 'final_answer';
   text: string;
   occurredAt?: number;

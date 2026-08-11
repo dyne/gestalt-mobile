@@ -112,24 +112,22 @@ describe('ChatController', () => {
     const controller = new ChatController({
       ...env,
       relay: {
-        getHistory: vi
-          .fn()
-          .mockResolvedValue({
-            baseSequence: 0,
-            items: [],
-            turns: [],
-            interactions: [
-              {
-                requestId: 'r',
-                kind: 'x',
-                turnId: null,
-                requestedAt: null,
-                resolvedAt: null,
-                payload: {},
-              },
-            ],
-            activeTurnId: null,
-          }),
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [
+            {
+              requestId: 'r',
+              kind: 'x',
+              turnId: null,
+              requestedAt: null,
+              resolvedAt: null,
+              payload: {},
+            },
+          ],
+          activeTurnId: null,
+        }),
         startTurn: vi.fn(),
         interruptTurn: vi.fn(),
         respondInteraction: respond,
@@ -929,6 +927,64 @@ describe('ChatController', () => {
     await controller.retryInteraction('q', { answer: 'reentered' });
     expect(reply).toHaveBeenNthCalledWith(1, 's', 'a', 'approved', 'ka');
     expect(reply).toHaveBeenNthCalledWith(2, 's', 'q', { answer: 'reentered' }, 'kq');
+    controller.dispose();
+  });
+  it('normalizes live interaction success into presentation-safe outcomes', async () => {
+    const env = environment();
+    const views: ChatViewState[] = [];
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          activeTurnId: 'turn-1',
+          interactions: [
+            {
+              requestId: 'deny',
+              kind: 'commandApproval',
+              turnId: 'turn-1',
+              requestedAt: null,
+              resolvedAt: null,
+              payload: {},
+            },
+            {
+              requestId: 'quiz',
+              kind: 'quiz',
+              turnId: 'turn-1',
+              requestedAt: null,
+              resolvedAt: null,
+              payload: {},
+            },
+            {
+              requestId: 'permission',
+              kind: 'permissionsApproval',
+              turnId: 'turn-1',
+              requestedAt: null,
+              resolvedAt: null,
+              payload: {},
+            },
+          ],
+        }),
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn().mockResolvedValue(undefined),
+      },
+      publish: (view) => views.push(view),
+      websocket: () => new Socket() as unknown as WebSocket,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    await controller.respond('deny', { decision: 'decline' });
+    await controller.respond('quiz', { answers: ['secret'] });
+    await controller.respond('permission', { granted: true });
+    expect(views.at(-1)?.interactions.map((item) => item.attemptedOutcome)).toEqual([
+      'denied',
+      'answered',
+      'approved',
+    ]);
     controller.dispose();
   });
 });

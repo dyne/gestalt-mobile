@@ -208,6 +208,20 @@ describe('chat projection', () => {
     ).toBe('finished');
     expect(final.messages[0]).toMatchObject({ phase: 'final_answer', text: '' });
   });
+  it('keeps a requested interaction attached to the active turn for timeline rendering', () => {
+    const requested = applyProjectionEvent(
+      {
+        ...acceptSnapshot(createChatProjection('s'), { ...snapshot(), activeTurnId: 'turn-1' }),
+        cursor: 1,
+      },
+      {
+        sequence: 2,
+        type: 'interaction.requested',
+        payload: { requestId: 'request-1', kind: 'commandApproval' },
+      },
+    );
+    expect(requested.interactions[1]).toMatchObject({ requestId: 'request-1', turnId: 'turn-1' });
+  });
   it('keeps finished lifecycle through a stale active snapshot and converges finish/interrupt permutations', () => {
     const base = acceptSnapshot(createChatProjection('s'), {
       ...snapshot(),

@@ -6,19 +6,59 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import ActivityList from './ActivityList.svelte';
+  import InteractionList from './InteractionList.svelte';
   import type { HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
   import { groupMessages } from './message-groups.js';
   import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
+  import type { ProjectedInteraction } from './chat-projection.js';
 
-  let { messages, activities }: { messages: ChatMessage[]; activities: HistoryActivity[] } =
-    $props();
+  type Props = {
+    messages: ChatMessage[];
+    activities: HistoryActivity[];
+    interactions?: ProjectedInteraction[];
+    answers?: Record<string, string>;
+    onanswer?(requestId: string, id: string, value: string): void;
+    onquiz?(interaction: ProjectedInteraction): void;
+    onpermission?(interaction: ProjectedInteraction): void;
+    ondecision?(id: string, decision: 'accept' | 'decline'): void;
+    onretry?(interaction: ProjectedInteraction): void;
+  };
+  let {
+    messages,
+    activities,
+    interactions = [],
+    answers = {},
+    onanswer = () => {},
+    onquiz = () => {},
+    onpermission = () => {},
+    ondecision = () => {},
+    onretry = () => {},
+  }: Props = $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
   let latestAnswerId = $derived(
     groups.findLast((group) => group.kind === 'assistant' && group.answer)?.id,
   );
+  let promptGroups = $derived(groups.filter((group) => group.kind === 'user'));
+  let unassignedInteractions = $derived(
+    interactions.filter(
+      (interaction) =>
+        !interaction.turnId || !promptGroups.some((group) => group.turnId === interaction.turnId),
+    ),
+  );
+  function ownerGroupId(interaction: ProjectedInteraction): string | null {
+    return (
+      promptGroups.findLast((group) => group.turnId && group.turnId === interaction.turnId)?.id ??
+      promptGroups.at(-1)?.id ??
+      null
+    );
+  }
+  function turnInteractions(group: (typeof groups)[number]): ProjectedInteraction[] {
+    if (group.kind !== 'user') return [];
+    return interactions.filter((interaction) => ownerGroupId(interaction) === group.id);
+  }
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
@@ -80,6 +120,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/if}
         </div>
         <div class="entry-content">{@render content(group.text)}</div>
+        <InteractionList
+          interactions={turnInteractions(group)}
+          {answers}
+          {onanswer}
+          {onquiz}
+          {onpermission}
+          {ondecision}
+          {onretry}
+        />
       {:else if group.answer}
         <section class="answer-turn">
           <div class="entry-heading">
@@ -127,6 +176,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/if}
     </li>
   {/each}
+  {#if promptGroups.length === 0 && unassignedInteractions.length}
+    <li class="interaction-only">
+      <InteractionList
+        interactions={unassignedInteractions}
+        {answers}
+        {onanswer}
+        {onquiz}
+        {onpermission}
+        {ondecision}
+        {onretry}
+      />
+    </li>
+  {/if}
 </ol>
 
 <style>

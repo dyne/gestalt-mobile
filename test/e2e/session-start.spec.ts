@@ -572,7 +572,6 @@ test('rehydrates a durable pending interaction after a browser reload', async ({
   await page.goto('/');
 
   await openChat(page);
-  await expect(page.getByRole('heading', { name: 'Codex needs your decision' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve' })).toBeVisible();
 });
 
@@ -1249,7 +1248,6 @@ test('renders and resolves a relay approval request', async ({ page }) => {
 
   await page.goto('/');
   await openChat(page);
-  await expect(page.getByRole('heading', { name: 'Codex needs your decision' })).toBeVisible();
   await page.getByRole('button', { name: 'Approve' }).click();
   await expect.poll(() => response).toEqual({ decision: 'accept' });
 });

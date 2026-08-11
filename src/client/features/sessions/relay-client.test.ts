@@ -232,15 +232,30 @@ describe('relay client', () => {
     });
   });
 
-  it('submits an interaction decision to the original session request', async () => {
-    const requests: string[] = [];
+  it('submits an interaction decision with its stable idempotency key', async () => {
+    const requests: Array<{
+      url: string;
+      method?: string;
+      headers?: HeadersInit;
+      body?: string;
+    }> = [];
     const client = createRelayClient(async (url, init) => {
-      requests.push(`${init?.method} ${String(url)} ${String(init?.body)}`);
+      requests.push({
+        url: String(url),
+        method: init?.method,
+        headers: init?.headers,
+        body: init?.body as string | undefined,
+      });
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
-    await client.respondInteraction('session-1', 'request-1', { decision: 'approved' });
+    await client.respondInteraction('session-1', 'request-1', { decision: 'approved' }, 'interaction-key');
     expect(requests).toEqual([
-      'POST /api/sessions/session-1/interactions/request-1 {"decision":"approved"}',
+      {
+        url: '/api/sessions/session-1/interactions/request-1',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'interaction-key' },
+        body: JSON.stringify({ decision: 'approved' }),
+      },
     ]);
   });
 

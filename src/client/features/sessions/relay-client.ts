@@ -289,10 +289,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       profile: Pick<RelaySkillProfile, 'version' | 'name' | 'skills'>,
     ) => put<RelaySkillProfile>(`/api/skill-profiles/${encodeURIComponent(name)}`, profile),
     deleteSkillProfile: (name: string) => remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
-    respondInteraction: (sessionId: string, requestId: string, value: unknown) =>
+    respondInteraction: (sessionId: string, requestId: string, value: unknown, key?: string) =>
       request<void>(
         `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,
         value,
+        key ? { 'idempotency-key': key } : {},
       ),
   };
 }

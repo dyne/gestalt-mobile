@@ -59,4 +59,124 @@ describe('MessageList', () => {
     expect(screen.getByText('commentary').closest('details')).not.toBeNull();
     expect(screen.getByText('activity').closest('#chat-activity')?.getAttribute('open')).toBe('');
   });
+
+  it('renders a durable resolved interaction in its owning prompt turn', () => {
+    render(MessageList, {
+      messages: [
+        {
+          id: 'prompt:one',
+          role: 'user',
+          turnId: 'turn-1',
+          text: 'Inspect the workspace',
+          complete: true,
+        },
+        {
+          id: 'assistant:turn-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+          phase: 'final_answer',
+          text: 'Done.',
+          complete: true,
+        },
+      ],
+      activities: [],
+      interactions: [
+        {
+          requestId: 'request-1',
+          key: 'interaction:request-1',
+          kind: 'commandApproval',
+          turnId: 'turn-1',
+          payload: null,
+          state: 'resolved',
+          attemptedOutcome: 'approved',
+        },
+      ],
+      answers: {},
+      onanswer: () => {},
+      onquiz: () => {},
+      onpermission: () => {},
+      ondecision: () => {},
+      onretry: () => {},
+    });
+    const prompt = screen.getByText('Inspect the workspace').closest('.prompt-turn');
+    expect(prompt?.textContent).toContain('Approved');
+    expect(screen.getByText('Done.').compareDocumentPosition(prompt!)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+
+  it('places unassigned interactions exactly once at the latest prompt or interaction-only record', () => {
+    const props = {
+      activities: [],
+      answers: {},
+      onanswer: () => {},
+      onquiz: () => {},
+      onpermission: () => {},
+      ondecision: () => {},
+      onretry: () => {},
+      interactions: [
+        {
+          requestId: 'null',
+          key: 'null',
+          kind: 'commandApproval',
+          payload: {},
+          state: 'resolved' as const,
+          attemptedOutcome: 'approved',
+        },
+        {
+          requestId: 'missing',
+          key: 'missing',
+          kind: 'commandApproval',
+          turnId: 'missing-turn',
+          payload: {},
+          state: 'resolved' as const,
+          attemptedOutcome: 'denied',
+        },
+      ],
+    };
+    const view = render(MessageList, {
+      ...props,
+      messages: [
+        { id: 'one', role: 'user', text: 'first', complete: true },
+        { id: 'two', role: 'user', text: 'second', complete: true },
+      ],
+    });
+    expect(screen.getAllByText('commandApproval')).toHaveLength(2);
+    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).toContain('Denied');
+    view.unmount();
+    render(MessageList, { ...props, messages: [] });
+    expect(screen.getAllByText('commandApproval')).toHaveLength(2);
+  });
+
+  it('assigns an interaction to only the last prompt record for a duplicated turn', () => {
+    render(MessageList, {
+      messages: [
+        { id: 'first', role: 'user', turnId: 'turn-1', text: 'first', complete: true },
+        { id: 'second', role: 'user', turnId: 'turn-1', text: 'second', complete: true },
+      ],
+      activities: [],
+      interactions: [
+        {
+          requestId: 'only-once',
+          key: 'only-once',
+          kind: 'commandApproval',
+          turnId: 'turn-1',
+          payload: {},
+          state: 'resolved',
+          attemptedOutcome: 'approved',
+        },
+      ],
+      answers: {},
+      onanswer: () => {},
+      onquiz: () => {},
+      onpermission: () => {},
+      ondecision: () => {},
+      onretry: () => {},
+    });
+    expect(screen.getAllByText('commandApproval')).toHaveLength(1);
+    expect(screen.getByText('first').closest('.prompt-turn')?.textContent).not.toContain(
+      'Approved',
+    );
+    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).toContain('Approved');
+  });
 });
