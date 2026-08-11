@@ -64,6 +64,7 @@ export function registerSessionRoutes(
         find: sessions.find,
         read: sessions.readHistory,
         currentSequence: sessions.currentSequence ?? (() => 0),
+        interactions: deps.interactions?.snapshot,
       });
     if (sessions.startTurn)
       registerStartTurn(app, {
@@ -71,6 +72,7 @@ export function registerSessionRoutes(
         start: sessions.startTurn,
         save: sessions.save,
         onStarted: sessions.onTurnStarted,
+        idempotency: sessions.idempotency,
       });
     if (sessions.models)
       registerSelectModel(app, {
@@ -118,9 +120,11 @@ export function registerSessionRoutes(
     if (sessions.replyInteraction && deps.interactions)
       registerRespondInteraction(app, {
         exists: (id) => sessions.find(id) !== null,
-        resolve: (sessionId, requestId, resolvedAt) =>
-          deps.interactions!.resolve(sessionId, requestId, resolvedAt),
+        resolve: (sessionId, requestId, resolvedAt, outcome) =>
+          deps.interactions!.resolve(sessionId, requestId, resolvedAt, outcome),
         validate: deps.interactions.validate,
+        pending: deps.interactions.pending,
+        alreadyResolved: deps.interactions.alreadyResolved,
         reply: sessions.replyInteraction,
         resolved: sessions.interactionResolved,
         now: sessions.now,

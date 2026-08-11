@@ -192,9 +192,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           );
         },
         (sessionId, request) => {
-          const interaction = toPendingInteraction(request);
+          const rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
-          if (!interaction || !session) return false;
+          if (!rawInteraction || !session) return false;
+          const interaction = {
+            ...rawInteraction,
+            turnId: session.activeTurnId,
+            requestedAt: new Date().toISOString(),
+          };
           interactions.add(sessionId, interaction);
           const updated = RelaySession.rehydrate(session).requestInteraction(
             interaction,
@@ -406,9 +411,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ? (sessionId, requestId, value) =>
               runtime.resolveServerRequest(sessionId, requestId, value)
           : undefined,
-        interactionResolved: (sessionId, requestId, occurredAt) => {
+        interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
+          const interaction = interactions.snapshot(sessionId).find((item) => item.requestId === requestId);
           events.publish(
-            journal.append(sessionId, 'interaction.resolved', { requestId }, occurredAt),
+            journal.append(sessionId, 'interaction.resolved', { requestId, turnId: interaction?.turnId ?? null, resolvedAt: occurredAt, outcome }, occurredAt),
           );
         },
       },
@@ -445,8 +451,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
         : {}),
       interactions: {
-        resolve: (sessionId, requestId, resolvedAt) =>
-          interactions.resolve(sessionId, requestId, resolvedAt),
+        resolve: (sessionId, requestId, resolvedAt, outcome) =>
+          interactions.resolve(sessionId, requestId, resolvedAt, outcome),
+        alreadyResolved: (sessionId, requestId) => interactions.resolved(sessionId, requestId),
+        snapshot: (sessionId) => interactions.snapshot(sessionId),
+        pending: (sessionId, requestId) => interactions.find(sessionId, requestId) !== null,
         validate: (sessionId, requestId, value) => {
           const interaction = interactions.find(sessionId, requestId);
           if (!interaction) return false;

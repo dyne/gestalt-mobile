@@ -927,6 +927,7 @@ describe('CodexSessionRuntime', () => {
     await expect(runtime.readHistory(ready)).resolves.toEqual({
       turns: [
         {
+          id: 'terminal-turn-1',
           items: [{ id: 'message-1', type: 'agentMessage' }],
           startedAt: 1_784_102_400,
           completedAt: null,

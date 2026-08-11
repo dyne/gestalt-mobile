@@ -28,6 +28,8 @@ export type PendingInteraction = {
   requestId: string;
   kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput' | 'quiz';
   payload: unknown;
+  turnId?: string | null;
+  requestedAt?: string;
 };
 
 /**
