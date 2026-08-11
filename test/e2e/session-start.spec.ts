@@ -6,6 +6,7 @@
 
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
@@ -195,10 +196,10 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     }),
   );
   await page.route('**/api/sessions/relay-session-1/history', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(chatSnapshot()) }),
   );
   await page.route('**/api/sessions/promoted-session-1/history', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(chatSnapshot()) }),
   );
   await page.route('**/api/sessions/recent-threads/open', async (route) => {
     expect(route.request().postDataJSON()).toEqual({
@@ -407,7 +408,7 @@ test('Open announces replacement history loss while selecting the ready session 
   await page.route('**/api/sessions/saved-session/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
 
@@ -474,7 +475,7 @@ test('Open re-enables retry after a bounded restore failure', async ({ page }) =
   await page.route('**/api/sessions/retry-session/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], activeTurnId: null, currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
 
@@ -549,7 +550,23 @@ test('rehydrates a durable pending interaction after a browser reload', async ({
     }),
   );
   await page.route('**/api/sessions/session-1/history', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }),
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        chatSnapshot({
+          interactions: [
+            {
+              requestId: 'approval-1',
+              kind: 'commandApproval',
+              turnId: null,
+              requestedAt: '2026-01-01T00:00:00.000Z',
+              resolvedAt: null,
+              payload: {},
+            },
+          ],
+        }),
+      ),
+    }),
   );
 
   await page.goto('/');
@@ -644,7 +661,7 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
 
@@ -1005,6 +1022,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        baseSequence: 7,
         currentSequence: 7,
         activeTurnId: 'terminal-turn-1',
         items: [
@@ -1025,6 +1043,8 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
           },
           { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
         ],
+        turns: [],
+        interactions: [],
       }),
     }),
   );
@@ -1093,6 +1113,7 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        baseSequence: reads,
         currentSequence: reads,
         activeTurnId: null,
         items:
@@ -1108,6 +1129,8 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
                   text: 'Terminal answer',
                 },
               ],
+        turns: [],
+        interactions: [],
       }),
     });
   });
@@ -1187,7 +1210,21 @@ test('renders and resolves a relay approval request', async ({ page }) => {
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(
+        chatSnapshot({
+          activeTurnId: 'turn-1',
+          interactions: [
+            {
+              requestId: 'request-1',
+              kind: 'commandApproval',
+              turnId: 'turn-1',
+              requestedAt: '2026-01-01T00:00:00.000Z',
+              resolvedAt: null,
+              payload: {},
+            },
+          ],
+        }),
+      ),
     }),
   );
   await page.route('**/api/sessions/session-1/interactions/request-1', async (route) => {
@@ -1239,7 +1276,30 @@ test('answers a relay user-input request', async ({ page }) => {
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(
+        chatSnapshot({
+          activeTurnId: 'turn-1',
+          interactions: [
+            {
+              requestId: 'request-1',
+              kind: 'userInput',
+              turnId: 'turn-1',
+              requestedAt: '2026-01-01T00:00:00.000Z',
+              resolvedAt: null,
+              payload: {
+                questions: [
+                  {
+                    id: 'question-1',
+                    header: 'Mode',
+                    question: 'Choose a mode',
+                    options: [{ label: 'Safe', description: 'Safe mode' }],
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
     }),
   );
   await page.route('**/api/sessions/session-1/interactions/request-1', async (route) => {
@@ -1302,7 +1362,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
   await page.routeWebSocket(
@@ -1331,7 +1391,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
   );
 });
 
-test('projects a live activity update from the relay socket', async ({ page }) => {
+test('projects a canonical activity from the Chat snapshot', async ({ page }) => {
   const session = {
     id: 'session-1',
     state: 'turnActive',
@@ -1352,33 +1412,16 @@ test('projects a live activity update from the relay socket', async ({ page }) =
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(
+        chatSnapshot({
+          activeTurnId: 'turn-1',
+          items: [
+            { id: 'commentary-1', kind: 'agent', phase: 'commentary', text: 'Inspecting.' },
+            { id: 'item-1', kind: 'command', command: 'git status', status: 'completed' },
+          ],
+        }),
+      ),
     }),
-  );
-  await page.routeWebSocket(
-    'ws://127.0.0.1:4173/api/sessions/session-1/events?after=0',
-    (socket) => {
-      socket.send(
-        JSON.stringify({
-          type: 'relay.event',
-          event: {
-            sequence: 1,
-            type: 'agentMessageDelta',
-            payload: { text: 'Inspecting the repository.' },
-          },
-        }),
-      );
-      socket.send(
-        JSON.stringify({
-          type: 'relay.event',
-          event: {
-            sequence: 2,
-            type: 'activity.updated',
-            payload: { id: 'item-1', label: 'Command · completed', detail: 'git status' },
-          },
-        }),
-      );
-    },
   );
 
   await page.goto('/');
@@ -1413,8 +1456,12 @@ test('resynchronizes canonical history after a pruned relay cursor', async ({ pa
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        baseSequence: 8,
         currentSequence: 8,
+        activeTurnId: null,
         items: reads === 1 ? [] : [{ id: 'agent-1', kind: 'agent', text: 'Recovered history' }],
+        turns: [],
+        interactions: [],
       }),
     });
   });
@@ -1455,9 +1502,13 @@ test('resynchronizes canonical history after a replay sequence gap', async ({ pa
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        baseSequence: reads === 1 ? 0 : 3,
         currentSequence: reads === 1 ? 0 : 3,
+        activeTurnId: null,
         items:
           reads === 1 ? [] : [{ id: 'agent-1', kind: 'agent', text: 'Recovered missing event' }],
+        turns: [],
+        interactions: [],
       }),
     });
   });
@@ -1501,7 +1552,7 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot({ activeTurnId: 'turn-1' })),
     }),
   );
   await page.routeWebSocket(
@@ -1560,9 +1611,13 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
+        baseSequence: reads === 1 ? 0 : 4,
         currentSequence: reads === 1 ? 0 : 4,
+        activeTurnId: null,
         items:
           reads === 1 ? [] : [{ id: 'restored', kind: 'agent', text: 'Restored after restart' }],
+        turns: [],
+        interactions: [],
       }),
     });
   });
@@ -1617,7 +1672,7 @@ test('clears an interrupted active turn when relay recovery updates the session'
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
   await page.routeWebSocket(

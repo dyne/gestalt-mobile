@@ -29,9 +29,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
-  import { toActivity, type HistoryActivity } from './features/chat/activity-summary.js';
   import { submitsOnEnter } from './features/chat/keyboard.js';
-  import { createMessageCache } from './features/chat/message-cache.js';
+  import { createChatCache } from './features/chat/chat-cache.js';
+  import { ChatController, type ChatViewState } from './features/chat/chat-controller.js';
+  import type { ProjectionEvent } from './features/chat/chat-projection.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
   import { createToastQueue } from './features/feedback/toast-queue.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
@@ -46,12 +47,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import GitView from './features/git/GitView.svelte';
   import { GitController, type GitState } from './features/git/git-controller.js';
   import { selectAfterClone } from './features/git/post-clone-selection.js';
-  import {
-    appendUserMessage,
-    applyDelta,
-    completeMessage,
-    type ChatMessage,
-  } from './features/chat/message-store.js';
   import { toPermissionApprovalResponse } from './features/chat/permission-request.js';
   import {
     readUserInputQuestions,
@@ -65,7 +60,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import {
     createRelayClient,
     type RelayGitSummary,
-    type RelayHistory,
     type RecentSession,
     type RelaySession,
     type RelaySkillProfile,
@@ -74,15 +68,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
-  import { applyRelayEvent } from './features/sessions/session-events-client.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
   import { isRelayPlanUpdate } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
-  import { turnReadiness } from './features/sessions/session-state.js';
-  import { SessionConnectionController } from './features/sessions/session-connection-controller.js';
   import { createSessionCache } from './features/sessions/session-cache.js';
-  import { getHistoryWithRecovery } from './features/sessions/history-recovery.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
   import {
@@ -101,10 +91,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { createDeviceClient } from './features/auth/device-client.js';
   import Scratchpad from './features/scratchpad/Scratchpad.svelte';
 
+  let chatView = $state<ChatViewState | null>(null);
   let tab = $state<Tab>('sessions');
   let devicesOpen = $state(false);
   let scratchpadOpen = $state(false);
-  let status = $state('Loading relay…');
+  let shellStatus = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
   const defaultSessionModel = 'gpt-5.6-terra';
@@ -136,11 +127,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let openingSessionId = $state<string | null>(null);
   let recoveryNotice = $state<string | null>(null);
   let message = $state('');
-  let activeTurnId = $state<string | null>(null);
-  let startingTurn = $state(false);
-  let messages = $state<ChatMessage[]>([]);
-  let activities = $state<HistoryActivity[]>([]);
-  let cursor = $state(0);
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
   let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
   let passivePlan = $state.raw<import('./features/plans/contracts.js').SupervisedPlan | null>(null);
@@ -184,9 +170,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let gitCloneStatus = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
-  let interactions = $state<Array<{ requestId: string; kind: string; payload: unknown }>>([]);
   let userInputAnswers = $state<Record<string, string>>({});
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const chatController = new ChatController({
+    relay,
+    cache: createChatCache(),
+    publish: (next) => (chatView = next),
+    onSessionEvent: (event) => handleChatMetadataEvent(event),
+  });
   const sessionStartController = new SessionStartController(
     { start: relay.startSession },
     createIdempotencyKey,
@@ -198,22 +189,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     (next) => (gitState = next),
     (error, code) => reportRelayError(error, code),
   );
-  const connection = new SessionConnectionController({
-    selectedSessionId: () => sessionId,
-    cursor: () => cursor,
-    onopen: () => (status = turnReadiness(activeTurnId)),
-    onclose: () => (status = 'Connection interrupted. Reconnecting…'),
-    onmessage: (raw) => handleSessionSocketMessage(raw),
-    onreconcile: async () => {
-      if (sessionId) await resyncHistory(sessionId);
-    },
-  });
   const deviceClient = createDeviceClient((input, init) => authorizedFetch(input, init));
   const planController = createPlanController(
     { getPlan: relay.getPlan, closePlan: relay.closePlan },
     (next) => (planState = next),
   );
-  const messageCache = createMessageCache();
   const sessionCache = createSessionCache();
   const toastQueue = createToastQueue();
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
@@ -236,7 +216,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       toastEvidence === 'stacked'
     )
       return;
-    connection.start();
     try {
       const bootstrap = await loadBootstrap(authorizedFetch);
       sessionWorkspaceId =
@@ -256,22 +235,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sessionId = bootstrap.sessions.some((session) => session.id === remembered)
         ? remembered
         : (bootstrap.sessions[0]?.id ?? null);
-      if (sessionId) cursor = await sessionCache.readCursor(sessionId);
       if (sessionId) message = await sessionCache.readDraft(sessionId);
-      if (sessionId) messages = await messageCache.read(sessionId);
       sessions = bootstrap.sessions;
-      interactions =
-        sessions.find((session) => session.id === sessionId)?.pendingInteractions ?? [];
       void refreshRecentSessions();
-      activeTurnId = sessions.find((session) => session.id === sessionId)?.activeTurnId ?? null;
-      status = sessionId ? turnReadiness(activeTurnId) : 'Choose a workspace and start a session.';
       planController.select(sessionId);
       if (sessionId) {
-        await resyncHistory(sessionId);
-        connectSession(sessionId);
+        chatController.select(sessionId);
       }
     } catch (error) {
-      status = reportRelayError(error, 'RELAY_UNAVAILABLE');
+      shellStatus = reportRelayError(error, 'RELAY_UNAVAILABLE');
     }
   });
 
@@ -280,7 +252,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onDestroy(() => {
-    connection.dispose();
+    chatController.dispose();
     planController.dispose();
     gitController.dispose();
     sessionStartController.dispose();
@@ -295,10 +267,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       profileState: 'ok',
     });
     if (errors.profile) {
-      status = errors.profile;
+      shellStatus = errors.profile;
       return;
     }
-    status = 'Starting session…';
+    shellStatus = 'Starting session…';
     const session = await sessionStartController.start(sessionWorkspaceId, {
       sandbox,
       approvalPolicy,
@@ -307,26 +279,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
     if (!session) {
       if (sessionStartState.error)
-        status = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED');
+        shellStatus = reportRelayError(new Error(sessionStartState.error), 'SESSION_START_FAILED');
       return;
     }
     try {
       sessionId = session.id;
       planController.select(session.id);
-      activeTurnId = null;
       void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();
-      messages = [];
-      persistMessages(session.id);
-      activities = [];
-      cursor = 0;
       message = await sessionCache.readDraft(session.id);
-      connectSession(session.id);
+      chatController.select(session.id);
       tab = 'chat';
       scrollTabIntoInitialPosition('chat');
-      status = 'Session started.';
+      shellStatus = 'Session started.';
     } catch (error) {
-      status = reportRelayError(error, 'SESSION_START_FAILED');
+      shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
     }
   }
 
@@ -346,12 +313,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await Promise.all([refreshSessions(), refreshRecentSessions()]);
     } catch (error) {
-      status = reportRelayError(error, 'SESSION_REFRESH_FAILED');
+      shellStatus = reportRelayError(error, 'SESSION_REFRESH_FAILED');
     }
   }
 
   async function openSession(id: string) {
-    status = 'Opening session…';
+    shellStatus = 'Opening session…';
     openingSessionId = id;
     try {
       const existing = sessions.find((session) => session.id === id);
@@ -366,50 +333,43 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sessionId = id;
       planController.select(id);
       void sessionCache.saveSelectedSession(id);
-      messages = await messageCache.read(id);
-      activities = [];
-      cursor = 0;
       message = await sessionCache.readDraft(id);
-      activeTurnId = sessions.find((session) => session.id === id)?.activeTurnId ?? null;
-      interactions = sessions.find((session) => session.id === id)?.pendingInteractions ?? [];
       tab = 'chat';
       scrollTabIntoInitialPosition('chat');
-      await resyncHistory(id);
-      connectSession(id);
+      chatController.select(id);
     } catch (error) {
-      status = `Could not open session: ${errorMessage(error)}`;
+      shellStatus = `Could not open session: ${errorMessage(error)}`;
     } finally {
       openingSessionId = null;
     }
   }
 
   async function openRecentSession(recent: RecentSession) {
-    status = 'Opening recent session…';
+    shellStatus = 'Opening recent session…';
     try {
       const session = await relay.openRecentSession(recent.id, recent.cwd);
       await refreshSessionLists();
       await openSession(session.id);
     } catch (error) {
-      status = `Could not open recent session: ${errorMessage(error)}`;
+      shellStatus = `Could not open recent session: ${errorMessage(error)}`;
     }
   }
 
   async function closeSession(id: string) {
-    status = 'Closing session…';
+    shellStatus = 'Closing session…';
     try {
       await relay.releaseSession(id);
       if (sessionId === id) {
         sessionId = null;
         tab = 'sessions';
-        activeTurnId = null;
-        interactions = [];
         void sessionCache.saveSelectedSession(null);
-        connection.disconnect();
+        chatController.select(null);
+        planController.select(null);
       }
       await refreshSessionLists();
-      status = 'Session closed.';
+      shellStatus = 'Session closed.';
     } catch (error) {
-      status = `Could not close session: ${errorMessage(error)}`;
+      shellStatus = `Could not close session: ${errorMessage(error)}`;
     }
   }
 
@@ -418,121 +378,50 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       await relay.forgetSession(id);
       if (sessionId === id) {
-        connection.disconnect();
+        chatController.select(null);
         sessionId = null;
-        activeTurnId = null;
         void sessionCache.saveSelectedSession(null);
+        planController.select(null);
       }
       await refreshSessionLists();
       recentSessions = retainForgottenSession(recentSessions, forgottenSession);
     } catch (error) {
-      status = `Could not forget session: ${errorMessage(error)}`;
+      shellStatus = `Could not forget session: ${errorMessage(error)}`;
     }
   }
 
   async function copyResumeCommand(command: string) {
-    status = (await copyText(command))
+    shellStatus = (await copyText(command))
       ? 'Resume command copied.'
       : 'Could not copy the resume command.';
   }
 
   async function selectSessionModel(model: string): Promise<void> {
-    if (!sessionId || activeTurnId) return;
+    if (!sessionId || chatView?.activeTurnId) return;
     try {
       const updated = await relay.selectModel(sessionId, model);
       sessions = sessions.map((session) =>
         session.id === updated.id ? { ...session, ...updated } : session,
       );
       message = '';
-      status = `Model changed to ${model}; it applies to the next turn.`;
+      shellStatus = `Model changed to ${model}; it applies to the next turn.`;
     } catch (error) {
-      status = `Could not change model: ${errorMessage(error)}`;
+      shellStatus = `Could not change model: ${errorMessage(error)}`;
     }
   }
 
   async function sendMessage() {
-    if (!sessionId || !message.trim() || activeTurnId || startingTurn) return;
-    const prompt = message.trim();
-    startingTurn = true;
-    try {
-      const turn = await relay.startTurn(sessionId, prompt);
-      activeTurnId = turn.activeTurnId ?? null;
-      messages = appendUserMessage(
-        messages,
-        `user-${turn.activeTurnId ?? Date.now().toString()}`,
-        prompt,
-        Date.now(),
-      );
-      persistMessages(sessionId);
-      message = '';
-      void sessionCache.saveDraft(sessionId, '');
-      status = turnReadiness(activeTurnId);
-    } catch (error) {
-      status = reportRelayError(error, 'MESSAGE_SEND_FAILED');
-    } finally {
-      startingTurn = false;
-    }
+    await chatController.send(message);
+    message = '';
+    if (sessionId) void sessionCache.saveDraft(sessionId, '');
   }
 
   async function interruptTurn() {
-    if (!sessionId || !activeTurnId) return;
-    try {
-      await relay.interruptTurn(sessionId, activeTurnId);
-      activeTurnId = null;
-      status = 'Codex turn interrupted.';
-    } catch (error) {
-      status = `Could not interrupt Codex: ${errorMessage(error)}`;
-    }
-  }
-
-  async function resyncHistory(id: string, fallbackSequence = 0) {
-    const { history, restored } = await getHistoryWithRecovery(relay, id);
-    if (restored) {
-      sessions = sessions.map((session) => (session.id === id ? restored : session));
-      if (restored.recovery?.replacementCreated)
-        recoveryNotice =
-          'The session was restored with a replacement Codex thread because its prior history was unavailable.';
-    }
-    if (sessionId !== id) return;
-    const canonicalMessages: ChatMessage[] = history.items
-      .filter((item) => (item.kind === 'user' || item.kind === 'agent') && item.text)
-      .map((item) => ({
-        id: item.id,
-        role: item.kind === 'user' ? 'user' : 'assistant',
-        text: item.text!,
-        ...(typeof item.occurredAt === 'number' ? { occurredAt: item.occurredAt } : {}),
-        ...(item.phase === 'commentary' || item.phase === 'final_answer'
-          ? { phase: item.phase }
-          : {}),
-        complete: true,
-      }));
-    const unfinishedMessages = messages.filter((message) => !message.complete);
-    messages = [...canonicalMessages, ...unfinishedMessages];
-    persistMessages(id);
-    const canonicalActivities = history.items.flatMap((item) => {
-      const activity = toActivity(item);
-      return activity ? [activity] : [];
-    });
-    activities = [
-      ...canonicalActivities,
-      ...activities.filter(
-        (activity) => !canonicalActivities.some((canonical) => canonical.id === activity.id),
-      ),
-    ];
-    if ('activeTurnId' in history) {
-      activeTurnId = history.activeTurnId ?? null;
-      sessions = sessions.map((session) =>
-        session.id === id ? { ...session, activeTurnId } : session,
-      );
-    }
-    cursor = Math.max(cursor, history.currentSequence ?? fallbackSequence);
-    void sessionCache.saveCursor(id, cursor);
-    if (fallbackSequence) planController.refresh(id);
-    status = turnReadiness(activeTurnId);
+    await chatController.interrupt();
   }
 
   function reconcileVisibleHistory(): void {
-    if (tab === 'chat' && sessionId) connection.resync();
+    if (tab === 'chat' && sessionId) chatController.refresh();
   }
 
   function selectTab(next: Tab, focusChatPrompt = false): void {
@@ -675,7 +564,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const workspaceId = sessionWorkspaceId || workspaceTree[0]?.id || '';
     const profile = codexProfiles.find((item) => item.state === 'ok')?.name ?? '';
     if (!workspaceId || !profile) {
-      status = 'Choose a workspace and available Codex profile before managing skill profiles.';
+      shellStatus =
+        'Choose a workspace and available Codex profile before managing skill profiles.';
       return;
     }
     await loadSkills(workspaceId, profile);
@@ -795,9 +685,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function resolveInteraction(requestId: string, decision: 'accept' | 'decline') {
-    if (!sessionId) return;
-    await relay.respondInteraction(sessionId, requestId, { decision });
-    interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
+    await chatController.respond(requestId, { decision });
   }
 
   async function resolveUserInput(interaction: {
@@ -805,7 +693,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kind: string;
     payload: unknown;
   }) {
-    if (!sessionId) return;
     const quiz =
       interaction.kind === 'quiz'
         ? parseQuiz(interaction.payload)
@@ -818,22 +705,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const response =
       interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
     try {
-      await relay.respondInteraction(sessionId, interaction.requestId, response);
-      interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+      await chatController.respond(interaction.requestId, response);
     } catch {
-      status = 'Could not send quiz answers. Please try again.';
+      shellStatus = 'Could not send quiz answers. Please try again.';
     }
   }
 
   async function resolvePermissions(interaction: { requestId: string; payload: unknown }) {
-    if (!sessionId) return;
     const response = toPermissionApprovalResponse(interaction.payload);
     if (!response) {
-      status = 'Codex sent an invalid permission request.';
+      shellStatus = 'Codex sent an invalid permission request.';
       return;
     }
-    await relay.respondInteraction(sessionId, interaction.requestId, response);
-    interactions = interactions.filter((item) => item.requestId !== interaction.requestId);
+    await chatController.respond(interaction.requestId, response);
   }
 
   function setUserInputAnswer(requestId: string, questionId: string, answer: string) {
@@ -843,10 +727,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function updateDraft(value: string) {
     message = value;
     if (sessionId) void sessionCache.saveDraft(sessionId, value);
-  }
-
-  function persistMessages(id: string): void {
-    void messageCache.write(id, messages);
   }
 
   function errorMessage(error: unknown): string {
@@ -860,97 +740,41 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function handleComposerKeydown(event: KeyboardEvent): void {
-    if (!submitsOnEnter(event) || activeTurnId || startingTurn || !message.trim()) return;
+    if (!submitsOnEnter(event) || chatView?.activeTurnId || chatView?.starting || !message.trim())
+      return;
     event.preventDefault();
     void sendMessage();
   }
 
-  function connectSession(id: string) {
-    connection.connect(id);
-  }
-
-  function handleSessionSocketMessage(raw: string) {
-    if (!sessionId) return;
-    const id = sessionId;
-    const envelope = JSON.parse(raw);
-    if (envelope.type === 'relay.resyncRequired') {
-      void resyncHistory(
-        id,
-        typeof envelope.currentSequence === 'number' ? envelope.currentSequence : 0,
-      );
+  function handleChatMetadataEvent(event: ProjectionEvent): void {
+    const selectedId = sessionId;
+    if (!selectedId) return;
+    if (
+      event.type === 'session.updated' &&
+      typeof event.payload === 'object' &&
+      event.payload !== null
+    ) {
+      const updated = event.payload as RelaySession;
+      if (updated.id === selectedId)
+        sessions = sessions.map((item) =>
+          item.id === selectedId ? { ...item, ...updated } : item,
+        );
       return;
     }
-    if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.requested') {
-      const interaction = envelope.event.payload as {
-        requestId: string;
-        kind: string;
-        payload: unknown;
-      };
-      if (!interactions.some((item) => item.requestId === interaction.requestId))
-        interactions = [...interactions, interaction];
-    }
-    if (envelope.type === 'relay.event' && envelope.event?.type === 'turnCompleted') {
-      activeTurnId = null;
-      status = turnReadiness(activeTurnId);
-      messages = completeMessage(messages, `assistant-${id}`);
-      persistMessages(id);
-      void resyncHistory(id).catch(() => undefined);
-    }
-    if (envelope.type === 'relay.event' && envelope.event?.type === 'session.updated') {
-      const updated = envelope.event.payload;
-      if (
-        typeof updated === 'object' &&
-        updated !== null &&
-        (updated as { id?: unknown }).id === id
-      ) {
-        const session = updated as RelaySession;
-        const previousTurnId = activeTurnId;
-        activeTurnId = typeof session.activeTurnId === 'string' ? session.activeTurnId : null;
-        if (previousTurnId && !activeTurnId) status = turnReadiness(activeTurnId);
-        sessions = sessions.map((item) => (item.id === id ? { ...item, ...session } : item));
-      }
-    }
-    if (envelope.type === 'relay.event' && envelope.event?.type === 'interaction.resolved') {
-      const { requestId } = envelope.event.payload as { requestId: string };
-      interactions = interactions.filter((interaction) => interaction.requestId !== requestId);
-    }
-    if (envelope.type === 'relay.event' && envelope.event?.type === 'activity.updated') {
-      const activity = envelope.event.payload as HistoryActivity;
-      if (
-        typeof activity.id === 'string' &&
-        typeof activity.label === 'string' &&
-        typeof activity.detail === 'string'
-      )
-        activities = [...activities.filter((item) => item.id !== activity.id), activity];
-    }
-    cursor = applyRelayEvent(
-      cursor,
-      envelope,
-      (text) => {
-        messages = applyDelta(messages, `assistant-${id}`, text, Date.now());
-        persistMessages(id);
-      },
-      () => {
-        void resyncHistory(id);
-      },
-      (event) => {
-        planController.applyEvent(id, event);
-        if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
-        if (
-          event.payload.reason !== 'authoring-start' &&
-          event.payload.reason !== 'work-start' &&
-          event.payload.reason !== 'supervision-start' &&
-          event.payload.reason !== 'resync'
-        )
-          return;
-        const signal = `${id}:${event.sequence}`;
-        if (signal === lastPlanOpenSignal) return;
-        lastPlanOpenSignal = signal;
-        tab = 'plan';
-        scrollTabIntoInitialPosition('plan');
-      },
-    );
-    void sessionCache.saveCursor(id, cursor);
+    if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
+    planController.applyEvent(selectedId, event);
+    if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
+    const reason = event.payload.reason;
+    if (
+      !reason ||
+      !['authoring-start', 'work-start', 'supervision-start', 'resync'].includes(reason)
+    )
+      return;
+    const signal = `${selectedId}:${event.sequence}`;
+    if (signal === lastPlanOpenSignal) return;
+    lastPlanOpenSignal = signal;
+    tab = 'plan';
+    scrollTabIntoInitialPosition('plan');
   }
 </script>
 
@@ -1012,9 +836,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
           {#if sessionId}
-            <MessageList {messages} {activities} />
+            <MessageList
+              messages={chatView ? [...chatView.messages] : []}
+              activities={chatView ? [...chatView.activities] : []}
+            />
             <InteractionList
-              {interactions}
+              interactions={chatView ? [...chatView.interactions] : []}
               answers={userInputAnswers}
               onanswer={setUserInputAnswer}
               onquiz={(interaction) => void resolveUserInput(interaction)}
@@ -1022,10 +849,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ondecision={(id, decision) => void resolveInteraction(id, decision)}
             />
             <Composer
-              {status}
+              status={chatView?.status ?? shellStatus}
               {message}
-              {activeTurnId}
-              starting={startingTurn}
+              activeTurnId={chatView?.activeTurnId ?? null}
+              starting={chatView?.starting ?? false}
               models={sessionModels}
               onchange={updateDraft}
               onscrollbottom={scrollChatToBottom}

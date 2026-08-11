@@ -6,6 +6,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 const session = {
   id: 'scratchpad-session',
@@ -38,7 +39,7 @@ async function openRelay(page: Page): Promise<void> {
   await page.route(`**/api/sessions/${session.id}/history`, (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0 }),
+      body: JSON.stringify(chatSnapshot()),
     }),
   );
   await page.route(`**/api/sessions/${session.id}/plan`, (route) => route.fulfill({ status: 204 }));

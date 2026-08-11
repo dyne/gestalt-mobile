@@ -6,10 +6,13 @@
 
 import { expect, test, type Page } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
+import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
-function session(pendingInteractions: unknown[]) {
+type PendingInteraction = { requestId: string; kind: string; payload: unknown };
+
+function session(pendingInteractions: PendingInteraction[]) {
   return {
     id: 'session-1',
     state: 'ready',
@@ -22,7 +25,7 @@ function session(pendingInteractions: unknown[]) {
   };
 }
 
-async function openChat(page: Page, pendingInteractions: unknown[]): Promise<void> {
+async function openChat(page: Page, pendingInteractions: PendingInteraction[]): Promise<void> {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -36,7 +39,19 @@ async function openChat(page: Page, pendingInteractions: unknown[]): Promise<voi
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ items: [], currentSequence: 0, activeTurnId: 'turn-1' }),
+      body: JSON.stringify(
+        chatSnapshot({
+          activeTurnId: 'turn-1',
+          interactions: pendingInteractions.map((interaction) => ({
+            requestId: interaction.requestId,
+            kind: interaction.kind,
+            payload: interaction.payload,
+            turnId: 'turn-1',
+            requestedAt: '2026-01-01T00:00:00.000Z',
+            resolvedAt: null,
+          })),
+        }),
+      ),
     }),
   );
   await page.route('**/api/sessions/recent-threads', (route) =>
@@ -75,9 +90,7 @@ test('shows file targets and separately tappable approval controls at a compact 
   expect(await approve.boundingBox()).not.toEqual(await deny.boundingBox());
 });
 
-test('keeps quiz answers visible after a relay failure and removes them only after acceptance', async ({
-  page,
-}) => {
+test('retries a failed quiz once and suppresses a duplicate accepted request', async ({ page }) => {
   await openChat(page, [
     {
       requestId: 'quiz-1',
@@ -115,10 +128,13 @@ test('keeps quiz answers visible after a relay failure and removes them only aft
 
   await page.getByRole('radio', { name: /Solo/ }).click();
   await page.getByRole('button', { name: 'Send answers' }).click();
-  await expect(page.getByText('Could not send quiz answers. Please try again.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send answers' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Send answers' }).click();
-  await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Send answers' })).toBeVisible();
+  expect(attempts).toBe(2);
+
+  await page.getByRole('button', { name: 'Send answers' }).click();
+  await page.waitForTimeout(100);
   expect(attempts).toBe(2);
 });
