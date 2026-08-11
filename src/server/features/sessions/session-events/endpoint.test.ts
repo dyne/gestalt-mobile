@@ -428,7 +428,7 @@ describe('session event WebSocket', () => {
     await app.close();
   });
 
-  it('keeps an already-current cursor live for the next event', async () => {
+  it('ignores stale live callbacks at the current cursor and sends the next event', async () => {
     let listener:
       | ((event: {
           sessionId: string;
@@ -464,6 +464,13 @@ describe('session event WebSocket', () => {
     );
     const message = once(socket, 'message').then(([data]) => JSON.parse(String(data)));
     await once(socket, 'open');
+    listener?.({
+      sessionId: 'session-1',
+      sequence: 9,
+      type: 'stale',
+      occurredAt: 't',
+      payload: {},
+    });
     listener?.({
       sessionId: 'session-1',
       sequence: 10,

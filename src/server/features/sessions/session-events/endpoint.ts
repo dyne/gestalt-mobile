@@ -43,18 +43,19 @@ export function registerSessionEvents(
     }
     server.handleUpgrade(request, socket, head, (connection) => {
       const sessionId = match[1]!;
-      const sent = new Set<number>();
+      let lastSentSequence = after;
       const send = (event: SessionEvent) => {
         // A subscription intentionally overlaps the durable replay.  The sequence
-        // is the authoritative identity of an event, so overlap is harmless.
+        // is the authoritative identity of an event, so a bounded high-water mark
+        // de-duplicates both replay overlap and stale live callbacks.
         if (
           event.sessionId !== sessionId ||
           !Number.isSafeInteger(event.sequence) ||
           event.sequence < 1
         )
           return;
-        if (sent.has(event.sequence)) return;
-        sent.add(event.sequence);
+        if (event.sequence <= lastSentSequence) return;
+        lastSentSequence = event.sequence;
         if (isSlowClient(deps.bufferedAmount?.(connection) ?? connection.bufferedAmount))
           return connection.close(1013, 'slow client');
         connection.send(JSON.stringify({ type: 'relay.event', event }));

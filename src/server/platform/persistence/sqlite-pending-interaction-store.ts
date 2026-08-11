@@ -9,6 +9,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { PendingInteraction } from '../../features/sessions/model/relay-session.js';
 import type { SafeInteractionSnapshot } from '../../../shared/contracts/chat-snapshot.js';
 
+type SafeInteractionOutcome = Extract<SafeInteractionSnapshot, { resolvedAt: string }>['outcome'];
+
+function safeInteractionOutcome(value: unknown): SafeInteractionOutcome {
+  return value === 'approved' || value === 'denied' || value === 'answered' ? value : 'answered';
+}
+
 export class SqlitePendingInteractionStore {
   constructor(private readonly db: DatabaseSync) {}
   add(sessionId: string, interaction: PendingInteraction): void {
@@ -29,7 +35,7 @@ export class SqlitePendingInteractionStore {
     sessionId: string,
     requestId: string,
     resolvedAt: string,
-    outcome: 'approved' | 'denied' | 'answered' = 'answered',
+    outcome: SafeInteractionOutcome = 'answered',
   ): boolean {
     return (
       this.db
@@ -66,7 +72,7 @@ export class SqlitePendingInteractionStore {
   resolved(
     sessionId: string,
     requestId: string,
-  ): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null {
+  ): { resolvedAt: string; outcome: SafeInteractionOutcome } | null {
     const row = this.db
       .prepare(
         'SELECT resolved_at,outcome FROM pending_interactions WHERE session_id = ? AND request_id = ? AND resolved_at IS NOT NULL',
@@ -75,7 +81,7 @@ export class SqlitePendingInteractionStore {
     return row
       ? {
           resolvedAt: row.resolved_at,
-          outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered',
+          outcome: safeInteractionOutcome(row.outcome),
         }
       : null;
   }
@@ -102,7 +108,7 @@ export class SqlitePendingInteractionStore {
             turnId: row.turn_id,
             requestedAt: row.requested_at,
             resolvedAt: row.resolved_at,
-            outcome: (row.outcome as 'approved' | 'denied' | 'answered') ?? 'answered',
+            outcome: safeInteractionOutcome(row.outcome),
           }
         : {
             requestId: row.request_id,
