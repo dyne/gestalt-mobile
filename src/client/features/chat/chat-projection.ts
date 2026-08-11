@@ -262,6 +262,11 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
 /** Accepts authoritative history without discarding a still-pending local operation. */
 export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot): ChatProjection {
   if (!Number.isInteger(snapshot.baseSequence) || snapshot.baseSequence < 0) return current;
+  // The projection has already applied state newer than this snapshot cut. Rebuilding
+  // from the stale snapshot would roll those sequenced events back, so retain the
+  // current projection and only drain events buffered while the request was in flight.
+  if (snapshot.baseSequence < current.cursor)
+    return replayBuffered({ ...current, snapshotting: false });
   const canonicalUsers = snapshot.items.filter((item) => item.kind === 'user');
   const prompts = current.prompts.map((prompt) => {
     const correlated = canonicalUsers.some(

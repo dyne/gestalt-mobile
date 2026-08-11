@@ -8,6 +8,7 @@ import {
   acceptSnapshot,
   applyProjectionEvent,
   beginInteraction,
+  beginSnapshot,
   createChatProjection,
   deriveStatus,
   failInteraction,
@@ -89,6 +90,50 @@ describe('chat projection', () => {
         payload: { text: 'still eligible' },
       }).cursor,
     ).toBe(2);
+  });
+  it('does not let a stale snapshot cut roll back sequenced timeline state', () => {
+    const base = acceptSnapshot(createChatProjection('s'), {
+      ...snapshot(2),
+      activeTurnId: 'turn-1',
+      items: [],
+      interactions: [],
+    });
+    const final = applyProjectionEvent(base, {
+      sequence: 3,
+      type: 'agentMessageDelta',
+      payload: { text: 'recovered final', phase: 'final_answer' },
+    });
+    const interaction = applyProjectionEvent(final, {
+      sequence: 4,
+      type: 'interaction.requested',
+      payload: { requestId: 'request-1', kind: 'commandApproval', turnId: 'turn-1', payload: {} },
+    });
+    const activity = applyProjectionEvent(interaction, {
+      sequence: 5,
+      type: 'activity.updated',
+      payload: { id: 'activity-1', label: 'Tool', detail: 'Finished' },
+    });
+
+    const retained = acceptSnapshot(beginSnapshot(activity), {
+      ...snapshot(2),
+      activeTurnId: null,
+      items: [],
+      interactions: [],
+    });
+
+    expect(retained).toMatchObject({
+      cursor: 5,
+      snapshotting: false,
+      activeTurnId: 'turn-1',
+      lifecycle: 'working',
+    });
+    expect(retained.messages).toEqual([
+      expect.objectContaining({ text: 'recovered final', phase: 'final_answer', complete: true }),
+    ]);
+    expect(retained.interactions).toEqual([
+      expect.objectContaining({ requestId: 'request-1', state: 'pending' }),
+    ]);
+    expect(retained.activities).toEqual([{ id: 'activity-1', label: 'Tool', detail: 'Finished' }]);
   });
   it('does not promote duplicate identical optimistic prompts by ambiguous text', () => {
     const projection = queuePrompt(
