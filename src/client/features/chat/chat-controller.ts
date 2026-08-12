@@ -51,6 +51,7 @@ export type ChatControllerOptions = Readonly<{
   setTimeout?: (callback: () => void, delay: number) => Timer;
   clearTimeout?: (timer: Timer) => void;
   createKey?: () => string;
+  now?: () => number;
   onSessionEvent?: (event: ProjectionEvent) => void;
 }>;
 const noCache: ChatCache = { read: async () => null, write: async () => {} };
@@ -126,6 +127,7 @@ export class ChatController {
       | 'setTimeout'
       | 'clearTimeout'
       | 'createKey'
+      | 'now'
     >
   > &
     ChatControllerOptions;
@@ -140,6 +142,7 @@ export class ChatController {
       setTimeout: options.setTimeout ?? ((fn, delay) => setTimeout(fn, delay)),
       clearTimeout: options.clearTimeout ?? ((timer) => clearTimeout(timer)),
       createKey: options.createKey ?? createIdempotencyKey,
+      now: options.now ?? Date.now,
     };
     this.#options.document.addEventListener('visibilitychange', this.#foreground);
     this.#options.window.addEventListener('focus', this.#foreground);
@@ -166,7 +169,7 @@ export class ChatController {
     const command = `${id}:${generation}:${operationId}`;
     if (!id || !text.trim() || this.#projection.activeTurnId || this.#commands.has(command)) return;
     this.#commands.add(command);
-    this.#set(queuePrompt(this.#projection, operationId, text.trim()));
+    this.#set(queuePrompt(this.#projection, operationId, text.trim(), this.#options.now()));
     try {
       const turn = await this.#options.relay.startTurn(id, text.trim(), operationId);
       if (this.#current(id, generation))

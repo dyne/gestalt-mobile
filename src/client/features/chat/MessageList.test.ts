@@ -253,4 +253,59 @@ describe('MessageList', () => {
     );
     expect(screen.getByText('second').closest('.prompt-turn')?.textContent).toContain('Approved');
   });
+  it('renders interleaved groups with one upper-right absolute time per group and relative labels', () => {
+    const start = Date.UTC(2026, 6, 15, 12, 0, 0);
+    render(MessageList, {
+      messages: [
+        {
+          id: 'prompt-1',
+          role: 'user',
+          turnId: 'turn-1',
+          text: 'first',
+          occurredAt: start,
+          complete: true,
+        },
+        {
+          id: 'answer-1',
+          role: 'assistant',
+          turnId: 'turn-1',
+          phase: 'final_answer',
+          text: 'first answer',
+          occurredAt: start + 60_000,
+          complete: true,
+        },
+        {
+          id: 'prompt-2',
+          role: 'user',
+          turnId: 'turn-2',
+          text: 'second',
+          occurredAt: start + 120_000,
+          complete: true,
+        },
+        {
+          id: 'commentary-2',
+          role: 'assistant',
+          turnId: 'turn-2',
+          phase: 'commentary',
+          text: 'checking',
+          occurredAt: start + 180_000,
+          complete: false,
+        },
+      ],
+      activities: [],
+      activeTurnId: 'turn-2',
+    });
+    expect(screen.getByRole('list', { name: 'Chat messages' }).textContent).toMatch(
+      /first[\s\S]*first answer[\s\S]*second[\s\S]*checking/,
+    );
+    const times = screen.getAllByText(/:/).filter((element) => element.tagName === 'TIME');
+    expect(times).toHaveLength(4);
+    expect(times.map((time) => time.getAttribute('datetime'))).toEqual([
+      new Date(start).toISOString(),
+      new Date(start + 60_000).toISOString(),
+      new Date(start + 120_000).toISOString(),
+      new Date(start + 180_000).toISOString(),
+    ]);
+    expect(times.filter((time) => time.textContent?.includes('1 minute later'))).toHaveLength(3);
+  });
 });

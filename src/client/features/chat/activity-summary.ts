@@ -9,11 +9,17 @@ export type HistoryActivity = {
   label: string;
   detail: string;
   turnId?: string;
+  occurredAt?: number;
 };
 
 export function toActivity(item: Record<string, unknown>): HistoryActivity | null {
   if (typeof item.id !== 'string') return null;
-  const owner = typeof item.turnId === 'string' ? { turnId: item.turnId } : {};
+  const owner = {
+    ...(typeof item.turnId === 'string' ? { turnId: item.turnId } : {}),
+    ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
+      ? { occurredAt: item.occurredAt }
+      : {}),
+  };
   if (item.kind === 'reasoning' && Array.isArray(item.summary)) {
     const detail = item.summary
       .filter((part): part is string => typeof part === 'string')

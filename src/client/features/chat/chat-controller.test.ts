@@ -34,6 +34,35 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('uses its injected clock for the optimistic prompt occurrence time', async () => {
+    const env = environment();
+    const controller = new ChatController({
+      ...env,
+      now: () => 1_784_102_400_000,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: null,
+        }),
+        startTurn: vi.fn().mockResolvedValue({ activeTurnId: 'turn-1' }),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await controller.send('prompt', 'operation');
+    expect(controller.view.messages[0]).toMatchObject({
+      id: 'prompt:operation',
+      occurredAt: 1_784_102_400_000,
+    });
+    controller.dispose();
+  });
   it('takes a second snapshot when a gap arrives during the initial snapshot', async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();

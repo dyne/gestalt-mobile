@@ -47,6 +47,224 @@ describe('chat projection', () => {
     expect(next.messages.map((item) => item.id)).toEqual(['item:u1', 'item:a1', 'prompt:op']);
     expect(next.prompts[0]?.state).toBe('submitting');
   });
+  it('keeps optimistic prompts and live agent items at their turn positions during history reconciliation', () => {
+    const first = acceptSnapshot(createChatProjection('s'), {
+      ...snapshot(),
+      items: [
+        { id: 'user-1', kind: 'user', text: 'first', turnId: 'turn-1' },
+        {
+          id: 'answer-1',
+          kind: 'agent',
+          text: 'first answer',
+          phase: 'final_answer',
+          turnId: 'turn-1',
+        },
+      ],
+    });
+    const queued = promotePrompt(
+      queuePrompt(first, 'operation-2', 'second'),
+      'operation-2',
+      'turn-2',
+    );
+    const live = applyProjectionEvent(queued, {
+      sequence: 2,
+      type: 'agentMessageDelta',
+      payload: {
+        itemId: 'live-2',
+        text: 'second commentary',
+        phase: 'commentary',
+        turnId: 'turn-2',
+      },
+    });
+
+    const reconciled = acceptSnapshot(live, {
+      ...snapshot(2),
+      activeTurnId: 'turn-2',
+      items: [
+        { id: 'user-1', kind: 'user', text: 'first', turnId: 'turn-1' },
+        {
+          id: 'answer-1',
+          kind: 'agent',
+          text: 'first answer',
+          phase: 'final_answer',
+          turnId: 'turn-1',
+        },
+        {
+          id: 'user-2',
+          kind: 'user',
+          text: 'second',
+          operationId: 'operation-2',
+          turnId: 'turn-2',
+        },
+      ],
+    });
+
+    expect(reconciled.messages.map((message) => message.id)).toEqual([
+      'item:user-1',
+      'item:answer-1',
+      'prompt:operation-2',
+      'assistant:live-2',
+    ]);
+  });
+  it('replaces a live item with its canonical item once without moving adjacent turns', () => {
+    const projection = applyProjectionEvent(
+      promotePrompt(queuePrompt(createChatProjection('s'), 'op', 'second'), 'op', 'turn-2'),
+      {
+        sequence: 1,
+        type: 'agentMessageCompleted',
+        payload: {
+          itemId: 'answer-2',
+          text: 'second answer',
+          phase: 'final_answer',
+          turnId: 'turn-2',
+        },
+      },
+    );
+    const reconciled = acceptSnapshot(projection, {
+      ...snapshot(),
+      items: [
+        { id: 'user-1', kind: 'user', text: 'first', turnId: 'turn-1' },
+        {
+          id: 'answer-1',
+          kind: 'agent',
+          text: 'first answer',
+          phase: 'final_answer',
+          turnId: 'turn-1',
+        },
+        { id: 'user-2', kind: 'user', text: 'second', operationId: 'op', turnId: 'turn-2' },
+        {
+          id: 'answer-2',
+          kind: 'agent',
+          text: 'second answer',
+          phase: 'final_answer',
+          turnId: 'turn-2',
+        },
+      ],
+    });
+
+    expect(reconciled.messages.map((message) => message.id)).toEqual([
+      'item:user-1',
+      'item:answer-1',
+      'prompt:op',
+      'assistant:answer-2',
+    ]);
+    expect(reconciled.messages.filter((message) => message.text === 'second answer')).toHaveLength(
+      1,
+    );
+  });
+  it('keeps first event times until canonical history supplies its authoritative occurrence time', () => {
+    const queued = promotePrompt(
+      queuePrompt(createChatProjection('s'), 'op', 'prompt', 1_000),
+      'op',
+      'turn-1',
+    );
+    const started = applyProjectionEvent(queued, {
+      sequence: 1,
+      type: 'agentMessageStarted',
+      occurredAt: '2026-08-12T10:00:01.000Z',
+      payload: { itemId: 'answer', text: '', phase: 'commentary', turnId: 'turn-1' },
+    });
+    const completed = applyProjectionEvent(started, {
+      sequence: 2,
+      type: 'agentMessageCompleted',
+      occurredAt: '2026-08-12T10:00:09.000Z',
+      payload: { itemId: 'answer', text: 'Done.', phase: 'final_answer', turnId: 'turn-1' },
+    });
+    expect(completed.messages.map((message) => message.occurredAt)).toEqual([
+      1_000,
+      Date.parse('2026-08-12T10:00:01.000Z'),
+    ]);
+
+    const canonical = acceptSnapshot(completed, {
+      ...snapshot(2),
+      turns: [{ id: 'turn-1', items: [], startedAt: 2_000, completedAt: 3_000 }],
+      items: [
+        {
+          id: 'user',
+          kind: 'user',
+          text: 'prompt',
+          operationId: 'op',
+          turnId: 'turn-1',
+          occurredAt: 2_500,
+        },
+        {
+          id: 'answer',
+          kind: 'agent',
+          text: 'Done.',
+          phase: 'final_answer',
+          turnId: 'turn-1',
+          occurredAt: 3_500,
+        },
+      ],
+    });
+    expect(canonical.messages.map((message) => message.occurredAt)).toEqual([2_500, 3_500]);
+  });
+  it('attributes relay event times to interactions and activities without accepting invalid timestamps', () => {
+    const requested = applyProjectionEvent(createChatProjection('s'), {
+      sequence: 1,
+      type: 'interaction.requested',
+      occurredAt: '2026-08-12T10:00:01.000Z',
+      payload: { requestId: 'request', kind: 'commandApproval', turnId: 'turn', payload: {} },
+    });
+    const updated = applyProjectionEvent(requested, {
+      sequence: 2,
+      type: 'activity.updated',
+      occurredAt: 'not-a-date',
+      payload: { id: 'activity', label: 'Command', detail: 'npm test', turnId: 'turn' },
+    });
+    const timed = applyProjectionEvent(updated, {
+      sequence: 3,
+      type: 'activity.updated',
+      occurredAt: '2026-08-12T10:00:03.000Z',
+      payload: { id: 'activity-2', label: 'Tool', detail: 'check', turnId: 'turn' },
+    });
+    expect(timed.interactions[0]?.occurredAt).toBe(Date.parse('2026-08-12T10:00:01.000Z'));
+    expect(timed.activities).toEqual([
+      { id: 'activity', label: 'Command', detail: 'npm test', turnId: 'turn' },
+      {
+        id: 'activity-2',
+        label: 'Tool',
+        detail: 'check',
+        turnId: 'turn',
+        occurredAt: Date.parse('2026-08-12T10:00:03.000Z'),
+      },
+    ]);
+  });
+  it('hydrates valid cached occurrence times and rejects non-finite values', () => {
+    const valid = hydrateCache('s', {
+      cursor: 1,
+      messages: [{ id: 'u', role: 'user', text: 'prompt', occurredAt: 1_000 }],
+      prompts: [
+        {
+          operationId: 'op',
+          key: 'prompt:op',
+          text: 'prompt',
+          state: 'accepted',
+          occurredAt: 1_000,
+        },
+      ],
+      interactions: [
+        {
+          requestId: 'request',
+          key: 'interaction:request',
+          kind: 'quiz',
+          state: 'pending',
+          occurredAt: 2_000,
+        },
+      ],
+    });
+    expect(valid.messages[0]?.occurredAt).toBe(1_000);
+    expect(valid.prompts[0]?.occurredAt).toBe(1_000);
+    expect(valid.interactions[0]?.occurredAt).toBe(2_000);
+    expect(
+      hydrateCache('s', {
+        cursor: 1,
+        messages: [{ id: 'u', role: 'user', text: 'prompt', occurredAt: Number.NaN }],
+        prompts: [],
+        interactions: [],
+      }).messages,
+    ).toEqual([]);
+  });
   it('is deterministic for duplicate and overlap schedules', () => {
     const event = { sequence: 2, type: 'agentMessageDelta', payload: { text: '!' } };
     const first = applyProjectionEvent(

@@ -109,6 +109,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       group.kind === 'user' && activeTurnId && (group.turnId === activeTurnId || !group.turnId),
     );
   }
+  function timeLabel(index: number, occurredAt: number | undefined): string | null {
+    return formatElapsedAfter(groups[index - 1]?.occurredAt, occurredAt);
+  }
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
@@ -180,8 +183,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {#if group.occurredAt}
             <time datetime={new Date(group.occurredAt).toISOString()}>
               {formatMessageTime(group.occurredAt)}
-              {#if formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
-                · {formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+              {#if timeLabel(index, group.occurredAt)}
+                · {timeLabel(index, group.occurredAt)}
               {/if}
             </time>
           {/if}
@@ -215,8 +218,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {#if group.occurredAt}
               <time datetime={new Date(group.occurredAt).toISOString()}>
                 {formatMessageTime(group.occurredAt)}
-                {#if formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
-                  · {formatElapsedAfter(groups[index - 1]?.occurredAt, group.occurredAt)}
+                {#if timeLabel(index, group.occurredAt)}
+                  · {timeLabel(index, group.occurredAt)}
                 {/if}
               </time>
             {/if}
@@ -258,6 +261,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <section class={isLive(group) ? 'progress-turn' : 'commentary-turn'}>
           <div class="entry-heading">
             <strong>{isLive(group) ? 'working' : 'commentary'}</strong>
+            {#if group.occurredAt}
+              <time datetime={new Date(group.occurredAt).toISOString()}>
+                {formatMessageTime(group.occurredAt)}
+                {#if timeLabel(index, group.occurredAt)}
+                  · {timeLabel(index, group.occurredAt)}
+                {/if}
+              </time>
+            {/if}
           </div>
           {#if isLive(group)}
             {#if group.commentary}

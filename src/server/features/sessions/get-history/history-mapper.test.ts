@@ -69,6 +69,7 @@ describe('toChatItems', () => {
         kind: 'reasoning',
         summary: ['I checked the workspace.'],
         turnId: 'history-turn-0',
+        occurredAt: 1_784_102_400_000,
       },
       {
         id: 'c',
@@ -77,6 +78,7 @@ describe('toChatItems', () => {
         status: 'completed',
         exitCode: 0,
         turnId: 'history-turn-0',
+        occurredAt: 1_784_102_400_000,
       },
       {
         id: 'f',
@@ -84,6 +86,7 @@ describe('toChatItems', () => {
         paths: ['src/app.ts', 'src/app.test.ts'],
         status: 'completed',
         turnId: 'history-turn-0',
+        occurredAt: 1_784_102_400_000,
       },
       {
         id: 'm',
@@ -91,6 +94,7 @@ describe('toChatItems', () => {
         name: 'filesystem.read_file',
         status: 'completed',
         turnId: 'history-turn-0',
+        occurredAt: 1_784_102_400_000,
       },
       {
         id: 'd',
@@ -98,6 +102,7 @@ describe('toChatItems', () => {
         name: 'lookup_ticket',
         status: 'failed',
         turnId: 'history-turn-0',
+        occurredAt: 1_784_102_400_000,
       },
     ]);
   });
