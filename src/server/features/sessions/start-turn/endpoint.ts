@@ -13,7 +13,11 @@ export function registerStartTurn(
   app: FastifyInstance,
   deps: {
     find(id: string): RelaySessionSnapshot | null;
-    start(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
+    start(
+      session: RelaySessionSnapshot,
+      text: string,
+      clientUserMessageId?: string,
+    ): Promise<RelaySessionSnapshot>;
     save(session: RelaySessionSnapshot): void;
     onStarted?(session: RelaySessionSnapshot): void;
     idempotency?: {
@@ -43,7 +47,7 @@ export function registerStartTurn(
       const operation =
         inflight.get(inflightKey) ??
         (async () => {
-          const started = await deps.start(session, text);
+          const started = await deps.start(session, text, key);
           deps.save(started);
           deps.onStarted?.(started);
           const result = {

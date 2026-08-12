@@ -7,7 +7,13 @@
 type TurnOwned = { turnId?: string };
 
 export type ChatItem =
-  | ({ id: string; kind: 'user'; text: string; occurredAt?: number } & TurnOwned)
+  | ({
+      id: string;
+      kind: 'user';
+      text: string;
+      operationId?: string;
+      occurredAt?: number;
+    } & TurnOwned)
   | ({
       id: string;
       kind: 'agent';
@@ -76,7 +82,16 @@ function toChatItem(
               .join('\n')
           : '';
         return text
-          ? [{ id, kind: 'user', text, ...owner, ...(timestamp ? { occurredAt: timestamp } : {}) }]
+          ? [
+              {
+                id,
+                kind: 'user',
+                text,
+                ...owner,
+                ...(typeof item.clientId === 'string' ? { operationId: item.clientId } : {}),
+                ...(timestamp ? { occurredAt: timestamp } : {}),
+              },
+            ]
           : [];
       }
       case 'agentMessage':
@@ -124,6 +139,11 @@ function toChatItem(
           ? [{ id, kind: 'fileChange', paths, status: item.status, ...owner }]
           : [];
       }
+      case 'mcpToolCall':
+      case 'dynamicToolCall':
+        return typeof item.tool === 'string' && typeof item.status === 'string'
+          ? [{ id, kind: 'tool', name: item.tool, status: item.status, ...owner }]
+          : [];
       default:
         return [];
     }

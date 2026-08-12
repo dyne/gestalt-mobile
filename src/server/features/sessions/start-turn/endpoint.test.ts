@@ -54,10 +54,12 @@ describe('POST /api/sessions/:id/turns', () => {
     const app = fastify();
     const results = new Map<string, { statusCode: number; body: string }>();
     let starts = 0;
+    const clientMessageIds: Array<string | undefined> = [];
     registerStartTurn(app, {
       find: () => ({ id: 'session-1', state: 'ready' }) as never,
-      start: async () => {
+      start: async (_session, _text, clientUserMessageId) => {
         starts++;
+        clientMessageIds.push(clientUserMessageId);
         return { id: 'session-1', activeTurnId: 'turn-1' } as never;
       },
       save: () => {},
@@ -75,6 +77,7 @@ describe('POST /api/sessions/:id/turns', () => {
     expect((await app.inject(request)).statusCode).toBe(202);
     expect((await app.inject(request)).json()).toMatchObject({ activeTurnId: 'turn-1' });
     expect(starts).toBe(1);
+    expect(clientMessageIds).toEqual(['lost-response']);
     await app.close();
   });
 

@@ -16,7 +16,12 @@ describe('toChatItems', () => {
           startedAt: 1_784_102_400,
           completedAt: 1_784_102_520,
           items: [
-            { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
+            {
+              id: 'u',
+              type: 'userMessage',
+              clientId: 'operation-1',
+              content: [{ type: 'text', text: 'hello' }],
+            },
             { id: 'a', type: 'agentMessage', text: 'hi', phase: 'final_answer' },
             {
               id: 'r',
@@ -36,6 +41,8 @@ describe('toChatItems', () => {
               status: 'completed',
               changes: [{ path: 'src/app.ts' }, { path: 'src/app.test.ts' }],
             },
+            { id: 'm', type: 'mcpToolCall', tool: 'filesystem.read_file', status: 'completed' },
+            { id: 'd', type: 'dynamicToolCall', tool: 'lookup_ticket', status: 'failed' },
             { id: 'x', type: 'imageView', path: '/tmp/image' },
           ],
         },
@@ -45,6 +52,7 @@ describe('toChatItems', () => {
         id: 'u',
         kind: 'user',
         text: 'hello',
+        operationId: 'operation-1',
         turnId: 'history-turn-0',
         occurredAt: 1_784_102_400_000,
       },
@@ -75,6 +83,20 @@ describe('toChatItems', () => {
         kind: 'fileChange',
         paths: ['src/app.ts', 'src/app.test.ts'],
         status: 'completed',
+        turnId: 'history-turn-0',
+      },
+      {
+        id: 'm',
+        kind: 'tool',
+        name: 'filesystem.read_file',
+        status: 'completed',
+        turnId: 'history-turn-0',
+      },
+      {
+        id: 'd',
+        kind: 'tool',
+        name: 'lookup_ticket',
+        status: 'failed',
         turnId: 'history-turn-0',
       },
     ]);

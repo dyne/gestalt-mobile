@@ -386,7 +386,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
           : undefined,
         startTurn: runtime
-          ? async (session, text) => runtime.startTurn(session, text, new Date().toISOString())
+          ? async (session, text, clientUserMessageId) =>
+              runtime.startTurn(session, text, clientUserMessageId, new Date().toISOString())
           : undefined,
         onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
         models,
