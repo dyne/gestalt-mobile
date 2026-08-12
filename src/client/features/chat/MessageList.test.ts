@@ -99,6 +99,41 @@ describe('MessageList', () => {
     expect(screen.queryByText('activity')).toBeNull();
   });
 
+  it('keeps a completed activity-only turn in history with its owning prompt', () => {
+    render(MessageList, {
+      messages: [
+        {
+          id: 'prompt:turn-1',
+          role: 'user',
+          turnId: 'turn-1',
+          text: 'Change the app',
+          complete: true,
+        },
+      ],
+      activities: [
+        {
+          id: 'command',
+          label: 'Command · completed',
+          detail: 'npm test',
+          turnId: 'turn-1',
+        },
+        {
+          id: 'change',
+          label: 'File change · completed',
+          detail: 'src/app.ts',
+          turnId: 'turn-1',
+        },
+      ],
+      activeTurnId: null,
+    });
+
+    const prompt = screen.getByText('Change the app').closest('.prompt-turn');
+    expect(prompt?.querySelector('.chat-activity')).not.toBeNull();
+    expect(prompt?.textContent).toContain('npm test');
+    expect(prompt?.textContent).toContain('src/app.ts');
+    expect(screen.getAllByRole('region', { name: 'Files changed' })).toHaveLength(1);
+  });
+
   it('renders a durable resolved interaction in its owning prompt turn', () => {
     render(MessageList, {
       messages: [

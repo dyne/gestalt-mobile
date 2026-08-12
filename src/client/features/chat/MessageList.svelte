@@ -43,15 +43,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let promptGroups = $derived(groups.filter((group) => group.kind === 'user'));
   let assistantGroups = $derived(groups.filter((group) => group.kind === 'assistant'));
   let latestAssistantId = $derived(assistantGroups.at(-1)?.id);
-  let hasActiveAssistant = $derived(
-    Boolean(
-      activeTurnId &&
-      assistantGroups.some(
-        (group) =>
-          group.turnId === activeTurnId || (!group.turnId && group.id === latestAssistantId),
-      ),
-    ),
-  );
   let unassignedInteractions = $derived(
     interactions.filter(
       (interaction) =>
@@ -75,11 +66,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       activity.turnId ? activity.turnId === group.turnId : group.id === latestAssistantId,
     );
   }
-  function currentActivities(): HistoryActivity[] {
-    return activities.filter((activity) =>
-      activity.turnId ? activity.turnId === activeTurnId : true,
+  function assistantOwnsActivity(activity: HistoryActivity): boolean {
+    return activity.turnId
+      ? assistantGroups.some((group) => group.turnId === activity.turnId)
+      : Boolean(latestAssistantId);
+  }
+  function activityPromptOwnerId(activity: HistoryActivity): string | null {
+    if (!activity.turnId || assistantOwnsActivity(activity)) return null;
+    return promptGroups.findLast((group) => group.turnId === activity.turnId)?.id ?? null;
+  }
+  function promptActivities(group: (typeof groups)[number]): HistoryActivity[] {
+    if (group.kind !== 'user') return [];
+    return activities.filter((activity) => activityPromptOwnerId(activity) === group.id);
+  }
+  function detachedActivities(): HistoryActivity[] {
+    return activities.filter(
+      (activity) => !assistantOwnsActivity(activity) && !activityPromptOwnerId(activity),
     );
   }
+  let detached = $derived(detachedActivities());
   function regularActivities(items: HistoryActivity[]): HistoryActivity[] {
     return items.filter(
       (activity) => !activity.label.toLowerCase().replaceAll(' ', '').startsWith('filechange'),
@@ -97,6 +102,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       group.kind === 'assistant' &&
       activeTurnId &&
       (group.turnId === activeTurnId || (!group.turnId && group.id === latestAssistantId)),
+    );
+  }
+  function isPromptLive(group: (typeof groups)[number]): boolean {
+    return Boolean(
+      group.kind === 'user' && activeTurnId && (group.turnId === activeTurnId || !group.turnId),
     );
   }
 </script>
@@ -164,6 +174,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {#each groups as group, index (group.id)}
     <li class={group.kind === 'user' ? 'prompt-turn' : 'answer-item'}>
       {#if group.kind === 'user'}
+        {@const ownedActivities = promptActivities(group)}
         <div class="entry-heading">
           <strong>prompt</strong>
           {#if group.occurredAt}
@@ -185,6 +196,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {ondecision}
           {onretry}
         />
+        {#if ownedActivities.length}
+          <section class={isPromptLive(group) ? 'progress-turn' : 'orphan-activity-turn'}>
+            {#if isPromptLive(group)}
+              <div class="entry-heading"><strong>working</strong></div>
+              <ActivityList activities={regularActivities(ownedActivities)} variant="live" />
+            {:else}
+              <ActivityList activities={regularActivities(ownedActivities)} />
+            {/if}
+            {@render changedFiles(ownedActivities)}
+          </section>
+        {/if}
       {:else if group.answer !== null}
         {@const ownedActivities = turnActivities(group)}
         <section class="answer-turn">
@@ -267,12 +289,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       />
     </li>
   {/if}
-  {#if activeTurnId && !hasActiveAssistant && currentActivities().length}
+  {#if detached.length}
     <li class="progress-item">
-      <section class="progress-turn">
-        <div class="entry-heading"><strong>working</strong></div>
-        <ActivityList activities={regularActivities(currentActivities())} variant="live" />
-        {@render changedFiles(currentActivities())}
+      <section class={activeTurnId ? 'progress-turn' : 'orphan-activity-turn'}>
+        {#if activeTurnId}
+          <div class="entry-heading"><strong>working</strong></div>
+          <ActivityList activities={regularActivities(detached)} variant="live" />
+        {:else}
+          <ActivityList activities={regularActivities(detached)} />
+        {/if}
+        {@render changedFiles(detached)}
       </section>
     </li>
   {/if}
@@ -311,6 +337,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .commentary-turn,
+  .orphan-activity-turn,
   .progress-turn,
   .commentary-content {
     padding: 0.5rem 0.625rem;

@@ -70,6 +70,59 @@ describe('normalizeCodexNotification', () => {
     });
   });
 
+  it('prefers the notification turn over stale session and item ownership', () => {
+    expect(
+      normalizeCodexNotification(
+        's',
+        4,
+        '2026-01-01T00:00:00.000Z',
+        {
+          method: 'item/completed',
+          params: {
+            turnId: 'notification-turn',
+            item: {
+              id: 'message-2',
+              type: 'agentMessage',
+              text: 'Done.',
+              phase: 'final_answer',
+              turnId: 'item-turn',
+            },
+          },
+        },
+        '/workspace',
+        'session-turn',
+      ),
+    ).toMatchObject({
+      type: 'agentMessageCompleted',
+      payload: { turnId: 'notification-turn' },
+    });
+
+    expect(
+      normalizeCodexNotification(
+        's',
+        5,
+        '2026-01-01T00:00:00.000Z',
+        {
+          method: 'item/started',
+          params: {
+            turnId: 'notification-turn',
+            item: {
+              id: 'command-2',
+              type: 'commandExecution',
+              command: 'npm test',
+              turnId: 'item-turn',
+            },
+          },
+        },
+        '/workspace',
+        'session-turn',
+      ),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: { turnId: 'notification-turn' },
+    });
+  });
+
   it('maps a command lifecycle item without its raw output', () => {
     expect(
       normalizeCodexNotification('s', 2, '2026-01-01T00:00:00.000Z', {

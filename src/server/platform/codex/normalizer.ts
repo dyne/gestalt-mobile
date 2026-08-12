@@ -40,7 +40,7 @@ export function normalizeCodexNotification(
       payload: decoded.params,
     };
   if (decoded.method === 'item/started' || decoded.method === 'item/completed') {
-    const message = safeAgentMessage(decoded.params.item, activeTurnId);
+    const message = safeAgentMessage(decoded.params.item, activeTurnId, decoded.params.turnId);
     if (message)
       return {
         sessionId,
@@ -49,7 +49,12 @@ export function normalizeCodexNotification(
         type: decoded.method === 'item/started' ? 'agentMessageStarted' : 'agentMessageCompleted',
         payload: message,
       };
-    const activity = safeActivity(decoded.params.item, workspacePath, activeTurnId);
+    const activity = safeActivity(
+      decoded.params.item,
+      workspacePath,
+      activeTurnId,
+      decoded.params.turnId,
+    );
     if (activity)
       return { sessionId, sequence, occurredAt, type: 'activity.updated', payload: activity };
   }
@@ -65,7 +70,10 @@ type DecodedNotification =
       method: 'turn/completed';
       params: { threadId?: string; turn: { id: string; status?: string } };
     }
-  | { method: 'item/started' | 'item/completed'; params: { item: unknown } };
+  | {
+      method: 'item/started' | 'item/completed';
+      params: { item: unknown; turnId?: string };
+    };
 
 /** Strictly decode only consumed notification shapes; unknown/future methods stay isolated. */
 export function decodeNotification(input: {
@@ -107,7 +115,13 @@ export function decodeNotification(input: {
   if (input.method === 'item/started' || input.method === 'item/completed') {
     const params = record(input.params);
     return params && 'item' in params
-      ? { method: input.method, params: { item: params.item } }
+      ? {
+          method: input.method,
+          params: {
+            item: params.item,
+            ...(safeId(params.turnId) ? { turnId: params.turnId } : {}),
+          },
+        }
       : null;
   }
   return null;
@@ -117,15 +131,18 @@ function safeActivity(
   item: unknown,
   workspacePath?: string,
   activeTurnId?: string | null,
+  notificationTurnId?: string,
 ): { id: string; label: string; detail: string; turnId?: string } | null {
   if (!item || typeof item !== 'object') return null;
   const value = item as Record<string, unknown>;
   if (typeof value.id !== 'string' || typeof value.type !== 'string') return null;
-  const owner = safeId(value.turnId)
-    ? { turnId: value.turnId as string }
-    : activeTurnId
-      ? { turnId: activeTurnId }
-      : {};
+  const owner = notificationTurnId
+    ? { turnId: notificationTurnId }
+    : safeId(value.turnId)
+      ? { turnId: value.turnId as string }
+      : activeTurnId
+        ? { turnId: activeTurnId }
+        : {};
   const status = typeof value.status === 'string' ? ` · ${value.status}` : '';
   if (value.type === 'commandExecution' && typeof value.command === 'string')
     return { id: value.id, label: `Command${status}`, detail: value.command, ...owner };
@@ -162,6 +179,7 @@ function safeActivity(
 function safeAgentMessage(
   item: unknown,
   activeTurnId?: string | null,
+  notificationTurnId?: string,
 ): {
   itemId: string;
   text: string;
@@ -176,11 +194,13 @@ function safeAgentMessage(
     itemId: value.id as string,
     text: typeof value.text === 'string' ? value.text : '',
     ...(phase ? { phase } : {}),
-    ...(safeId(value.turnId)
-      ? { turnId: value.turnId as string }
-      : activeTurnId
-        ? { turnId: activeTurnId }
-        : {}),
+    ...(notificationTurnId
+      ? { turnId: notificationTurnId }
+      : safeId(value.turnId)
+        ? { turnId: value.turnId as string }
+        : activeTurnId
+          ? { turnId: activeTurnId }
+          : {}),
   };
 }
 
