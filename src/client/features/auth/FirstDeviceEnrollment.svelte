@@ -74,7 +74,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           if (mounted) feedback = 'Setup QR unavailable. Use the setup link below.';
         });
     const desktop = window.matchMedia?.('(min-width: 768px)').matches ?? false;
-    if (desktop) pollTimer = setInterval(() => void pollStatus(), 15_000);
+    if (!enrollmentTicket && desktop) pollTimer = setInterval(() => void pollStatus(), 15_000);
   });
 
   onDestroy(() => {

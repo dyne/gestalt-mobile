@@ -31,6 +31,7 @@ function props(
     canonicalOrigin: string;
     onAuthenticated: ReturnType<typeof vi.fn>;
     onLocked: ReturnType<typeof vi.fn>;
+    enrollmentTicket: string;
   }> = {},
 ) {
   const client: TestClient = {
@@ -186,6 +187,28 @@ describe('FirstDeviceEnrollment', () => {
     mount(values);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(values.client.status).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel ticket enrollment when an existing relay is locked on desktop', async () => {
+    vi.useFakeTimers();
+    window.matchMedia = vi.fn(() => ({ matches: true })) as never;
+    const values = props({
+      enrollmentTicket: 'ticket',
+      client: {
+        ...props().client,
+        status: vi.fn(async () => ({ status: 'locked', publicOrigin: 'https://relay.example' })),
+      },
+    });
+    mount(values);
+    await fireEvent.input(screen.getByLabelText('Device nickname'), { target: { value: 'Omni' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Authorize this device' }));
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.waitFor(() =>
+      expect(values.client.verifyRegistration).toHaveBeenCalledWith({ id: 'credential' }, 'Omni'),
+    );
+    expect(values.client.status).not.toHaveBeenCalled();
+    expect(values.onLocked).not.toHaveBeenCalled();
+    expect(values.onAuthenticated).toHaveBeenCalledOnce();
   });
 
   it('does not continue an in-flight registration after another device wins polling', async () => {
