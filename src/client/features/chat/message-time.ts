@@ -8,7 +8,13 @@ export function formatElapsedAfter(
   previous: number | undefined,
   current: number | undefined,
 ): string | null {
-  if (previous === undefined || current === undefined) return null;
+  if (
+    previous === undefined ||
+    current === undefined ||
+    !Number.isFinite(previous) ||
+    !Number.isFinite(current)
+  )
+    return null;
   const minutes = Math.floor(Math.max(0, current - previous) / 60_000);
   if (minutes < 1) return 'moments later';
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} later`;

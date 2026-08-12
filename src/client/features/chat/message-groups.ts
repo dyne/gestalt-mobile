@@ -29,7 +29,9 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       commentary: commentary.map((message) => message.text).join('\n\n'),
       answer: null,
       ...(commentary.at(-1)?.turnId ? { turnId: commentary.at(-1)!.turnId } : {}),
-      ...(commentary.at(-1)?.occurredAt ? { occurredAt: commentary.at(-1)!.occurredAt } : {}),
+      ...(commentary.at(-1)?.occurredAt !== undefined
+        ? { occurredAt: commentary.at(-1)!.occurredAt }
+        : {}),
     });
     commentary = [];
   };
@@ -42,7 +44,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         kind: 'user',
         text: message.text,
         ...(message.turnId ? { turnId: message.turnId } : {}),
-        ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
+        ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
       });
       continue;
     }
@@ -56,7 +58,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       commentary: commentary.length ? commentary.map((item) => item.text).join('\n\n') : null,
       answer: message.text,
       ...(message.turnId ? { turnId: message.turnId } : {}),
-      ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
+      ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
     });
     commentary = [];
   }

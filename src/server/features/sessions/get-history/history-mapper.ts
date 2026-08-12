@@ -112,10 +112,28 @@ function toChatItem(
       case 'reasoning':
         if (!Array.isArray(item.summary)) return [];
         const summary = reasoningSummary(item.summary);
-        return summary.length ? [{ id, kind: 'reasoning', summary, ...owner }] : [];
+        return summary.length
+          ? [
+              {
+                id,
+                kind: 'reasoning',
+                summary,
+                ...owner,
+                ...(timestamp ? { occurredAt: timestamp } : {}),
+              },
+            ]
+          : [];
       case 'plan':
         return typeof item.text === 'string'
-          ? [{ id, kind: 'plan', text: item.text, ...owner }]
+          ? [
+              {
+                id,
+                kind: 'plan',
+                text: item.text,
+                ...owner,
+                ...(timestamp ? { occurredAt: timestamp } : {}),
+              },
+            ]
           : [];
       case 'commandExecution':
         return typeof item.command === 'string' && typeof item.status === 'string'
@@ -126,6 +144,7 @@ function toChatItem(
                 command: item.command,
                 status: item.status,
                 ...owner,
+                ...(timestamp ? { occurredAt: timestamp } : {}),
                 ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
               },
             ]
@@ -136,13 +155,31 @@ function toChatItem(
           isRecord(change) && typeof change.path === 'string' ? [change.path] : [],
         );
         return paths.length
-          ? [{ id, kind: 'fileChange', paths, status: item.status, ...owner }]
+          ? [
+              {
+                id,
+                kind: 'fileChange',
+                paths,
+                status: item.status,
+                ...owner,
+                ...(timestamp ? { occurredAt: timestamp } : {}),
+              },
+            ]
           : [];
       }
       case 'mcpToolCall':
       case 'dynamicToolCall':
         return typeof item.tool === 'string' && typeof item.status === 'string'
-          ? [{ id, kind: 'tool', name: item.tool, status: item.status, ...owner }]
+          ? [
+              {
+                id,
+                kind: 'tool',
+                name: item.tool,
+                status: item.status,
+                ...owner,
+                ...(timestamp ? { occurredAt: timestamp } : {}),
+              },
+            ]
           : [];
       default:
         return [];

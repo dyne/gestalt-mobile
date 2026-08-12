@@ -23,6 +23,7 @@ export type ProjectedPrompt = Readonly<{
   text: string;
   state: PromptState;
   turnId?: string | null;
+  occurredAt?: number;
 }>;
 export type ProjectedInteraction = Readonly<{
   requestId: string;
@@ -33,6 +34,7 @@ export type ProjectedInteraction = Readonly<{
   state: InteractionState;
   operationId?: string;
   attemptedOutcome?: unknown;
+  occurredAt?: number;
 }>;
 export type ChatProjection = Readonly<{
   sessionId: string | null;
@@ -77,10 +79,17 @@ function messageFromItem(item: ChatItem): ChatMessage | null {
     role: item.kind === 'user' ? 'user' : 'assistant',
     text: item.text,
     ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}),
-    ...(typeof item.occurredAt === 'number' ? { occurredAt: item.occurredAt } : {}),
+    ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
+      ? { occurredAt: item.occurredAt }
+      : {}),
     ...(typeof item.turnId === 'string' ? { turnId: item.turnId } : {}),
     complete: true,
   };
+}
+function parseOccurredAt(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
   return {
@@ -91,6 +100,9 @@ function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
     payload: 'payload' in snapshot ? snapshot.payload : null,
     state: snapshot.resolvedAt ? 'resolved' : 'pending',
     ...(snapshot.resolvedAt ? { attemptedOutcome: snapshot.outcome } : {}),
+    ...(parseOccurredAt(snapshot.requestedAt) !== undefined
+      ? { occurredAt: parseOccurredAt(snapshot.requestedAt) }
+      : {}),
   };
 }
 function safeOutcome(
@@ -127,7 +139,16 @@ function upsertActivity(
   activity: HistoryActivity,
 ): HistoryActivity[] {
   return activities.some((item) => item.id === activity.id)
-    ? activities.map((item) => (item.id === activity.id ? activity : item))
+    ? activities.map((item) =>
+        item.id === activity.id
+          ? {
+              ...activity,
+              ...(activity.occurredAt === undefined && item.occurredAt !== undefined
+                ? { occurredAt: item.occurredAt }
+                : {}),
+            }
+          : item,
+      )
     : [...activities, activity];
 }
 function mergeMessages(
@@ -136,9 +157,11 @@ function mergeMessages(
   previous: readonly ChatMessage[],
 ): ChatMessage[] {
   const old = new Map(previous.map((message) => [message.id, message]));
+  const previousIndex = new Map(previous.map((message, index) => [message.id, index]));
   const unmatched = new Set(
     prompts.filter((prompt) => prompt.state !== 'canonical').map((prompt) => prompt.operationId),
   );
+  const retained = new Set<string>();
   const canonical = items.flatMap((item) => {
     const message = messageFromItem(item);
     if (!message) return [];
@@ -158,30 +181,57 @@ function mergeMessages(
       if (prompt) {
         unmatched.delete(prompt.operationId);
         const existing = old.get(prompt.key);
+        const reconciled = {
+          ...message,
+          id: prompt.key,
+          turnId: prompt.turnId ?? message.turnId,
+          ...(message.occurredAt === undefined && existing?.occurredAt !== undefined
+            ? { occurredAt: existing.occurredAt }
+            : {}),
+        };
+        retained.add(reconciled.id);
         return [
-          existing && existing.text === message.text
+          existing &&
+          existing.text === reconciled.text &&
+          existing.turnId === reconciled.turnId &&
+          existing.complete === reconciled.complete &&
+          existing.occurredAt === reconciled.occurredAt
             ? existing
-            : { ...message, id: prompt.key, turnId: prompt.turnId ?? message.turnId },
+            : reconciled,
         ];
       }
     }
     if (item.kind === 'agent' && typeof item.turnId === 'string') {
       const live =
         old.get(`assistant:${item.id}`) ??
-        previous.find(
-          (candidate) =>
+        previous.find((candidate) =>
+          Boolean(
             candidate.role === 'assistant' &&
             candidate.turnId === item.turnId &&
             candidate.text === message.text &&
             (candidate.phase === message.phase || !candidate.complete),
+          ),
         );
-      if (live)
+      if (live) {
+        retained.add(live.id);
+        const reconciled = {
+          ...message,
+          id: live.id,
+          turnId: message.turnId ?? live.turnId,
+          ...(message.occurredAt === undefined && live.occurredAt !== undefined
+            ? { occurredAt: live.occurredAt }
+            : {}),
+        };
         return [
-          live.text === message.text && live.phase === message.phase
+          live.text === reconciled.text &&
+          live.phase === reconciled.phase &&
+          live.occurredAt === reconciled.occurredAt
             ? live
-            : { ...message, id: live.id, turnId: message.turnId ?? live.turnId },
+            : reconciled,
         ];
+      }
     }
+    retained.add(message.id);
     return [message];
   });
   const optimistic = prompts
@@ -198,11 +248,54 @@ function mergeMessages(
     );
   const live = previous.filter(
     (message) =>
-      !message.complete &&
       message.role === 'assistant' &&
-      !canonical.some((item) => item.id === message.id),
+      message.id.startsWith('assistant:') &&
+      !retained.has(message.id),
   );
-  return unique([...canonical, ...optimistic, ...live]);
+  const extras = unique([...optimistic, ...live]);
+  const canonicalIndex = new Map(canonical.map((message, index) => [message.id, index]));
+  const slots = new Map<number, ChatMessage[]>();
+
+  for (const message of extras) {
+    let after: number | null = null;
+    if (message.turnId) {
+      for (let index = canonical.length - 1; index >= 0; index -= 1) {
+        if (canonical[index]?.turnId === message.turnId) {
+          after = index;
+          break;
+        }
+      }
+    }
+    if (after === null) {
+      const index = previousIndex.get(message.id);
+      if (index !== undefined) {
+        for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+          const anchor = canonicalIndex.get(previous[cursor]!.id);
+          if (anchor !== undefined) {
+            after = anchor;
+            break;
+          }
+        }
+        if (after === null) {
+          for (let cursor = index + 1; cursor < previous.length; cursor += 1) {
+            const anchor = canonicalIndex.get(previous[cursor]!.id);
+            if (anchor !== undefined) {
+              after = anchor - 1;
+              break;
+            }
+          }
+        }
+      }
+    }
+    const slot = after ?? canonical.length - 1;
+    slots.set(slot, [...(slots.get(slot) ?? []), message]);
+  }
+
+  return unique(
+    canonical
+      .flatMap((message, index) => [message, ...(slots.get(index) ?? [])])
+      .concat(slots.get(-1) ?? []),
+  );
 }
 
 /** Cache input is deliberately treated as untrusted: it is only a local rendering hint. */
@@ -245,7 +338,9 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           message &&
           typeof message.id === 'string' &&
           (message.role === 'user' || message.role === 'assistant') &&
-          typeof message.text === 'string',
+          typeof message.text === 'string' &&
+          (message.occurredAt === undefined ||
+            (typeof message.occurredAt === 'number' && Number.isFinite(message.occurredAt))),
         ),
       )
       .slice(-200),
@@ -269,7 +364,9 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           typeof prompt.operationId === 'string' &&
           typeof prompt.key === 'string' &&
           typeof prompt.text === 'string' &&
-          promptStates.includes(prompt.state),
+          promptStates.includes(prompt.state) &&
+          (prompt.occurredAt === undefined ||
+            (typeof prompt.occurredAt === 'number' && Number.isFinite(prompt.occurredAt))),
         ),
       )
       .slice(-200),
@@ -281,7 +378,9 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           typeof item.key === 'string' &&
           typeof item.kind === 'string' &&
           (item.turnId === undefined || item.turnId === null || typeof item.turnId === 'string') &&
-          interactionStates.includes(item.state),
+          interactionStates.includes(item.state) &&
+          (item.occurredAt === undefined ||
+            (typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt))),
         ),
       )
       .slice(-200),
@@ -317,7 +416,13 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
   const interactions = unique(
     canonicalInteractions.map((next) => {
       const prior = priorById.get(next.requestId);
-      return prior?.state === 'resolved' ? prior : next;
+      if (prior?.state === 'resolved') return prior;
+      return {
+        ...next,
+        ...(next.occurredAt === undefined && prior?.occurredAt !== undefined
+          ? { occurredAt: prior.occurredAt }
+          : {}),
+      };
     }),
   );
   const activities = unique(
@@ -330,7 +435,20 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
     label: item.label,
     detail: item.detail,
     ...(item.turnId ? { turnId: item.turnId } : {}),
+    ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
   }));
+  const turnTimes = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
+  const items = snapshot.items.map((item) => {
+    if (typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)) return item;
+    const turn = typeof item.turnId === 'string' ? turnTimes.get(item.turnId) : undefined;
+    const occurredAt =
+      item.kind === 'agent'
+        ? (turn?.completedAt ?? turn?.startedAt)
+        : (turn?.startedAt ?? turn?.completedAt);
+    return typeof occurredAt === 'number' && Number.isFinite(occurredAt)
+      ? { ...item, occurredAt }
+      : item;
+  });
   const projected: ChatProjection = {
     ...current,
     cursor: Math.max(current.cursor, snapshot.baseSequence),
@@ -341,7 +459,7 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       current.cursor === 0 && current.lifecycle === 'finished' ? 'working' : current.lifecycle,
     ),
     prompts,
-    messages: mergeMessages(snapshot.items, prompts, current.messages),
+    messages: mergeMessages(items, prompts, current.messages),
     activities,
     interactions,
     buffered: new Map(
@@ -358,6 +476,7 @@ export function queuePrompt(
   current: ChatProjection,
   operationId: string,
   text: string,
+  occurredAt?: number,
 ): ChatProjection {
   if (!text.trim() || current.prompts.some((prompt) => prompt.operationId === operationId))
     return current;
@@ -367,12 +486,22 @@ export function queuePrompt(
     text,
     state: 'submitting',
     turnId: null,
+    ...(typeof occurredAt === 'number' && Number.isFinite(occurredAt) ? { occurredAt } : {}),
   };
   return {
     ...current,
     lifecycle: 'starting',
     prompts: [...current.prompts, prompt],
-    messages: [...current.messages, { id: prompt.key, role: 'user', text, complete: false }],
+    messages: [
+      ...current.messages,
+      {
+        id: prompt.key,
+        role: 'user',
+        text,
+        ...(prompt.occurredAt !== undefined ? { occurredAt: prompt.occurredAt } : {}),
+        complete: false,
+      },
+    ],
   };
 }
 export function promotePrompt(
@@ -467,6 +596,7 @@ export function applyProjectionEvent(
   }
   let next = { ...current, cursor: event.sequence };
   const payload = event.payload as Record<string, unknown>;
+  const occurredAt = parseOccurredAt(event.occurredAt);
   if (event.type === 'agentMessageDelta' && typeof payload?.text === 'string') {
     const owner =
       typeof payload.turnId === 'string' ? payload.turnId : (next.activeTurnId ?? undefined);
@@ -486,6 +616,9 @@ export function applyProjectionEvent(
                     ? { phase: payload.phase }
                     : {}),
                   complete: payload.phase === 'final_answer' ? true : message.complete,
+                  ...(message.occurredAt === undefined && occurredAt !== undefined
+                    ? { occurredAt }
+                    : {}),
                 }
               : message,
           )
@@ -499,6 +632,7 @@ export function applyProjectionEvent(
                 : {}),
               text: payload.text,
               ...(owner ? { turnId: owner } : {}),
+              ...(occurredAt !== undefined ? { occurredAt } : {}),
               complete: payload.phase === 'final_answer',
             },
           ],
@@ -529,6 +663,11 @@ export function applyProjectionEvent(
           : next.activeTurnId
             ? { turnId: next.activeTurnId }
             : {}),
+      ...(existing?.occurredAt !== undefined
+        ? { occurredAt: existing.occurredAt }
+        : occurredAt !== undefined
+          ? { occurredAt }
+          : {}),
     };
     next = {
       ...next,
@@ -566,6 +705,7 @@ export function applyProjectionEvent(
             turnId: typeof payload.turnId === 'string' ? payload.turnId : next.activeTurnId,
             payload: payload.payload,
             state: 'pending',
+            ...(occurredAt !== undefined ? { occurredAt } : {}),
           },
         ],
       };
@@ -583,6 +723,7 @@ export function applyProjectionEvent(
         id: payload.id,
         label: payload.label,
         detail: payload.detail,
+        ...(occurredAt !== undefined ? { occurredAt } : {}),
         ...(typeof payload.turnId === 'string'
           ? { turnId: payload.turnId }
           : next.activeTurnId
