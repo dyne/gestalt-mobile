@@ -13,6 +13,7 @@ export type MessageGroup =
       kind: 'assistant';
       commentary: string | null;
       answer: string | null;
+      turnId?: string;
       occurredAt?: number;
     };
 
@@ -27,6 +28,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       kind: 'assistant',
       commentary: commentary.map((message) => message.text).join('\n\n'),
       answer: null,
+      ...(commentary.at(-1)?.turnId ? { turnId: commentary.at(-1)!.turnId } : {}),
       ...(commentary.at(-1)?.occurredAt ? { occurredAt: commentary.at(-1)!.occurredAt } : {}),
     });
     commentary = [];
@@ -53,6 +55,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       kind: 'assistant',
       commentary: commentary.length ? commentary.map((item) => item.text).join('\n\n') : null,
       answer: message.text,
+      ...(message.turnId ? { turnId: message.turnId } : {}),
       ...(message.occurredAt ? { occurredAt: message.occurredAt } : {}),
     });
     commentary = [];

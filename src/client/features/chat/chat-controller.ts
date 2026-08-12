@@ -325,7 +325,8 @@ export class ChatController {
         event.type === 'plan.closed'
       );
     const value = payload as Record<string, unknown>;
-    if (event.type === 'agentMessageDelta' || event.type === 'agentMessageCompleted')
+    if (event.type === 'agentMessageDelta') return typeof value.text === 'string';
+    if (event.type === 'agentMessageStarted' || event.type === 'agentMessageCompleted')
       return typeof value.text === 'string';
     if (event.type === 'interaction.requested')
       return typeof value.requestId === 'string' && typeof value.kind === 'string';

@@ -122,6 +122,14 @@ function lifecycle(activeTurnId: string | null, previous: TurnLifecycle): TurnLi
 function unique<T extends { key?: string; id?: string }>(items: readonly T[]): T[] {
   return [...new Map(items.map((item) => [item.key ?? item.id ?? '', item])).values()];
 }
+function upsertActivity(
+  activities: readonly HistoryActivity[],
+  activity: HistoryActivity,
+): HistoryActivity[] {
+  return activities.some((item) => item.id === activity.id)
+    ? activities.map((item) => (item.id === activity.id ? activity : item))
+    : [...activities, activity];
+}
 function mergeMessages(
   items: readonly ChatItem[],
   prompts: readonly ProjectedPrompt[],
@@ -158,7 +166,15 @@ function mergeMessages(
       }
     }
     if (item.kind === 'agent' && typeof item.turnId === 'string') {
-      const live = old.get(`assistant:${item.turnId}`);
+      const live =
+        old.get(`assistant:${item.id}`) ??
+        previous.find(
+          (candidate) =>
+            candidate.role === 'assistant' &&
+            candidate.turnId === item.turnId &&
+            candidate.text === message.text &&
+            (candidate.phase === message.phase || !candidate.complete),
+        );
       if (live)
         return [
           live.text === message.text && live.phase === message.phase
@@ -233,6 +249,19 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
         ),
       )
       .slice(-200),
+    activities: Array.isArray(candidate.activities)
+      ? candidate.activities
+          .filter((activity): activity is HistoryActivity =>
+            Boolean(
+              activity &&
+              typeof activity.id === 'string' &&
+              typeof activity.label === 'string' &&
+              typeof activity.detail === 'string' &&
+              (activity.turnId === undefined || typeof activity.turnId === 'string'),
+            ),
+          )
+          .slice(-200)
+      : [],
     prompts: candidate.prompts
       .filter((prompt): prompt is ProjectedPrompt =>
         Boolean(
@@ -296,7 +325,12 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       const activity = toActivity(item);
       return activity ? [{ ...activity, key: `activity:${activity.id}` }] : [];
     }) as Array<HistoryActivity & { key: string }>,
-  ).map((item) => ({ id: item.id, label: item.label, detail: item.detail }));
+  ).map((item) => ({
+    id: item.id,
+    label: item.label,
+    detail: item.detail,
+    ...(item.turnId ? { turnId: item.turnId } : {}),
+  }));
   const projected: ChatProjection = {
     ...current,
     cursor: Math.max(current.cursor, snapshot.baseSequence),
@@ -433,13 +467,12 @@ export function applyProjectionEvent(
   }
   let next = { ...current, cursor: event.sequence };
   const payload = event.payload as Record<string, unknown>;
-  if (
-    (event.type === 'agentMessageDelta' || event.type === 'agentMessageCompleted') &&
-    typeof payload?.text === 'string'
-  ) {
-    const id = `assistant:${next.activeTurnId ?? 'live'}`;
+  if (event.type === 'agentMessageDelta' && typeof payload?.text === 'string') {
+    const owner =
+      typeof payload.turnId === 'string' ? payload.turnId : (next.activeTurnId ?? undefined);
+    const itemId = typeof payload.itemId === 'string' ? payload.itemId : (owner ?? 'live');
+    const id = `assistant:${itemId}`;
     const existing = next.messages.find((message) => message.id === id);
-    const final = payload.phase === 'final_answer' || event.type === 'agentMessageCompleted';
     next = {
       ...next,
       lifecycle: next.activeTurnId ? 'working' : next.lifecycle,
@@ -449,8 +482,10 @@ export function applyProjectionEvent(
               ? {
                   ...message,
                   text: message.text + payload.text,
-                  phase: final ? 'final_answer' : message.phase,
-                  complete: final,
+                  ...(payload.phase === 'commentary' || payload.phase === 'final_answer'
+                    ? { phase: payload.phase }
+                    : {}),
+                  complete: payload.phase === 'final_answer' ? true : message.complete,
                 }
               : message,
           )
@@ -459,11 +494,48 @@ export function applyProjectionEvent(
             {
               id,
               role: 'assistant',
-              phase: final ? 'final_answer' : 'commentary',
+              ...(payload.phase === 'commentary' || payload.phase === 'final_answer'
+                ? { phase: payload.phase }
+                : {}),
               text: payload.text,
-              complete: final,
+              ...(owner ? { turnId: owner } : {}),
+              complete: payload.phase === 'final_answer',
             },
           ],
+    };
+  } else if (
+    (event.type === 'agentMessageStarted' || event.type === 'agentMessageCompleted') &&
+    typeof payload.text === 'string'
+  ) {
+    const itemId =
+      typeof payload.itemId === 'string' ? payload.itemId : (next.activeTurnId ?? 'live');
+    const id = `assistant:${itemId}`;
+    const existing = next.messages.find((message) => message.id === id);
+    const complete = event.type === 'agentMessageCompleted';
+    const message: ChatMessage = {
+      id,
+      role: 'assistant',
+      text: complete && payload.text ? payload.text : (existing?.text ?? payload.text),
+      complete,
+      ...(payload.phase === 'commentary' || payload.phase === 'final_answer'
+        ? { phase: payload.phase }
+        : existing?.phase
+          ? { phase: existing.phase }
+          : {}),
+      ...(typeof payload.turnId === 'string'
+        ? { turnId: payload.turnId }
+        : existing?.turnId
+          ? { turnId: existing.turnId }
+          : next.activeTurnId
+            ? { turnId: next.activeTurnId }
+            : {}),
+    };
+    next = {
+      ...next,
+      lifecycle: next.activeTurnId ? 'working' : next.lifecycle,
+      messages: existing
+        ? next.messages.map((item) => (item.id === id ? message : item))
+        : [...next.messages, message],
     };
   } else if (event.type === 'turnCompleted' || event.type === 'turnInterrupted') {
     next = {
@@ -507,10 +579,16 @@ export function applyProjectionEvent(
   )
     next = {
       ...next,
-      activities: [
-        ...next.activities.filter((activity) => activity.id !== payload.id),
-        { id: payload.id, label: payload.label, detail: payload.detail },
-      ],
+      activities: upsertActivity(next.activities, {
+        id: payload.id,
+        label: payload.label,
+        detail: payload.detail,
+        ...(typeof payload.turnId === 'string'
+          ? { turnId: payload.turnId }
+          : next.activeTurnId
+            ? { turnId: next.activeTurnId }
+            : {}),
+      }),
     };
   else if (event.type === 'session.updated' && typeof payload?.activeTurnId !== 'undefined') {
     const id = typeof payload.activeTurnId === 'string' ? payload.activeTurnId : null;

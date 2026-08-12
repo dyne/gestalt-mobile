@@ -4,20 +4,28 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+type TurnOwned = { turnId?: string };
+
 export type ChatItem =
-  | { id: string; kind: 'user'; text: string; occurredAt?: number }
-  | {
+  | ({ id: string; kind: 'user'; text: string; occurredAt?: number } & TurnOwned)
+  | ({
       id: string;
       kind: 'agent';
       text: string;
       phase?: 'commentary' | 'final_answer';
       occurredAt?: number;
-    }
-  | { id: string; kind: 'reasoning'; summary: string[] }
-  | { id: string; kind: 'plan'; text: string }
-  | { id: string; kind: 'command'; command: string; status: string; exitCode?: number }
-  | { id: string; kind: 'fileChange'; paths: string[]; status: string }
-  | { id: string; kind: 'tool'; name: string; status: string };
+    } & TurnOwned)
+  | ({ id: string; kind: 'reasoning'; summary: string[] } & TurnOwned)
+  | ({ id: string; kind: 'plan'; text: string } & TurnOwned)
+  | ({
+      id: string;
+      kind: 'command';
+      command: string;
+      status: string;
+      exitCode?: number;
+    } & TurnOwned)
+  | ({ id: string; kind: 'fileChange'; paths: string[]; status: string } & TurnOwned)
+  | ({ id: string; kind: 'tool'; name: string; status: string } & TurnOwned);
 
 export type HistoryTurn = {
   id?: string;
@@ -30,21 +38,31 @@ export type HistoryTurn = {
 export function toChatTurns(
   turns: HistoryTurn[],
 ): Array<{ id: string; items: ChatItem[]; startedAt: number | null; completedAt: number | null }> {
-  return turns.map((turn, index) => ({
-    id: turn.id ?? `history-turn-${index}`,
-    items: turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn))),
-    startedAt: turn.startedAt,
-    completedAt: turn.completedAt,
-  }));
+  return turns.map((turn, index) => {
+    const turnId = turn.id ?? `history-turn-${index}`;
+    return {
+      id: turnId,
+      items: turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn), turnId)),
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+    };
+  });
 }
 
 export function toChatItems(turns: HistoryTurn[]): ChatItem[] {
-  return turns.flatMap((turn) =>
-    turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn))),
+  return turns.flatMap((turn, index) =>
+    turn.items.flatMap((item) =>
+      toChatItem(item, occurredAt(item, turn), turn.id ?? `history-turn-${index}`),
+    ),
   );
 }
 
-function toChatItem(item: Record<string, unknown>, timestamp: number | undefined): ChatItem[] {
+function toChatItem(
+  item: Record<string, unknown>,
+  timestamp: number | undefined,
+  turnId: string | undefined,
+): ChatItem[] {
+  const owner = turnId ? { turnId } : {};
   return [item].flatMap<ChatItem>((item) => {
     const id = typeof item.id === 'string' ? item.id : null;
     if (!id) return [];
@@ -58,7 +76,7 @@ function toChatItem(item: Record<string, unknown>, timestamp: number | undefined
               .join('\n')
           : '';
         return text
-          ? [{ id, kind: 'user', text, ...(timestamp ? { occurredAt: timestamp } : {}) }]
+          ? [{ id, kind: 'user', text, ...owner, ...(timestamp ? { occurredAt: timestamp } : {}) }]
           : [];
       }
       case 'agentMessage':
@@ -68,6 +86,7 @@ function toChatItem(item: Record<string, unknown>, timestamp: number | undefined
                 id,
                 kind: 'agent',
                 text: item.text,
+                ...owner,
                 ...(item.phase === 'commentary' || item.phase === 'final_answer'
                   ? { phase: item.phase }
                   : {}),
@@ -78,9 +97,11 @@ function toChatItem(item: Record<string, unknown>, timestamp: number | undefined
       case 'reasoning':
         if (!Array.isArray(item.summary)) return [];
         const summary = reasoningSummary(item.summary);
-        return summary.length ? [{ id, kind: 'reasoning', summary }] : [];
+        return summary.length ? [{ id, kind: 'reasoning', summary, ...owner }] : [];
       case 'plan':
-        return typeof item.text === 'string' ? [{ id, kind: 'plan', text: item.text }] : [];
+        return typeof item.text === 'string'
+          ? [{ id, kind: 'plan', text: item.text, ...owner }]
+          : [];
       case 'commandExecution':
         return typeof item.command === 'string' && typeof item.status === 'string'
           ? [
@@ -89,10 +110,20 @@ function toChatItem(item: Record<string, unknown>, timestamp: number | undefined
                 kind: 'command',
                 command: item.command,
                 status: item.status,
+                ...owner,
                 ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
               },
             ]
           : [];
+      case 'fileChange': {
+        if (!Array.isArray(item.changes) || typeof item.status !== 'string') return [];
+        const paths = item.changes.flatMap((change) =>
+          isRecord(change) && typeof change.path === 'string' ? [change.path] : [],
+        );
+        return paths.length
+          ? [{ id, kind: 'fileChange', paths, status: item.status, ...owner }]
+          : [];
+      }
       default:
         return [];
     }
