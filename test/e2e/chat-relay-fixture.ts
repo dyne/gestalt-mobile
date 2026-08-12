@@ -100,10 +100,19 @@ export class ChatRelayFixture {
   snapshot(sessionId: string, snapshot: ReturnType<typeof chatSnapshot>): void {
     this.histories.set(sessionId, snapshot);
   }
-  event(sessionId: string, sequence: number, type: string, payload: unknown): void {
-    this.sockets
-      .get(sessionId)
-      ?.send(JSON.stringify({ type: 'relay.event', event: { sequence, type, payload } }));
+  event(
+    sessionId: string,
+    sequence: number,
+    type: string,
+    payload: unknown,
+    occurredAt?: string,
+  ): void {
+    this.sockets.get(sessionId)?.send(
+      JSON.stringify({
+        type: 'relay.event',
+        event: { sequence, type, payload, ...(occurredAt ? { occurredAt } : {}) },
+      }),
+    );
   }
   duplicate(sessionId: string, sequence: number, type: string, payload: unknown): void {
     this.event(sessionId, sequence, type, payload);
