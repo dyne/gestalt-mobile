@@ -41,6 +41,283 @@ async function centerEvidence(page: Page, target: Locator): Promise<void> {
   expect(targetBox!.y + targetBox!.height).toBeLessThanOrEqual(navigationBox!.y);
 }
 
+const multiTurnItems = [
+  {
+    id: 'prompt-1',
+    kind: 'user',
+    text: 'first canonical prompt',
+    turnId: 'turn-1',
+    operationId: 'client-turn-1',
+    occurredAt: Date.parse('2026-01-01T12:00:00.000Z'),
+  },
+  {
+    id: 'answer-1',
+    kind: 'agent',
+    text: 'first canonical answer',
+    turnId: 'turn-1',
+    phase: 'final_answer',
+    occurredAt: Date.parse('2026-01-01T12:01:00.000Z'),
+  },
+  {
+    id: 'prompt-2',
+    kind: 'user',
+    text: 'second canonical prompt',
+    turnId: 'turn-2',
+    operationId: 'client-turn-2',
+    occurredAt: Date.parse('2026-01-01T12:03:00.000Z'),
+  },
+  {
+    id: 'answer-2',
+    kind: 'agent',
+    text: 'second canonical answer',
+    turnId: 'turn-2',
+    phase: 'final_answer',
+    occurredAt: Date.parse('2026-01-01T12:05:00.000Z'),
+  },
+];
+
+async function expectTimeline(page: Page, labels: string[]): Promise<void> {
+  const entries = page.getByLabel('Chat messages').getByRole('listitem');
+  await expect(entries).toHaveCount(labels.length);
+  const actual = await entries.allTextContents();
+  labels.forEach((label, index) => expect(actual[index]).toContain(label));
+}
+
+for (const viewport of [
+  { name: 'mobile-100', width: 390, height: 844, fontScale: 100 },
+  { name: 'tablet-200', width: 768, height: 1024, fontScale: 200 },
+]) {
+  test(`restores an interleaved canonical timeline with timings (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockAuthenticatedStatus(page);
+    const fixture = new ChatRelayFixture(page);
+    await fixture.install([
+      {
+        id: 'session-1',
+        state: 'ready',
+        threadId: 'thread-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        activeTurnId: null,
+        pendingInteractions: [],
+      },
+    ]);
+    fixture.snapshot(
+      'session-1',
+      chatSnapshot({
+        items: multiTurnItems,
+        turns: [
+          {
+            id: 'turn-1',
+            items: [],
+            startedAt: multiTurnItems[0]!.occurredAt,
+            completedAt: multiTurnItems[1]!.occurredAt,
+          },
+          {
+            id: 'turn-2',
+            items: [],
+            startedAt: multiTurnItems[2]!.occurredAt,
+            completedAt: multiTurnItems[3]!.occurredAt,
+          },
+        ],
+      }),
+    );
+    await page.goto('/');
+    if (viewport.fontScale === 200)
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = '200%';
+      });
+    await page.getByRole('button', { name: 'Chat' }).click();
+    const labels = [
+      'first canonical prompt',
+      'first canonical answer',
+      'second canonical prompt',
+      'second canonical answer',
+    ];
+    await expectTimeline(page, labels);
+    const before = await page
+      .locator('time')
+      .evaluateAll((times) => times.map((time) => time.dateTime));
+    expect(before).toEqual([
+      '2026-01-01T12:00:00.000Z',
+      '2026-01-01T12:01:00.000Z',
+      '2026-01-01T12:03:00.000Z',
+      '2026-01-01T12:05:00.000Z',
+    ]);
+    await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
+    await expect(page.getByLabel('Chat messages')).toContainText('2 minutes later');
+    await page.reload();
+    await page.getByRole('button', { name: 'Chat' }).click();
+    await expectTimeline(page, labels);
+    expect(
+      await page.locator('time').evaluateAll((times) => times.map((time) => time.dateTime)),
+    ).toEqual(before);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `output/playwright/chat-timeline-restored-${viewport.name}.png`,
+      fullPage: false,
+    });
+  });
+}
+
+test('converges a live item through an overlapping snapshot, reconnect, and refresh', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'session-1',
+      state: 'ready',
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: null,
+      pendingInteractions: [],
+    },
+  ]);
+  const turn = fixture.deferTurn('session-1');
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('live convergence prompt');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByText('live convergence prompt')).toBeVisible();
+  await expect.poll(() => fixture.commands.length).toBe(1);
+  turn.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-live' } });
+  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  const startedAt = '2026-01-01T12:10:00.000Z';
+  fixture.event(
+    'session-1',
+    1,
+    'agentMessageStarted',
+    {
+      itemId: 'answer-live',
+      turnId: 'turn-live',
+      text: '',
+      phase: 'final_answer',
+    },
+    startedAt,
+  );
+  fixture.event(
+    'session-1',
+    2,
+    'agentMessageDelta',
+    {
+      itemId: 'answer-live',
+      turnId: 'turn-live',
+      text: 'first ',
+      phase: 'final_answer',
+    },
+    '2026-01-01T12:10:10.000Z',
+  );
+  await expect(page.getByText('first ', { exact: true })).toBeVisible();
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({
+      baseSequence: 2,
+      currentSequence: 2,
+      activeTurnId: 'turn-live',
+      items: [
+        {
+          id: 'prompt-live',
+          kind: 'user',
+          text: 'live convergence prompt',
+          turnId: 'turn-live',
+          operationId: fixture.commands[0]!.idempotencyKey!,
+          occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
+        },
+      ],
+    }),
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  fixture.event(
+    'session-1',
+    3,
+    'agentMessageDelta',
+    {
+      itemId: 'answer-live',
+      turnId: 'turn-live',
+      text: 'second ',
+      phase: 'final_answer',
+    },
+    '2026-01-01T12:10:20.000Z',
+  );
+  fixture.event(
+    'session-1',
+    4,
+    'agentMessageCompleted',
+    {
+      itemId: 'answer-live',
+      turnId: 'turn-live',
+      text: 'first second final',
+      phase: 'final_answer',
+    },
+    '2026-01-01T12:10:30.000Z',
+  );
+  await expect(page.getByText('first second final', { exact: true })).toBeVisible();
+  const datetime = await page
+    .getByText('first second final', { exact: true })
+    .locator('xpath=ancestor::li')
+    .locator('time')
+    .getAttribute('datetime');
+  expect(datetime).toBe(startedAt);
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({
+      baseSequence: 4,
+      currentSequence: 4,
+      activeTurnId: null,
+      items: [
+        {
+          id: 'prompt-live',
+          kind: 'user',
+          text: 'live convergence prompt',
+          turnId: 'turn-live',
+          operationId: fixture.commands[0]!.idempotencyKey!,
+          occurredAt: Date.parse('2026-01-01T12:09:00.000Z'),
+        },
+        {
+          id: 'answer-live',
+          kind: 'agent',
+          text: 'first second final',
+          turnId: 'turn-live',
+          phase: 'final_answer',
+          occurredAt: Date.parse(startedAt),
+        },
+      ],
+      turns: [
+        {
+          id: 'turn-live',
+          items: [],
+          startedAt: Date.parse('2026-01-01T12:09:00.000Z'),
+          completedAt: Date.parse('2026-01-01T12:10:30.000Z'),
+        },
+      ],
+    }),
+  );
+  const oldSocket = fixture.sockets.get('session-1');
+  fixture.close('session-1');
+  await expect.poll(() => fixture.sockets.get('session-1') !== oldSocket).toBe(true);
+  await expect(page.getByText('first second final', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('live convergence prompt', { exact: true })).toHaveCount(1);
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expectTimeline(page, ['live convergence prompt', 'first second final']);
+  await expect(page.locator('time')).toHaveCount(2);
+  await expect(page.locator('time').last()).toHaveAttribute('datetime', startedAt);
+  await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
+  expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(844);
+});
+
 test('retains an optimistic prompt while turn HTTP is deferred', async ({ page }) => {
   await mockAuthenticatedStatus(page);
   const fixture = new ChatRelayFixture(page);
