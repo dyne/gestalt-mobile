@@ -67,7 +67,11 @@ export type AppDependencies = {
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
-    startTurn?(session: RelaySessionSnapshot, text: string): Promise<RelaySessionSnapshot>;
+    startTurn?(
+      session: RelaySessionSnapshot,
+      text: string,
+      clientUserMessageId?: string,
+    ): Promise<RelaySessionSnapshot>;
     onTurnStarted?(session: RelaySessionSnapshot): void;
     models?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;

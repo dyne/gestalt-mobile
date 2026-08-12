@@ -185,6 +185,7 @@ export class CodexSessionRuntime {
   async startTurn(
     session: RelaySessionSnapshot,
     text: string,
+    clientUserMessageId: string | undefined,
     now: string,
   ): Promise<RelaySessionSnapshot> {
     const resource = this.sessions.get(session.id);
@@ -193,6 +194,7 @@ export class CodexSessionRuntime {
       await resource.process.rpc.request('turn/start', {
         threadId: session.threadId,
         input: [{ type: 'text', text, text_elements: [] }],
+        ...(clientUserMessageId ? { clientUserMessageId } : {}),
         ...(session.model ? { model: session.model } : {}),
       }),
     );
@@ -525,6 +527,12 @@ function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
   const id = boundedString(item?.id, 256);
   const type = boundedString(item?.type, 64);
   if (!item || !id || !type) return [];
+  if (type === 'userMessage') {
+    const content = decodeUserMessageContent(item.content);
+    if (!content.length) return [];
+    const clientId = boundedString(item.clientId, 256);
+    return [{ id, type, content, ...(clientId ? { clientId } : {}) }];
+  }
   if (type === 'agentMessage')
     return [
       {
@@ -534,6 +542,10 @@ function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
         ...(boundedString(item.phase, 64) ? { phase: boundedString(item.phase, 64)! } : {}),
       },
     ];
+  if (type === 'reasoning') {
+    const summary = decodeReasoningSummary(item.summary);
+    return summary.length ? [{ id, type, summary }] : [];
+  }
   if (type === 'plan' && boundedString(item.text))
     return [{ id, type, text: boundedString(item.text)! }];
   if (type === 'commandExecution' && boundedString(item.command) && boundedString(item.status, 64))
@@ -546,5 +558,41 @@ function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
         ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
       },
     ];
+  if (type === 'fileChange') {
+    const changes = decodeFileChanges(item.changes);
+    const status = boundedString(item.status, 64);
+    return changes.length && status ? [{ id, type, changes, status }] : [];
+  }
+  if ((type === 'mcpToolCall' || type === 'dynamicToolCall') && boundedString(item.tool)) {
+    const status = boundedString(item.status, 64);
+    return status ? [{ id, type, tool: boundedString(item.tool)!, status }] : [];
+  }
   return [];
+}
+
+function decodeUserMessageContent(value: unknown): Array<{ type: 'text'; text: string }> {
+  if (!Array.isArray(value) || value.length > 1_000) return [];
+  return value.flatMap((part) => {
+    const record = asRecord(part);
+    const text = boundedString(record?.text);
+    return record?.type === 'text' && text ? [{ type: 'text' as const, text }] : [];
+  });
+}
+
+function decodeReasoningSummary(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 1_000) return [];
+  return value.flatMap((part) => {
+    if (boundedString(part)) return [boundedString(part)!];
+    const record = asRecord(part);
+    const text = boundedString(record?.text);
+    return record?.type === 'summary_text' && text ? [text] : [];
+  });
+}
+
+function decodeFileChanges(value: unknown): Array<{ path: string }> {
+  if (!Array.isArray(value) || value.length > 1_000) return [];
+  return value.flatMap((change) => {
+    const path = boundedString(asRecord(change)?.path);
+    return path ? [{ path }] : [];
+  });
 }

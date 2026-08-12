@@ -937,6 +937,244 @@ describe('CodexSessionRuntime', () => {
     });
   });
 
+  it('sends the client operation identifier as clientUserMessageId', async () => {
+    let turnStartParams: unknown;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'turn/start') {
+            turnStartParams = params;
+            return { turn: { id: 'turn-1' } };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const ready = await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+
+    await runtime.startTurn(ready, 'hello', 'operation-1', 'later');
+    expect(turnStartParams).toEqual({
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'hello', text_elements: [] }],
+      clientUserMessageId: 'operation-1',
+    });
+  });
+
+  it('preserves bounded canonical user messages and client identifiers from thread history', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'thread/read')
+            return {
+              thread: {
+                turns: [
+                  {
+                    id: 'turn-1',
+                    items: [
+                      {
+                        id: 'user-1',
+                        type: 'userMessage',
+                        clientId: 'operation-1',
+                        content: [{ type: 'text', text: 'prompt 1' }, { type: 'image' }],
+                      },
+                      { id: 'agent-1', type: 'agentMessage', text: 'answer 1' },
+                    ],
+                  },
+                  {
+                    id: 'turn-2',
+                    items: [
+                      {
+                        id: 'user-2',
+                        type: 'userMessage',
+                        clientId: 'x'.repeat(257),
+                        content: [
+                          { type: 'text', text: 'prompt 2' },
+                          { type: 'text', text: 'x'.repeat(64_001) },
+                        ],
+                      },
+                      { id: 'agent-2', type: 'agentMessage', text: 'answer 2' },
+                      { id: 'invalid', type: 'userMessage', content: [{ type: 'image' }] },
+                    ],
+                  },
+                ],
+              },
+            };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const ready = await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+
+    await expect(runtime.readHistory(ready)).resolves.toMatchObject({
+      turns: [
+        {
+          id: 'turn-1',
+          items: [
+            {
+              id: 'user-1',
+              type: 'userMessage',
+              clientId: 'operation-1',
+              content: [{ type: 'text', text: 'prompt 1' }],
+            },
+            { id: 'agent-1', type: 'agentMessage', text: 'answer 1' },
+          ],
+        },
+        {
+          id: 'turn-2',
+          items: [
+            { id: 'user-2', type: 'userMessage', content: [{ type: 'text', text: 'prompt 2' }] },
+            { id: 'agent-2', type: 'agentMessage', text: 'answer 2' },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('decodes every activity type rendered by canonical history and ignores unknown items', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'thread/read')
+            return {
+              thread: {
+                turns: [
+                  {
+                    id: 'turn-1',
+                    items: [
+                      {
+                        id: 'reasoning',
+                        type: 'reasoning',
+                        summary: ['checked', { type: 'summary_text', text: 'files' }],
+                      },
+                      { id: 'plan', type: 'plan', text: '1. inspect' },
+                      {
+                        id: 'command',
+                        type: 'commandExecution',
+                        command: 'git status',
+                        status: 'completed',
+                        exitCode: 0,
+                      },
+                      {
+                        id: 'files',
+                        type: 'fileChange',
+                        status: 'completed',
+                        changes: [{ path: 'C:\\repo\\file.ts' }],
+                      },
+                      {
+                        id: 'mcp',
+                        type: 'mcpToolCall',
+                        tool: 'filesystem.read_file',
+                        status: 'completed',
+                      },
+                      {
+                        id: 'dynamic',
+                        type: 'dynamicToolCall',
+                        tool: 'lookup_ticket',
+                        status: 'failed',
+                      },
+                      { id: 'unknown', type: 'imageView', path: '/private' },
+                    ],
+                  },
+                ],
+              },
+            };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const ready = await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+
+    await expect(runtime.readHistory(ready)).resolves.toMatchObject({
+      turns: [
+        {
+          id: 'turn-1',
+          items: [
+            { id: 'reasoning', type: 'reasoning', summary: ['checked', 'files'] },
+            { id: 'plan', type: 'plan', text: '1. inspect' },
+            {
+              id: 'command',
+              type: 'commandExecution',
+              command: 'git status',
+              status: 'completed',
+              exitCode: 0,
+            },
+            {
+              id: 'files',
+              type: 'fileChange',
+              status: 'completed',
+              changes: [{ path: 'C:\\repo\\file.ts' }],
+            },
+            { id: 'mcp', type: 'mcpToolCall', tool: 'filesystem.read_file', status: 'completed' },
+            { id: 'dynamic', type: 'dynamicToolCall', tool: 'lookup_ticket', status: 'failed' },
+          ],
+        },
+      ],
+    });
+  });
+
   it('notifies the supervisor when an app-server process exits unexpectedly', async () => {
     let onExit: (() => void) | undefined;
     const exited: string[] = [];
