@@ -249,4 +249,32 @@ describe('SessionsView session base tree', () => {
     await fireEvent.click(screen.getByRole('button', { name: /\/b/ }));
     expect(onselectopen).toHaveBeenCalledWith('open-b');
   });
+
+  it('copies resume commands from open and saved adopted sessions', async () => {
+    const oncopyresume = vi.fn();
+    renderView({
+      oncopyresume,
+      sessions: [
+        {
+          id: 'open',
+          state: 'turnActive',
+          workspacePath: '/open',
+          resumeCommand: 'codex resume open',
+        },
+        {
+          id: 'saved',
+          state: 'released',
+          workspacePath: '/saved',
+          resumeCommand: 'codex resume saved',
+        },
+      ],
+    });
+
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy' });
+    expect(copyButtons).toHaveLength(2);
+    await fireEvent.click(copyButtons[0]!);
+    await fireEvent.click(copyButtons[1]!);
+    expect(oncopyresume).toHaveBeenNthCalledWith(1, 'codex resume open');
+    expect(oncopyresume).toHaveBeenNthCalledWith(2, 'codex resume saved');
+  });
 });

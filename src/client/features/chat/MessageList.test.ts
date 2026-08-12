@@ -14,7 +14,7 @@ import MessageList from './MessageList.svelte';
 describe('MessageList', () => {
   afterEach(cleanup);
 
-  it('places the collapsible activity log beside commentary in the completed answer heading', () => {
+  it('wraps commentary and activity only after the answer completes', () => {
     render(MessageList, {
       messages: [
         {
@@ -35,29 +35,68 @@ describe('MessageList', () => {
       activities: [{ id: 'command', label: 'Command · completed', detail: 'git status' }],
     });
 
-    const heading = screen.getByText('answer').parentElement;
-    expect(heading?.querySelector('.commentary-toggle')).not.toBeNull();
-    expect(heading?.querySelector('#chat-activity')).not.toBeNull();
+    const answer = screen.getByText('Done.').closest('.answer-turn');
+    expect(answer?.querySelector('.commentary-toggle')).not.toBeNull();
+    expect(answer?.querySelector('.chat-activity')).not.toBeNull();
     expect(screen.getByText('git status').textContent).toBe('git status');
-    expect(heading?.querySelector('#chat-activity')?.getAttribute('open')).toBeNull();
+    expect(answer?.querySelector('.chat-activity')?.getAttribute('open')).toBeNull();
   });
 
-  it('keeps an in-progress activity log expanded while commentary is streaming', () => {
+  it('shows commentary and activity directly in the main timeline while working', () => {
     render(MessageList, {
       messages: [
         {
           id: 'commentary',
           role: 'assistant',
+          turnId: 'turn-1',
           phase: 'commentary',
           text: 'Checking the workspace.',
           complete: false,
         },
       ],
-      activities: [{ id: 'command', label: 'Command · in_progress', detail: 'git status' }],
+      activities: [
+        {
+          id: 'command',
+          label: 'Command · in_progress',
+          detail: 'git status',
+          turnId: 'turn-1',
+        },
+      ],
+      activeTurnId: 'turn-1',
     });
 
-    expect(screen.getByText('commentary').closest('details')).not.toBeNull();
-    expect(screen.getByText('activity').closest('#chat-activity')?.getAttribute('open')).toBe('');
+    const progress = screen.getByText('working').closest('.progress-turn');
+    expect(progress?.textContent).toContain('Checking the workspace.');
+    expect(progress?.querySelector('.live-activity')).not.toBeNull();
+    expect(progress?.querySelector('details')).toBeNull();
+  });
+
+  it('keeps changed files visible outside collapsed activity history', () => {
+    render(MessageList, {
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant',
+          turnId: 'turn-1',
+          phase: 'final_answer',
+          text: 'Done.',
+          complete: true,
+        },
+      ],
+      activities: [
+        {
+          id: 'change',
+          label: 'File change · completed',
+          detail: 'src/app.ts\nsrc/app.test.ts',
+          turnId: 'turn-1',
+        },
+      ],
+    });
+
+    const files = screen.getByRole('region', { name: 'Files changed' });
+    expect(files.textContent).toContain('src/app.ts');
+    expect(files.textContent).toContain('src/app.test.ts');
+    expect(screen.queryByText('activity')).toBeNull();
   });
 
   it('renders a durable resolved interaction in its owning prompt turn', () => {

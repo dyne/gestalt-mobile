@@ -336,9 +336,10 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(openSessions.getByRole('listitem')).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Open' })).toHaveCount(0);
   await expect(openSessions.getByRole('button', { name: 'Close' })).toHaveCount(1);
+  await expect(openSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Forget' })).toHaveCount(0);
   await expect(savedSessions.getByRole('listitem')).toHaveCount(1);
-  await expect(savedSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(0);
+  await expect(savedSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(1);
 
@@ -1052,7 +1053,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
 
   await openChat(page);
   await expect(page.getByText('Check the branch')).toBeVisible();
-  await expect(page.getByText('answer')).toBeVisible();
+  await expect(page.getByText('working', { exact: true })).toBeVisible();
   await expect(page.getByText('No changes are needed.')).toBeVisible();
   await expect(page.getByRole('table')).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Installation' })).toBeVisible();
@@ -1070,22 +1071,17 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     await promptTurn.evaluate((element) => getComputedStyle(element).backgroundColor),
   ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
   await expect(page.getByRole('button', { name: 'Send prompt' }).locator('svg')).toBeVisible();
-  const commentary = page.locator('.answer-turn');
-  const answerHeading = commentary.locator('.entry-heading');
+  const progress = page.locator('.answer-turn');
+  const answerHeading = progress.locator('.entry-heading');
   expect(
     await answerHeading
       .locator(':scope > *')
       .evaluateAll((elements) => elements.map((element) => element.tagName)),
-  ).toEqual(['STRONG', 'BUTTON', 'DETAILS', 'TIME']);
-  const commentaryToggle = answerHeading.getByRole('button', { name: 'commentary' });
-  await expect(commentaryToggle).toHaveText('>commentary');
-  await expect(commentary.getByText('I am inspecting the branch.')).toBeHidden();
-  await commentaryToggle.click();
-  await expect(commentaryToggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(commentary.getByText('I am inspecting the branch.')).toBeVisible();
-  await expect(commentary.getByText('The branch is clean.')).toBeVisible();
-  await page.locator('#chat-activity summary').click();
-  await expect(page.getByText('Command · completed')).toBeVisible();
+  ).toEqual(['STRONG', 'TIME']);
+  await expect(progress.getByText('I am inspecting the branch.')).toBeVisible();
+  await expect(progress.getByText('The branch is clean.')).toBeVisible();
+  await expect(progress.locator('.live-activity')).toContainText('Command · completed');
+  await expect(progress.locator('details')).toHaveCount(0);
 });
 
 test('reconciles terminal-originated history while Chat is visible', async ({ page }) => {
@@ -1360,7 +1356,7 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
   await page.route('**/api/sessions/session-1/history', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(chatSnapshot()),
+      body: JSON.stringify(chatSnapshot({ activeTurnId: 'turn-1' })),
     }),
   );
   await page.routeWebSocket(
@@ -1381,8 +1377,8 @@ test('projects a live agent delta from the relay socket', async ({ page }) => {
 
   await page.goto('/');
   await openChat(page);
-  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
-  await expect(page.getByText('Working on it.\nStill working.')).toBeHidden();
+  await expect(page.getByText('working', { exact: true })).toBeVisible();
+  await expect(page.getByText('Working on it.\nStill working.')).toBeVisible();
   await expect(page.locator('ol[aria-label="Chat messages"] li')).toHaveCSS(
     'white-space',
     'pre-wrap',
@@ -1416,6 +1412,12 @@ test('projects a canonical activity from the Chat snapshot', async ({ page }) =>
           items: [
             { id: 'commentary-1', kind: 'agent', phase: 'commentary', text: 'Inspecting.' },
             { id: 'item-1', kind: 'command', command: 'git status', status: 'completed' },
+            {
+              id: 'change-1',
+              kind: 'fileChange',
+              paths: ['src/app.ts', 'src/app.test.ts'],
+              status: 'completed',
+            },
           ],
         }),
       ),
@@ -1424,10 +1426,13 @@ test('projects a canonical activity from the Chat snapshot', async ({ page }) =>
 
   await page.goto('/');
   await openChat(page);
-  const activity = page.locator('#chat-activity');
-  await activity.locator('summary').click();
+  const activity = page.locator('.live-activity');
   await expect(activity.getByText('Command · completed')).toBeVisible();
   await expect(page.getByText('git status')).toBeVisible();
+  const files = page.getByRole('region', { name: 'Files changed' });
+  await expect(files).toContainText('src/app.ts');
+  await expect(files).toContainText('src/app.test.ts');
+  await expect(activity).not.toContainText('src/app.ts');
 });
 
 test('resynchronizes canonical history after a pruned relay cursor', async ({ page }) => {
@@ -1578,8 +1583,8 @@ test('reconnects a dropped browser socket and replays from its saved cursor', as
 
   await page.goto('/');
   await openChat(page);
-  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
-  await expect(page.getByText('before drop after replay')).toBeHidden();
+  await expect(page.getByText('working', { exact: true })).toBeVisible();
+  await expect(page.getByText('before drop after replay')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
   await expect(page.getByRole('status')).toHaveText('Codex is working…');
 });
@@ -1641,8 +1646,7 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
 
   await openChat(page);
   await expect(page.getByText('Restored after restart')).toBeVisible();
-  await expect(page.getByText('commentary', { exact: true })).toBeVisible();
-  await expect(page.getByText('live again')).toBeHidden();
+  await expect(page.getByText('live again')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
   await expect(page.getByRole('status')).toHaveText('Ready');
 });

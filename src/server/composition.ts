@@ -170,26 +170,37 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
+          const currentSession = sessions.find(sessionId);
           const normalized = normalizeCodexNotification(
             sessionId,
             0,
             occurredAt,
             notification,
-            sessions.find(sessionId)?.workspacePath,
+            currentSession?.workspacePath,
+            currentSession?.activeTurnId,
           );
           if (!normalized) return;
+          let completedSession:
+            import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | undefined;
           if (normalized.type === 'turnCompleted') {
             const turnId = (normalized.payload as { turn?: { id?: string } }).turn?.id;
             const session = sessions.find(sessionId);
-            if (session && turnId && session.activeTurnId === turnId)
-              sessions.save(
-                RelaySession.rehydrate(session).completeTurn(turnId, occurredAt).snapshot,
-              );
+            if (session && turnId && session.activeTurnId === turnId) {
+              completedSession = RelaySession.rehydrate(session).completeTurn(
+                turnId,
+                occurredAt,
+              ).snapshot;
+              sessions.save(completedSession);
+            }
             planMeasurementRefresh?.refreshNow(sessionId);
           }
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
           );
+          if (completedSession)
+            events.publish(
+              journal.append(sessionId, 'session.updated', completedSession, occurredAt),
+            );
         },
         (sessionId, request) => {
           const rawInteraction = toPendingInteraction(request);

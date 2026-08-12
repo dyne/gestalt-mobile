@@ -23,6 +23,53 @@ describe('normalizeCodexNotification', () => {
     });
   });
 
+  it('keeps agent item identity and phase through its live lifecycle', () => {
+    expect(
+      normalizeCodexNotification(
+        's',
+        2,
+        '2026-01-01T00:00:00.000Z',
+        {
+          method: 'item/started',
+          params: { item: { id: 'message-1', type: 'agentMessage', phase: 'commentary' } },
+        },
+        '/workspace',
+        'turn-1',
+      ),
+    ).toMatchObject({
+      type: 'agentMessageStarted',
+      payload: { itemId: 'message-1', text: '', phase: 'commentary', turnId: 'turn-1' },
+    });
+    expect(
+      normalizeCodexNotification(
+        's',
+        3,
+        '2026-01-01T00:00:00.000Z',
+        {
+          method: 'item/completed',
+          params: {
+            item: {
+              id: 'message-1',
+              type: 'agentMessage',
+              text: 'Checking the workspace.',
+              phase: 'commentary',
+            },
+          },
+        },
+        '/workspace',
+        'turn-1',
+      ),
+    ).toMatchObject({
+      type: 'agentMessageCompleted',
+      payload: {
+        itemId: 'message-1',
+        text: 'Checking the workspace.',
+        phase: 'commentary',
+        turnId: 'turn-1',
+      },
+    });
+  });
+
   it('maps a command lifecycle item without its raw output', () => {
     expect(
       normalizeCodexNotification('s', 2, '2026-01-01T00:00:00.000Z', {
@@ -98,7 +145,11 @@ describe('normalizeCodexNotification', () => {
       ),
     ).toMatchObject({
       type: 'activity.updated',
-      payload: { id: 'change-1', label: 'fileChange · completed', detail: 'src/app.ts' },
+      payload: {
+        id: 'change-1',
+        label: 'File change · completed',
+        detail: 'src/app.ts',
+      },
     });
   });
 });

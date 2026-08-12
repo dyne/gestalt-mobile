@@ -133,7 +133,9 @@ describe('chat projection', () => {
     expect(retained.interactions).toEqual([
       expect.objectContaining({ requestId: 'request-1', state: 'pending' }),
     ]);
-    expect(retained.activities).toEqual([{ id: 'activity-1', label: 'Tool', detail: 'Finished' }]);
+    expect(retained.activities).toEqual([
+      { id: 'activity-1', label: 'Tool', detail: 'Finished', turnId: 'turn-1' },
+    ]);
   });
   it('does not promote duplicate identical optimistic prompts by ambiguous text', () => {
     const projection = queuePrompt(
@@ -325,6 +327,47 @@ describe('chat projection', () => {
       payload: { id: 'a', label: 'second', detail: 'y' },
     });
     expect(two.activities).toEqual([{ id: 'a', label: 'second', detail: 'y' }]);
+  });
+  it('keeps separate agent items live and promotes their phases without waiting for history', () => {
+    const working = promotePrompt(
+      queuePrompt(createChatProjection('s'), 'op', 'prompt'),
+      'op',
+      'turn-1',
+    );
+    const commentary = applyProjectionEvent(working, {
+      sequence: 1,
+      type: 'agentMessageStarted',
+      payload: { itemId: 'commentary-1', text: '', phase: 'commentary', turnId: 'turn-1' },
+    });
+    const commentaryDelta = applyProjectionEvent(commentary, {
+      sequence: 2,
+      type: 'agentMessageDelta',
+      payload: { itemId: 'commentary-1', text: 'Checking.', turnId: 'turn-1' },
+    });
+    const answer = applyProjectionEvent(commentaryDelta, {
+      sequence: 3,
+      type: 'agentMessageCompleted',
+      payload: {
+        itemId: 'answer-1',
+        text: 'Done.',
+        phase: 'final_answer',
+        turnId: 'turn-1',
+      },
+    });
+
+    expect(answer.messages.filter((message) => message.role === 'assistant')).toEqual([
+      expect.objectContaining({
+        id: 'assistant:commentary-1',
+        phase: 'commentary',
+        text: 'Checking.',
+      }),
+      expect.objectContaining({
+        id: 'assistant:answer-1',
+        phase: 'final_answer',
+        text: 'Done.',
+        complete: true,
+      }),
+    ]);
   });
   it('keeps interaction resolutions monotonic and derives lifecycle status', () => {
     const projection = resolveInteraction(

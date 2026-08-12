@@ -8,6 +8,7 @@ export type ChatItem = {
   id: string;
   kind: string;
   text?: string;
+  turnId?: string;
   occurredAt?: number;
   [key: string]: unknown;
 };

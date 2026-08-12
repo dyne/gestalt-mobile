@@ -921,6 +921,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <MessageList
               messages={chatView ? [...chatView.messages] : []}
               activities={chatView ? [...chatView.activities] : []}
+              activeTurnId={chatView?.activeTurnId ?? null}
               interactions={chatView ? [...chatView.interactions] : []}
               answers={userInputAnswers}
               onanswer={setUserInputAnswer}

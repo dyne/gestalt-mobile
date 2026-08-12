@@ -406,10 +406,14 @@ for (const shot of [
       path: `output/playwright/chat-timeline-resolved-${shot.name}-${shot.fontScale}.png`,
     });
     fixture.event('session-1', 1, 'agentMessageDelta', {
+      itemId: 'commentary-1',
+      turnId: 'turn-1',
       text: 'working screenshot',
       phase: 'commentary',
     });
     await expect(page.getByText('working screenshot')).toBeAttached();
+    await expect(page.getByText('working', { exact: true })).toBeVisible();
+    await expect(page.locator('.progress-turn details')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
     expect(
       await page.evaluate(
@@ -422,13 +426,18 @@ for (const shot of [
         path: `output/playwright/chat-timeline-working-${shot.name}-${shot.fontScale}.png`,
       });
     fixture.event('session-1', 2, 'agentMessageDelta', {
-      text: ' finished screenshot',
+      itemId: 'answer-1',
+      turnId: 'turn-1',
+      text: 'finished screenshot',
       phase: 'final_answer',
     });
     fixture.event('session-1', 3, 'session.updated', { activeTurnId: null });
     fixture.event('session-1', 4, 'turnCompleted', null);
     await expect(page.getByText('finished screenshot')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'commentary' })).toBeVisible();
+    await expect(page.getByText('working screenshot')).toBeHidden();
     await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+    await expect(page.getByRole('status')).toHaveText('Ready');
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,

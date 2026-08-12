@@ -108,6 +108,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             class="managed-session open-session"
           >
             <div class="session-actions">
+              {#if session.resumeCommand}
+                <button type="button" onclick={() => oncopyresume(session.resumeCommand!)}
+                  >Copy</button
+                >
+              {/if}
               <button type="button" onclick={() => onclose(session.id)}>Close</button>
             </div>
             <div class="session-details">
@@ -160,6 +165,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </button>
+            {#if session.resumeCommand}
+              <button type="button" onclick={() => oncopyresume(session.resumeCommand!)}
+                >Copy</button
+              >
+            {/if}
             <button type="button" onclick={() => onforget(session.id)}>Forget</button>
           </div>
           <div class="session-details">
