@@ -694,7 +694,7 @@ describe('production composition', () => {
     const replayedSequence = messages[updatedIndex]!.event.sequence;
     const liveSequence = messages[closedIndex]!.event.sequence;
     expect(replayedSequence).toBeGreaterThan(0);
-    expect(liveSequence).toBe(replayedSequence + 1);
+    expect(liveSequence).toBeGreaterThan(replayedSequence);
     expect(new Set([replayedSequence, liveSequence]).size).toBe(2);
     expect(messages.filter((message) => message.event.type === 'plan.updated')).toHaveLength(1);
     expect(messages.filter((message) => message.event.type === 'plan.closed')).toHaveLength(1);
@@ -758,7 +758,7 @@ describe('production composition', () => {
     await restarted.close();
   });
 
-  it('restores active persisted threads when the relay restarts', async () => {
+  it('detaches active persisted threads when the relay restarts without resuming a writer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
     temporaryPaths.push(root, dataDir);
@@ -813,18 +813,9 @@ describe('production composition', () => {
     });
     expect(secondCalls).toEqual([]);
     await second.listen({ host: '127.0.0.1', port: 0 });
-    await expect
-      .poll(() => secondCalls, { timeout: 1_000 })
-      .toEqual([
-        'initialize',
-        'skills/list',
-        'initialize',
-        'skills/list',
-        'initialize',
-        'thread/resume',
-      ]);
+    await expect.poll(() => secondCalls, { timeout: 1_000 }).toEqual(['initialize', 'skills/list']);
     const restored = await second.inject(`/api/sessions/${created.json().id}`);
-    expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'ready' });
+    expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'stopped' });
     await second.close();
   });
 

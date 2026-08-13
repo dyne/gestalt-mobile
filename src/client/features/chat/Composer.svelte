@@ -19,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     starting: boolean;
     detached?: boolean;
     retryMessage?: string | null;
+    retryable?: boolean;
     models?: string[];
     onchange(value: string): void;
     onscrollbottom?(): void;
@@ -34,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     starting,
     detached = false,
     retryMessage = null,
+    retryable = false,
     models = [],
     onchange,
     onscrollbottom = () => {},
@@ -122,7 +124,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {#if retryMessage}
     <div class="writer-feedback" role="alert" aria-atomic="true">
       <p>{retryMessage}</p>
-      <button type="button" disabled={starting} onclick={onretry}>Retry send</button>
+      {#if retryable}
+        <button type="button" disabled={starting} onclick={onretry}>Retry send</button>
+      {/if}
     </div>
   {/if}
   {#if commandMenuOpen}

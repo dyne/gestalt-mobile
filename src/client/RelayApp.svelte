@@ -210,7 +210,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onSendError: (error, operationId) => {
       const feedback = relayFeedback(error, 'MESSAGE_SEND_FAILED');
       writerFeedback = feedback.message;
-      retryOperationId = operationId;
+      retryOperationId = feedback.retryable ? operationId : null;
       shellStatus = reportRelayError(error, 'MESSAGE_SEND_FAILED');
     },
     onSendAccepted: (operationId) => {
@@ -958,6 +958,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 ),
               )}
               retryMessage={writerFeedback}
+              retryable={retryOperationId !== null}
               models={sessionModels}
               onchange={updateDraft}
               onscrollbottom={() => scheduleTail('explicit')}

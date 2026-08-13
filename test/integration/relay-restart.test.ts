@@ -100,7 +100,7 @@ function fakeAppServer(calls: string[]) {
     onExit: () => () => {},
   };
 }
-test('restores a persisted thread after an HTTP relay restart', async () => {
+test('keeps a persisted thread detached after an HTTP relay restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
   paths.push(root, dataDir);
@@ -151,24 +151,15 @@ test('restores a persisted thread after an HTTP relay restart', async () => {
     launchAppServer: () => fakeAppServer(restoredCalls),
   });
   await second.listen({ host: '127.0.0.1', port: 0 });
-  await expect
-    .poll(() => restoredCalls, { timeout: 1_000 })
-    .toEqual([
-      'initialize',
-      'skills/list',
-      'initialize',
-      'skills/list',
-      'initialize',
-      'thread/resume',
-    ]);
+  await expect.poll(() => restoredCalls, { timeout: 1_000 }).toEqual(['initialize', 'skills/list']);
   expect((await second.inject(`/api/sessions/${created.id}`)).json()).toMatchObject({
     threadId: 'thread-1',
-    state: 'ready',
+    state: 'stopped',
   });
   await second.close();
 });
 
-test('restores the original snapshot after profile removal and fresh catalog changes', async () => {
+test('uses the original snapshot only when a detached session sends after profile removal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
   const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-home-'));
@@ -214,7 +205,10 @@ test('restores the original snapshot after profile removal and fresh catalog cha
                 { cwd: (params as { cwds: string[] }).cwds[0], skills: discovered, errors: [] },
               ],
             };
-          return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+          if (['thread/start', 'thread/resume'].includes(method))
+            return { thread: { id: 'thread-1' } };
+          if (method === 'turn/start') return { turn: { id: 'turn-1' } };
+          return {};
         },
         onNotification: () => () => {},
         onServerRequest: () => () => {},
@@ -283,6 +277,13 @@ test('restores the original snapshot after profile removal and fresh catalog cha
     launchAppServer,
   });
   await second.listen({ host: '127.0.0.1', port: 0 });
+  expect(launches.find((launch) => launch.skillsConfig)).toBeUndefined();
+  const started = await second.inject({
+    method: 'POST',
+    url: `/api/sessions/${created.json().id}/turns`,
+    payload: { text: 'resume only on send' },
+  });
+  expect(started.statusCode).toBe(202);
   await expect
     .poll(() => launches.find((launch) => launch.skillsConfig)?.skillsConfig)
     .toEqual([

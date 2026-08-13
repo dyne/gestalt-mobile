@@ -17,7 +17,6 @@ import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
-import { isCodexThreadWriterBusy } from './platform/codex/json-rpc-client.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
@@ -531,30 +530,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     database.close();
     throw error;
   }
-  const restoreActiveSessions = async () => {
-    if (!runtime) return;
+  const detachActiveSessions = async () => {
     await mapWithConcurrency(
-      sessions
-        .list()
-        .filter((session) => session.desiredState === 'active' && session.threadId !== null),
+      sessions.list().filter((session) => session.threadId !== null),
       2,
       async (session) => {
-        try {
-          saveSession(await runtime.restore(session, new Date().toISOString()));
-        } catch (error) {
-          saveSession(
-            isCodexThreadWriterBusy(error)
-              ? RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot
-              : RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
-          );
-        }
+        if (session.desiredState === 'active')
+          saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
+        await runtime?.watchPlanStatus(session);
       },
     );
   };
   app.addHook('onListen', async () => {
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
     if (profile) await editorSkillCatalog.refresh(profile, root);
-    await restoreActiveSessions();
+    await detachActiveSessions();
   });
   app.addHook('onClose', async () => {
     planMeasurementRefresh?.stopAll();

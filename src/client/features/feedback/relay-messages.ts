@@ -35,7 +35,7 @@ export type RelayFeedbackCode = keyof typeof relayMessages;
 export function relayFeedback(
   error: unknown,
   fallbackCode: RelayFeedbackCode,
-): { code: RelayFeedbackCode; message: string } {
+): { code: RelayFeedbackCode; message: string; retryable: boolean } {
   const candidate = error instanceof Error ? error.message : '';
   const problemCode =
     typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
@@ -46,5 +46,9 @@ export function relayFeedback(
     : Object.hasOwn(relayMessages, candidate)
       ? (candidate as RelayFeedbackCode)
       : fallbackCode;
-  return { code, message: relayMessages[code] };
+  const retryable =
+    typeof error === 'object' && error !== null && 'retryable' in error
+      ? error.retryable === true
+      : true;
+  return { code, message: relayMessages[code], retryable };
 }

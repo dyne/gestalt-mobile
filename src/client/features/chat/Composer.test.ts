@@ -37,6 +37,7 @@ describe('Composer', () => {
       starting: true,
       detached: true,
       retryMessage: 'This thread is active in another Codex client. Release it there, then retry.',
+      retryable: true,
       onchange: () => {},
       onsend: () => {},
       onretry: retry,
