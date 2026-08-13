@@ -70,6 +70,8 @@ export function registerSessionRoutes(
       registerStartTurn(app, {
         find: sessions.find,
         start: sessions.startTurn,
+        ensureWriter: sessions.ensureWriter,
+        releaseWriter: sessions.releaseWriter,
         save: sessions.save,
         onStarted: sessions.onTurnStarted,
         idempotency: sessions.idempotency,

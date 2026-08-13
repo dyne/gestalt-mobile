@@ -8,6 +8,8 @@ import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
 import { registerStartTurn } from './endpoint.js';
+import { WriterAcquisitionError } from '../application/writer-acquisition.js';
+import { writerAcquisitionProblem } from '../application/writer-acquisition.js';
 
 describe('POST /api/sessions/:id/turns', () => {
   it('starts a text turn for a ready session', async () => {
@@ -171,6 +173,184 @@ describe('POST /api/sessions/:id/turns', () => {
     expect((await first).statusCode).toBe(202);
     expect((await second).statusCode).toBe(202);
     expect(starts).toBe(1);
+    await app.close();
+  });
+
+  it('acquires a detached writer once, persists ready, then forwards the original key', async () => {
+    const app = fastify();
+    const order: string[] = [];
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state: 'stopped', threadId: 'thread-1' }) as never,
+      ensureWriter: async () => {
+        order.push('resume');
+        return {
+          session: { id: 's', state: 'ready', threadId: 'thread-1' } as never,
+          replacementCreated: false,
+        };
+      },
+      start: async (_session, _text, key) => {
+        order.push(`start:${key}`);
+        return { id: 's', state: 'turnActive', activeTurnId: 'turn-1' } as never;
+      },
+      save: (session) => order.push(`save:${session.state}`),
+      idempotency: { get: () => null, put: () => {} },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      headers: { 'idempotency-key': 'client-1' },
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(order).toEqual(['resume', 'save:ready', 'start:client-1', 'save:turnActive']);
+    await app.close();
+  });
+
+  it('returns a safe retryable writer-busy problem without starting or caching a turn', async () => {
+    const app = fastify();
+    let starts = 0;
+    let cached = 0;
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state: 'stopped', threadId: 'thread-secret' }) as never,
+      ensureWriter: async () => {
+        throw new WriterAcquisitionError('writerBusy');
+      },
+      start: async () => {
+        starts++;
+        return {} as never;
+      },
+      save: () => {},
+      idempotency: {
+        get: () => null,
+        put: () => {
+          cached++;
+        },
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      headers: { 'idempotency-key': 'k' },
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      status: 409,
+      code: 'SESSION_WRITER_BUSY',
+      retryable: true,
+      detail: 'This thread is active in another Codex client. Release it there, then retry.',
+    });
+    expect(response.body).not.toContain('thread-secret');
+    expect(starts).toBe(0);
+    expect(cached).toBe(0);
+    await app.close();
+  });
+
+  it('rejects an already active turn without acquiring or starting again', async () => {
+    const app = fastify();
+    let acquired = 0;
+    let started = 0;
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state: 'turnActive', threadId: 'thread-1' }) as never,
+      ensureWriter: async () => {
+        acquired++;
+        return {} as never;
+      },
+      start: async () => {
+        started++;
+        return {} as never;
+      },
+      save: () => {},
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ code: 'SESSION_TURN_ACTIVE' });
+    expect(acquired).toBe(0);
+    expect(started).toBe(0);
+    await app.close();
+  });
+
+  it.each([
+    ['rolloutMissing', 409, 'SESSION_ROLLOUT_MISSING', false],
+    ['workspaceUnavailable', 409, 'SESSION_WORKSPACE_UNAVAILABLE', true],
+    ['runtimeDependencyFailed', 502, 'SESSION_RUNTIME_DEPENDENCY_FAILED', true],
+    ['protocolIncompatible', 503, 'CODEX_PROTOCOL_INCOMPATIBLE', false],
+    ['runtimeUnavailable', 503, 'SESSION_RUNTIME_UNAVAILABLE', true],
+  ] as const)('maps %s to a stable redacted problem', async (kind, status, code, retryable) => {
+    const app = fastify();
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state: 'stopped', threadId: 'private-thread-id' }) as never,
+      ensureWriter: async () => {
+        throw new WriterAcquisitionError(kind);
+      },
+      start: async () => ({}) as never,
+      save: () => {},
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(status);
+    expect(response.json()).toMatchObject({ status, code, retryable });
+    expect(response.body).not.toContain('private-thread-id');
+    await app.close();
+  });
+
+  it('falls back to the redacted runtime-unavailable problem for unknown failures', async () => {
+    const app = fastify();
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state: 'stopped', threadId: 'private-thread-id' }) as never,
+      ensureWriter: async () => {
+        throw new Error('raw codex failure private-thread-id');
+      },
+      start: async () => ({}) as never,
+      save: () => {},
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual(writerAcquisitionProblem('runtimeUnavailable'));
+    expect(response.body).not.toContain('private-thread-id');
+    await app.close();
+  });
+
+  it('releases an acquired writer when post-start persistence fails without masking the failure', async () => {
+    const app = fastify();
+    const original = {
+      id: 's',
+      state: 'stopped',
+      threadId: 'thread-1',
+      pendingInteractions: [],
+    };
+    const acquired = { ...original, state: 'ready' };
+    let releases = 0;
+    let saves = 0;
+    registerStartTurn(app, {
+      find: () => original as never,
+      ensureWriter: async () => ({ session: acquired as never, replacementCreated: false }),
+      start: async () => ({ ...acquired, state: 'turnActive', activeTurnId: 'turn-1' }) as never,
+      save: () => {
+        if (++saves > 1) throw new Error('persistence failure');
+      },
+      releaseWriter: async () => {
+        releases++;
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/s/turns',
+      payload: { text: 'hello' },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(releases).toBe(1);
     await app.close();
   });
 });

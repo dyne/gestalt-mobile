@@ -9,8 +9,10 @@ import type { Readable, Writable } from 'node:stream';
 
 export const CODEX_THREAD_NOT_FOUND = 'CODEX_THREAD_NOT_FOUND';
 export const CODEX_JSON_RPC_ERROR = 'CODEX_JSON_RPC_ERROR';
+export const CODEX_THREAD_WRITER_BUSY = 'CODEX_THREAD_WRITER_BUSY';
 
-type CodexJsonRpcErrorKind = typeof CODEX_THREAD_NOT_FOUND | typeof CODEX_JSON_RPC_ERROR;
+type CodexJsonRpcErrorKind =
+  typeof CODEX_THREAD_NOT_FOUND | typeof CODEX_THREAD_WRITER_BUSY | typeof CODEX_JSON_RPC_ERROR;
 
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
@@ -33,13 +35,20 @@ export function isMissingCodexThreadRollout(error: unknown): boolean {
   return error instanceof CodexJsonRpcError && error.kind === CODEX_THREAD_NOT_FOUND;
 }
 
+/** Compatibility shim for the confirmed Codex 0.146 active-writer response. */
+export function isCodexThreadWriterBusy(error: unknown): boolean {
+  return error instanceof CodexJsonRpcError && error.kind === CODEX_THREAD_WRITER_BUSY;
+}
+
 function classifyCodexJsonRpcError(
   code: number | undefined,
   message: string,
 ): CodexJsonRpcErrorKind {
-  return code === -32600 && /^no rollout found for thread id\b/i.test(message)
-    ? CODEX_THREAD_NOT_FOUND
-    : CODEX_JSON_RPC_ERROR;
+  if (code !== -32600) return CODEX_JSON_RPC_ERROR;
+  if (/^no rollout found for thread id\b/i.test(message)) return CODEX_THREAD_NOT_FOUND;
+  // Fixture-backed exact protocol wording: do not broaden this into a heuristic.
+  if (/^thread .* already has an active writer$/i.test(message)) return CODEX_THREAD_WRITER_BUSY;
+  return CODEX_JSON_RPC_ERROR;
 }
 
 function boundMessage(message: string): string {

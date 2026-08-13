@@ -25,6 +25,11 @@ import {
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
+import {
+  WriterAcquisitionError,
+  type WriterAcquisition,
+} from '../../features/sessions/application/writer-acquisition.js';
+import { isCodexThreadWriterBusy, isMissingCodexThreadRollout } from './json-rpc-client.js';
 
 export type AppServer = {
   rpc: {
@@ -133,6 +138,7 @@ export class CodexSessionRuntime {
     string,
     Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
   >();
+  private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
 
   async start(
     session: RelaySessionSnapshot,
@@ -204,6 +210,37 @@ export class CodexSessionRuntime {
       }),
     );
     return RelaySession.rehydrate(session).startTurn(result, now).snapshot;
+  }
+
+  /** The sole authoritative in-process ownership probe.  It never launches a child. */
+  ownsWriter(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.active === true;
+  }
+
+  async ensureWriter(session: RelaySessionSnapshot, now: string): Promise<WriterAcquisition> {
+    if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
+    const inflight = this.writerAcquisitions.get(session.id);
+    if (inflight) return inflight;
+    const acquisition = this.acquireWriter(session, now);
+    this.writerAcquisitions.set(session.id, acquisition);
+    try {
+      return await acquisition;
+    } finally {
+      if (this.writerAcquisitions.get(session.id) === acquisition)
+        this.writerAcquisitions.delete(session.id);
+    }
+  }
+
+  private async acquireWriter(
+    session: RelaySessionSnapshot,
+    now: string,
+  ): Promise<WriterAcquisition> {
+    try {
+      const restored = await this.restoreWithOutcome(session, now);
+      return { session: restored.session, replacementCreated: restored.replacementCreated };
+    } catch (error) {
+      throw classifyWriterAcquisitionFailure(error);
+    }
   }
 
   async interruptTurn(session: RelaySessionSnapshot, turnId: string): Promise<void> {
@@ -473,6 +510,18 @@ function isMethodNotFound(error: unknown): boolean {
   return Boolean(
     error && typeof error === 'object' && (error as { code?: unknown }).code === -32601,
   );
+}
+
+function classifyWriterAcquisitionFailure(error: unknown): WriterAcquisitionError {
+  if (isCodexThreadWriterBusy(error)) return new WriterAcquisitionError('writerBusy');
+  if (isMissingCodexThreadRollout(error)) return new WriterAcquisitionError('rolloutMissing');
+  if (isMethodNotFound(error)) return new WriterAcquisitionError('protocolIncompatible');
+  const code = error instanceof Error ? error.message : '';
+  if (code === 'ENOENT' || code === 'CODEX_THREAD_ID_MISSING')
+    return new WriterAcquisitionError('workspaceUnavailable');
+  if (/MCP|DEPENDENCY|SKILL/i.test(code))
+    return new WriterAcquisitionError('runtimeDependencyFailed');
+  return new WriterAcquisitionError('runtimeUnavailable');
 }
 
 function rateLimitWindows(value: unknown): readonly RateLimitWindow[] | undefined {
