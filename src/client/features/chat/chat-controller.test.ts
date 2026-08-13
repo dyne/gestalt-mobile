@@ -63,6 +63,47 @@ describe('ChatController', () => {
     });
     controller.dispose();
   });
+  it('reports a rejected writer acquisition and preserves its operation identifier for retry', async () => {
+    const env = environment();
+    const rejected = Object.assign(new Error('safe detail'), { code: 'SESSION_WRITER_BUSY' });
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(rejected)
+      .mockResolvedValue({ activeTurnId: 'turn-1' });
+    const onSendError = vi.fn();
+    const onSendAccepted = vi.fn();
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: null,
+        }),
+        startTurn: start,
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      onSendError,
+      onSendAccepted,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await controller.send('prompt', 'stable-operation');
+    expect(onSendError).toHaveBeenCalledWith(rejected, 'stable-operation');
+    expect(controller.view.prompts[0]).toMatchObject({
+      state: 'failed',
+      operationId: 'stable-operation',
+    });
+    await controller.retryPrompt('stable-operation');
+    expect(start).toHaveBeenNthCalledWith(2, 's', 'prompt', 'stable-operation');
+    expect(onSendAccepted).toHaveBeenCalledWith('stable-operation');
+    controller.dispose();
+  });
   it('takes a second snapshot when a gap arrives during the initial snapshot', async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();

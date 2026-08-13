@@ -113,12 +113,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
-  let chatEnabled = $derived(
-    sessions.some(
-      (session) =>
-        session.id === sessionId && (session.state === 'ready' || session.state === 'turnActive'),
-    ),
-  );
+  let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
   let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
   let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
@@ -126,6 +121,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
   let startingSession = $derived(sessionStartState.starting);
   let openingSessionId = $state<string | null>(null);
+  let openGeneration = 0;
+  let writerFeedback = $state<string | null>(null);
+  let retryOperationId = $state<string | null>(null);
   let recoveryNotice = $state<string | null>(null);
   let message = $state('');
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
@@ -206,6 +204,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     cache: createChatCache(),
     publish: (next) => (chatView = next),
     onSessionEvent: (event) => handleChatMetadataEvent(event),
+    onHistoryError: (error) => {
+      shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
+    },
+    onSendError: (error, operationId) => {
+      const feedback = relayFeedback(error, 'MESSAGE_SEND_FAILED');
+      writerFeedback = feedback.message;
+      retryOperationId = operationId;
+      shellStatus = reportRelayError(error, 'MESSAGE_SEND_FAILED');
+    },
+    onSendAccepted: (operationId) => {
+      if (retryOperationId === operationId) {
+        writerFeedback = null;
+        retryOperationId = null;
+      }
+    },
   });
   const sessionStartController = new SessionStartController(
     { start: relay.startSession },
@@ -391,26 +404,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   async function openSession(id: string) {
     shellStatus = 'Opening session…';
     openingSessionId = id;
+    const generation = ++openGeneration;
     try {
-      const existing = sessions.find((session) => session.id === id);
-      if (existing && existing.state !== 'ready' && existing.state !== 'turnActive') {
-        const restored = await relay.restoreSession(id);
-        sessions = sessions.map((session) => (session.id === id ? restored : session));
-        if (restored.recovery?.replacementCreated) {
-          recoveryNotice =
-            'Open created a replacement session because the prior Codex history was unavailable.';
-        }
-      }
       sessionId = id;
+      writerFeedback = null;
+      retryOperationId = null;
       planController.select(id);
       void sessionCache.saveSelectedSession(id);
-      message = await sessionCache.readDraft(id);
       chatController.select(id);
       enterChatContext();
+      const draft = await sessionCache.readDraft(id);
+      if (generation === openGeneration && sessionId === id) message = draft;
     } catch (error) {
-      shellStatus = `Could not open session: ${errorMessage(error)}`;
+      shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
     } finally {
-      openingSessionId = null;
+      if (generation === openGeneration) openingSessionId = null;
     }
   }
 
@@ -418,10 +426,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     shellStatus = 'Opening recent session…';
     try {
       const session = await relay.openRecentSession(recent.id, recent.cwd);
-      await refreshSessionLists();
+      if (!sessions.some((item) => item.id === session.id)) sessions = [...sessions, session];
+      void refreshSessionLists();
       await openSession(session.id);
     } catch (error) {
-      shellStatus = `Could not open recent session: ${errorMessage(error)}`;
+      shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
     }
   }
 
@@ -481,10 +490,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function sendMessage() {
-    void chatController.send(message);
+    const operationId = createIdempotencyKey();
+    void chatController.send(message, operationId);
     message = '';
     scheduleTail('explicit');
     if (sessionId) void sessionCache.saveDraft(sessionId, '');
+  }
+
+  async function retrySend(): Promise<void> {
+    if (!retryOperationId) return;
+    writerFeedback = null;
+    await chatController.retryPrompt(retryOperationId);
   }
 
   async function interruptTurn() {
@@ -935,11 +951,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {message}
               activeTurnId={chatView?.activeTurnId ?? null}
               starting={chatView?.starting ?? false}
+              detached={Boolean(
+                sessions.find((session) => session.id === sessionId) &&
+                !['ready', 'turnActive'].includes(
+                  sessions.find((session) => session.id === sessionId)?.state ?? '',
+                ),
+              )}
+              retryMessage={writerFeedback}
               models={sessionModels}
               onchange={updateDraft}
               onscrollbottom={() => scheduleTail('explicit')}
               onmodelselect={(model) => void selectSessionModel(model)}
               onsend={() => void sendMessage()}
+              onretry={() => void retrySend()}
               oninterrupt={() => void interruptTurn()}
             />
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
