@@ -17,11 +17,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     message: string;
     activeTurnId: string | null;
     starting: boolean;
+    detached?: boolean;
+    retryMessage?: string | null;
     models?: string[];
     onchange(value: string): void;
     onscrollbottom?(): void;
     onmodelselect?(model: string): void;
     onsend(): void;
+    onretry?(): void;
     oninterrupt(): void;
   };
   let {
@@ -29,11 +32,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     message,
     activeTurnId,
     starting,
+    detached = false,
+    retryMessage = null,
     models = [],
     onchange,
     onscrollbottom = () => {},
     onmodelselect = () => {},
     onsend,
+    onretry = () => {},
     oninterrupt,
   }: Props = $props();
 
@@ -95,18 +101,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <form
+  aria-busy={starting}
   onsubmit={(event) => {
     event.preventDefault();
     onsend();
   }}
 >
-  <p role="status" aria-label={status}>
+  <p role="status" aria-live="polite" aria-atomic="true" aria-label={status}>
     {#if status === 'Ready.'}
       Ready <span class="block-cursor" aria-hidden="true"></span>
     {:else}
       {status}
     {/if}
   </p>
+  {#if detached}
+    <p id="writer-hint" class="writer-hint">
+      You can read this conversation. Sending will connect to Codex.
+    </p>
+  {/if}
+  {#if retryMessage}
+    <div class="writer-feedback" role="alert" aria-atomic="true">
+      <p>{retryMessage}</p>
+      <button type="button" disabled={starting} onclick={onretry}>Retry send</button>
+    </div>
+  {/if}
   {#if commandMenuOpen}
     <ul id="chat-command-completion" class="command-menu" aria-label="Chat commands">
       {#each commandMatches as command, index (command.name)}
@@ -151,6 +169,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       aria-label="Prompt"
       placeholder="Prompt"
       value={message}
+      aria-describedby={detached ? 'writer-hint' : undefined}
       oninput={(event) => updateMessage(event.currentTarget.value)}
       onkeydown={keydown}
       rows="1"
@@ -172,6 +191,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   form > [role='status'] {
     margin-block: 1rem 0.35rem;
     text-align: start;
+  }
+  .writer-hint {
+    margin: 0.35rem 0;
+    color: var(--theme-text-muted);
+  }
+  .writer-feedback {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-block: 0.5rem;
+    padding: 0.5rem;
+    border-inline-start: 0.25rem solid var(--theme-danger, #b42318);
+    background: var(--theme-control-hover);
+  }
+  .writer-feedback p {
+    flex: 1 1 16rem;
+    margin: 0;
   }
   .command-menu {
     display: grid;

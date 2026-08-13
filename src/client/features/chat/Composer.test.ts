@@ -28,6 +28,34 @@ describe('Composer', () => {
     expect(status.firstChild?.textContent).toBe('Ready ');
   });
 
+  it('explains detached reading and keeps a retry action accessible while acquisition fails', async () => {
+    const retry = vi.fn();
+    render(Composer, {
+      status: 'Starting Codex turn…',
+      message: 'retry this',
+      activeTurnId: null,
+      starting: true,
+      detached: true,
+      retryMessage: 'This thread is active in another Codex client. Release it there, then retry.',
+      onchange: () => {},
+      onsend: () => {},
+      onretry: retry,
+      oninterrupt: () => {},
+    });
+
+    expect(
+      screen.getByText('You can read this conversation. Sending will connect to Codex.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('active in another Codex client');
+    expect((screen.getByRole('button', { name: 'Retry send' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      (screen.getByRole('button', { name: 'Send prompt' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
   it('shows and accepts compact command completion above the prompt', async () => {
     const onchange = vi.fn();
     const onsend = vi.fn();

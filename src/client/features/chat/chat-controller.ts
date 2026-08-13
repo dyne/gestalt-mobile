@@ -53,6 +53,9 @@ export type ChatControllerOptions = Readonly<{
   createKey?: () => string;
   now?: () => number;
   onSessionEvent?: (event: ProjectionEvent) => void;
+  onHistoryError?: (error: unknown) => void;
+  onSendError?: (error: unknown, operationId: string) => void;
+  onSendAccepted?: (operationId: string) => void;
 }>;
 const noCache: ChatCache = { read: async () => null, write: async () => {} };
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -172,10 +175,15 @@ export class ChatController {
     this.#set(queuePrompt(this.#projection, operationId, text.trim(), this.#options.now()));
     try {
       const turn = await this.#options.relay.startTurn(id, text.trim(), operationId);
-      if (this.#current(id, generation))
+      if (this.#current(id, generation)) {
         this.#set(promotePrompt(this.#projection, operationId, turn.activeTurnId ?? null));
-    } catch {
-      if (this.#current(id, generation)) this.#set(failPrompt(this.#projection, operationId));
+        this.#options.onSendAccepted?.(operationId);
+      }
+    } catch (error: unknown) {
+      if (this.#current(id, generation)) {
+        this.#set(failPrompt(this.#projection, operationId));
+        this.#options.onSendError?.(error, operationId);
+      }
     } finally {
       this.#commands.delete(command);
     }
@@ -364,9 +372,11 @@ export class ChatController {
         this.#set(acceptSnapshot(this.#projection, decoded));
         if (recovering) this.#replaceSocket(id, generation);
       })
-      .catch(() => {
-        if (this.#current(id, generation))
+      .catch((error: unknown) => {
+        if (this.#current(id, generation)) {
           this.#set({ ...this.#projection, snapshotting: false, lifecycle: 'recoverable' });
+          this.#options.onHistoryError?.(error);
+        }
       })
       .finally(() => {
         if (this.#snapshot?.promise === promise) {

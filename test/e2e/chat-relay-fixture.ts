@@ -31,6 +31,10 @@ export type RecordedCommand = Readonly<{
   body: unknown;
   idempotencyKey: string | null;
 }>;
+export type ProtocolCall = Readonly<{
+  kind: 'history' | 'recentOpen' | 'resume' | 'turn';
+  sessionId: string;
+}>;
 export class ChatRelayFixture {
   readonly sockets = new Map<string, RelaySocket>();
   readonly histories = new Map<string, ReturnType<typeof chatSnapshot>>();
@@ -38,67 +42,112 @@ export class ChatRelayFixture {
   readonly turns = new Map<string, Deferred<DeferredCommandResponse>>();
   readonly interactions = new Map<string, Deferred<DeferredCommandResponse>>();
   readonly commands: RecordedCommand[] = [];
+  readonly protocol: ProtocolCall[] = [];
+  readonly writerLocks = new Set<string>();
+  readonly sessions: Array<Record<string, unknown>> = [];
+  readonly recentSessions: Array<Record<string, unknown>> = [];
+  readonly recentOpenSessions = new Map<string, Record<string, unknown>>();
   constructor(readonly page: Page) {}
   async install(sessions: Array<Record<string, unknown>>): Promise<void> {
+    this.sessions.push(...sessions);
     await this.page.route('**/api/bootstrap', (route) =>
       route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({ workspaces: [], profiles: [], sessions }),
+        body: JSON.stringify({ workspaces: [], profiles: [], sessions: this.sessions }),
       }),
     );
     await this.page.route('**/api/sessions/recent-threads', (route) =>
-      route.fulfill({ contentType: 'application/json', body: '[]' }),
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(this.recentSessions) }),
     );
-    for (const session of sessions) {
-      const id = String(session.id);
-      this.histories.set(id, chatSnapshot());
-      await this.page.route(`**/api/sessions/${id}/history`, async (route) => {
-        const pending = this.historyDeferred.get(id);
-        if (pending && this.historyDeferred.get(id) === pending) this.historyDeferred.delete(id);
-        const snapshot = pending ? await pending.promise : this.histories.get(id);
-        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(snapshot) });
-      });
-      await this.page.routeWebSocket(new RegExp(`/api/sessions/${id}/events`), (socket) =>
-        this.sockets.set(id, socket),
+    await this.page.route('**/api/sessions/recent-threads/open', async (route) => {
+      const body = route.request().postDataJSON() as { threadId?: unknown };
+      const threadId = typeof body.threadId === 'string' ? body.threadId : '';
+      const session = this.recentOpenSessions.get(threadId);
+      this.protocol.push({ kind: 'recentOpen', sessionId: threadId });
+      if (!session) return route.fulfill({ status: 404 });
+      if (!this.sessions.some((item) => item.id === session.id)) this.sessions.push(session);
+      this.histories.set(
+        String(session.id),
+        this.histories.get(String(session.id)) ?? chatSnapshot(),
       );
-      await this.page.route(`**/api/sessions/${id}/turns`, async (route) => {
-        this.commands.push({
-          kind: 'turn',
-          sessionId: id,
-          body: route.request().postDataJSON(),
-          idempotencyKey: await route.request().headerValue('idempotency-key'),
-        });
-        const instruction = await this.turns.get(id)?.promise;
-        if (!instruction || instruction.kind === 'abort')
-          return route.abort(instruction?.errorCode);
-        await route.fulfill({
-          status: instruction.status,
-          contentType: 'application/json',
-          body: JSON.stringify(instruction.body),
-        });
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify(session),
       });
-      await this.page.route(`**/api/sessions/${id}/interactions/*`, async (route) => {
-        const requestId = decodeURIComponent(route.request().url().split('/').at(-1) ?? '');
-        this.commands.push({
-          kind: 'interaction',
-          sessionId: id,
-          requestId,
-          body: route.request().postDataJSON(),
-          idempotencyKey: await route.request().headerValue('idempotency-key'),
-        });
-        const instruction = await this.interactions.get(requestId)?.promise;
-        if (!instruction || instruction.kind === 'abort')
-          return route.abort(instruction?.errorCode);
-        await route.fulfill({
-          status: instruction.status,
-          contentType: 'application/json',
-          body: JSON.stringify(instruction.body),
-        });
+    });
+    await this.page.route('**/api/sessions', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(this.sessions) }),
+    );
+    for (const session of sessions) this.histories.set(String(session.id), chatSnapshot());
+    await this.page.route('**/api/sessions/*/history', async (route) => {
+      const id = decodeURIComponent(route.request().url().split('/').at(-2) ?? '');
+      this.protocol.push({ kind: 'history', sessionId: id });
+      const pending = this.historyDeferred.get(id);
+      if (pending && this.historyDeferred.get(id) === pending) this.historyDeferred.delete(id);
+      const snapshot = pending ? await pending.promise : this.histories.get(id);
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(snapshot) });
+    });
+    await this.page.routeWebSocket(/\/api\/sessions\/([^/]+)\/events/, (socket) => {
+      const id = decodeURIComponent(socket.url().split('/').at(-2) ?? '');
+      this.sockets.set(id, socket);
+    });
+    await this.page.route('**/api/sessions/*/turns', async (route) => {
+      const id = decodeURIComponent(route.request().url().split('/').at(-2) ?? '');
+      this.commands.push({
+        kind: 'turn',
+        sessionId: id,
+        body: route.request().postDataJSON(),
+        idempotencyKey: await route.request().headerValue('idempotency-key'),
       });
-    }
+      if (this.writerLocks.has(id)) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({
+            code: 'SESSION_WRITER_BUSY',
+            detail: 'This thread is active in another Codex client. Release it there, then retry.',
+          }),
+        });
+        return;
+      }
+      this.protocol.push({ kind: 'resume', sessionId: id });
+      this.protocol.push({ kind: 'turn', sessionId: id });
+      const instruction = await this.turns.get(id)?.promise;
+      if (!instruction || instruction.kind === 'abort') return route.abort(instruction?.errorCode);
+      await route.fulfill({
+        status: instruction.status,
+        contentType: 'application/json',
+        body: JSON.stringify(instruction.body),
+      });
+    });
+    await this.page.route('**/api/sessions/*/interactions/*', async (route) => {
+      const parts = route.request().url().split('/');
+      const id = decodeURIComponent(parts.at(-3) ?? '');
+      const requestId = decodeURIComponent(route.request().url().split('/').at(-1) ?? '');
+      this.commands.push({
+        kind: 'interaction',
+        sessionId: id,
+        requestId,
+        body: route.request().postDataJSON(),
+        idempotencyKey: await route.request().headerValue('idempotency-key'),
+      });
+      const instruction = await this.interactions.get(requestId)?.promise;
+      if (!instruction || instruction.kind === 'abort') return route.abort(instruction?.errorCode);
+      await route.fulfill({
+        status: instruction.status,
+        contentType: 'application/json',
+        body: JSON.stringify(instruction.body),
+      });
+    });
   }
   snapshot(sessionId: string, snapshot: ReturnType<typeof chatSnapshot>): void {
     this.histories.set(sessionId, snapshot);
+  }
+  addRecent(recent: Record<string, unknown>, session: Record<string, unknown>): void {
+    this.recentSessions.push(recent);
+    this.recentOpenSessions.set(String(recent.id), session);
+    this.histories.set(String(session.id), chatSnapshot());
   }
   event(
     sessionId: string,
@@ -138,5 +187,11 @@ export class ChatRelayFixture {
     const value = deferred<DeferredCommandResponse>();
     this.interactions.set(requestId, value);
     return value;
+  }
+  lockWriter(sessionId: string): void {
+    this.writerLocks.add(sessionId);
+  }
+  releaseWriter(sessionId: string): void {
+    this.writerLocks.delete(sessionId);
   }
 }
