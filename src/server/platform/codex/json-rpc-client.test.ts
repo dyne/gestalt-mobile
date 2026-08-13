@@ -9,12 +9,21 @@ import { describe, expect, it } from 'vitest';
 import {
   CODEX_JSON_RPC_ERROR,
   CODEX_THREAD_NOT_FOUND,
+  CODEX_THREAD_WRITER_BUSY,
   CodexJsonRpcError,
   isMissingCodexThreadRollout,
   JsonRpcClient,
 } from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
+  it('classifies only the confirmed active-writer protocol response', () => {
+    expect(new CodexJsonRpcError(-32600, 'Thread thread-1 already has an active writer').kind).toBe(
+      CODEX_THREAD_WRITER_BUSY,
+    );
+    expect(new CodexJsonRpcError(-32600, 'active writer exists').kind).not.toBe(
+      CODEX_THREAD_WRITER_BUSY,
+    );
+  });
   it('correlates a JSONL response to its request', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

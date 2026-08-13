@@ -30,6 +30,7 @@ import { registerProblemHandler } from './platform/http/problem-handler.js';
 import { registerAuthorizationBoundary } from './platform/http/authorization-boundary.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
 import type { RestoreSessionResult } from './platform/codex/session-runtime.js';
+import type { WriterAcquisition } from './features/sessions/application/writer-acquisition.js';
 import type { SkillCatalog, SkillProfileStore } from './features/skills/application/ports.js';
 import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
@@ -72,6 +73,8 @@ export type AppDependencies = {
       text: string,
       clientUserMessageId?: string,
     ): Promise<RelaySessionSnapshot>;
+    ensureWriter?(session: RelaySessionSnapshot): Promise<WriterAcquisition>;
+    releaseWriter?(id: string): void | Promise<void>;
     onTurnStarted?(session: RelaySessionSnapshot): void;
     models?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;

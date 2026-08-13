@@ -17,6 +17,7 @@ import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
+import { isCodexThreadWriterBusy } from './platform/codex/json-rpc-client.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
@@ -293,7 +294,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           );
       },
     );
-    recoverExitedSession = (sessionId) => supervisor.recover(sessionId);
+    // An exited child has released our writer.  Do not repeatedly resume a
+    // durable thread: another Codex client may acquire it between callbacks.
+    recoverExitedSession = (sessionId) => {
+      supervisor.cancel(sessionId);
+      const session = sessions.find(sessionId);
+      if (session)
+        saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
+    };
   }
   let authorization: SqliteAuthorizationStore | undefined;
   if (passkeyAuthEnabled) {
@@ -392,6 +400,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ? async (session, text, clientUserMessageId) =>
               runtime.startTurn(session, text, clientUserMessageId, new Date().toISOString())
           : undefined,
+        ensureWriter: runtime
+          ? (session) => runtime.ensureWriter(session, new Date().toISOString())
+          : undefined,
+        releaseWriter: runtime ? (id) => runtime.release(id) : undefined,
         onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
@@ -529,9 +541,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       async (session) => {
         try {
           saveSession(await runtime.restore(session, new Date().toISOString()));
-        } catch {
+        } catch (error) {
           saveSession(
-            RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
+            isCodexThreadWriterBusy(error)
+              ? RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot
+              : RelaySession.rehydrate(session).requireAttention(new Date().toISOString()).snapshot,
           );
         }
       },

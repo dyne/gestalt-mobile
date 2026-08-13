@@ -16,6 +16,94 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('reuses an owned active runtime and resumes a stale ready row exactly once', async () => {
+    const calls: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          calls.push(method);
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const base = {
+      id: 's',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'thread-1',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(base, 'after');
+    const active = await runtime.ensureWriter(
+      { ...base, state: 'turnActive', activeTurnId: 'turn-1' },
+      'later',
+    );
+    expect(active.session.state).toBe('turnActive');
+    expect(calls).toEqual(['initialize', 'thread/resume']);
+
+    const staleCalls: string[] = [];
+    const stale = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          staleCalls.push(method);
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    await Promise.all([stale.ensureWriter(base, 'later'), stale.ensureWriter(base, 'later')]);
+    expect(staleCalls).toEqual(['initialize', 'thread/resume']);
+  });
+
+  it('maps an active-writer startup conflict to writerBusy and disposes the child', async () => {
+    const close = vi.fn();
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/resume')
+            throw new CodexJsonRpcError(-32600, 'Thread thread-1 already has an active writer');
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close,
+    }));
+    const session = {
+      id: 's',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'thread-1',
+      state: 'stopped' as const,
+      desiredState: 'stopped' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await expect(runtime.ensureWriter(session, 'after')).rejects.toMatchObject({
+      kind: 'writerBusy',
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(runtime.ownsWriter('s')).toBe(false);
+  });
   it('reads a stopped thread through a bounded detached reader without resume', async () => {
     const calls: string[] = [];
     const close = vi.fn();
