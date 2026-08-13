@@ -67,4 +67,24 @@ describe('POST /api/sessions/recent-threads/open', () => {
     expect(response.json()).toMatchObject({ code: 'RECENT_THREAD_HISTORY_UNAVAILABLE' });
     await app.close();
   });
+
+  it('uses a generic detail when persistence or another open operation fails', async () => {
+    const app = fastify();
+    registerPromoteRecentThread(app, {
+      list: async () => [{ id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 1 }],
+      promote: async () => {
+        throw new Error('sqlite write failed');
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/recent-threads/open',
+      payload: { threadId: 'thread-1', cwd: '/work/project' },
+    });
+    expect(response.json()).toEqual({
+      code: 'RECENT_THREAD_OPEN_FAILED',
+      detail: 'The selected thread could not be opened. Retry shortly.',
+    });
+    await app.close();
+  });
 });

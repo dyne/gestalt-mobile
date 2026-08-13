@@ -33,13 +33,14 @@ export function registerPromoteRecentThread(
     try {
       return reply.code(202).send(await deps.promote(thread));
     } catch (error) {
+      const historyUnavailable = error instanceof RecentThreadHistoryUnavailable;
       return reply.code(409).send({
-        code:
-          error instanceof RecentThreadHistoryUnavailable
-            ? 'RECENT_THREAD_HISTORY_UNAVAILABLE'
-            : 'RECENT_THREAD_OPEN_FAILED',
-        detail:
-          'The selected thread history is currently unavailable. Retry after Codex is available.',
+        code: historyUnavailable
+          ? 'RECENT_THREAD_HISTORY_UNAVAILABLE'
+          : 'RECENT_THREAD_OPEN_FAILED',
+        detail: historyUnavailable
+          ? 'The selected thread history is currently unavailable. Retry after Codex is available.'
+          : 'The selected thread could not be opened. Retry shortly.',
       });
     }
   });

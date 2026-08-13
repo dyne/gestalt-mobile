@@ -183,6 +183,15 @@ export class CodexSessionRuntime {
     for (const resource of [...this.sessions.values()]) resource.dispose();
   }
 
+  /** Keeps a detached session's supervised-plan status observable without launching Codex. */
+  async watchPlanStatus(session: RelaySessionSnapshot): Promise<void> {
+    if (!this.planStatusSource) return;
+    await this.planStatusSource.open(
+      { id: session.id, workspacePath: session.workspacePath },
+      (update) => this.onPlanStatus?.(session.id, update),
+    );
+  }
+
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingRequests.get(requestId);

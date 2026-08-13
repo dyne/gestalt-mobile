@@ -280,7 +280,6 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   ];
   let closed = false;
   let forgotten = false;
-  let reopened = false;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -308,22 +307,13 @@ test('separates open and saved sessions and retains forgotten threads in recent 
       body: JSON.stringify({ ...sessions[0], state: 'released' }),
     });
   });
-  await page.route('**/api/sessions/running-session/restore', async (route) => {
-    expect(route.request().method()).toBe('POST');
-    reopened = true;
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(sessions[0]),
-    });
-  });
   await page.route('**/api/sessions', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(
-        (closed && !reopened
-          ? [{ ...sessions[0], state: 'released' }, sessions[1]]
-          : sessions
-        ).filter((session) => !forgotten || session.id !== 'stopped-session'),
+        (closed ? [{ ...sessions[0], state: 'released' }, sessions[1]] : sessions).filter(
+          (session) => !forgotten || session.id !== 'stopped-session',
+        ),
       ),
     }),
   );
@@ -358,13 +348,12 @@ test('separates open and saved sessions and retains forgotten threads in recent 
     .filter({ hasText: '/projects/running' })
     .getByRole('button', { name: 'Open' })
     .click();
-  await expect.poll(() => reopened).toBe(true);
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(openSessions.getByText('/projects/running')).toBeVisible();
+  await expect(savedSessions.getByText('/projects/running')).toBeVisible();
 });
 
-test('Open announces replacement history loss while selecting the ready session at mobile and desktop sizes', async ({
+test('Open selects detached history without restoring a replacement session at mobile and desktop sizes', async ({
   page,
 }) => {
   const saved = {
@@ -376,13 +365,6 @@ test('Open announces replacement history loss while selecting the ready session 
     profile: 'work',
     activeTurnId: null,
   };
-  const replacement = {
-    ...saved,
-    state: 'ready',
-    threadId: 'replacement-thread',
-    recovery: { historyUnavailable: true, replacementCreated: true },
-  };
-  let restored = false;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -399,12 +381,13 @@ test('Open announces replacement history loss while selecting the ready session 
   await page.route('**/api/sessions', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(restored ? [replacement] : [saved]),
+      body: JSON.stringify([saved]),
     }),
   );
+  let restoreRequests = 0;
   await page.route('**/api/sessions/saved-session/restore', async (route) => {
-    restored = true;
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(replacement) });
+    restoreRequests += 1;
+    await route.fulfill({ status: 500 });
   });
   await page.route('**/api/sessions/saved-session/history', (route) =>
     route.fulfill({
@@ -417,21 +400,19 @@ test('Open announces replacement history loss while selecting the ready session 
     { width: 390, height: 844 },
     { width: 1280, height: 800 },
   ]) {
-    restored = false;
     await page.setViewportSize(viewport);
     await page.goto('/');
     await page.getByRole('button', { name: 'Sessions' }).click();
     await page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' }).click();
     await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-    const recoveryNotice = page
-      .getByRole('status')
-      .filter({ hasText: 'prior Codex history was unavailable' });
-    await expect(recoveryNotice).toContainText('prior Codex history was unavailable');
-    await expect(recoveryNotice.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+    await expect(
+      page.getByText('You can read this conversation. Sending will connect to Codex.'),
+    ).toBeVisible();
   }
+  expect(restoreRequests).toBe(0);
 });
 
-test('Open re-enables retry after a bounded restore failure', async ({ page }) => {
+test('Open hydrates a saved session without a restore request', async ({ page }) => {
   const saved = {
     id: 'retry-session',
     state: 'released',
@@ -441,7 +422,6 @@ test('Open re-enables retry after a bounded restore failure', async ({ page }) =
     profile: 'work',
     activeTurnId: null,
   };
-  let attempts = 0;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -458,20 +438,10 @@ test('Open re-enables retry after a bounded restore failure', async ({ page }) =
   await page.route('**/api/sessions', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify([saved]) }),
   );
+  let restoreRequests = 0;
   await page.route('**/api/sessions/retry-session/restore', async (route) => {
-    attempts += 1;
-    if (attempts === 1) {
-      await route.fulfill({
-        status: 502,
-        contentType: 'application/json',
-        body: JSON.stringify({ code: 'RESTORE_FAILED' }),
-      });
-      return;
-    }
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ ...saved, state: 'ready' }),
-    });
+    restoreRequests += 1;
+    await route.fulfill({ status: 500 });
   });
   await page.route('**/api/sessions/retry-session/history', (route) =>
     route.fulfill({
@@ -484,10 +454,8 @@ test('Open re-enables retry after a bounded restore failure', async ({ page }) =
   await page.getByRole('button', { name: 'Sessions' }).click();
   const open = page.getByLabel('Saved sessions').getByRole('button', { name: 'Open' });
   await open.click();
-  await expect(open).toBeEnabled();
-  await open.click();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-  expect(attempts).toBe(2);
+  expect(restoreRequests).toBe(0);
 });
 
 test('starts a session with sandbox and approval settings', async ({ page }) => {

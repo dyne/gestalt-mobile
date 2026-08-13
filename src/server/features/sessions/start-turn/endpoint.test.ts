@@ -83,6 +83,36 @@ describe('POST /api/sessions/:id/turns', () => {
     await app.close();
   });
 
+  it('replays a cached accepted turn before rejecting the current active state', async () => {
+    const app = fastify();
+    const results = new Map<string, { statusCode: number; body: string }>();
+    let state = 'ready';
+    let starts = 0;
+    registerStartTurn(app, {
+      find: () => ({ id: 'session-1', state }) as never,
+      start: async () => {
+        starts++;
+        state = 'turnActive';
+        return { id: 'session-1', activeTurnId: 'turn-1' } as never;
+      },
+      save: () => {},
+      idempotency: {
+        get: (scope, key) => results.get(`${scope}:${key}`) ?? null,
+        put: (scope, key, statusCode, body) => results.set(`${scope}:${key}`, { statusCode, body }),
+      },
+    });
+    const request = {
+      method: 'POST' as const,
+      url: '/api/sessions/session-1/turns',
+      headers: { 'idempotency-key': 'lost-response' },
+      payload: { text: 'hello' },
+    };
+    expect((await app.inject(request)).statusCode).toBe(202);
+    expect((await app.inject(request)).json()).toMatchObject({ activeTurnId: 'turn-1' });
+    expect(starts).toBe(1);
+    await app.close();
+  });
+
   it('publishes turn-adjacent interaction state before the HTTP turn response', async () => {
     const app = fastify();
     const order: string[] = [];
@@ -172,6 +202,51 @@ describe('POST /api/sessions/:id/turns', () => {
     release();
     expect((await first).statusCode).toBe(202);
     expect((await second).statusCode).toBe(202);
+    expect(starts).toBe(1);
+    await app.close();
+  });
+
+  it('serializes different idempotency keys and rejects the second turn after revalidation', async () => {
+    const app = fastify();
+    let state = 'stopped';
+    let starts = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    registerStartTurn(app, {
+      find: () => ({ id: 's', state, threadId: 'thread-1' }) as never,
+      ensureWriter: async () => ({
+        session: { id: 's', state: 'ready', threadId: 'thread-1' } as never,
+        replacementCreated: false,
+      }),
+      start: async () => {
+        starts++;
+        entered();
+        await pending;
+        state = 'turnActive';
+        return { id: 's', state, activeTurnId: 'turn-1' } as never;
+      },
+      save: () => {},
+      idempotency: { get: () => null, put: () => {} },
+    });
+    const request = (key: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/sessions/s/turns',
+        headers: { 'idempotency-key': key },
+        payload: { text: key },
+      });
+    const first = request('first');
+    await started;
+    const second = request('second');
+    release();
+    expect((await first).statusCode).toBe(202);
+    expect((await second).json()).toEqual({ code: 'SESSION_TURN_ACTIVE' });
     expect(starts).toBe(1);
     await app.close();
   });

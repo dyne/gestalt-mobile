@@ -12,6 +12,7 @@ describe('relayFeedback', () => {
     expect(relayFeedback(new Error('GIT_CLONE_FAILED'), 'RELAY_UNAVAILABLE')).toEqual({
       code: 'GIT_CLONE_FAILED',
       message: 'Clone failed.',
+      retryable: true,
     }));
 
   it('maps a stable API problem code without exposing its detail', () =>
@@ -24,6 +25,7 @@ describe('relayFeedback', () => {
       code: 'SESSION_HISTORY_UNAVAILABLE',
       message:
         'Session history is unavailable. Check the relay connection and try opening the session again.',
+      retryable: true,
     }));
 
   it('explains a Codex history read failure as distinct from a relay outage', () =>
@@ -36,6 +38,7 @@ describe('relayFeedback', () => {
       code: 'SESSION_HISTORY_READ_FAILED',
       message:
         'Session history could not be read. The conversation remains saved; try again shortly.',
+      retryable: true,
     }));
 
   it('never exposes arbitrary error details', () => {
@@ -46,5 +49,17 @@ describe('relayFeedback', () => {
     expect(feedback.code).toBe('RELAY_UNAVAILABLE');
     expect(feedback.message).not.toContain('secret');
     expect(feedback.message).not.toContain('output');
+  });
+
+  it('preserves a server-declared non-retryable problem', () => {
+    expect(
+      relayFeedback(
+        Object.assign(new Error('unsafe'), {
+          code: 'SESSION_ROLLOUT_MISSING',
+          retryable: false,
+        }),
+        'MESSAGE_SEND_FAILED',
+      ),
+    ).toMatchObject({ code: 'SESSION_ROLLOUT_MISSING', retryable: false });
   });
 });
