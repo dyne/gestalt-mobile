@@ -5,11 +5,23 @@
  */
 
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { registerGetHistory } from './endpoint.js';
 
 describe('GET /api/sessions/:id/history', () => {
+  it('reads a stopped persisted session through the supplied detached reader', async () => {
+    const app = fastify();
+    const read = vi.fn(async () => ({ turns: [], activeTurnId: null }));
+    registerGetHistory(app, {
+      find: () => ({ id: 's', threadId: 'thread-1', state: 'stopped' }) as never,
+      read,
+      currentSequence: () => 0,
+    });
+    expect((await app.inject('/api/sessions/s/history')).statusCode).toBe(200);
+    expect(read).toHaveBeenCalledOnce();
+    await app.close();
+  });
   it('returns normalized canonical history', async () => {
     const app = fastify();
     registerGetHistory(app, {

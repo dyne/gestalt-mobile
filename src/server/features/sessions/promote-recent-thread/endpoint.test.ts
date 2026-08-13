@@ -8,6 +8,7 @@ import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 import { registerPromoteRecentThread } from './endpoint.js';
+import { RecentThreadHistoryUnavailable } from './use-case.js';
 
 describe('POST /api/sessions/recent-threads/open', () => {
   it('promotes only a thread returned by the recent Codex thread list', async () => {
@@ -47,6 +48,23 @@ describe('POST /api/sessions/recent-threads/open', () => {
 
     expect(response.statusCode).toBe(404);
     expect(promote).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('returns a stable safe history-unavailable code', async () => {
+    const app = fastify();
+    registerPromoteRecentThread(app, {
+      list: async () => [{ id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 1 }],
+      promote: async () => {
+        throw new RecentThreadHistoryUnavailable();
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/recent-threads/open',
+      payload: { threadId: 'thread-1', cwd: '/work/project' },
+    });
+    expect(response.json()).toMatchObject({ code: 'RECENT_THREAD_HISTORY_UNAVAILABLE' });
     await app.close();
   });
 });

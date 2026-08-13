@@ -24,6 +24,16 @@ import {
 export type SessionState =
   'starting' | 'ready' | 'turnActive' | 'recovering' | 'attentionRequired' | 'stopped' | 'released';
 export type DesiredState = 'active' | 'stopped';
+
+/** A durable thread can be read even when this relay has no live writer. */
+export function isSessionReadable(session: Pick<RelaySessionSnapshot, 'threadId'>): boolean {
+  return session.threadId !== null;
+}
+
+/** Writer ownership is deliberately transient: only a live relay state implies it. */
+export function relayOwnsWriter(session: Pick<RelaySessionSnapshot, 'state'>): boolean {
+  return session.state === 'ready' || session.state === 'turnActive';
+}
 export type PendingInteraction = {
   requestId: string;
   kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput' | 'quiz';

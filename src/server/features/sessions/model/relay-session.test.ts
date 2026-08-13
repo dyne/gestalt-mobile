@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { RelaySession } from './relay-session.js';
+import { isSessionReadable, relayOwnsWriter, RelaySession } from './relay-session.js';
 import { DomainError } from './errors.js';
 
 const createdAt = '2026-07-14T00:00:00.000Z';
@@ -24,6 +24,25 @@ const session = () =>
   });
 
 describe('RelaySession', () => {
+  it.each([
+    ['ready', true, true],
+    ['turnActive', true, true],
+    ['stopped', true, false],
+    ['released', true, false],
+    ['attentionRequired', true, false],
+    ['recovering', true, false],
+  ] as const)(
+    'separates detached readability from writer ownership for %s',
+    (state, readable, writable) => {
+      const snapshot = { ...session().bindThread('thread-1', createdAt).snapshot, state };
+      expect(isSessionReadable(snapshot)).toBe(readable);
+      expect(relayOwnsWriter(snapshot)).toBe(writable);
+    },
+  );
+
+  it('does not read a session without a durable thread id', () => {
+    expect(isSessionReadable(session().snapshot)).toBe(false);
+  });
   it('keeps a copied effective skill selection through lifecycle transitions', () => {
     const original = session().snapshot;
     const changed = RelaySession.rehydrate(original)

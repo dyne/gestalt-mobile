@@ -124,10 +124,15 @@ export class CodexSessionRuntime {
     private readonly planMeasurementBaseUrl?: string,
     private readonly requestTimeoutMs = 30_000,
     private readonly maxPendingRequests = 64,
+    private readonly readerCwd?: string,
   ) {
     void _legacyProcesses;
   }
   private readonly sessions = new Map<string, SessionResource>();
+  private readonly historyReads = new Map<
+    string,
+    Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
+  >();
 
   async start(
     session: RelaySessionSnapshot,
@@ -233,13 +238,50 @@ export class CodexSessionRuntime {
     turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
-    const resource = this.sessions.get(session.id);
-    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    const owned = this.sessions.get(session.id);
+    if (owned) return this.decodeHistory(owned.process, session.threadId);
+    const existing = this.historyReads.get(session.id);
+    if (existing) return existing;
+    const read = this.readDetachedHistory(session);
+    this.historyReads.set(session.id, read);
+    try {
+      return await read;
+    } finally {
+      if (this.historyReads.get(session.id) === read) this.historyReads.delete(session.id);
+    }
+  }
+
+  private async readDetachedHistory(session: RelaySessionSnapshot): Promise<{
+    turns: HistoryTurn[];
+    activeTurnId: string | null;
+  }> {
+    // A reader is intentionally not a SessionResource: it owns no subscriptions,
+    // runtime registration, plan lease, or writer state and is closed on every path.
+    const process = this.launch({
+      profile: session.profile,
+      cwd: this.readerCwd ?? session.workspacePath,
+    });
+    try {
+      await process.rpc.request('initialize', {
+        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      });
+      return await this.decodeHistory(process, session.threadId!);
+    } finally {
+      process.close();
+    }
+  }
+
+  private async decodeHistory(
+    process: AppServer,
+    threadId: string,
+  ): Promise<{
+    turns: HistoryTurn[];
+    activeTurnId: string | null;
+  }> {
     const result = decodeThreadRead(
-      await resource.process.rpc.request('thread/read', {
-        threadId: session.threadId,
-        includeTurns: true,
-      }),
+      await process.rpc.request('thread/read', { threadId, includeTurns: true }),
     );
     const rawTurns = result;
     const activeTurn = rawTurns.find(
