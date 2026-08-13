@@ -138,9 +138,8 @@ for (const viewport of [
       'second canonical answer',
     ];
     await expectTimeline(page, labels);
-    const before = await page
-      .locator('time')
-      .evaluateAll((times) => times.map((time) => time.dateTime));
+    const messageTimes = page.getByLabel('Chat messages').locator('time');
+    const before = await messageTimes.evaluateAll((times) => times.map((time) => time.dateTime));
     expect(before).toEqual([
       '2026-01-01T12:00:00.000Z',
       '2026-01-01T12:01:00.000Z',
@@ -152,9 +151,9 @@ for (const viewport of [
     await page.reload();
     await page.getByRole('button', { name: 'Chat' }).click();
     await expectTimeline(page, labels);
-    expect(
-      await page.locator('time').evaluateAll((times) => times.map((time) => time.dateTime)),
-    ).toEqual(before);
+    expect(await messageTimes.evaluateAll((times) => times.map((time) => time.dateTime))).toEqual(
+      before,
+    );
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -312,8 +311,9 @@ test('converges a live item through an overlapping snapshot, reconnect, and refr
   await page.reload();
   await page.getByRole('button', { name: 'Chat' }).click();
   await expectTimeline(page, ['live convergence prompt', 'first second final']);
-  await expect(page.locator('time')).toHaveCount(2);
-  await expect(page.locator('time').last()).toHaveAttribute('datetime', startedAt);
+  const messageTimes = page.getByLabel('Chat messages').locator('time');
+  await expect(messageTimes).toHaveCount(2);
+  await expect(messageTimes.last()).toHaveAttribute('datetime', startedAt);
   await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
   expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(844);
 });

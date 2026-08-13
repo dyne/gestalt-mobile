@@ -92,6 +92,7 @@ function parseOccurredAt(value: unknown): number | undefined {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
+  const occurredAt = parseOccurredAt(snapshot.requestedAt);
   return {
     requestId: snapshot.requestId,
     key: `interaction:${snapshot.requestId}`,
@@ -100,9 +101,7 @@ function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
     payload: 'payload' in snapshot ? snapshot.payload : null,
     state: snapshot.resolvedAt ? 'resolved' : 'pending',
     ...(snapshot.resolvedAt ? { attemptedOutcome: snapshot.outcome } : {}),
-    ...(parseOccurredAt(snapshot.requestedAt) !== undefined
-      ? { occurredAt: parseOccurredAt(snapshot.requestedAt) }
-      : {}),
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
   };
 }
 function safeOutcome(
@@ -291,11 +290,10 @@ function mergeMessages(
     slots.set(slot, [...(slots.get(slot) ?? []), message]);
   }
 
-  return unique(
-    canonical
-      .flatMap((message, index) => [message, ...(slots.get(index) ?? [])])
-      .concat(slots.get(-1) ?? []),
-  );
+  return unique([
+    ...(slots.get(-1) ?? []),
+    ...canonical.flatMap((message, index) => [message, ...(slots.get(index) ?? [])]),
+  ]);
 }
 
 /** Cache input is deliberately treated as untrusted: it is only a local rendering hint. */

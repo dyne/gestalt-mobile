@@ -47,6 +47,29 @@ describe('chat projection', () => {
     expect(next.messages.map((item) => item.id)).toEqual(['item:u1', 'item:a1', 'prompt:op']);
     expect(next.prompts[0]?.state).toBe('submitting');
   });
+  it('places an unmatched prior message before the first canonical anchor', () => {
+    const cached = hydrateCache('s', {
+      cursor: 0,
+      lifecycle: 'finished',
+      activeTurnId: null,
+      messages: [
+        { id: 'prompt:op', role: 'user', text: 'earlier prompt', complete: false },
+        { id: 'item:answer', role: 'assistant', text: 'later answer', complete: true },
+      ],
+      prompts: [
+        { operationId: 'op', key: 'prompt:op', text: 'earlier prompt', state: 'submitting' },
+      ],
+      interactions: [],
+    });
+
+    const reconciled = acceptSnapshot(cached, {
+      ...snapshot(),
+      items: [{ id: 'answer', kind: 'agent', text: 'later answer', phase: 'final_answer' }],
+      interactions: [],
+    });
+
+    expect(reconciled.messages.map((message) => message.id)).toEqual(['prompt:op', 'item:answer']);
+  });
   it('keeps optimistic prompts and live agent items at their turn positions during history reconciliation', () => {
     const first = acceptSnapshot(createChatProjection('s'), {
       ...snapshot(),
