@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-type TurnOwned = { turnId?: string };
+type TurnOwned = { turnId?: string; occurredAt?: number };
 
 export type ChatItem =
   | ({
@@ -89,7 +89,7 @@ function toChatItem(
                 text,
                 ...owner,
                 ...(typeof item.clientId === 'string' ? { operationId: item.clientId } : {}),
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -105,7 +105,7 @@ function toChatItem(
                 ...(item.phase === 'commentary' || item.phase === 'final_answer'
                   ? { phase: item.phase }
                   : {}),
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -119,7 +119,7 @@ function toChatItem(
                 kind: 'reasoning',
                 summary,
                 ...owner,
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -131,7 +131,7 @@ function toChatItem(
                 kind: 'plan',
                 text: item.text,
                 ...owner,
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -144,7 +144,7 @@ function toChatItem(
                 command: item.command,
                 status: item.status,
                 ...owner,
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
                 ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {}),
               },
             ]
@@ -162,7 +162,7 @@ function toChatItem(
                 paths,
                 status: item.status,
                 ...owner,
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];
@@ -177,7 +177,7 @@ function toChatItem(
                 name: item.tool,
                 status: item.status,
                 ...owner,
-                ...(timestamp ? { occurredAt: timestamp } : {}),
+                ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
               },
             ]
           : [];

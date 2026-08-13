@@ -106,4 +106,24 @@ describe('toChatItems', () => {
       },
     ]);
   });
+
+  it('preserves the epoch timestamp for every renderable history item', () => {
+    expect(
+      toChatItems([
+        {
+          startedAt: 0,
+          completedAt: 0,
+          items: [
+            { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'prompt' }] },
+            { id: 'a', type: 'agentMessage', text: 'answer', phase: 'final_answer' },
+            { id: 'r', type: 'reasoning', summary: ['reasoning'] },
+            { id: 'p', type: 'plan', text: 'plan' },
+            { id: 'c', type: 'commandExecution', command: 'true', status: 'completed' },
+            { id: 'f', type: 'fileChange', changes: [{ path: 'file' }], status: 'completed' },
+            { id: 't', type: 'mcpToolCall', tool: 'tool', status: 'completed' },
+          ],
+        },
+      ]).map((item) => item.occurredAt),
+    ).toEqual([0, 0, 0, 0, 0, 0, 0]);
+  });
 });
