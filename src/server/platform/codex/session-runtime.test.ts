@@ -16,6 +16,156 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('reads a stopped thread through a bounded detached reader without resume', async () => {
+    const calls: string[] = [];
+    const close = vi.fn();
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          calls.push(method);
+          if (method === 'thread/read') return { thread: { turns: [] } };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close,
+    }));
+    await expect(
+      runtime.readHistory({
+        id: 'stopped',
+        workspaceId: 'workspace',
+        workspacePath: '/missing-history-cwd',
+        profile: 'default',
+        threadId: 'thread-1',
+        state: 'stopped',
+        desiredState: 'stopped',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      }),
+    ).resolves.toEqual({ turns: [], activeTurnId: null });
+    expect(calls).toEqual(['initialize', 'thread/read']);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('closes a detached reader when initialization fails', async () => {
+    const close = vi.fn();
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async () => {
+          throw new Error('bad init');
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close,
+    }));
+    await expect(
+      runtime.readHistory({
+        id: 's',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        threadId: 't',
+        state: 'stopped',
+        desiredState: 'stopped',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'a',
+        updatedAt: 'a',
+      }),
+    ).rejects.toThrow('bad init');
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('coalesces concurrent detached reads and cleans up malformed results', async () => {
+    let launches = 0;
+    const close = vi.fn();
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => (release = resolve));
+    const runtime = new CodexSessionRuntime(() => {
+      launches += 1;
+      return {
+        rpc: {
+          request: async (method) => {
+            if (method === 'thread/read') {
+              await waiting;
+              return { malformed: true };
+            }
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close,
+      };
+    });
+    const session = {
+      id: 's',
+      workspaceId: 'w',
+      workspacePath: '/w',
+      profile: 'default',
+      threadId: 't',
+      state: 'stopped' as const,
+      desiredState: 'stopped' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'a',
+      updatedAt: 'a',
+    };
+    const first = runtime.readHistory(session);
+    const second = runtime.readHistory(session);
+    release();
+    await expect(Promise.all([first, second])).rejects.toThrow();
+    expect(launches).toBe(1);
+    expect(close).toHaveBeenCalledOnce();
+    await expect(runtime.readHistory({ ...session, threadId: null })).rejects.toThrow(
+      'CODEX_THREAD_ID_MISSING',
+    );
+    expect(launches).toBe(1);
+  });
+
+  it('uses an owned runtime for history without launching a temporary reader', async () => {
+    const launches = vi.fn(() => ({
+      rpc: {
+        request: async (method: string) =>
+          method === 'thread/start' ? { thread: { id: 't' } } : { thread: { turns: [] } },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const runtime = new CodexSessionRuntime(launches);
+    const ready = await runtime.start(
+      {
+        id: 's',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'a',
+        updatedAt: 'a',
+      },
+      'b',
+    );
+    await runtime.readHistory(ready);
+    expect(launches).toHaveBeenCalledTimes(1);
+  });
+
   it('initializes app-server, starts a thread, and returns a ready session', async () => {
     const calls: string[] = [];
     const runtime = new CodexSessionRuntime(() => ({

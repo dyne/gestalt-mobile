@@ -127,6 +127,48 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
+  it('uses the relay root for detached history reads and Open never resumes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    const launches: Array<{ cwd: string; method?: string }> = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+      launchAppServer: (input) => ({
+        rpc: {
+          request: async (method) => {
+            launches.push({ cwd: input.cwd, method });
+            if (method === 'thread/list')
+              return { data: [{ id: 't', cwd: '/deleted', updatedAt: 1 }] };
+            if (method === 'thread/read') return { thread: { turns: [] } };
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }),
+    });
+    const opened = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/recent-threads/open',
+      payload: { threadId: 't', cwd: '/deleted' },
+    });
+    expect(opened.statusCode).toBe(202);
+    expect(
+      launches.filter((call) => call.method === 'thread/read').map((call) => call.cwd),
+    ).toEqual([root]);
+    expect(launches.some((call) => call.method === 'thread/resume')).toBe(false);
+    await app.close();
+  });
   it('serves the relay without creating passkey state when access control is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

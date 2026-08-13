@@ -252,6 +252,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           }
         },
         options.planMeasurementBaseUrl,
+        30_000,
+        64,
+        root,
       )
     : null;
   if (runtime && planMeasurementHelperPath) {
@@ -406,7 +409,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 now: () => new Date().toISOString(),
                 list: () => sessions.list(),
                 save: saveSession,
-                restore: (session) => runtime.restore(session, new Date().toISOString()),
+                read: (session) => runtime.readHistory(session),
               })
           : undefined,
         release: (session) =>
