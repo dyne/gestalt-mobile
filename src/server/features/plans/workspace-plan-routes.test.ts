@@ -20,7 +20,7 @@ const plan = {
 };
 
 describe('workspace plan catalog routes', () => {
-  it('resolves an opaque workspace, returns a sorted catalog, and decodes opaque filenames', async () => {
+  it('resolves an opaque workspace and decodes workspace-relative plan paths', async () => {
     const app = fastify();
     const reads: string[] = [];
     const deps = {
@@ -30,7 +30,7 @@ describe('workspace plan catalog routes', () => {
       plans: {
         list: async () => [
           {
-            planName: 'roadmap space.org',
+            planName: 'plans/roadmap space.org',
             title: 'Roadmap',
             totalSteps: 1,
             doneSteps: 0,
@@ -47,12 +47,12 @@ describe('workspace plan catalog routes', () => {
     registerGetWorkspacePlan(app, deps);
 
     expect((await app.inject('/api/workspaces/opaque/plans')).json()).toEqual([
-      expect.objectContaining({ planName: 'roadmap space.org' }),
+      expect.objectContaining({ planName: 'plans/roadmap space.org' }),
     ]);
-    const response = await app.inject('/api/workspaces/opaque/plans/roadmap%20space.org');
+    const response = await app.inject('/api/workspaces/opaque/plans/plans%2Froadmap%20space.org');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ title: 'Catalog plan' });
-    expect(reads).toEqual(['roadmap space.org']);
+    expect(reads).toEqual(['plans/roadmap space.org']);
     await app.close();
   });
 

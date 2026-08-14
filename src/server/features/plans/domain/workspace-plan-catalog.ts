@@ -6,8 +6,9 @@
 
 import type { SupervisedPlan } from './supervised-plan.js';
 
-/** A path-free summary of one validated, workspace-local Org plan. */
+/** A workspace-relative summary of one helper-validated Org plan. */
 export type WorkspacePlanEntry = Readonly<{
+  /** Normalized path below the workspace; never an absolute filesystem path. */
   planName: string;
   title: string;
   subtitle?: string;

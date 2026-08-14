@@ -56,6 +56,7 @@ import { compileSkillOverride, type SkillProfile } from './features/skills/model
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
+import { OrgPlanCommandValidator } from './platform/plans/org-plan-command-validator.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
@@ -122,7 +123,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const idempotency = new SqliteIdempotencyStore(database);
   const supervisedPlans = new SupervisedPlanRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
-  const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const planMeasurementHelperPath =
     options.planMeasurementHelperPath ?? process.env.GESTALT_MOBILE_ORG_PLAN_HELPER;
   const withPendingInteractions = (
@@ -136,6 +136,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
   const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
     skillCatalog(profile).list(workspace),
+  );
+  const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog(
+    new OrgPlanCommandValidator({
+      ...(planMeasurementHelperPath ? { helperPath: planMeasurementHelperPath } : {}),
+      discoverSkills: async (workspace) => (await skillCatalog('default').list(workspace)).skills,
+    }),
   );
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,

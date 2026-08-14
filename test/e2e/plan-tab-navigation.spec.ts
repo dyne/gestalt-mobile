@@ -259,7 +259,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
       contentType: 'application/json',
       body: JSON.stringify([
         {
-          planName: 'roadmap.org',
+          planName: 'plans/roadmap.org',
           title: workspacePlan.title,
           totalSteps: workspacePlan.totalSteps,
           doneSteps: workspacePlan.doneSteps,
@@ -268,7 +268,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
       ]),
     }),
   );
-  await page.route('**/api/workspaces/workspace-1/plans/roadmap.org', (route) =>
+  await page.route('**/api/workspaces/workspace-1/plans/plans%2Froadmap.org', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify(workspacePlan) }),
   );
   await page.routeWebSocket(
@@ -283,7 +283,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('Select a workspace to browse its local plans.')).toBeVisible();
   releaseBootstrap();
-  const roadmap = page.getByRole('button', { name: /Workspace roadmap.*roadmap.org/ });
+  const roadmap = page.getByRole('button', { name: /Workspace roadmap.*plans\/roadmap.org/ });
   await expect(roadmap).toBeVisible();
   await roadmap.click();
   await expect(page.getByRole('heading', { name: workspacePlan.title })).toBeVisible();

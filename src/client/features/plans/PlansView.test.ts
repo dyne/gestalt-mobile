@@ -52,7 +52,7 @@ describe('PlansView', () => {
       onopen: vi.fn(),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('No local plans are available in this workspace.')).toBeTruthy();
+    expect(screen.getByText('No valid Org plans were found below this workspace.')).toBeTruthy();
     rerender({
       catalog: { kind: 'error', workspaceId: 'one', error: 'Offline' },
       state: null,
@@ -94,6 +94,26 @@ describe('PlansView', () => {
         screen.getByRole('button', { name: /Roadmap.*roadmap.org.*1 \/ 2 complete/ }),
       ),
     );
+  });
+
+  it('shows and opens a workspace-relative nested plan path', async () => {
+    const onopen = vi.fn();
+    render(PlansView, {
+      catalog: {
+        kind: 'ready',
+        workspaceId: 'one',
+        entries: [{ ...entry, planName: 'plans/releases/roadmap.org' }],
+      },
+      state: null,
+      onopen,
+      onclose: vi.fn(),
+    });
+
+    expect(screen.getByText('Org plans validated below the selected workspace.')).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole('button', { name: /Roadmap.*plans\/releases\/roadmap.org/ }),
+    );
+    expect(onopen).toHaveBeenCalledWith('plans/releases/roadmap.org');
   });
 
   it('preserves closing and error plan states for the plan viewer', () => {

@@ -45,7 +45,7 @@ export interface PlanMeasurementSnapshotSource {
   read(sessionId: string): Promise<PlanMeasurementSnapshot>;
 }
 
-/** Reads passive workspace-local Org plans without coupling to a relay session. */
+/** Reads helper-validated Org plans anywhere below a workspace without coupling to a session. */
 export interface WorkspacePlanCatalogSource {
   list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]>;
   read(workspacePath: string, planName: string): Promise<WorkspacePlanReadResult>;

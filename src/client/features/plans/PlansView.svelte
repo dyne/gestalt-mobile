@@ -75,14 +75,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {:else if catalog.kind === 'error'}
       <p>{catalog.error}</p>
     {:else if catalog.entries.length === 0}
-      <p>No local plans are available in this workspace.</p>
+      <p>No valid Org plans were found below this workspace.</p>
     {:else}
+      <p class="scope">Org plans validated below the selected workspace.</p>
       <ul>
         {#each catalog.entries as entry (entry.planName)}
           <li>
             <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
               <strong>{entry.title}</strong>
-              <span>{entry.planName}</span>
+              <code>{entry.planName}</code>
               <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
               {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
             </button>
@@ -100,6 +101,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   h2 {
     margin-block: 0.4rem;
+  }
+  .scope {
+    margin-block: 0 0.75rem;
   }
   ul {
     display: grid;
@@ -119,5 +123,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   button:focus-visible {
     outline: 3px solid currentColor;
     outline-offset: 2px;
+  }
+  code {
+    font: inherit;
   }
 </style>
