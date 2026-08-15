@@ -108,6 +108,7 @@ export type AppDependencies = {
   planRoutes?: {
     exists(id: string): boolean;
     find(id: string): SupervisedPlan | null;
+    refresh(id: string): Promise<SupervisedPlan | null>;
     removeStatus(id: string): Promise<void>;
     clear(id: string): void;
     closed(id: string): void;

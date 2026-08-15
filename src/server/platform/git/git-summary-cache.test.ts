@@ -9,14 +9,32 @@ import { describe, expect, it } from 'vitest';
 import { GitSummaryCache } from './git-summary-cache.js';
 
 describe('GitSummaryCache', () => {
-  it('reuses a successful summary until invalidated', async () => {
+  it('re-inspects after a completed read so external Git changes become visible', async () => {
     let reads = 0;
     const cache = new GitSummaryCache(async () => ({ value: ++reads }));
 
     await expect(cache.inspect('/workspace')).resolves.toEqual({ value: 1 });
-    await expect(cache.inspect('/workspace')).resolves.toEqual({ value: 1 });
-    cache.invalidate('/workspace');
     await expect(cache.inspect('/workspace')).resolves.toEqual({ value: 2 });
+  });
+
+  it('coalesces only concurrent inspections of the same workspace', async () => {
+    let finish!: (value: { value: number }) => void;
+    let reads = 0;
+    const cache = new GitSummaryCache(
+      () =>
+        new Promise<{ value: number }>((resolve) => {
+          reads += 1;
+          finish = resolve;
+        }),
+    );
+
+    const first = cache.inspect('/workspace');
+    const concurrent = cache.inspect('/workspace');
+    expect(reads).toBe(1);
+    finish({ value: 1 });
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([{ value: 1 }, { value: 1 }]);
+    void cache.inspect('/workspace');
+    expect(reads).toBe(2);
   });
 
   it('does not cache a failed inspection', async () => {

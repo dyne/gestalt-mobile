@@ -465,6 +465,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       planRoutes: {
         exists: (id) => sessions.find(id) !== null,
         find: (id) => supervisedPlans.find(id),
+        refresh: async (id) => {
+          const refreshed = await planStatusSource.refresh(id);
+          if (refreshed?.kind === 'updated') return refreshed.plan;
+          return refreshed ? null : supervisedPlans.find(id);
+        },
         removeStatus: (id) =>
           planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
         clear: (id) => supervisedPlans.clear(id),

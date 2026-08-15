@@ -129,6 +129,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
   let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
   let passivePlan = $state.raw<import('./features/plans/contracts.js').SupervisedPlan | null>(null);
+  let passivePlanName = $state<string | null>(null);
   let hideLivePlan = $state(false);
   let plansCatalogRequest: AbortController | null = null;
   let passivePlanRequest: AbortController | null = null;
@@ -527,6 +528,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
     }
     if (next === 'git' && gitWorkspaceId) void gitController.refresh();
+    if (next === 'plan') {
+      if (sessionId) planController.refresh(sessionId);
+      if (!changedTab) refreshPlanSurface();
+    }
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
       void refreshSessionLists();
@@ -537,6 +542,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const workspaceId = plansWorkspaceId;
     if (tab === 'plan') loadPlansCatalog(workspaceId);
   });
+
+  let externalRefreshQueued = false;
+
+  function queueVisibleExternalRefresh(): void {
+    if (document.visibilityState !== 'visible' || externalRefreshQueued) return;
+    externalRefreshQueued = true;
+    queueMicrotask(() => {
+      externalRefreshQueued = false;
+      if (document.visibilityState !== 'visible') return;
+      if (tab === 'git' && gitWorkspaceId) void gitController.refresh();
+      if (tab === 'plan') refreshPlanSurface();
+    });
+  }
 
   function focusNavigationTab(next: Tab): void {
     navigationFocus = next;
@@ -575,6 +593,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
     passivePlan = null;
+    passivePlanName = null;
     if (!workspaceId) {
       plansCatalog = { kind: 'no-workspace' };
       return;
@@ -611,6 +630,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       .then((plan) => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
         passivePlan = plan;
+        passivePlanName = planName;
         hideLivePlan = false;
       })
       .catch((error: unknown) => {
@@ -625,8 +645,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function closePlanViewer(): void {
     passivePlan = null;
+    passivePlanName = null;
     hideLivePlan = true;
     loadPlansCatalog();
+  }
+
+  function refreshPlanSurface(): void {
+    if (sessionId) planController.refresh(sessionId);
+    if (passivePlanName) openWorkspacePlan(passivePlanName);
+    else loadPlansCatalog();
   }
 
   async function loadSkills(workspaceId: string, profile: string): Promise<void> {
@@ -876,6 +903,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <svelte:head>
   <title>Gestalt Mobile</title>
 </svelte:head>
+
+<svelte:window onfocus={queueVisibleExternalRefresh} />
+<svelte:document onvisibilitychange={queueVisibleExternalRefresh} />
 
 {#if toastEvidence === 'error' || toastEvidence === 'stacked'}
   <ToastEvidence variant={toastEvidence} />

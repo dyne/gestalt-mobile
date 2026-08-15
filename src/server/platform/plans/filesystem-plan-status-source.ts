@@ -81,6 +81,10 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     this.leases.clear();
   }
 
+  async refresh(sessionId: string): Promise<PlanStatusUpdate | null> {
+    return (await this.leases.get(sessionId)?.refreshCurrent()) ?? null;
+  }
+
   async remove(sessionId: string, identity?: string): Promise<void> {
     const statusPath = this.activeStatusPaths.get(sessionId);
     const signal = statusPath ? await this.readStatusForRollback(statusPath) : undefined;
@@ -252,11 +256,15 @@ class ActiveLease implements PlanStatusLease {
       this.debounce = undefined;
       const pendingStatusPath = this.pendingStatusPath;
       this.pendingStatusPath = undefined;
-      void (pendingStatusPath ? this.refresh(pendingStatusPath) : this.refreshLatest());
+      void (pendingStatusPath ? this.refreshPath(pendingStatusPath) : this.refreshLatest());
     }, 25);
   }
 
-  private async refreshLatest(): Promise<void> {
+  async refreshCurrent(): Promise<PlanStatusUpdate | null> {
+    return this.activeStatusPath ? this.refreshPath(this.activeStatusPath) : this.refreshLatest();
+  }
+
+  private async refreshLatest(): Promise<PlanStatusUpdate | null> {
     try {
       const candidates = (await readdir(this.statusDirectory))
         .filter((filename) => filename.endsWith(statusFileSuffix))
@@ -282,13 +290,16 @@ class ActiveLease implements PlanStatusLease {
             right.signal.updatedAt.localeCompare(left.signal.updatedAt) ||
             right.modifiedAt - left.modifiedAt,
         )[0];
-      if (latest) await this.refresh(latest.statusPath, latest.signal);
+      return latest ? this.refreshPath(latest.statusPath, latest.signal) : null;
     } catch {
-      if (!this.closed) this.emitUnavailable();
+      return !this.closed ? this.emitUnavailable() : null;
     }
   }
 
-  private async refresh(statusPath: string, parsedSignal?: PlanStatusSignal): Promise<void> {
+  private async refreshPath(
+    statusPath: string,
+    parsedSignal?: PlanStatusSignal,
+  ): Promise<PlanStatusUpdate | null> {
     try {
       const signal =
         parsedSignal ?? parseSignal(await this.planReadFilesystem.readFile(statusPath, 'utf8'));
@@ -300,7 +311,7 @@ class ActiveLease implements PlanStatusLease {
       if (!isPlanPathWithinWorkspace(planPath, workspacePath))
         throw new Error('PATH_OUTSIDE_WORKSPACE');
       const identity = createHash('sha256').update(planPath).digest('hex');
-      if (await this.isDismissed(identity)) return;
+      if (await this.isDismissed(identity)) return null;
       const result = parseSupervisedPlan({
         source: await this.planReadFilesystem.readFile(planPath, 'utf8'),
         planPath,
@@ -325,24 +336,28 @@ class ActiveLease implements PlanStatusLease {
           }
           if (previousStatusPath && previousStatusPath !== statusPath)
             await rm(previousStatusPath, { force: true }).catch(() => {});
+          return update;
         }
       } else if (!this.closed) {
-        this.emitUnavailable();
+        return this.emitUnavailable();
       }
+      return null;
     } catch (error) {
       if (
         (error as NodeJS.ErrnoException).code === 'ENOENT' &&
         this.activeStatusPath !== undefined &&
         statusPath !== this.activeStatusPath
       )
-        return;
-      if (!this.closed) this.emitUnavailable();
+        return null;
+      return !this.closed ? this.emitUnavailable() : null;
     }
   }
 
-  private emitUnavailable(): void {
+  private emitUnavailable(): PlanStatusUpdate {
     this.lastEmittedUpdate = undefined;
-    this.listener({ kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' });
+    const update = { kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' } as const;
+    this.listener(update);
+    return update;
   }
 }
 

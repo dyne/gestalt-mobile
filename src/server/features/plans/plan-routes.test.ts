@@ -29,9 +29,22 @@ const incomplete: SupervisedPlan = {
 describe('session plan REPR routes', () => {
   it('returns no content until a session owns a retained plan and isolates unknown sessions', async () => {
     const app = fastify();
-    registerGetPlan(app, { exists: (id) => id === 'one', find: () => null });
+    registerGetPlan(app, { exists: (id) => id === 'one', refresh: async () => null });
     expect((await app.inject('/api/sessions/one/plan')).statusCode).toBe(204);
     expect((await app.inject('/api/sessions/two/plan')).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('awaits a fresh plan projection for every GET', async () => {
+    const app = fastify();
+    let reads = 0;
+    registerGetPlan(app, {
+      exists: () => true,
+      refresh: async () => ({ ...incomplete, title: `Filesystem plan ${++reads}` }),
+    });
+
+    expect((await app.inject('/api/sessions/one/plan')).json().title).toBe('Filesystem plan 1');
+    expect((await app.inject('/api/sessions/one/plan')).json().title).toBe('Filesystem plan 2');
     await app.close();
   });
 
@@ -43,6 +56,7 @@ describe('session plan REPR routes', () => {
     const deps = {
       exists: (id: string) => id === 'one',
       find: () => plan,
+      refresh: async () => plan,
       removeStatus: async (id: string) => {
         removed.push(id);
       },
@@ -122,6 +136,7 @@ describe('session plan REPR routes', () => {
     const deps = {
       exists: (id: string) => sessions.has(id),
       find: (id: string) => plans.get(id) ?? null,
+      refresh: async (id: string) => plans.get(id) ?? null,
       removeStatus: async (id: string) => {
         removed.push(id);
       },

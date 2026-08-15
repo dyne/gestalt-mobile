@@ -54,6 +54,35 @@ function leaseStatusPath(lease: PlanStatusLease, planPath: string): string {
 }
 
 describe('FilesystemPlanStatusSource', () => {
+  it('re-reads the active Org file on an explicit refresh without a new helper signal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
+    temporaryPaths.push(root);
+    const workspace = join(root, 'workspace');
+    const planPath = join(workspace, 'plan.org');
+    await mkdir(workspace);
+    await writeFile(planPath, org('Original title'));
+    const updates: PlanStatusUpdate[] = [];
+    const source = new FilesystemPlanStatusSource(join(root, 'state'));
+    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
+      updates.push(update),
+    );
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
+    await vi.waitFor(() =>
+      expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Original title' } }),
+    );
+
+    await writeFile(planPath, org('Changed on filesystem'));
+    await expect(source.refresh('session-a')).resolves.toMatchObject({
+      kind: 'updated',
+      plan: { title: 'Changed on filesystem' },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      kind: 'updated',
+      plan: { title: 'Changed on filesystem' },
+    });
+    lease.close();
+  });
+
   it.each(['supervision-start', 'resync'])(
     'retains the %s helper signal reason',
     async (reason) => {
