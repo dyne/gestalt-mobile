@@ -128,6 +128,67 @@ describe('skill profile codec', () => {
     });
   });
 
+  it('rebinds a saved plugin skill across cache versions', () => {
+    const currentPath =
+      '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.2.0/skills/development-testing/SKILL.md';
+    const result = compileSkillOverride({
+      discovered: [
+        { name: 'gestalt:development-testing', path: currentPath, enabled: false },
+        { ...alpha, enabled: true },
+      ],
+      explicit: createSkillSelection([
+        {
+          name: 'gestalt:development-testing',
+          path: '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.1.0/skills/development-testing/SKILL.md',
+          enabled: true,
+        },
+      ]),
+    });
+
+    expect(result).toEqual({
+      source: 'explicit',
+      skillsConfig: [
+        { path: currentPath, enabled: true },
+        { path: '/skills/alpha/SKILL.md', enabled: false },
+      ],
+      warnings: [],
+    });
+  });
+
+  it('does not rebind a stale plugin skill to a different plugin or skill path', () => {
+    const stalePath =
+      '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.1.0/skills/development-testing/SKILL.md';
+    const result = compileSkillOverride({
+      discovered: [
+        {
+          name: 'other:development-testing',
+          path: '/home/test/.codex/plugins/cache/other-marketplace/other-plugin/2.2.0/skills/development-testing/SKILL.md',
+          enabled: true,
+        },
+        {
+          name: 'gestalt:verification-before-completion',
+          path: '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.2.0/skills/verification-before-completion/SKILL.md',
+          enabled: true,
+        },
+      ],
+      explicit: createSkillSelection([
+        { name: 'gestalt:development-testing', path: stalePath, enabled: true },
+      ]),
+    });
+
+    expect(result.skillsConfig).toEqual([
+      {
+        path: '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.2.0/skills/verification-before-completion/SKILL.md',
+        enabled: false,
+      },
+      {
+        path: '/home/test/.codex/plugins/cache/other-marketplace/other-plugin/2.2.0/skills/development-testing/SKILL.md',
+        enabled: false,
+      },
+    ]);
+    expect(result.warnings).toEqual([`Saved skill path is no longer discovered: ${stalePath}`]);
+  });
+
   it('emits no override when neither explicit nor project selection exists', () => {
     expect(compileSkillOverride({ discovered: [alpha] })).toEqual({
       source: 'native',

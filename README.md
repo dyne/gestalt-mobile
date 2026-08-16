@@ -50,7 +50,10 @@ skill paths without starting the server. Without `--skills`, a workspace
 `gestalt-skills.yml` is used when present; otherwise Codex-native selection is
 preserved. Explicit profiles take precedence over project defaults, which take
 precedence over native configuration. Gestalt Mobile never rewrites Codex
-configuration or skill files.
+configuration or skill files. Exact skill paths remain authoritative, while
+paths inside Codex's versioned plugin cache are rebound to the currently
+discovered plugin version when their marketplace, plugin, and skill-relative
+path still match.
 
 ## Themes
 

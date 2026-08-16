@@ -117,6 +117,43 @@ function canonicalSkillPath(value: string): string {
 }
 
 /**
+ * Return the durable identity of a skill inside Codex's versioned plugin cache.
+ * The concrete version directory is installation state, while marketplace,
+ * plugin, and skill-relative path remain stable across plugin upgrades.
+ */
+function versionNeutralPluginSkillPath(value: string): string | undefined {
+  const match = value.match(
+    /^(.*[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+)[\\/][^\\/]+([\\/]skills[\\/].+[\\/]SKILL\.md)$/,
+  );
+  return match ? `${match[1]}${match[2]}` : undefined;
+}
+
+function rebindVersionedPluginSkills(
+  discovered: readonly AvailableSkill[],
+  selection: SkillSelection,
+): SkillSelection {
+  const discoveredPaths = new Set(discovered.map((skill) => canonicalSkillPath(skill.path)));
+  const discoveredByDurablePath = new Map<string, AvailableSkill[]>();
+  for (const skill of discovered) {
+    const durablePath = versionNeutralPluginSkillPath(canonicalSkillPath(skill.path));
+    if (durablePath === undefined) continue;
+    const matches = discoveredByDurablePath.get(durablePath) ?? [];
+    matches.push(skill);
+    discoveredByDurablePath.set(durablePath, matches);
+  }
+
+  return createSkillSelection(
+    selection.map((entry) => {
+      if (discoveredPaths.has(entry.path)) return entry;
+      const durablePath = versionNeutralPluginSkillPath(entry.path);
+      if (durablePath === undefined) return entry;
+      const matches = discoveredByDurablePath.get(durablePath) ?? [];
+      return matches.length === 1 ? { ...entry, path: matches[0].path } : entry;
+    }),
+  );
+}
+
+/**
  * Validate a complete selection and return its canonical deterministic order.
  * This is lexical only: resolving symlinks is I/O and belongs to a platform
  * adapter before it constructs this domain value.
@@ -201,11 +238,12 @@ export function compileSkillOverride(input: {
   const effective = selectEffectiveSkillSelection(input);
   if (effective.selection === undefined)
     return { source: 'native', skillsConfig: undefined, warnings: [] };
+  const reboundSelection = rebindVersionedPluginSkills(input.discovered, effective.selection);
   const discoveredPaths = new Set(input.discovered.map((skill) => canonicalSkillPath(skill.path)));
-  const warnings = effective.selection
+  const warnings = reboundSelection
     .filter((entry) => !discoveredPaths.has(entry.path))
     .map((entry) => `Saved skill path is no longer discovered: ${entry.path}`);
-  const configured = applySkillSelectionSnapshot(input.discovered, effective.selection);
+  const configured = applySkillSelectionSnapshot(input.discovered, reboundSelection);
   return {
     source: effective.source,
     skillsConfig: configured
