@@ -18,6 +18,7 @@ export type ChatTurn = {
   startedAt: number | null;
   completedAt: number | null;
 };
+export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed';
 export type SafeInteractionSnapshot =
   | {
       requestId: string;
@@ -33,7 +34,7 @@ export type SafeInteractionSnapshot =
       turnId: string | null;
       requestedAt: string | null;
       resolvedAt: string;
-      outcome: 'approved' | 'denied' | 'answered';
+      outcome: SafeInteractionOutcome;
     };
 /** Lower-bound snapshot: events with sequence > baseSequence are replayable. */
 export type ChatSnapshot = {

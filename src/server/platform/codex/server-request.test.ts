@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GESTALT_QUIZ_TOOL_NAME } from '../../../shared/contracts/quiz.js';
-import { toPendingInteraction } from './server-request.js';
+import { resolvedServerRequestId, toPendingInteraction } from './server-request.js';
 
 describe('Codex server request mapping', () => {
   it('maps a command approval to the relay interaction vocabulary', () => {
@@ -61,6 +61,21 @@ describe('Codex server request mapping', () => {
         method: 'item/tool/call',
         params: { tool: GESTALT_QUIZ_TOOL_NAME, arguments: { questions: [] } },
       }),
+    ).toBeNull();
+  });
+
+  it('decodes only bounded server-request resolution notifications', () => {
+    expect(
+      resolvedServerRequestId({
+        method: 'serverRequest/resolved',
+        params: { threadId: 'thread-1', requestId: 42 },
+      }),
+    ).toBe('42');
+    expect(
+      resolvedServerRequestId({ method: 'serverRequest/resolved', params: { requestId: '' } }),
+    ).toBeNull();
+    expect(
+      resolvedServerRequestId({ method: 'turn/completed', params: { requestId: 42 } }),
     ).toBeNull();
   });
 });

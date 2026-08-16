@@ -868,4 +868,93 @@ describe('production composition', () => {
     // Model and skill catalogs run for bootstrap and session start; the active child closes with the relay.
     expect(closed).toBe(5);
   });
+
+  it('reconciles an interaction cleared upstream as no longer pending', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const handles: Array<{
+      calls: string[];
+      notify?: (notification: { method: string; params: unknown }) => void;
+      request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
+    }> = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok', status: 'ready' }],
+        require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+      },
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => {
+        const handle: (typeof handles)[number] = { calls: [] };
+        handles.push(handle);
+        return {
+          rpc: {
+            request: async (method: string, params: unknown) => {
+              handle.calls.push(method);
+              if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+              if (method === 'thread/read') return { thread: { turns: [] } };
+              if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
+              if (method === 'skills/list')
+                return {
+                  data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }],
+                };
+              return {};
+            },
+            onNotification: (listener) => {
+              handle.notify = listener;
+              return () => {};
+            },
+            onServerRequest: (listener) => {
+              handle.request = listener;
+              return () => {};
+            },
+          },
+          close: () => {},
+          onExit: () => () => {},
+        };
+      },
+    });
+    const workspace = (await app.inject('/api/bootstrap'))
+      .json()
+      .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: workspace.id, profile: 'default' },
+    });
+    const sessionId = created.json().id as string;
+    const handle = handles.find((candidate) => candidate.calls.includes('thread/start'));
+    expect(handle?.request).toBeDefined();
+    const pending = handle!.request!({
+      id: 7,
+      method: 'item/tool/requestUserInput',
+      params: { isBlocking: true, questions: [] },
+    });
+    const cleared = pending.catch((error: unknown) => error);
+    expect((await app.inject(`/api/sessions/${sessionId}/history`)).json().interactions).toEqual([
+      expect.objectContaining({ requestId: '7', resolvedAt: null }),
+    ]);
+
+    handle!.notify!({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-1', requestId: 7 },
+    });
+
+    expect(await cleared).toEqual(
+      expect.objectContaining({ message: 'CODEX_SERVER_REQUEST_CLEARED' }),
+    );
+    expect((await app.inject(`/api/sessions/${sessionId}/history`)).json().interactions).toEqual([
+      expect.objectContaining({
+        requestId: '7',
+        resolvedAt: expect.any(String),
+        outcome: 'dismissed',
+      }),
+    ]);
+    await app.close();
+  });
 });

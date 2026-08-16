@@ -12,7 +12,9 @@ import type { SafeInteractionSnapshot } from '../../../shared/contracts/chat-sna
 type SafeInteractionOutcome = Extract<SafeInteractionSnapshot, { resolvedAt: string }>['outcome'];
 
 function safeInteractionOutcome(value: unknown): SafeInteractionOutcome {
-  return value === 'approved' || value === 'denied' || value === 'answered' ? value : 'answered';
+  return value === 'approved' || value === 'denied' || value === 'answered' || value === 'dismissed'
+    ? value
+    : 'answered';
 }
 
 export class SqlitePendingInteractionStore {
@@ -20,7 +22,15 @@ export class SqlitePendingInteractionStore {
   add(sessionId: string, interaction: PendingInteraction): void {
     this.db
       .prepare(
-        'INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at) VALUES (?,?,?,?,?,?)',
+        `INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at)
+         VALUES (?,?,?,?,?,?)
+         ON CONFLICT(session_id,request_id) DO UPDATE SET
+           kind = excluded.kind,
+           payload_json = excluded.payload_json,
+           turn_id = excluded.turn_id,
+           requested_at = excluded.requested_at,
+           resolved_at = NULL,
+           outcome = NULL`,
       )
       .run(
         sessionId,

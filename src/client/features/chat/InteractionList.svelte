@@ -70,9 +70,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       >
         {interaction.attemptedOutcome === 'denied'
           ? 'Denied'
-          : interaction.attemptedOutcome === 'answered'
-            ? 'Answers sent'
-            : 'Approved'}
+          : interaction.attemptedOutcome === 'dismissed'
+            ? 'No longer awaiting a response'
+            : interaction.attemptedOutcome === 'answered'
+              ? 'Answers sent'
+              : 'Approved'}
       </p>
     {:else}
       {#if submitting}<p class="interaction-submitting" data-interaction-state="submitting">

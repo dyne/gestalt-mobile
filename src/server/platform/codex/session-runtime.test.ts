@@ -1501,10 +1501,11 @@ describe('CodexSessionRuntime', () => {
     ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
   });
 
-  it('bounds server requests, times them out, and makes late resolutions harmless', async () => {
+  it('bounds server requests without timing out explicit user input', async () => {
     vi.useFakeTimers();
     let requestListener:
       ((request: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    const accepted = vi.fn(() => true);
     const runtime = new CodexSessionRuntime(
       () => ({
         rpc: {
@@ -1520,7 +1521,7 @@ describe('CodexSessionRuntime', () => {
       }),
       undefined,
       undefined,
-      () => true,
+      accepted,
       undefined,
       undefined,
       undefined,
@@ -1551,11 +1552,75 @@ describe('CodexSessionRuntime', () => {
     await expect(requestListener!({ id: 2, method: 'item/tool/call', params: {} })).rejects.toThrow(
       'CODEX_SERVER_REQUEST_LIMIT',
     );
-    const timeout = expect(pending).rejects.toThrow('CODEX_SERVER_REQUEST_TIMEOUT');
-    await vi.advanceTimersByTimeAsync(10);
-    await timeout;
-    expect(runtime.resolveServerRequest('session-1', '1', {})).toBe(false);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runtime.resolveServerRequest('session-1', '1', { answers: {} })).toBe(true);
+    await expect(pending).resolves.toEqual({ answers: {} });
     vi.useRealTimers();
+  });
+
+  it('settles a local request when app-server reports that it was cleared', async () => {
+    let requestListener:
+      ((request: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    let notificationListener:
+      ((notification: { method: string; params: unknown }) => void) | undefined;
+    const notified = vi.fn();
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: (listener) => {
+            notificationListener = listener;
+            return () => {};
+          },
+          onServerRequest: (listener) => {
+            requestListener = listener;
+            return () => {};
+          },
+        },
+        close: () => {},
+      }),
+      undefined,
+      notified,
+      () => true,
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    const pending = requestListener!({
+      id: 3,
+      method: 'item/tool/requestUserInput',
+      params: { isBlocking: true, questions: [] },
+    });
+    const cleared = pending.catch((error: unknown) => error);
+    notificationListener!({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-1', requestId: 3 },
+    });
+    expect(await cleared).toEqual(
+      expect.objectContaining({ message: 'CODEX_SERVER_REQUEST_CLEARED' }),
+    );
+    expect(runtime.resolveServerRequest('session-1', '3', {})).toBe(false);
+    expect(notified).toHaveBeenCalledWith('session-1', {
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-1', requestId: 3 },
+    });
   });
 
   it('removes listeners and leases exactly once when exit races release', async () => {

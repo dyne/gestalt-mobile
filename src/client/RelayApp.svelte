@@ -193,9 +193,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (interaction.state === 'resolved') {
       return interaction.attemptedOutcome === 'denied'
         ? 'Decision denied.'
-        : interaction.attemptedOutcome === 'answered'
-          ? 'Answers sent.'
-          : 'Decision approved.';
+        : interaction.attemptedOutcome === 'dismissed'
+          ? 'Request is no longer awaiting a response.'
+          : interaction.attemptedOutcome === 'answered'
+            ? 'Answers sent.'
+            : 'Decision approved.';
     }
     return '';
   });

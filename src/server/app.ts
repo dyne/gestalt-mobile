@@ -21,11 +21,15 @@ import type {
 import { registerPlanRoutes } from './features/plans/register-routes.js';
 import type { RecentThread } from './features/sessions/list-recent-threads/endpoint.js';
 import { registerSessionRoutes } from './features/sessions/register-routes.js';
+import type { InteractionReplyResult } from './features/sessions/respond-interaction/endpoint.js';
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
 import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
-import type { SafeInteractionSnapshot } from '../shared/contracts/chat-snapshot.js';
+import type {
+  SafeInteractionOutcome,
+  SafeInteractionSnapshot,
+} from '../shared/contracts/chat-snapshot.js';
 import { registerProblemHandler } from './platform/http/problem-handler.js';
 import { registerAuthorizationBoundary } from './platform/http/authorization-boundary.js';
 import type { StartSessionSettings } from './features/sessions/application/start-settings.js';
@@ -79,7 +83,7 @@ export type AppDependencies = {
     models?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;
     remove?(id: string): void;
-    replyInteraction?(sessionId: string, requestId: string, value: unknown): boolean;
+    replyInteraction?(sessionId: string, requestId: string, value: unknown): InteractionReplyResult;
     readHistory?(session: RelaySessionSnapshot): Promise<{
       turns: import('./features/sessions/get-history/history-mapper.js').HistoryTurn[];
       activeTurnId: string | null;
@@ -97,7 +101,7 @@ export type AppDependencies = {
       sessionId: string,
       requestId: string,
       occurredAt: string,
-      outcome: 'approved' | 'denied' | 'answered',
+      outcome: SafeInteractionOutcome,
     ): void;
   };
   sessionEvents?: {
@@ -131,13 +135,13 @@ export type AppDependencies = {
       sessionId: string,
       requestId: string,
       resolvedAt: string,
-      outcome: 'approved' | 'denied' | 'answered',
+      outcome: SafeInteractionOutcome,
     ): boolean;
     validate?(sessionId: string, requestId: string, value: Record<string, unknown>): boolean;
     alreadyResolved?(
       sessionId: string,
       requestId: string,
-    ): { resolvedAt: string; outcome: 'approved' | 'denied' | 'answered' } | null;
+    ): { resolvedAt: string; outcome: SafeInteractionOutcome } | null;
     snapshot?(sessionId: string): SafeInteractionSnapshot[];
     pending?(sessionId: string, requestId: string): boolean;
   };

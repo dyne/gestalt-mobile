@@ -248,7 +248,7 @@ describe('relay client', () => {
       });
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
-    await client.respondInteraction(
+    const response = await client.respondInteraction(
       'session-1',
       'request-1',
       { decision: 'approved' },
@@ -262,6 +262,7 @@ describe('relay client', () => {
         body: JSON.stringify({ decision: 'approved' }),
       },
     ]);
+    expect(response).toEqual({ accepted: true });
   });
 
   it('uses typed Skills transport routes and preserves a profile failure detail', async () => {

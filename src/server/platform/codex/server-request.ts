@@ -27,6 +27,20 @@ export function toPendingInteraction(input: {
   return kind ? { requestId: String(input.id), kind, payload: input.params } : null;
 }
 
+export function resolvedServerRequestId(input: {
+  method?: string;
+  params?: unknown;
+}): string | null {
+  if (input.method !== 'serverRequest/resolved' || !isRecord(input.params)) return null;
+  const requestId = input.params.requestId;
+  if (!(
+    (typeof requestId === 'string' && requestId.length > 0 && requestId.length <= 256) ||
+    (typeof requestId === 'number' && Number.isSafeInteger(requestId))
+  ))
+    return null;
+  return String(requestId);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

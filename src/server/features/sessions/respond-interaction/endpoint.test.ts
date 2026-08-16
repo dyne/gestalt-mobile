@@ -32,7 +32,7 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
     await app.close();
   });
 
-  it('keeps the interaction pending when the app-server cannot accept a response', async () => {
+  it('dismisses a stale interaction when app-server is no longer awaiting it', async () => {
     const app = fastify();
     let resolved = false;
     registerRespondInteraction(app, {
@@ -41,7 +41,7 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
         resolved = true;
         return true;
       },
-      reply: () => false,
+      reply: () => 'cleared',
       now: () => 'now',
     });
 
@@ -51,8 +51,9 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
       payload: { decision: 'approved' },
     });
 
-    expect(result.statusCode).toBe(409);
-    expect(resolved).toBe(false);
+    expect(result.statusCode).toBe(202);
+    expect(result.json()).toEqual({ accepted: true, resolvedAt: 'now', outcome: 'dismissed' });
+    expect(resolved).toBe(true);
     await app.close();
   });
 

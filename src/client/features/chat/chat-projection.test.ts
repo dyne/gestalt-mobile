@@ -514,6 +514,32 @@ describe('chat projection', () => {
     );
     expect(requested.interactions[1]).toMatchObject({ requestId: 'request-1', turnId: 'turn-1' });
   });
+  it('reopens a reused app-server request id after its prior interaction resolved', () => {
+    const resolved = resolveInteraction(
+      acceptSnapshot(createChatProjection('s'), snapshot()),
+      'r1',
+      'dismissed',
+    );
+    const reopened = applyProjectionEvent(resolved, {
+      sequence: 2,
+      type: 'interaction.requested',
+      payload: {
+        requestId: 'r1',
+        kind: 'userInput',
+        turnId: 'turn-2',
+        payload: { isBlocking: true },
+      },
+    });
+    expect(reopened.interactions).toEqual([
+      expect.objectContaining({
+        requestId: 'r1',
+        kind: 'userInput',
+        turnId: 'turn-2',
+        payload: { isBlocking: true },
+        state: 'pending',
+      }),
+    ]);
+  });
   it('keeps finished lifecycle through a stale active snapshot and converges finish/interrupt permutations', () => {
     const base = acceptSnapshot(createChatProjection('s'), {
       ...snapshot(),

@@ -43,7 +43,7 @@ import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
-import { toPendingInteraction } from './platform/codex/server-request.js';
+import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
 import {
   isValidInteractionResponse,
   isValidQuizInteractionResponse,
@@ -60,6 +60,7 @@ import { OrgPlanCommandValidator } from './platform/plans/org-plan-command-valid
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
+import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -170,12 +171,42 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
   let planMeasurementRefresh: PlanMeasurementRefresh | undefined;
+  const publishInteractionResolved = (
+    sessionId: string,
+    requestId: string,
+    occurredAt: string,
+    outcome: SafeInteractionOutcome,
+  ) => {
+    const interaction = interactions
+      .snapshot(sessionId)
+      .find((item) => item.requestId === requestId);
+    events.publish(
+      journal.append(
+        sessionId,
+        'interaction.resolved',
+        { requestId, turnId: interaction?.turnId ?? null, resolvedAt: occurredAt, outcome },
+        occurredAt,
+      ),
+    );
+  };
+  const dismissPendingInteractions = (sessionId: string, occurredAt: string) => {
+    for (const interaction of interactions.list(sessionId)) {
+      if (interactions.resolve(sessionId, interaction.requestId, occurredAt, 'dismissed'))
+        publishInteractionResolved(sessionId, interaction.requestId, occurredAt, 'dismissed');
+    }
+  };
   const runtime = options.startAppServers
     ? new CodexSessionRuntime(
         options.launchAppServer ?? launchCodexAppServer,
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
+          const resolvedRequestId = resolvedServerRequestId(notification);
+          if (
+            resolvedRequestId &&
+            interactions.resolve(sessionId, resolvedRequestId, occurredAt, 'dismissed')
+          )
+            publishInteractionResolved(sessionId, resolvedRequestId, occurredAt, 'dismissed');
           const currentSession = sessions.find(sessionId);
           const normalized = normalizeCodexNotification(
             sessionId,
@@ -228,7 +259,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           );
           return true;
         },
-        (sessionId) => recoverExitedSession(sessionId),
+        (sessionId) => {
+          dismissPendingInteractions(sessionId, new Date().toISOString());
+          recoverExitedSession(sessionId);
+        },
         resolveSkills,
         planStatusSource,
         (sessionId, update) => {
@@ -399,16 +433,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
         activate: runtime
-          ? async (session, settings) => runtime.start(session, new Date().toISOString(), settings)
+          ? async (session, settings) => {
+              const now = new Date().toISOString();
+              dismissPendingInteractions(session.id, now);
+              return runtime.start(session, now, settings);
+            }
           : undefined,
         startTurn: runtime
           ? async (session, text, clientUserMessageId) =>
               runtime.startTurn(session, text, clientUserMessageId, new Date().toISOString())
           : undefined,
         ensureWriter: runtime
-          ? (session) => runtime.ensureWriter(session, new Date().toISOString())
+          ? (session) => {
+              dismissPendingInteractions(session.id, new Date().toISOString());
+              return runtime.ensureWriter(session, new Date().toISOString());
+            }
           : undefined,
-        releaseWriter: runtime ? (id) => runtime.release(id) : undefined,
+        releaseWriter: runtime
+          ? (id) => {
+              dismissPendingInteractions(id, new Date().toISOString());
+              return runtime.release(id);
+            }
+          : undefined,
         onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
@@ -436,25 +482,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         close: runtime
           ? (id) => {
               planMeasurementRefresh?.stop(id);
+              dismissPendingInteractions(id, new Date().toISOString());
               return runtime.release(id);
             }
           : undefined,
         replyInteraction: runtime
           ? (sessionId, requestId, value) =>
-              runtime.resolveServerRequest(sessionId, requestId, value)
+              runtime.resolveServerRequest(sessionId, requestId, value) ? 'accepted' : 'cleared'
           : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
-          const interaction = interactions
-            .snapshot(sessionId)
-            .find((item) => item.requestId === requestId);
-          events.publish(
-            journal.append(
-              sessionId,
-              'interaction.resolved',
-              { requestId, turnId: interaction?.turnId ?? null, resolvedAt: occurredAt, outcome },
-              occurredAt,
-            ),
-          );
+          publishInteractionResolved(sessionId, requestId, occurredAt, outcome);
         },
       },
       sessionEvents: {
@@ -559,6 +596,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     planMeasurementRefresh?.stopAll();
+    for (const session of sessions.list())
+      dismissPendingInteractions(session.id, new Date().toISOString());
     runtime?.stopAll();
     planStatusSource.closeAll();
     database.close();

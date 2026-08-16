@@ -30,6 +30,7 @@ import {
   type WriterAcquisition,
 } from '../../features/sessions/application/writer-acquisition.js';
 import { isCodexThreadWriterBusy, isMissingCodexThreadRollout } from './json-rpc-client.js';
+import { resolvedServerRequestId } from './server-request.js';
 
 export type AppServer = {
   rpc: {
@@ -59,7 +60,6 @@ export type RestoreSessionResult =
 type PendingRequest = {
   resolve(result: unknown): void;
   reject(reason: Error): void;
-  timer: ReturnType<typeof setTimeout>;
 };
 
 /** One private owner for every resource acquired for a live Codex child. */
@@ -84,7 +84,6 @@ class SessionResource {
     if (this.disposed) return false;
     this.disposed = true;
     for (const pending of this.pendingRequests.values()) {
-      clearTimeout(pending.timer);
       pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
     }
     this.pendingRequests.clear();
@@ -127,11 +126,13 @@ export class CodexSessionRuntime {
       update: import('../../features/plans/application/ports.js').PlanStatusUpdate,
     ) => void,
     private readonly planMeasurementBaseUrl?: string,
-    private readonly requestTimeoutMs = 30_000,
+    // Compatibility slot: blocking app-server requests wait for explicit input.
+    _legacyRequestTimeoutMs: number | undefined = undefined,
     private readonly maxPendingRequests = 64,
     private readonly readerCwd?: string,
   ) {
     void _legacyProcesses;
+    void _legacyRequestTimeoutMs;
   }
   private readonly sessions = new Map<string, SessionResource>();
   private readonly historyReads = new Map<
@@ -197,7 +198,6 @@ export class CodexSessionRuntime {
     const pending = resource?.pendingRequests.get(requestId);
     if (!resource || !pending) return false;
     resource.pendingRequests.delete(requestId);
-    clearTimeout(pending.timer);
     pending.resolve(result);
     return true;
   }
@@ -425,18 +425,16 @@ export class CodexSessionRuntime {
     resource: SessionResource,
     request: { id: number; method: string; params: unknown },
   ): Promise<unknown> {
-    if (!resource.active || !this.onServerRequest?.(resource.sessionId, request)) {
-      return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
-    }
+    if (!resource.active) return Promise.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
     if (resource.pendingRequests.size >= this.maxPendingRequests)
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_LIMIT'));
     const requestId = String(request.id);
+    if (resource.pendingRequests.has(requestId))
+      return Promise.reject(new Error('CODEX_SERVER_REQUEST_DUPLICATE'));
+    if (!this.onServerRequest?.(resource.sessionId, request))
+      return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (resource.pendingRequests.delete(requestId))
-          reject(new Error('CODEX_SERVER_REQUEST_TIMEOUT'));
-      }, this.requestTimeoutMs);
-      resource.pendingRequests.set(requestId, { resolve, reject, timer });
+      resource.pendingRequests.set(requestId, { resolve, reject });
     });
   }
 
@@ -496,7 +494,17 @@ export class CodexSessionRuntime {
         if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
       });
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
-        if (resource.active) this.onNotification?.(session.id, notification);
+        if (!resource.active) return;
+        const resolvedRequestId = resolvedServerRequestId(notification);
+        if (resolvedRequestId) {
+          const pending = resource.pendingRequests.get(resolvedRequestId);
+          resource.pendingRequests.delete(resolvedRequestId);
+          // App-server has already cleared the request, so settle the local handler too.
+          // The late JSON-RPC error response is harmless and prevents an orphaned promise.
+          // The notification callback reconciles the durable interaction record.
+          pending?.reject(new Error('CODEX_SERVER_REQUEST_CLEARED'));
+        }
+        this.onNotification?.(session.id, notification);
       });
       const requestUnsubscribe = process.rpc.onServerRequest((request) =>
         this.holdServerRequest(resource, request),

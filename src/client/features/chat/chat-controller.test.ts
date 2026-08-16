@@ -999,7 +999,7 @@ describe('ChatController', () => {
     await controller.retryInteraction('a');
     await controller.retryInteraction('q');
     await controller.retryInteraction('q', { answer: 'reentered' });
-    expect(reply).toHaveBeenNthCalledWith(1, 's', 'a', 'approved', 'ka');
+    expect(reply).toHaveBeenNthCalledWith(1, 's', 'a', { decision: 'accept' }, 'ka');
     expect(reply).toHaveBeenNthCalledWith(2, 's', 'q', { answer: 'reentered' }, 'kq');
     controller.dispose();
   });
@@ -1059,6 +1059,46 @@ describe('ChatController', () => {
       'answered',
       'approved',
     ]);
+    controller.dispose();
+  });
+
+  it('uses the relay outcome when an interaction was already cleared upstream', async () => {
+    const env = environment();
+    const views: ChatViewState[] = [];
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          activeTurnId: 'turn-1',
+          interactions: [
+            {
+              requestId: 'stale',
+              kind: 'commandApproval',
+              turnId: 'turn-1',
+              requestedAt: null,
+              resolvedAt: null,
+              payload: {},
+            },
+          ],
+        }),
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn().mockResolvedValue({ outcome: 'dismissed' }),
+      },
+      publish: (view) => views.push(view),
+      websocket: () => new Socket() as unknown as WebSocket,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    await controller.respond('stale', { decision: 'accept' });
+    expect(views.at(-1)?.interactions[0]).toMatchObject({
+      state: 'resolved',
+      attemptedOutcome: 'dismissed',
+    });
     controller.dispose();
   });
 });

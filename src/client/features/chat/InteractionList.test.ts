@@ -137,5 +137,19 @@ describe('InteractionList', () => {
     expect(screen.getByText('quiz').closest('article')).toBe(card);
     await tick();
     expect(document.activeElement).toBe(screen.getByText('Answers sent'));
+
+    await view.rerender({
+      interactions: [
+        {
+          requestId: 'request-state',
+          key: 'interaction:request-state',
+          kind: 'userInput',
+          payload: null,
+          state: 'resolved',
+          attemptedOutcome: 'dismissed',
+        },
+      ],
+    });
+    expect(screen.getByText('No longer awaiting a response')).toBeTruthy();
   });
 });

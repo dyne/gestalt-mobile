@@ -193,6 +193,22 @@ describe('SQLite relay persistence', () => {
     expect(store.resolve('s', 'i', 'later')).toBe(true);
     expect(store.list('s')).toEqual([]);
     expect(store.resolve('s', 'i', 'again')).toBe(false);
+    store.add('s', {
+      requestId: 'i',
+      kind: 'commandApproval',
+      payload: { command: 'git status' },
+      turnId: 'turn-2',
+      requestedAt: 'new',
+    });
+    expect(store.list('s')).toEqual([
+      {
+        requestId: 'i',
+        kind: 'commandApproval',
+        payload: { command: 'git status' },
+        turnId: 'turn-2',
+        requestedAt: 'new',
+      },
+    ]);
     database.close();
   });
 
@@ -304,6 +320,7 @@ describe('SQLite relay persistence', () => {
       ['approved', 'approved'],
       ['denied', 'denied'],
       ['answered', 'answered'],
+      ['dismissed', 'dismissed'],
     ] as const) {
       store.add('s', { requestId: id, kind: 'userInput', payload: { prompt: 'safe' } });
       expect(store.resolve('s', id, 'first', outcome)).toBe(true);
@@ -318,6 +335,7 @@ describe('SQLite relay persistence', () => {
       'approved',
       'denied',
       'answered',
+      'dismissed',
     ]);
     expect(JSON.stringify(snapshot)).not.toContain('secret-native-answer');
     reopened.close();

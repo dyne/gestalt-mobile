@@ -28,7 +28,8 @@ export const serializeChatCache = (projection: ChatProjection) => ({
       ...(state === 'resolved' &&
       (attemptedOutcome === 'approved' ||
         attemptedOutcome === 'denied' ||
-        attemptedOutcome === 'answered')
+        attemptedOutcome === 'answered' ||
+        attemptedOutcome === 'dismissed')
         ? { attemptedOutcome }
         : {}),
       ...(typeof attemptedOutcome === 'object' &&

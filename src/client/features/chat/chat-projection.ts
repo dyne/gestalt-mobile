@@ -7,6 +7,7 @@
 import type {
   ChatItem,
   ChatSnapshot,
+  SafeInteractionOutcome,
   SafeInteractionSnapshot,
 } from '../../../shared/contracts/chat-snapshot.js';
 import { toActivity, type HistoryActivity } from './activity-summary.js';
@@ -15,7 +16,6 @@ import type { ChatMessage } from './message-store.js';
 export type PromptState = 'submitting' | 'accepted' | 'failed' | 'canonical';
 export type TurnLifecycle = 'starting' | 'working' | 'finished' | 'interrupted' | 'recoverable';
 export type InteractionState = 'pending' | 'submitting' | 'resolved' | 'failed';
-export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered';
 
 export type ProjectedPrompt = Readonly<{
   operationId: string;
@@ -111,7 +111,8 @@ function safeOutcome(
   if (
     attemptedOutcome === 'approved' ||
     attemptedOutcome === 'denied' ||
-    attemptedOutcome === 'answered'
+    attemptedOutcome === 'answered' ||
+    attemptedOutcome === 'dismissed'
   )
     return attemptedOutcome;
   if (interaction?.kind === 'quiz' || interaction?.kind === 'userInput') return 'answered';
@@ -691,22 +692,26 @@ export function applyProjectionEvent(
     typeof payload?.requestId === 'string' &&
     typeof payload.kind === 'string'
   ) {
-    if (!next.interactions.some((item) => item.requestId === payload.requestId))
+    const existing = next.interactions.find((item) => item.requestId === payload.requestId);
+    if (!existing || existing.state === 'resolved') {
+      const requested: ProjectedInteraction = {
+        requestId: payload.requestId,
+        key: `interaction:${payload.requestId}`,
+        kind: payload.kind,
+        turnId: typeof payload.turnId === 'string' ? payload.turnId : next.activeTurnId,
+        payload: payload.payload,
+        state: 'pending',
+        ...(occurredAt !== undefined ? { occurredAt } : {}),
+      };
       next = {
         ...next,
-        interactions: [
-          ...next.interactions,
-          {
-            requestId: payload.requestId,
-            key: `interaction:${payload.requestId}`,
-            kind: payload.kind,
-            turnId: typeof payload.turnId === 'string' ? payload.turnId : next.activeTurnId,
-            payload: payload.payload,
-            state: 'pending',
-            ...(occurredAt !== undefined ? { occurredAt } : {}),
-          },
-        ],
+        interactions: existing
+          ? next.interactions.map((item) =>
+              item.requestId === payload.requestId ? requested : item,
+            )
+          : [...next.interactions, requested],
       };
+    }
   } else if (event.type === 'interaction.resolved' && typeof payload?.requestId === 'string')
     next = resolveInteraction(next, payload.requestId, payload.outcome);
   else if (

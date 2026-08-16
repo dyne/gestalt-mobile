@@ -136,3 +136,31 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
   await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
   expect(attempts).toBe(2);
 });
+
+test('marks an interaction already cleared upstream as no longer pending', async ({ page }) => {
+  await openChat(page, [
+    {
+      requestId: 'stale-approval',
+      kind: 'commandApproval',
+      payload: { command: 'git status' },
+    },
+  ]);
+  await page.route('**/api/sessions/session-1/interactions/stale-approval', (route) =>
+    route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accepted: true,
+        resolvedAt: '2026-01-01T00:01:00.000Z',
+        outcome: 'dismissed',
+      }),
+    }),
+  );
+
+  await page.getByRole('button', { name: 'Approve' }).click();
+
+  await expect(page.locator('[data-interaction-state="resolved"]')).toHaveText(
+    'No longer awaiting a response',
+  );
+  await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+});

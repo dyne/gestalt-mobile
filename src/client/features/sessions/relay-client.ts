@@ -5,7 +5,10 @@
  */
 
 import type { SupervisedPlan } from '../plans/contracts.js';
-import type { ChatSnapshot } from '../../../shared/contracts/chat-snapshot.js';
+import type {
+  ChatSnapshot,
+  SafeInteractionOutcome,
+} from '../../../shared/contracts/chat-snapshot.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -40,6 +43,11 @@ export type RelaySession = {
 };
 export type RestoreSessionResult = RelaySession & {
   recovery?: { historyUnavailable: true; replacementCreated: true };
+};
+export type RelayInteractionResponse = {
+  accepted: true;
+  resolvedAt: string;
+  outcome: SafeInteractionOutcome;
 };
 export type RecentSession = {
   id: string;
@@ -294,7 +302,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     ) => put<RelaySkillProfile>(`/api/skill-profiles/${encodeURIComponent(name)}`, profile),
     deleteSkillProfile: (name: string) => remove(`/api/skill-profiles/${encodeURIComponent(name)}`),
     respondInteraction: (sessionId: string, requestId: string, value: unknown, key?: string) =>
-      request<void>(
+      request<RelayInteractionResponse>(
         `/api/sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,
         value,
         key ? { 'idempotency-key': key } : {},

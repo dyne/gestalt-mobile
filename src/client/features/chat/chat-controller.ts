@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { ChatSnapshot } from '../../../shared/contracts/chat-snapshot.js';
+import type {
+  ChatSnapshot,
+  SafeInteractionOutcome,
+} from '../../../shared/contracts/chat-snapshot.js';
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
 import {
   acceptSnapshot,
@@ -34,7 +37,7 @@ export type ChatRelay = Readonly<{
     requestId: string,
     value: unknown,
     key?: string,
-  ): Promise<void>;
+  ): Promise<{ outcome?: SafeInteractionOutcome } | void>;
 }>;
 export type ChatCache = Readonly<{
   read(sessionId: string): Promise<unknown>;
@@ -83,7 +86,10 @@ export const isSafeInteractionSnapshot = (
   if (value.resolvedAt === null) return Object.hasOwn(value, 'payload');
   return (
     typeof value.resolvedAt === 'string' &&
-    (value.outcome === 'approved' || value.outcome === 'denied' || value.outcome === 'answered') &&
+    (value.outcome === 'approved' ||
+      value.outcome === 'denied' ||
+      value.outcome === 'answered' ||
+      value.outcome === 'dismissed') &&
     !Object.hasOwn(value, 'payload')
   );
 };
@@ -223,9 +229,17 @@ export class ChatController {
     this.#interactionCommands.add(command);
     this.#set(beginInteraction(this.#projection, requestId, key));
     try {
-      await this.#options.relay.respondInteraction(id, requestId, value, key);
+      const result = await this.#options.relay.respondInteraction(id, requestId, value, key);
+      const outcome =
+        result &&
+        (result.outcome === 'approved' ||
+          result.outcome === 'denied' ||
+          result.outcome === 'answered' ||
+          result.outcome === 'dismissed')
+          ? result.outcome
+          : value;
       if (this.#current(id, generation))
-        this.#set(resolveInteraction(this.#projection, requestId, value));
+        this.#set(resolveInteraction(this.#projection, requestId, outcome));
     } catch {
       if (this.#current(id, generation))
         this.#set(failInteraction(this.#projection, requestId, value));
@@ -236,7 +250,13 @@ export class ChatController {
   async retryInteraction(requestId: string, replacementValue?: unknown): Promise<void> {
     const interaction = this.#projection.interactions.find((item) => item.requestId === requestId);
     if (interaction?.state !== 'failed' || !interaction.operationId) return;
-    const value = replacementValue ?? interaction.attemptedOutcome;
+    const attempted = replacementValue ?? interaction.attemptedOutcome;
+    const value =
+      attempted === 'approved'
+        ? { decision: 'accept' }
+        : attempted === 'denied'
+          ? { decision: 'decline' }
+          : attempted;
     if (value === undefined) return;
     await this.respond(requestId, value, interaction.operationId);
   }
