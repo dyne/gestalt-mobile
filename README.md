@@ -53,7 +53,11 @@ precedence over native configuration. Gestalt Mobile never rewrites Codex
 configuration or skill files. Exact skill paths remain authoritative, while
 paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
-path still match.
+path still match. Skills named `$gestalt:*` are session infrastructure: Mobile
+always enables and advertises every freshly discovered one, including skills
+added after a profile was saved. The editor labels them **Always advertised**
+and does not offer a disable control. Refresh discovery and start a new session
+after upgrading Gestalt Agents; running sessions retain their startup catalog.
 
 ## Themes
 

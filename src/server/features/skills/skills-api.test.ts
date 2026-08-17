@@ -47,6 +47,7 @@ describe('skills REPR endpoints', () => {
           path: '/skills/a/SKILL.md',
           nativeEnabled: false,
           effectiveEnabled: true,
+          alwaysAdvertised: false,
         },
         {
           name: 'Same',
@@ -54,6 +55,7 @@ describe('skills REPR endpoints', () => {
           path: '/skills/b/SKILL.md',
           nativeEnabled: true,
           effectiveEnabled: false,
+          alwaysAdvertised: false,
         },
       ],
     });

@@ -12,8 +12,20 @@ const available = {
   source: 'native' as const,
   errors: [],
   skills: [
-    { name: 'Alpha', path: '/skills/alpha/SKILL.md', nativeEnabled: true, effectiveEnabled: true },
-    { name: 'Alpha', path: '/skills/beta/SKILL.md', nativeEnabled: false, effectiveEnabled: false },
+    {
+      name: 'Alpha',
+      path: '/skills/alpha/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: false,
+    },
+    {
+      name: 'Alpha',
+      path: '/skills/beta/SKILL.md',
+      nativeEnabled: false,
+      effectiveEnabled: false,
+      alwaysAdvertised: false,
+    },
   ],
 };
 
@@ -75,6 +87,44 @@ describe('SkillsState', () => {
     expect(state.saveIntent).toBe('replace');
     expect(state.skills.find((skill) => skill.path.endsWith('beta/SKILL.md'))?.enabled).toBe(true);
     expect(state.dirty).toBe(false);
+  });
+
+  it('does not let a saved profile or toggle hide an always-advertised skill', async () => {
+    const gestaltSkill = {
+      name: 'gestalt:org-plan',
+      path: '/plugins/gestalt/skills/org-plan/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: true,
+    };
+    const state = new SkillsState(
+      client({
+        listAvailableSkills: vi.fn(async () => ({
+          source: 'native' as const,
+          errors: [],
+          skills: [gestaltSkill],
+        })),
+        listSkillProfiles: vi.fn(async () => ({
+          profiles: [
+            {
+              version: 1 as const,
+              name: 'old',
+              path: '/profiles/old.yml',
+              skills: [{ name: gestaltSkill.name, path: gestaltSkill.path, enabled: false }],
+            },
+          ],
+        })),
+      }),
+    );
+
+    await state.load('workspace', 'default');
+    state.selectProfile('old');
+    state.toggle(gestaltSkill.path, false);
+
+    expect(state.skills[0]?.enabled).toBe(true);
+    expect(state.savePayload('old').skills).toEqual([
+      { name: gestaltSkill.name, path: gestaltSkill.path, enabled: true },
+    ]);
   });
 
   it('suppresses concurrent saves and preserves a save failure for the view', async () => {

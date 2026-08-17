@@ -106,6 +106,32 @@ describe('skill profile codec', () => {
     expect(applySkillSelectionSnapshot(discovered)).toEqual(discovered);
   });
 
+  it('keeps every Gestalt skill advertised across stale or restrictive snapshots', () => {
+    const current = {
+      name: 'gestalt:org-plan',
+      path: '/plugins/cache/market/gestalt/2.2.0/skills/org-plan/SKILL.md',
+      enabled: false,
+    };
+    const newlyAdded = {
+      name: 'gestalt:new-workflow',
+      path: '/plugins/cache/market/gestalt/2.2.0/skills/new-workflow/SKILL.md',
+      enabled: false,
+    };
+    const staleSnapshot = createSkillSelection([
+      {
+        name: current.name,
+        path: '/plugins/cache/market/gestalt/2.1.0/skills/org-plan/SKILL.md',
+        enabled: false,
+      },
+    ]);
+
+    expect(applySkillSelectionSnapshot([current, newlyAdded], staleSnapshot)).toEqual([
+      { ...current, enabled: true },
+      { ...newlyAdded, enabled: true },
+    ]);
+    expect(applySkillSelectionSnapshot([current])).toEqual([{ ...current, enabled: true }]);
+  });
+
   it('prefers explicit selection, disables new paths, and warns for stale paths', () => {
     const result = compileSkillOverride({
       discovered: [
@@ -179,7 +205,7 @@ describe('skill profile codec', () => {
     expect(result.skillsConfig).toEqual([
       {
         path: '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.2.0/skills/verification-before-completion/SKILL.md',
-        enabled: false,
+        enabled: true,
       },
       {
         path: '/home/test/.codex/plugins/cache/other-marketplace/other-plugin/2.2.0/skills/development-testing/SKILL.md',

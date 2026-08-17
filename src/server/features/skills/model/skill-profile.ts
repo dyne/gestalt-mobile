@@ -27,8 +27,9 @@ export type SkillSelectionEntry = z.infer<typeof skillSelectionEntrySchema>;
 
 /**
  * A complete, strict snapshot of enabled states keyed by canonical absolute
- * paths. When it is applied, discovered paths not in the snapshot are disabled.
- * The absence of a selection is distinct and preserves Codex-native state.
+ * paths. When it is applied, discovered paths not in the snapshot are disabled,
+ * except session-infrastructure skills that must remain advertised. The absence
+ * of a selection preserves Codex-native state under the same invariant.
  */
 export type SkillSelection = readonly SkillSelectionEntry[];
 
@@ -75,6 +76,11 @@ export type AvailableSkill = z.infer<typeof availableSkillSchema>;
 /** Non-wire diagnostic retained when Codex discovers a workspace imperfectly. */
 export type SkillDiscoveryError = { message: string };
 export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscoveryError[] };
+
+/** Gestalt workflow skills are session infrastructure, not optional profile entries. */
+export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name'>): boolean {
+  return skill.name.startsWith('gestalt:');
+}
 
 const profileDocumentSchema = z
   .object({
@@ -178,7 +184,9 @@ export function createSkillSelection(entries: readonly SkillSelectionEntry[]): S
 /**
  * Apply an optional complete selection snapshot to a fresh catalog. Selection
  * entry names are never used for matching: canonical paths are the identity.
- * Without a snapshot, the catalog retains Codex-native enabled states.
+ * Gestalt-provider skills are always enabled so update-added infrastructure
+ * cannot disappear from a session catalog. Other skills retain native state
+ * when no snapshot exists.
  */
 export function applySkillSelectionSnapshot(
   discovered: readonly AvailableSkill[],
@@ -192,14 +200,18 @@ export function applySkillSelectionSnapshot(
     return { ...parsed.data, path: canonicalSkillPath(parsed.data.path) };
   });
 
-  if (selection === undefined) {
-    return catalog;
-  }
+  if (selection === undefined)
+    return catalog.map((skill) =>
+      isAlwaysAdvertisedSkill(skill) ? { ...skill, enabled: true } : skill,
+    );
 
   const enabledByPath = new Map(
     createSkillSelection(selection).map((entry) => [entry.path, entry.enabled]),
   );
-  return catalog.map((skill) => ({ ...skill, enabled: enabledByPath.get(skill.path) ?? false }));
+  return catalog.map((skill) => ({
+    ...skill,
+    enabled: isAlwaysAdvertisedSkill(skill) ? true : (enabledByPath.get(skill.path) ?? false),
+  }));
 }
 
 export type EffectiveSkillSelection = {

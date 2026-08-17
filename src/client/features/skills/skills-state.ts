@@ -137,7 +137,7 @@ export class SkillsState {
     const enabled = new Map(selected.skills.map((skill) => [skill.path, skill.enabled]));
     this.skills = this.skills.map((skill) => ({
       ...skill,
-      enabled: enabled.get(skill.path) ?? false,
+      enabled: skill.alwaysAdvertised ? true : (enabled.get(skill.path) ?? false),
     }));
     this.captureBaseline();
     this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
@@ -152,7 +152,9 @@ export class SkillsState {
   }
 
   toggle(path: string, enabled: boolean): void {
-    this.skills = this.skills.map((skill) => (skill.path === path ? { ...skill, enabled } : skill));
+    this.skills = this.skills.map((skill) =>
+      skill.path === path && !skill.alwaysAdvertised ? { ...skill, enabled } : skill,
+    );
   }
 
   reset(): void {
@@ -253,7 +255,9 @@ export class SkillsState {
     this.source = available.source;
     this.skills = available.skills.map((skill) => ({
       ...skill,
-      enabled: explicitEdits.get(skill.path) ?? skill.effectiveEnabled,
+      enabled: skill.alwaysAdvertised
+        ? true
+        : (explicitEdits.get(skill.path) ?? skill.effectiveEnabled),
     }));
     this.baseline = new Map(
       available.skills.map((skill) => [

@@ -204,6 +204,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               id={`skill-${skill.path}`}
               type="checkbox"
               checked={skill.enabled}
+              disabled={skill.alwaysAdvertised}
               onfocus={revealFocusedSkill}
               onchange={(event) => {
                 snapshot.toggle(skill.path, (event.currentTarget as HTMLInputElement).checked);
@@ -211,7 +212,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               }}
             />
             <span>{skill.displayName ?? skill.name}</span>
-            <span class="state">{skill.enabled ? 'Enabled' : 'Disabled'}</span>
+            <span class="state"
+              >{skill.alwaysAdvertised
+                ? 'Always advertised'
+                : skill.enabled
+                  ? 'Enabled'
+                  : 'Disabled'}</span
+            >
           </label>
           <div class="skill-details">
             {#if skill.description}<p>{skill.description}</p>{/if}
