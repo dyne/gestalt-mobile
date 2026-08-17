@@ -119,6 +119,7 @@ export type RelayAvailableSkill = {
   scope?: string;
   nativeEnabled: boolean;
   effectiveEnabled: boolean;
+  alwaysAdvertised: boolean;
 };
 
 export type RelaySkillList = {

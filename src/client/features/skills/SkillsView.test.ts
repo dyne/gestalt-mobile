@@ -37,11 +37,33 @@ async function rendered() {
       scope: 'user',
       nativeEnabled: false,
       effectiveEnabled: true,
+      alwaysAdvertised: false,
       enabled: true,
       dependencies: { tools: [{ type: 'mcp', value: 'filesystem' }] },
     },
   ];
   state.profiles = [{ version: 1, name: 'team', path: '/profiles/team.yml', skills: [] }];
+  state.status = { kind: 'ready' };
+  render(SkillsView, {
+    skillsState: state,
+    onrefresh: vi.fn(async () => undefined),
+    onprofileschange: vi.fn(),
+  });
+  return state;
+}
+
+async function renderedAlwaysAdvertised() {
+  const state = new SkillsState(client);
+  state.skills = [
+    {
+      name: 'gestalt:org-plan',
+      path: '/plugins/gestalt/skills/org-plan/SKILL.md',
+      nativeEnabled: true,
+      effectiveEnabled: true,
+      alwaysAdvertised: true,
+      enabled: true,
+    },
+  ];
   state.status = { kind: 'ready' };
   render(SkillsView, {
     skillsState: state,
@@ -82,6 +104,14 @@ describe('SkillsView', () => {
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
     vi.unstubAllGlobals();
+  });
+
+  it('labels Gestalt infrastructure skills and does not offer a disable control', async () => {
+    await renderedAlwaysAdvertised();
+    const checkbox = screen.getByRole('checkbox', { name: /gestalt:org-plan/ });
+
+    expect((checkbox as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText('Always advertised')).toBeTruthy();
   });
 
   it('makes create and replace intent visible and saves a full profile', async () => {
