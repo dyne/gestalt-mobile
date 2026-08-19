@@ -30,6 +30,19 @@ function runtimeImports(path: string): string[] {
     .filter((target) => extname(target) === '.ts');
 }
 
+/** Extract static, side-effect, dynamic, and CommonJS-style import specifiers. */
+function importSpecifiers(source: string): string[] {
+  const patterns = [
+    /\bimport\s+(?:[^'"()]+?\s+from\s+)?['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\b(?:require|createRequire)\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  return patterns.flatMap((pattern) => [...source.matchAll(pattern)].map((match) => match[1]!));
+}
+
+const forbiddenActivityAdapter =
+  /^(?:fastify(?:\/|$)|node:(?:fs|timers)(?:\/|$)|.*(?:platform\/codex|platform\/persistence|sqlite|\.svelte)(?:\/|$)?)/;
+
 function hasCycle(
   path: string,
   graph: ReadonlyMap<string, readonly string[]>,
@@ -53,5 +66,25 @@ describe('server production architecture', () => {
     const graph = new Map(files.map((path) => [path, runtimeImports(path)]));
 
     expect(files.some((path) => hasCycle(path, graph))).toBe(false);
+  });
+  it('keeps agent-activity domain free of framework, persistence, and Codex adapters', () => {
+    const root = join(serverRoot, 'features', 'agent-activity');
+    for (const path of sourceFiles(root)) {
+      const source = readFileSync(path, 'utf8');
+      expect(
+        importSpecifiers(source).some((specifier) => forbiddenActivityAdapter.test(specifier)),
+      ).toBe(false);
+    }
+  });
+  it('recognizes forbidden imports in static, side-effect, dynamic, and require forms', () => {
+    expect(
+      importSpecifiers(`
+        import Fastify from 'fastify';
+        import 'node:fs';
+        void import('../platform/codex/session-runtime.js');
+        require('../platform/persistence/sqlite.js');
+        createRequire('widget.svelte');
+      `).every((specifier) => forbiddenActivityAdapter.test(specifier)),
+    ).toBe(true);
   });
 });

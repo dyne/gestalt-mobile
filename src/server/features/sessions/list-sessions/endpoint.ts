@@ -11,11 +11,15 @@ import { buildResumeCommand } from '../application/resume-command.js';
 
 export function registerListSessions(
   app: FastifyInstance,
-  deps: { list(): RelaySessionSnapshot[] },
+  deps: {
+    list(): RelaySessionSnapshot[];
+    activity?: (id: string) => import('../../agent-activity/model.js').AgentActivitySnapshot;
+  },
 ): void {
   app.get('/api/sessions', async () =>
     deps.list().map((session) => ({
       ...session,
+      ...(deps.activity ? { agentActivity: deps.activity(session.id) } : {}),
       resumeCommand: session.threadId ? buildResumeCommand(session) : null,
     })),
   );

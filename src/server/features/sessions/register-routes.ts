@@ -24,6 +24,7 @@ import { registerSessionEvents } from './session-events/endpoint.js';
 import { registerStartSession } from './start-session/endpoint.js';
 import { registerStartTurn } from './start-turn/endpoint.js';
 import { registerStopSession } from './stop-session/endpoint.js';
+import { registerRefreshActivity } from './refresh-activity/endpoint.js';
 
 export function registerSessionRoutes(
   app: FastifyInstance,
@@ -57,8 +58,14 @@ export function registerSessionRoutes(
       reportFailure: (operation, error) =>
         deps.logger.error(`${operation} failed: ${safeErrorLabel(error)}`),
     });
-    registerGetSession(app, sessions.find);
-    if (sessions.list) registerListSessions(app, { list: sessions.list });
+    registerGetSession(app, sessions.find, sessions.agentActivity);
+    if (sessions.refreshActivity)
+      registerRefreshActivity(app, {
+        exists: (id) => sessions.find(id) !== null,
+        refresh: sessions.refreshActivity,
+      });
+    if (sessions.list)
+      registerListSessions(app, { list: sessions.list, activity: sessions.agentActivity });
     if (sessions.readHistory)
       registerGetHistory(app, {
         find: sessions.find,

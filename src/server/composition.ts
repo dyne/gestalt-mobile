@@ -43,6 +43,8 @@ import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
+import { AgentActivityRegistry } from './features/agent-activity/registry.js';
+import { decodeAgentActivityFact } from './platform/codex/activity-facts.js';
 import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
 import {
   isValidInteractionResponse,
@@ -74,6 +76,8 @@ export type ComposeRelayAppOptions = {
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   startAppServers?: boolean;
+  activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
+  activitySchedule?: (callback: () => void, delayMs: number) => () => void;
   launchAppServer?: (input: {
     profile: string;
     cwd: string;
@@ -130,6 +134,43 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
+  const activity = new AgentActivityRegistry(
+    (snapshot, occurredAt) =>
+      events.publish(
+        journal.append(snapshot.sessionId, 'agent.activity.updated', snapshot, occurredAt),
+      ),
+    {
+      // Evidence arms one bounded reconciliation; healthy sessions are never polled.
+      schedule:
+        options.activitySchedule ??
+        ((callback, delayMs) => {
+          const timer = setTimeout(callback, delayMs);
+          return () => clearTimeout(timer);
+        }),
+      now: () => new Date().toISOString(),
+      diagnostic:
+        options.activityDiagnostic ??
+        ((sessionId, code) => console.warn(`agent activity ${code} session=${sessionId}`)),
+      reconcile: async (sessionId) => {
+        const session = sessions.find(sessionId);
+        if (!session || !runtime) return;
+        const history = await runtime.readHistory(session);
+        const occurredAt = new Date().toISOString();
+        activity.observe({
+          sessionId,
+          occurredAt,
+          kind: history.activeTurnId ? 'turnStarted' : 'turnCompleted',
+          ...(session.threadId ? { threadId: session.threadId } : {}),
+          ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
+        });
+        activity.childrenReconciled(
+          sessionId,
+          occurredAt,
+          await runtime.listDirectChildren(session),
+        );
+      },
+    },
+  );
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
@@ -201,6 +242,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
+          const activityFact = decodeAgentActivityFact(sessionId, occurredAt, notification);
+          if (activityFact) activity.observe(activityFact);
           const resolvedRequestId = resolvedServerRequestId(notification);
           if (
             resolvedRequestId &&
@@ -249,6 +292,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             requestedAt: new Date().toISOString(),
           };
           interactions.add(sessionId, interaction);
+          activity.observe({
+            sessionId,
+            occurredAt: interaction.requestedAt,
+            kind: 'interactionPending',
+          });
           const updated = RelaySession.rehydrate(session).requestInteraction(
             interaction,
             new Date().toISOString(),
@@ -260,6 +308,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           return true;
         },
         (sessionId) => {
+          activity.disconnected(sessionId, new Date().toISOString());
           dismissPendingInteractions(sessionId, new Date().toISOString());
           recoverExitedSession(sessionId);
         },
@@ -311,8 +360,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const saveSession = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
+    const prior = sessions.find(session.id);
     sessions.save(session);
     events.publish(journal.append(session.id, 'session.updated', session, session.updatedAt));
+    const becameRuntimeReady =
+      prior &&
+      prior.state !== 'ready' &&
+      prior.state !== 'turnActive' &&
+      (session.state === 'ready' || session.state === 'turnActive');
+    if (
+      runtime &&
+      session.threadId &&
+      (!prior || prior.threadId !== session.threadId || becameRuntimeReady)
+    )
+      void activity.refresh(session.id);
   };
   if (runtime) {
     const supervisor = new SessionSupervisor(
@@ -323,7 +384,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           new Date().toISOString(),
         ).snapshot;
         saveSession(recovering);
-        saveSession(await runtime.restore(recovering, new Date().toISOString()));
+        const restored = await runtime.restore(recovering, new Date().toISOString());
+        saveSession(restored);
       },
       (sessionId) => {
         const session = sessions.find(sessionId);
@@ -436,7 +498,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ? async (session, settings) => {
               const now = new Date().toISOString();
               dismissPendingInteractions(session.id, now);
-              return runtime.start(session, now, settings);
+              const started = await runtime.start(session, now, settings);
+              return started;
             }
           : undefined,
         startTurn: runtime
@@ -455,7 +518,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               return runtime.release(id);
             }
           : undefined,
-        onTurnStarted: (session) => planMeasurementRefresh?.refreshNow(session.id),
+        onTurnStarted: (session) => {
+          activity.observe({
+            sessionId: session.id,
+            occurredAt: session.updatedAt,
+            kind: 'turnStarted',
+            ...(session.threadId ? { threadId: session.threadId } : {}),
+            ...(session.activeTurnId ? { turnId: session.activeTurnId } : {}),
+          });
+          planMeasurementRefresh?.refreshNow(session.id);
+        },
+        agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
+        refreshActivity: (id) => activity.refresh(id),
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
         currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
@@ -463,7 +537,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ? (session, turnId) => runtime.interruptTurn(session, turnId)
           : undefined,
         restore: runtime
-          ? (session) => runtime.restoreWithOutcome(session, new Date().toISOString())
+          ? async (session) => {
+              const restored = await runtime.restoreWithOutcome(session, new Date().toISOString());
+              return restored;
+            }
           : undefined,
         promoteRecent: runtime
           ? (thread) =>
@@ -477,12 +554,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           : undefined,
         release: (session) =>
           RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
-        remove: (id) => sessions.remove(id),
+        remove: (id) => {
+          activity.dispose(id);
+          sessions.remove(id);
+        },
         idempotency,
         close: runtime
           ? (id) => {
               planMeasurementRefresh?.stop(id);
               dismissPendingInteractions(id, new Date().toISOString());
+              activity.dispose(id);
               return runtime.release(id);
             }
           : undefined,
@@ -491,6 +572,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               runtime.resolveServerRequest(sessionId, requestId, value) ? 'accepted' : 'cleared'
           : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
+          activity.observe({ sessionId, occurredAt, kind: 'interactionResolved' });
           publishInteractionResolved(sessionId, requestId, occurredAt, outcome);
         },
       },
@@ -596,8 +678,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     planMeasurementRefresh?.stopAll();
-    for (const session of sessions.list())
+    for (const session of sessions.list()) {
+      activity.dispose(session.id);
       dismissPendingInteractions(session.id, new Date().toISOString());
+    }
     runtime?.stopAll();
     planStatusSource.closeAll();
     database.close();

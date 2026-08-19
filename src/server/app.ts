@@ -25,6 +25,7 @@ import type { InteractionReplyResult } from './features/sessions/respond-interac
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
 import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
+import type { AgentActivitySnapshot } from './features/agent-activity/model.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
 import type {
   SafeInteractionOutcome,
@@ -89,6 +90,8 @@ export type AppDependencies = {
       activeTurnId: string | null;
     }>;
     currentSequence?(sessionId: string): number;
+    agentActivity?(sessionId: string): AgentActivitySnapshot;
+    refreshActivity?(sessionId: string): Promise<void>;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     promoteRecent?(thread: RecentThread): Promise<RelaySessionSnapshot>;

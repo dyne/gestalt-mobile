@@ -16,6 +16,289 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('lists direct children across bounded pages and rejects cursor loops', async () => {
+    let page = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/resume' || method === 'initialize') return {};
+          if (method === 'thread/list') {
+            page += 1;
+            return page === 1
+              ? {
+                  data: [
+                    {
+                      id: 'child-1',
+                      status: { type: 'active' },
+                      agentNickname: 'one',
+                      agentRole: 'worker',
+                    },
+                  ],
+                  nextCursor: 'two',
+                }
+              : { data: [{ id: 'child-2', status: { type: 'idle' } }] };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'child-list',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
+      { id: 'child-1', nickname: 'one', role: 'worker' },
+      { id: 'child-2' },
+    ]);
+  });
+  it('fails closed on a looping child cursor', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/list' ? { data: [], nextCursor: 'loop' } : {},
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'loop',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).rejects.toThrow(
+      'CODEX_CHILD_LIST_UNSUPPORTED',
+    );
+  });
+  it('rejects missing thread and propagates child-list RPC failure', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/resume' || method === 'initialize') return {};
+          throw new Error('RPC_DOWN');
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const base = {
+      id: 'failure',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await expect(runtime.listDirectChildren({ ...base, threadId: null })).rejects.toThrow(
+      'CODEX_THREAD_ID_MISSING',
+    );
+    await runtime.restore(base, 'after');
+    await expect(runtime.listDirectChildren(base)).rejects.toThrow('RPC_DOWN');
+  });
+  it('fails closed when child pages exceed the 64-child bound', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/resume' || method === 'initialize'
+            ? {}
+            : {
+                data: Array.from({ length: 64 }, (_, index) => ({ id: `c-${index}` })),
+                nextCursor: 'more',
+              },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'cap',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).rejects.toThrow(
+      'CODEX_CHILD_LIST_UNSUPPORTED',
+    );
+  });
+  it('fails closed after four child-list pages', async () => {
+    let page = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/resume' || method === 'initialize'
+            ? {}
+            : { data: [], nextCursor: `page-${++page}` },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'pages',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).rejects.toThrow(
+      'CODEX_CHILD_LIST_UNSUPPORTED',
+    );
+  });
+  it('ignores malformed and oversized child identifiers', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/resume' || method === 'initialize'
+            ? {}
+            : { data: [{ id: '' }, { id: 'x'.repeat(257) }, { id: 'valid' }] },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'malformed',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).resolves.toEqual([
+      { id: 'valid', status: 'notLoaded', qualified: false },
+    ]);
+  });
+  it('qualifies missing or future child statuses as disconnected evidence', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/resume' || method === 'initialize'
+            ? {}
+            : {
+                data: [
+                  { id: 'missing' },
+                  { id: 'future', status: { type: 'futureStatus' } },
+                  { id: 'idle', status: { type: 'idle' } },
+                ],
+              },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'status',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).resolves.toEqual([
+      { id: 'missing', status: 'notLoaded', qualified: false },
+      { id: 'future', status: 'notLoaded', qualified: false },
+      { id: 'idle', status: 'idle' },
+    ]);
+  });
+  it('stops on an oversized child cursor', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'thread/resume' || method === 'initialize'
+            ? {}
+            : { data: [], nextCursor: 'x'.repeat(257) },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'cursor',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).resolves.toEqual([]);
+  });
   it('reuses an owned active runtime and resumes a stale ready row exactly once', async () => {
     const calls: string[] = [];
     const runtime = new CodexSessionRuntime(() => ({

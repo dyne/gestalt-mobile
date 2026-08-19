@@ -62,6 +62,15 @@ type PendingRequest = {
   reject(reason: Error): void;
 };
 
+export type DirectChildThread = Readonly<{
+  id: string;
+  status?: string;
+  /** `thread/list` omitted or changed its documented status shape. */
+  qualified?: boolean;
+  nickname?: string;
+  role?: string;
+}>;
+
 /** One private owner for every resource acquired for a live Codex child. */
 class SessionResource {
   private disposed = false;
@@ -296,6 +305,69 @@ export class CodexSessionRuntime {
     } finally {
       if (this.historyReads.get(session.id) === read) this.historyReads.delete(session.id);
     }
+  }
+
+  /** Bounded reconciliation port for direct spawned children only. */
+  async listDirectChildren(session: RelaySessionSnapshot): Promise<readonly DirectChildThread[]> {
+    if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    const owned = this.sessions.get(session.id);
+    if (!owned) return [];
+    const children: DirectChildThread[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 4 && children.length < 64; page += 1) {
+      const result = await owned.process.rpc.request('thread/list', {
+        parentThreadId: session.threadId,
+        ...(cursor ? { cursor } : {}),
+      });
+      const response =
+        result && typeof result === 'object' ? (result as Record<string, unknown>) : null;
+      const data = response && Array.isArray(response.data) ? response.data : [];
+      children.push(
+        ...data.flatMap((candidate) => {
+          if (!candidate || typeof candidate !== 'object') return [];
+          const value = candidate as Record<string, unknown>;
+          if (typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 256)
+            return [];
+          const rawStatus =
+            value.status && typeof value.status === 'object'
+              ? (value.status as Record<string, unknown>).type
+              : undefined;
+          // `thread/list` is our bounded child-authority read. A row without
+          // one of its documented statuses cannot prove a child is healthy.
+          const status =
+            rawStatus === 'active' ||
+            rawStatus === 'idle' ||
+            rawStatus === 'notLoaded' ||
+            rawStatus === 'systemError'
+              ? rawStatus
+              : undefined;
+          return [
+            {
+              id: value.id,
+              ...(status ? { status } : { status: 'notLoaded', qualified: false }),
+              ...(typeof value.agentNickname === 'string' && value.agentNickname.length <= 128
+                ? { nickname: value.agentNickname }
+                : {}),
+              ...(typeof value.agentRole === 'string' && value.agentRole.length <= 128
+                ? { role: value.agentRole }
+                : {}),
+            },
+          ];
+        }),
+      );
+      const next =
+        typeof response?.nextCursor === 'string' && response.nextCursor.length <= 256
+          ? response.nextCursor
+          : undefined;
+      if (!next) return children;
+      if (cursors.has(next) || children.length >= 64)
+        throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
+      cursors.add(next);
+      cursor = next;
+    }
+    if (cursor) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
+    return children;
   }
 
   private async readDetachedHistory(session: RelaySessionSnapshot): Promise<{

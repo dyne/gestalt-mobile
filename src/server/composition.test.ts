@@ -127,6 +127,26 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
+  it('accepts bounded activity diagnostic and scheduler seams', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    const diagnostic = vi.fn();
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: null,
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+      activitySchedule: () => () => undefined,
+      activityDiagnostic: diagnostic,
+    });
+    expect(diagnostic).not.toHaveBeenCalled();
+    await app.close();
+  });
   it('uses the relay root for detached history reads and Open never resumes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -165,7 +185,7 @@ describe('production composition', () => {
     expect(opened.statusCode).toBe(202);
     expect(
       launches.filter((call) => call.method === 'thread/read').map((call) => call.cwd),
-    ).toEqual([root]);
+    ).toEqual([root, root]);
     expect(launches.some((call) => call.method === 'thread/resume')).toBe(false);
     await app.close();
   });
@@ -255,6 +275,12 @@ describe('production composition', () => {
       ['GET', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
       ['HEAD', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
       ['GET', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
+      [
+        'POST',
+        '/api/sessions/:id/activity/refresh',
+        '/api/sessions/session-1/activity/refresh',
+        'protected',
+      ],
       ['HEAD', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
       ['POST', '/api/sessions/:id/model', '/api/sessions/session-1/model', 'protected'],
       ['GET', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
@@ -798,6 +824,7 @@ describe('production composition', () => {
       'skills/list',
       'initialize',
       'thread/start',
+      'thread/read',
     ]);
     await first.close();
 
@@ -815,7 +842,11 @@ describe('production composition', () => {
     await second.listen({ host: '127.0.0.1', port: 0 });
     await expect.poll(() => secondCalls, { timeout: 1_000 }).toEqual(['initialize', 'skills/list']);
     const restored = await second.inject(`/api/sessions/${created.json().id}`);
-    expect(restored.json()).toMatchObject({ threadId: 'thread-1', state: 'stopped' });
+    expect(restored.json()).toMatchObject({
+      threadId: 'thread-1',
+      state: 'stopped',
+      agentActivity: { confidence: 'stale', root: { state: 'disconnected' } },
+    });
     await second.close();
   });
 
@@ -876,9 +907,12 @@ describe('production composition', () => {
     await mkdir(join(root, 'workspace'));
     const handles: Array<{
       calls: string[];
+      failReads?: boolean;
       notify?: (notification: { method: string; params: unknown }) => void;
       request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
     }> = [];
+    const activityCallbacks: Array<() => void> = [];
+    const activityDiagnostic = vi.fn();
     const app = await composeAuthorizedApp({
       root,
       dataDir,
@@ -889,6 +923,11 @@ describe('production composition', () => {
       },
       installedCodexVersion: 'codex-cli 0.144.3',
       startAppServers: true,
+      activitySchedule: (callback) => {
+        activityCallbacks.push(callback);
+        return () => undefined;
+      },
+      activityDiagnostic,
       launchAppServer: () => {
         const handle: (typeof handles)[number] = { calls: [] };
         handles.push(handle);
@@ -897,7 +936,10 @@ describe('production composition', () => {
             request: async (method: string, params: unknown) => {
               handle.calls.push(method);
               if (method === 'thread/start') return { thread: { id: 'thread-1' } };
-              if (method === 'thread/read') return { thread: { turns: [] } };
+              if (method === 'thread/read') {
+                if (handle.failReads) throw new Error('READ_DOWN');
+                return { thread: { turns: [] } };
+              }
               if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
               if (method === 'skills/list')
                 return {
@@ -930,6 +972,112 @@ describe('production composition', () => {
     const sessionId = created.json().id as string;
     const handle = handles.find((candidate) => candidate.calls.includes('thread/start'));
     expect(handle?.request).toBeDefined();
+    await vi.waitFor(() => {
+      expect(handle?.calls).toContain('thread/read');
+      expect(handle?.calls).toContain('thread/list');
+    });
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      state: 'ready',
+      agentActivity: { confidence: 'fresh' },
+    });
+    const reconciliationCalls = handle!.calls.filter(
+      (method) => method === 'thread/read' || method === 'thread/list',
+    );
+    const ordinarySave = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/model`,
+      payload: { model: 'gpt-5.6-terra' },
+    });
+    expect(ordinarySave.statusCode).toBe(200);
+    expect(
+      handle!.calls.filter((method) => method === 'thread/read' || method === 'thread/list'),
+    ).toEqual(reconciliationCalls);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+      {
+        headers: {
+          origin: relyingParty.publicOrigin,
+          cookie: 'gestalt_mobile_session=test-session',
+        },
+      },
+    );
+    const activityEvents: Array<{ event: { type: string; sequence: number } }> = [];
+    socket.on('message', (data) => activityEvents.push(JSON.parse(String(data))));
+    await once(socket, 'open');
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      agentActivity: { confidence: 'fresh' },
+    });
+    activityCallbacks.splice(0);
+    handle!.failReads = true;
+    await expect(
+      app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/activity/refresh` }),
+    ).resolves.toMatchObject({ statusCode: 202 });
+    for (let retry = 0; retry < 3; retry += 1) {
+      await vi.waitFor(() => expect(activityCallbacks.length).toBeGreaterThan(0));
+      const callback = activityCallbacks.shift();
+      expect(callback).toBeDefined();
+      callback!();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    await vi.waitFor(() => expect(activityDiagnostic).toHaveBeenCalledTimes(1));
+    expect(activityDiagnostic).toHaveBeenCalledWith(sessionId, 'reconcileExhausted');
+    handle!.failReads = false;
+    const initialActivityEvents = activityEvents.filter(
+      (message) => message.event.type === 'agent.activity.updated',
+    ).length;
+    handle!.notify!({
+      method: 'thread/started',
+      params: { thread: { id: 'thread-1', status: { type: 'active' } } },
+    });
+    await vi.waitFor(() =>
+      expect(
+        activityEvents.filter((message) => message.event.type === 'agent.activity.updated'),
+      ).toHaveLength(initialActivityEvents + 1),
+    );
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      agentActivity: { root: { state: 'working' } },
+    });
+    expect(
+      activityEvents.filter((message) => message.event.type === 'agent.activity.updated'),
+    ).toHaveLength(initialActivityEvents + 1);
+    const activitySequence = activityEvents.find(
+      (message) => message.event.type === 'agent.activity.updated',
+    )!.event.sequence;
+    socket.close();
+    const replaySocket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=${activitySequence - 1}`,
+      {
+        headers: {
+          origin: relyingParty.publicOrigin,
+          cookie: 'gestalt_mobile_session=test-session',
+        },
+      },
+    );
+    const replayEvents: Array<{ event: { type: string; sequence: number } }> = [];
+    replaySocket.on('message', (data) => replayEvents.push(JSON.parse(String(data))));
+    await once(replaySocket, 'open');
+    await vi.waitFor(() =>
+      expect(replayEvents.some((message) => message.event.sequence === activitySequence)).toBe(
+        true,
+      ),
+    );
+    expect(
+      replayEvents.filter((message) => message.event.sequence === activitySequence),
+    ).toHaveLength(1);
+    replaySocket.close();
+    // Replaying the same app-server fact is semantically idempotent: the
+    // session snapshot remains stable and no prompt/collaboration text enters it.
+    handle!.notify!({
+      method: 'thread/started',
+      params: { thread: { id: 'thread-1', status: { type: 'active' } } },
+    });
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      agentActivity: { root: { state: 'working' }, subagents: [] },
+    });
     const pending = handle!.request!({
       id: 7,
       method: 'item/tool/requestUserInput',

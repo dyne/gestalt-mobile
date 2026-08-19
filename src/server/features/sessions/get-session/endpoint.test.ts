@@ -14,4 +14,22 @@ describe('GET /api/sessions/:id', () => {
     expect((await app.inject('/api/sessions/nope')).statusCode).toBe(404);
     await app.close();
   });
+  it('includes a redacted activity snapshot when supplied by the session port', async () => {
+    const app = fastify();
+    registerGetSession(
+      app,
+      () => ({ id: 's', threadId: null }) as never,
+      () =>
+        ({
+          sessionId: 's',
+          root: { state: 'working' },
+          subagents: [],
+          confidence: 'fresh',
+        }) as never,
+    );
+    expect((await app.inject('/api/sessions/s')).json()).toMatchObject({
+      agentActivity: { sessionId: 's', root: { state: 'working' }, subagents: [] },
+    });
+    await app.close();
+  });
 });
