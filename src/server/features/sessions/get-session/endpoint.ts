@@ -11,12 +11,14 @@ import { buildResumeCommand } from '../application/resume-command.js';
 export function registerGetSession(
   app: FastifyInstance,
   find: (id: string) => RelaySessionSnapshot | null,
+  activity?: (id: string) => import('../../agent-activity/model.js').AgentActivitySnapshot,
 ): void {
   app.get('/api/sessions/:id', async (request, reply) => {
     const session = find((request.params as { id: string }).id);
     return session
       ? reply.send({
           ...session,
+          ...(activity ? { agentActivity: activity(session.id) } : {}),
           resumeCommand: session.threadId ? buildResumeCommand(session) : null,
         })
       : reply.code(404).send({ code: 'SESSION_NOT_FOUND' });

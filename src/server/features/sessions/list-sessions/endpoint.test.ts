@@ -18,4 +18,21 @@ describe('GET /api/sessions', () => {
     expect(response.json()).toEqual([{ id: 'session-1', state: 'ready', resumeCommand: null }]);
     await app.close();
   });
+  it('maps the current activity snapshot without collaboration prompts', async () => {
+    const app = fastify();
+    registerListSessions(app, {
+      list: () => [{ id: 'session-1', state: 'ready', threadId: null }] as never,
+      activity: () =>
+        ({
+          sessionId: 'session-1',
+          root: { state: 'idle' },
+          subagents: [],
+          confidence: 'fresh',
+        }) as never,
+    });
+    expect((await app.inject({ method: 'GET', url: '/api/sessions' })).json()).toMatchObject([
+      { agentActivity: { root: { state: 'idle' }, subagents: [] } },
+    ]);
+    await app.close();
+  });
 });
