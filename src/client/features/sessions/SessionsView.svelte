@@ -16,11 +16,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './relay-client.js';
   import { formatRelativeTime } from './relative-time.js';
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
+  import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
+  import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 
   type Props = {
     sessions: RelaySession[];
     recentSessions: RecentSession[];
     selectedSessionId: string | null;
+    activitySnapshots?: ReadonlyMap<string, AgentActivitySnapshot>;
     workspaceTree: WorkspaceOption[];
     workspaceId: string;
     expandedIds: ReadonlySet<string>;
@@ -53,6 +56,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessions,
     recentSessions,
     selectedSessionId,
+    activitySnapshots = new Map(),
     workspaceTree,
     workspaceId,
     expandedIds,
@@ -146,6 +150,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   </span>
                 {/if}
               </button>
+              <AgentActivityIndicators
+                activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+              />
             </div>
           </li>
         {/each}

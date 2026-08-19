@@ -56,6 +56,7 @@ export type ChatControllerOptions = Readonly<{
   createKey?: () => string;
   now?: () => number;
   onSessionEvent?: (event: ProjectionEvent) => void;
+  onRelayEvent?: (event: ProjectionEvent) => void;
   onHistoryError?: (error: unknown) => void;
   onSendError?: (error: unknown, operationId: string) => void;
   onSendAccepted?: (operationId: string) => void;
@@ -339,10 +340,12 @@ export class ChatController {
       return;
     const next = applyProjectionEvent(this.#projection, event);
     this.#set(next);
+    this.#options.onRelayEvent?.(event);
     if (
       event.type === 'session.updated' ||
       event.type === 'plan.updated' ||
-      event.type === 'plan.closed'
+      event.type === 'plan.closed' ||
+      event.type === 'agent.activity.updated'
     )
       this.#options.onSessionEvent?.(event);
     if (next.snapshotting) void this.#takeSnapshot(id, generation);
@@ -369,6 +372,10 @@ export class ChatController {
         typeof value.id === 'string' &&
         typeof value.label === 'string' &&
         typeof value.detail === 'string'
+      );
+    if (event.type === 'agent.activity.updated')
+      return (
+        typeof value.sessionId === 'string' && Boolean(value.root) && Array.isArray(value.subagents)
       );
     return event.type === 'plan.updated' || event.type === 'plan.closed';
   }

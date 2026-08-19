@@ -25,6 +25,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   import AppHeader from './components/AppHeader.svelte';
   import ActivityList from './features/chat/ActivityList.svelte';
+  import AgentActivityIndicators from './features/agent-activity/AgentActivityIndicators.svelte';
+  import AgentActivityEvidence from './features/agent-activity/AgentActivityEvidence.svelte';
+  import { AgentActivityController } from './features/agent-activity/agent-activity-controller.js';
+  import type { AgentActivitySnapshot } from './features/agent-activity/contracts.js';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
@@ -113,6 +117,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
+  let activitySnapshots = $state.raw<ReadonlyMap<string, AgentActivitySnapshot>>(new Map());
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
   let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
@@ -202,11 +207,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return '';
   });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const activityController = new AgentActivityController({
+    relay,
+    publish: (next) => (activitySnapshots = new Map(next)),
+  });
   const chatController = new ChatController({
     relay,
     cache: createChatCache(),
     publish: (next) => (chatView = next),
     onSessionEvent: (event) => handleChatMetadataEvent(event),
+    onRelayEvent: (event) => {
+      if (sessionId) activityController.observe(sessionId, event);
+    },
     onHistoryError: (error) => {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
     },
@@ -243,6 +255,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const toastQueue = createToastQueue();
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
+  const activityEvidence = new URLSearchParams(location.search).get('activity-evidence');
 
   function openScratchpad(): void {
     scratchpadOpen = true;
@@ -282,6 +295,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : (bootstrap.sessions[0]?.id ?? null);
       if (sessionId) message = await sessionCache.readDraft(sessionId);
       sessions = bootstrap.sessions;
+      activityController.bootstrap(
+        bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
+        sessionId,
+      );
       void refreshRecentSessions();
       planController.select(sessionId);
       if (sessionId) {
@@ -341,6 +358,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     tailScheduler.invalidate();
     followTail.cancel();
     chatController.dispose();
+    activityController.dispose();
     planController.dispose();
     gitController.dispose();
     sessionStartController.dispose();
@@ -377,6 +395,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await refreshSessions();
       message = await sessionCache.readDraft(session.id);
       chatController.select(session.id);
+      activityController.select(session.id);
       enterChatContext();
       shellStatus = 'Session started.';
     } catch (error) {
@@ -386,6 +405,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function refreshSessions() {
     sessions = await relay.listSessions();
+    activityController.bootstrap(
+      sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
+      sessionId,
+    );
   }
 
   async function refreshRecentSessions() {
@@ -415,6 +438,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       planController.select(id);
       void sessionCache.saveSelectedSession(id);
       chatController.select(id);
+      activityController.select(id);
       enterChatContext();
       const draft = await sessionCache.readDraft(id);
       if (generation === openGeneration && sessionId === id) message = draft;
@@ -446,6 +470,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         tab = 'sessions';
         void sessionCache.saveSelectedSession(null);
         chatController.select(null);
+        activityController.select(null);
         planController.select(null);
       }
       await refreshSessionLists();
@@ -461,6 +486,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await relay.forgetSession(id);
       if (sessionId === id) {
         chatController.select(null);
+        activityController.select(null);
         sessionId = null;
         void sessionCache.saveSelectedSession(null);
         planController.select(null);
@@ -873,6 +899,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function handleChatMetadataEvent(event: ProjectionEvent): void {
     const selectedId = sessionId;
     if (!selectedId) return;
+    if (event.type === 'agent.activity.updated') {
+      return;
+    }
     if (
       event.type === 'session.updated' &&
       typeof event.payload === 'object' &&
@@ -909,7 +938,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <svelte:window onfocus={queueVisibleExternalRefresh} />
 <svelte:document onvisibilitychange={queueVisibleExternalRefresh} />
 
-{#if toastEvidence === 'error' || toastEvidence === 'stacked'}
+{#if activityEvidence === 'true'}
+  <AgentActivityEvidence />
+{:else if toastEvidence === 'error' || toastEvidence === 'stacked'}
   <ToastEvidence variant={toastEvidence} />
 {:else if evidenceContext === 'sessions' || evidenceContext === 'git'}
   <main class="evidence-mode">
@@ -962,6 +993,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if tab === 'chat'}
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
+          <AgentActivityIndicators
+            activity={sessionId ? (activitySnapshots.get(sessionId) ?? null) : null}
+          />
           <p class="visually-hidden" aria-live="polite" aria-atomic="true">
             {interactionAnnouncement}
           </p>
@@ -1064,6 +1098,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {sessions}
             {recentSessions}
             selectedSessionId={sessionId}
+            {activitySnapshots}
             {workspaceTree}
             workspaceId={sessionWorkspaceId}
             expandedIds={sessionExpandedIds}

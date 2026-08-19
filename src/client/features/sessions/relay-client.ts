@@ -9,6 +9,7 @@ import type {
   ChatSnapshot,
   SafeInteractionOutcome,
 } from '../../../shared/contracts/chat-snapshot.js';
+import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -40,6 +41,7 @@ export type RelaySession = {
     skills: Array<{ name: string; path: string; enabled: boolean }>;
   };
   lastOrgPlan?: { filename: string; title: string };
+  agentActivity?: AgentActivitySnapshot;
 };
 export type RestoreSessionResult = RelaySession & {
   recovery?: { historyUnavailable: true; replacementCreated: true };
@@ -203,6 +205,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
 
   return {
     listSessions: () => get<RelaySession[]>('/api/sessions'),
+    getSession: (sessionId: string) =>
+      get<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
+    refreshActivity: (sessionId: string) =>
+      request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/activity/refresh`, {}),
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
     openRecentSession: (threadId: string, cwd: string) =>
       request<RelaySession>('/api/sessions/recent-threads/open', { threadId, cwd }),

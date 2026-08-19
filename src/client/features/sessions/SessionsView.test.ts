@@ -83,6 +83,25 @@ function renderView(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionsView session base tree', () => {
+  it('renders activity beside, not inside, the session selection button', () => {
+    const activity = {
+      sessionId: 'live',
+      confidence: 'fresh' as const,
+      aggregateSubagents: 'working' as const,
+      root: {
+        state: 'working' as const,
+        observedAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-01-01T00:00:00.000Z',
+      },
+      subagents: [],
+    };
+    const { container } = renderView({
+      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      activitySnapshots: new Map([['live', activity]]),
+    });
+    expect(screen.getByText('Supervisor: working')).toBeTruthy();
+    expect(container.querySelector('.session-select details')).toBeNull();
+  });
   it('uses clear approval labels while emitting the Codex policy value', async () => {
     const onapprovalpolicychange = vi.fn();
     renderView({ onapprovalpolicychange });
