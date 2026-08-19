@@ -43,6 +43,23 @@ describe('RelaySession', () => {
   it('does not read a session without a durable thread id', () => {
     expect(isSessionReadable(session().snapshot)).toBe(false);
   });
+  it('keeps legacy capability distinct from a supported stopped writer', () => {
+    const legacy = RelaySession.fromExistingThread({
+      id: 'legacy',
+      workspaceId: 'w',
+      workspacePath: '/w',
+      profile: 'default',
+      threadId: 't',
+      now: createdAt,
+    });
+    const supported = legacy.supportsAttentionTool(createdAt).stop(createdAt);
+    expect(legacy.snapshot.attentionToolCapability).toBeUndefined();
+    expect(supported.snapshot).toMatchObject({
+      attentionToolCapability: 'supported',
+      state: 'stopped',
+      threadId: 't',
+    });
+  });
   it('keeps a copied effective skill selection through lifecycle transitions', () => {
     const original = session().snapshot;
     const changed = RelaySession.rehydrate(original)

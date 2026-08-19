@@ -24,6 +24,31 @@ describe('agent activity projector', () => {
       reason: 'pendingInteraction',
     });
   });
+
+  it('keeps a typed attention blocker authoritative while an unrelated interaction resolves', () => {
+    const pending = projectAgentActivity(createAgentActivitySnapshot('s', '2026-01-01T00:00:00Z'), {
+      sessionId: 's',
+      occurredAt: '2026-01-01T00:00:01Z',
+      kind: 'interactionPending',
+      attentionReason: 'hardBlock',
+    });
+    const unrelatedResolved = projectAgentActivity(pending, {
+      sessionId: 's',
+      occurredAt: '2026-01-01T00:00:02Z',
+      kind: 'interactionResolved',
+      hasPendingInteraction: true,
+      attentionReason: 'hardBlock',
+    });
+    expect(unrelatedResolved.root).toMatchObject({ state: 'awaitingHuman', reason: 'hardBlock' });
+    expect(
+      projectAgentActivity(unrelatedResolved, {
+        sessionId: 's',
+        occurredAt: '2026-01-01T00:00:03Z',
+        kind: 'interactionResolved',
+        hasPendingInteraction: false,
+      }).root,
+    ).toMatchObject({ state: 'working', reason: 'turnActive' });
+  });
   it('keeps child activity independent while the root waits', () => {
     let child = projectAgentActivity(createAgentActivitySnapshot('s', at), fact('turnStarted'));
     child = projectAgentActivity(

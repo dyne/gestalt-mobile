@@ -12,6 +12,7 @@ import {
   gestaltQuizDynamicTool,
   toQuizToolResponse,
 } from '../../../shared/contracts/quiz.js';
+import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
@@ -855,7 +856,7 @@ describe('CodexSessionRuntime', () => {
       model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
-      dynamicTools: [gestaltQuizDynamicTool],
+      dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
     });
   });
 
@@ -1079,7 +1080,7 @@ describe('CodexSessionRuntime', () => {
         cwd: '/workspace',
         approvalPolicy: 'on-request',
         model: 'gpt-5.4',
-        dynamicTools: [gestaltQuizDynamicTool],
+        dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
       });
     },
   );
@@ -1396,7 +1397,10 @@ describe('CodexSessionRuntime', () => {
     const response = toQuizToolResponse([
       { id: 'execution_mode', answer: 'Supervised multi-agent' },
     ]);
+    expect(runtime.attentionWriterState('missing-session', '7')).toBe('unavailable');
+    expect(runtime.attentionWriterState('session-1', '7')).toBe('available');
     expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(true);
+    expect(runtime.attentionWriterState('session-1', '7')).toBe('cleared');
     expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(false);
     await expect(result).resolves.toEqual(response);
   });

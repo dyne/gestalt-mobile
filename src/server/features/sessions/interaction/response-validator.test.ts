@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isValidInteractionResponse,
+  isValidOrgPlanAttentionInteractionResponse,
   isValidQuizInteractionResponse,
 } from './response-validator.js';
 import { toQuizToolResponse } from '../../../../shared/contracts/quiz.js';
+import { toOrgPlanAttentionToolResponse } from '../../../../shared/contracts/org-plan-attention.js';
 
 describe('isValidInteractionResponse', () => {
   it('requires generated user-input answer arrays', () => {
@@ -99,5 +101,24 @@ describe('isValidInteractionResponse', () => {
       { id: 'review_mode', answer: 'Supervised multi-agent' },
     ]);
     expect(isValidQuizInteractionResponse(quiz, response)).toBe(true);
+  });
+
+  it('keeps Org Plan attention replies distinct from quiz and generated request validators', () => {
+    const attention = {
+      reason: 'hardBlock',
+      summary: 'A required system is unavailable.',
+      requestedAction: 'Restore the system.',
+      resumeCondition: 'externalStateChanged',
+    };
+    expect(
+      isValidOrgPlanAttentionInteractionResponse(
+        attention,
+        toOrgPlanAttentionToolResponse({ action: 'resume', guidance: 'It is restored.' }),
+      ),
+    ).toBe(true);
+    expect(isValidOrgPlanAttentionInteractionResponse(attention, toQuizToolResponse([]))).toBe(
+      false,
+    );
+    expect(isValidInteractionResponse('orgPlanAttention', { action: 'resume' })).toBe(false);
   });
 });

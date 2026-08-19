@@ -23,6 +23,7 @@ import {
   type MissingRolloutRecovery,
 } from '../../features/sessions/restore-session/use-case.js';
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
+import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
 import {
@@ -165,7 +166,9 @@ export class CodexSessionRuntime {
       resource.threadId = startedThreadId;
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return RelaySession.rehydrate(session).bindThread(startedThreadId, now).snapshot;
+      return RelaySession.rehydrate(session)
+        .bindThread(startedThreadId, now)
+        .supportsAttentionTool(now).snapshot;
     } catch (error) {
       resource.dispose();
       throw error;
@@ -209,6 +212,16 @@ export class CodexSessionRuntime {
     resource.pendingRequests.delete(requestId);
     pending.resolve(result);
     return true;
+  }
+
+  /** Distinguishes an offline relay writer from a live writer that cleared a request. */
+  attentionWriterState(
+    sessionId: string,
+    requestId: string,
+  ): 'available' | 'cleared' | 'unavailable' {
+    const resource = this.sessions.get(sessionId);
+    if (!resource || !resource.active) return 'unavailable';
+    return resource.pendingRequests.has(requestId) ? 'available' : 'cleared';
   }
 
   async startTurn(
@@ -436,10 +449,10 @@ export class CodexSessionRuntime {
         await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
-          dynamicTools: [gestaltQuizDynamicTool],
+          dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
         });
         result = {
-          session: RelaySession.rehydrate(session).restore(now).snapshot,
+          session: RelaySession.rehydrate(session).restore(now).supportsAttentionTool(now).snapshot,
           historyUnavailable: false,
           replacementCreated: false,
         };
@@ -527,7 +540,7 @@ export class CodexSessionRuntime {
     return {
       cwd: session.workspacePath,
       approvalPolicy: settings.approvalPolicy ?? 'on-request',
-      dynamicTools: [gestaltQuizDynamicTool],
+      dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
       ...(settings.model ? { model: settings.model } : {}),
       ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
     };

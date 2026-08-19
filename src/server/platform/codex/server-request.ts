@@ -6,6 +6,10 @@
 
 import type { PendingInteraction } from '../../features/sessions/model/relay-session.js';
 import { GESTALT_QUIZ_TOOL_NAME, parseQuiz } from '../../../shared/contracts/quiz.js';
+import {
+  GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+  parseOrgPlanAttention,
+} from '../../../shared/contracts/org-plan-attention.js';
 
 export function toPendingInteraction(input: {
   id: number;
@@ -14,9 +18,17 @@ export function toPendingInteraction(input: {
 }): PendingInteraction | null {
   if (!Number.isSafeInteger(input.id) || !isRecord(input.params)) return null;
   if (input.method === 'item/tool/call') {
-    if (!isRecord(input.params) || input.params.tool !== GESTALT_QUIZ_TOOL_NAME) return null;
-    const quiz = parseQuiz(input.params.arguments);
-    return quiz ? { requestId: String(input.id), kind: 'quiz', payload: quiz } : null;
+    if (input.params.tool === GESTALT_QUIZ_TOOL_NAME) {
+      const quiz = parseQuiz(input.params.arguments);
+      return quiz ? { requestId: String(input.id), kind: 'quiz', payload: quiz } : null;
+    }
+    if (input.params.tool === GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME) {
+      const attention = parseOrgPlanAttention(input.params.arguments);
+      return attention
+        ? { requestId: String(input.id), kind: 'orgPlanAttention', payload: attention }
+        : null;
+    }
+    return null;
   }
   const kind = {
     'item/commandExecution/requestApproval': 'commandApproval',

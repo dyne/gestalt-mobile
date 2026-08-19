@@ -6,6 +6,7 @@
 
 import { once } from 'node:events';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,7 @@ import {
   planStatusDirectoryPath,
   planStatusFilePath,
 } from './platform/plans/filesystem-plan-status-source.js';
+import { toOrgPlanAttentionToolResponse } from '../shared/contracts/org-plan-attention.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -44,6 +46,74 @@ function fakeAppServer(calls: string[]) {
     },
     close: () => {},
     onExit: () => () => {},
+  };
+}
+
+type LiveServerHandle = {
+  calls: string[];
+  notify?: (notification: { method: string; params: unknown }) => void;
+  request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
+};
+
+function liveAppServer(handles: LiveServerHandle[]) {
+  return () => {
+    const handle: LiveServerHandle = { calls: [] };
+    handles.push(handle);
+    return {
+      rpc: {
+        request: async (method: string, params: unknown) => {
+          handle.calls.push(method);
+          if (method === 'thread/start') return { thread: { id: `thread-${handles.length}` } };
+          if (method === 'thread/read') return { thread: { turns: [] } };
+          if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
+          if (method === 'skills/list')
+            return {
+              data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }],
+            };
+          return {};
+        },
+        onNotification: (listener: LiveServerHandle['notify']) => {
+          handle.notify = listener;
+          return () => {};
+        },
+        onServerRequest: (listener: LiveServerHandle['request']) => {
+          handle.request = listener;
+          return () => {};
+        },
+      },
+      close: () => {},
+      onExit: () => () => {},
+    };
+  };
+}
+
+async function createComposedSession(app: Awaited<ReturnType<typeof composeAuthorizedApp>>) {
+  const workspace = (await app.inject('/api/bootstrap'))
+    .json()
+    .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
+  expect(workspace).toBeDefined();
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/sessions',
+    payload: { workspaceId: workspace.id, profile: 'default' },
+  });
+  expect(created.statusCode).toBe(202);
+  return created.json().id as string;
+}
+
+function attentionCall(id: number, reason: 'hardBlock' | 'permissionRequired' = 'hardBlock') {
+  return {
+    id,
+    method: 'item/tool/call',
+    params: {
+      tool: 'gestalt_org_plan_attention',
+      arguments: {
+        reason,
+        summary: 'A bounded human decision is required.',
+        requestedAction: 'Provide the requested decision.',
+        resumeCondition: reason === 'permissionRequired' ? 'permissionGranted' : 'userGuidance',
+      },
+    },
   };
 }
 
@@ -127,6 +197,361 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
+  it('publishes isolated typed required, resolved, and failed attention transitions through the feature-only seam', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const handles: LiveServerHandle[] = [];
+    let transitions:
+      | import('./features/org-plan-attention/application/ports.js').OrgPlanAttentionTransitions
+      | undefined;
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+      onAttentionTransitions: (port) => {
+        transitions = port;
+      },
+    });
+    expect(transitions).toBeDefined();
+    const sessionA = await createComposedSession(app);
+    const sessionB = await createComposedSession(app);
+    const handleA = await vi.waitFor(() => {
+      const handle = handles.find((candidate) => candidate.calls.includes('thread/start'));
+      expect(handle?.request).toBeDefined();
+      return handle!;
+    });
+    const handleB = await vi.waitFor(() => {
+      const started = handles.filter((candidate) => candidate.calls.includes('thread/start'));
+      expect(started).toHaveLength(2);
+      expect(started[1]?.request).toBeDefined();
+      return started[1]!;
+    });
+    const receivedA: Array<{ kind: string; requestId: string }> = [];
+    const receivedB: Array<{ kind: string; requestId: string }> = [];
+    const unsubscribeA = transitions!.subscribe(sessionA, (event) => receivedA.push(event));
+    const unsubscribeB = transitions!.subscribe(sessionB, (event) => receivedB.push(event));
+    const resolving = handleA.request!(attentionCall(701));
+    await vi.waitFor(() =>
+      expect(receivedA).toEqual([expect.objectContaining({ kind: 'required', requestId: '701' })]),
+    );
+    expect(receivedB).toEqual([]);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionA}/attention/701/resolve`,
+          payload: { operationKey: 'resolve-a', action: 'resume' },
+        })
+      ).statusCode,
+    ).toBe(202);
+    await expect(resolving).resolves.toEqual(toOrgPlanAttentionToolResponse({ action: 'resume' }));
+    await vi.waitFor(() =>
+      expect(receivedA).toEqual([
+        expect.objectContaining({ kind: 'required', requestId: '701' }),
+        expect.objectContaining({ kind: 'resolved', requestId: '701' }),
+      ]),
+    );
+    const failing = handleB.request!(attentionCall(702, 'permissionRequired'));
+    await vi.waitFor(() =>
+      expect(receivedB).toEqual([expect.objectContaining({ kind: 'required', requestId: '702' })]),
+    );
+    handleB.notify!({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-ignored', requestId: 702 },
+    });
+    await expect(failing).rejects.toMatchObject({ message: 'CODEX_SERVER_REQUEST_CLEARED' });
+    await vi.waitFor(() =>
+      expect(receivedB).toEqual([
+        expect.objectContaining({ kind: 'required', requestId: '702' }),
+        expect.objectContaining({ kind: 'failed', requestId: '702' }),
+      ]),
+    );
+    unsubscribeA();
+    const afterUnsubscribe = handleA.request!(attentionCall(703));
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionA}/attention`)).json()).toMatchObject({
+        requestId: '703',
+      }),
+    );
+    expect(receivedA).toHaveLength(2);
+    handleA.notify!({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-ignored', requestId: 703 },
+    });
+    await expect(afterUnsubscribe).rejects.toMatchObject({
+      message: 'CODEX_SERVER_REQUEST_CLEARED',
+    });
+    expect(receivedA).toHaveLength(2);
+    unsubscribeB();
+    await app.close();
+  });
+
+  it('keeps the typed attention blocker authoritative across simultaneous interaction resolutions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const handles: LiveServerHandle[] = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+      profiles: {
+        list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+    });
+    const sessionId = await createComposedSession(app);
+    await vi.waitFor(() => expect(handles.find((handle) => handle.request)?.request).toBeDefined());
+    const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+
+    const attentionFirst = handle.request!(attentionCall(711, 'permissionRequired'));
+    const inputFirst = handle.request!({
+      id: 712,
+      method: 'item/tool/requestUserInput',
+      params: { questions: [] },
+    });
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'awaitingHuman', reason: 'pendingInteraction' } },
+      }),
+    );
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/interactions/712`,
+          payload: { answers: {} },
+        })
+      ).statusCode,
+    ).toBe(202);
+    await expect(inputFirst).resolves.toEqual({ answers: {} });
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'awaitingHuman', reason: 'permissionRequired' } },
+      }),
+    );
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/attention/711/resolve`,
+      payload: { operationKey: 'attention-first', action: 'resume' },
+    });
+    await expect(attentionFirst).resolves.toEqual(
+      toOrgPlanAttentionToolResponse({ action: 'resume' }),
+    );
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'working' } },
+      }),
+    );
+
+    const attentionSecond = handle.request!(attentionCall(713));
+    const inputSecond = handle.request!({
+      id: 714,
+      method: 'item/tool/requestUserInput',
+      params: { questions: [] },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/attention/713/resolve`,
+      payload: { operationKey: 'attention-second', action: 'resume' },
+    });
+    await expect(attentionSecond).resolves.toEqual(
+      toOrgPlanAttentionToolResponse({ action: 'resume' }),
+    );
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'awaitingHuman', reason: 'pendingInteraction' } },
+      }),
+    );
+    await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/interactions/714`,
+      payload: { answers: {} },
+    });
+    await expect(inputSecond).resolves.toEqual({ answers: {} });
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'working' } },
+      }),
+    );
+    await app.close();
+  });
+
+  it('preserves active and terminal attention state through a same-database relay reopen', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const handles: LiveServerHandle[] = [];
+    const profiles = {
+      list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+      require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+    };
+    const first = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+    });
+    const sessionId = await createComposedSession(first);
+    await vi.waitFor(() => expect(handles.find((handle) => handle.request)?.request).toBeDefined());
+    const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+    const active = handle.request!(attentionCall(801));
+    const terminal = handle.request!(attentionCall(802));
+    const terminalResponse = toOrgPlanAttentionToolResponse({
+      action: 'resume',
+      guidance: 'Sensitive terminal guidance.',
+    });
+    const accepted = await first.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/attention/802/resolve`,
+      payload: {
+        operationKey: 'terminal-key',
+        action: 'resume',
+        guidance: 'Sensitive terminal guidance.',
+      },
+    });
+    const resolvedAt = accepted.json().resolvedAt as string;
+    await expect(terminal).resolves.toEqual(terminalResponse);
+    await first.close();
+    await expect(active).rejects.toMatchObject({ message: 'CODEX_SERVER_REQUEST_CANCELLED' });
+
+    const reopened = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+    });
+    expect((await reopened.inject(`/api/sessions/${sessionId}/attention`)).json()).toMatchObject({
+      requestId: '801',
+    });
+    const listed = (await reopened.inject('/api/sessions')).json();
+    expect(JSON.stringify(listed)).toContain('801');
+    await reopened.listen({ host: '127.0.0.1', port: 0 });
+    await expect
+      .poll(async () => (await reopened.inject(`/api/sessions/${sessionId}`)).json().state)
+      .toBe('stopped');
+    expect(
+      (await reopened.inject({ method: 'POST', url: `/api/sessions/${sessionId}/restore` }))
+        .statusCode,
+    ).toBe(200);
+    const history = (await reopened.inject(`/api/sessions/${sessionId}/history`)).json();
+    expect(history.interactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requestId: '801', resolvedAt: null }),
+        expect.objectContaining({ requestId: '802', resolvedAt, outcome: 'answered' }),
+      ]),
+    );
+    expect(JSON.stringify(history)).not.toContain('Sensitive terminal guidance.');
+    expect(
+      (
+        await reopened.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/attention/802/resolve`,
+          payload: { operationKey: 'terminal-key', action: 'resume' },
+        })
+      ).json(),
+    ).toEqual({ accepted: true, replayed: true, resolvedAt });
+    expect(
+      (
+        await reopened.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/attention/802/resolve`,
+          payload: { operationKey: 'other-terminal-key', action: 'resume' },
+        })
+      ).json(),
+    ).toEqual({ code: 'ATTENTION_OPERATION_STALE' });
+    await reopened.close();
+  });
+
+  it('reports supported offline writers separately from legacy sessions without the attention capability', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const handles: LiveServerHandle[] = [];
+    const profiles = {
+      list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+      require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+    };
+    const first = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      profiles,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+    });
+    const supportedSession = await createComposedSession(first);
+    const legacySession = await createComposedSession(first);
+    await vi.waitFor(() =>
+      expect(handles.filter((handle) => handle.calls.includes('thread/start'))).toHaveLength(2),
+    );
+    const started = handles.filter((handle) => handle.calls.includes('thread/start'));
+    const supportedRequest = started[0]!.request!(attentionCall(901));
+    const legacyRequest = started[1]!.request!(attentionCall(902));
+    await vi.waitFor(async () =>
+      expect((await first.inject(`/api/sessions/${legacySession}/attention`)).statusCode).toBe(200),
+    );
+    await first.close();
+    await expect(supportedRequest).rejects.toMatchObject({
+      message: 'CODEX_SERVER_REQUEST_CANCELLED',
+    });
+    await expect(legacyRequest).rejects.toMatchObject({
+      message: 'CODEX_SERVER_REQUEST_CANCELLED',
+    });
+    const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+    database
+      .prepare('UPDATE relay_sessions SET attention_tool_capability = NULL WHERE id = ?')
+      .run(legacySession);
+    database.close();
+    const offline = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      profiles,
+      installedCodexVersion: null,
+    });
+    expect(
+      (
+        await offline.inject({
+          method: 'POST',
+          url: `/api/sessions/${supportedSession}/attention/901/resolve`,
+          payload: { operationKey: 'offline-supported', action: 'resume' },
+        })
+      ).json(),
+    ).toEqual({ code: 'ATTENTION_WRITER_UNAVAILABLE' });
+    expect(
+      (
+        await offline.inject({
+          method: 'POST',
+          url: `/api/sessions/${legacySession}/attention/902/resolve`,
+          payload: { operationKey: 'legacy-thread', action: 'resume' },
+        })
+      ).json(),
+    ).toEqual({ code: 'ATTENTION_LEGACY_UNSUPPORTED' });
+    await offline.close();
+  });
   it('accepts bounded activity diagnostic and scheduler seams', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -275,6 +700,7 @@ describe('production composition', () => {
       ['GET', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
       ['HEAD', '/api/sessions/recent-threads', '/api/sessions/recent-threads', 'protected'],
       ['GET', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
+      ['GET', '/api/sessions/:id/attention', '/api/sessions/session-1/attention', 'protected'],
       [
         'POST',
         '/api/sessions/:id/activity/refresh',
@@ -282,6 +708,13 @@ describe('production composition', () => {
         'protected',
       ],
       ['HEAD', '/api/sessions/:id', '/api/sessions/session-1', 'protected'],
+      ['HEAD', '/api/sessions/:id/attention', '/api/sessions/session-1/attention', 'protected'],
+      [
+        'POST',
+        '/api/sessions/:id/attention/:requestId/resolve',
+        '/api/sessions/session-1/attention/request-1/resolve',
+        'protected',
+      ],
       ['POST', '/api/sessions/:id/model', '/api/sessions/session-1/model', 'protected'],
       ['GET', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['HEAD', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
@@ -1103,6 +1536,156 @@ describe('production composition', () => {
         outcome: 'dismissed',
       }),
     ]);
+
+    const attention = handle!.request!({
+      id: 8,
+      method: 'item/tool/call',
+      params: {
+        tool: 'gestalt_org_plan_attention',
+        arguments: {
+          reason: 'permissionRequired',
+          summary: 'A protected release needs approval.',
+          requestedAction: 'Grant the release permission.',
+          resumeCondition: 'permissionGranted',
+        },
+      },
+    });
+    await vi.waitFor(async () => {
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        pendingInteractions: [
+          expect.objectContaining({
+            requestId: '8',
+            kind: 'orgPlanAttention',
+            payload: expect.objectContaining({ reason: 'permissionRequired' }),
+          }),
+        ],
+        agentActivity: { root: { state: 'awaitingHuman', reason: 'permissionRequired' } },
+      });
+    });
+    const auditSocket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+      {
+        headers: {
+          origin: relyingParty.publicOrigin,
+          cookie: 'gestalt_mobile_session=test-session',
+        },
+      },
+    );
+    const auditEvents: Array<{ event: { type: string } }> = [];
+    auditSocket.on('message', (data) => auditEvents.push(JSON.parse(String(data))));
+    await once(auditSocket, 'open');
+    await vi.waitFor(() =>
+      expect(
+        auditEvents.some((message) => message.event.type === 'org-plan.attention-required'),
+      ).toBe(true),
+    );
+    expect((await app.inject(`/api/sessions/${sessionId}/attention`)).json()).toMatchObject({
+      requestId: '8',
+      attention: { reason: 'permissionRequired', resumeCondition: 'permissionGranted' },
+    });
+    const attentionResponse = toOrgPlanAttentionToolResponse({
+      action: 'resume',
+      guidance: 'The release permission is now granted.',
+    });
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/interactions/8`,
+          payload: attentionResponse,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/attention/8/resolve`,
+        payload: {
+          operationKey: 'attention-8',
+          action: 'resume',
+          guidance: 'The release permission is now granted.',
+        },
+      }),
+    ).toMatchObject({ statusCode: 202 });
+    expect(await attention).toEqual(attentionResponse);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/attention/8/resolve`,
+          payload: { operationKey: 'attention-8', action: 'resume' },
+        })
+      ).json(),
+    ).toMatchObject({ accepted: true, replayed: true });
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/sessions/${sessionId}/attention/8/resolve`,
+          payload: { operationKey: 'other-key', action: 'resume' },
+        })
+      ).json(),
+    ).toEqual({ code: 'ATTENTION_OPERATION_STALE' });
+    await vi.waitFor(() =>
+      expect(
+        auditEvents.some((message) => message.event.type === 'org-plan.attention-resolved'),
+      ).toBe(true),
+    );
+    const requiredIndex = auditEvents.findIndex(
+      (message) => message.event.type === 'org-plan.attention-required',
+    );
+    const resolvedIndex = auditEvents.findIndex(
+      (message) => message.event.type === 'org-plan.attention-resolved',
+    );
+    expect(requiredIndex).toBeGreaterThanOrEqual(0);
+    expect(resolvedIndex).toBeGreaterThan(requiredIndex);
+    auditSocket.close();
+    const attentionHistory = (await app.inject(`/api/sessions/${sessionId}/history`)).json();
+    expect(attentionHistory.interactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requestId: '8', kind: 'orgPlanAttention', outcome: 'answered' }),
+      ]),
+    );
+    expect(JSON.stringify(attentionHistory)).not.toContain(
+      'The release permission is now granted.',
+    );
+    // A server-cleared attention request is a durable failed audit and must
+    // re-project the root rather than leaving the GUI awaiting a vanished alert.
+    const clearedAttention = handle!.request!({
+      id: 9,
+      method: 'item/tool/call',
+      params: {
+        tool: 'gestalt_org_plan_attention',
+        arguments: {
+          reason: 'externalState',
+          summary: 'The remote state changed.',
+          requestedAction: 'Refresh the remote state.',
+          resumeCondition: 'externalStateChanged',
+        },
+      },
+    });
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'awaitingHuman' } },
+      }),
+    );
+    handle!.notify!({
+      method: 'serverRequest/resolved',
+      params: { threadId: 'thread-1', requestId: 9 },
+    });
+    await expect(clearedAttention).rejects.toMatchObject({
+      message: 'CODEX_SERVER_REQUEST_CLEARED',
+    });
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        agentActivity: { root: { state: 'working' } },
+      }),
+    );
+    expect((await app.inject(`/api/sessions/${sessionId}/history`)).json().interactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requestId: '9', kind: 'orgPlanAttention', outcome: 'failed' }),
+      ]),
+    );
     await app.close();
   });
 });

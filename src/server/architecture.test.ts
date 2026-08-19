@@ -76,6 +76,15 @@ describe('server production architecture', () => {
       ).toBe(false);
     }
   });
+  it('keeps the Org Plan attention feature behind ports rather than Codex or persistence adapters', () => {
+    const root = join(serverRoot, 'features', 'org-plan-attention', 'application');
+    for (const path of sourceFiles(root)) {
+      const source = readFileSync(path, 'utf8');
+      expect(
+        importSpecifiers(source).some((specifier) => forbiddenActivityAdapter.test(specifier)),
+      ).toBe(false);
+    }
+  });
   it('recognizes forbidden imports in static, side-effect, dynamic, and require forms', () => {
     expect(
       importSpecifiers(`

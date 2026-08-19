@@ -11,6 +11,12 @@ export type AgentActivityReason =
   | 'turnActive'
   | 'turnCompleted'
   | 'pendingInteraction'
+  | 'planChange'
+  | 'hardBlock'
+  | 'missingDependency'
+  | 'permissionRequired'
+  | 'externalState'
+  | 'materialAmbiguity'
   | 'collaborationWait'
   | 'agentError'
   | 'processExited'
@@ -65,6 +71,16 @@ export type AgentActivityFact = Readonly<{
   childRole?: string;
   childStatus?: string;
   collaborationAction?: string;
+  attentionReason?: Extract<
+    AgentActivityReason,
+    | 'planChange'
+    | 'hardBlock'
+    | 'missingDependency'
+    | 'permissionRequired'
+    | 'externalState'
+    | 'materialAmbiguity'
+  >;
+  hasPendingInteraction?: boolean;
 }>;
 
 const states: readonly AgentActivityState[] = [
@@ -129,9 +145,17 @@ export function projectAgentActivity(
   if (fact.kind === 'turnCompleted' && root.state !== 'awaitingHuman')
     Object.assign(root, { state: 'idle', reason: 'turnCompleted' });
   if (fact.kind === 'interactionPending')
-    Object.assign(root, { state: 'awaitingHuman', reason: 'pendingInteraction' });
+    Object.assign(root, {
+      state: 'awaitingHuman',
+      reason: fact.attentionReason ?? 'pendingInteraction',
+    });
   if (fact.kind === 'interactionResolved' && root.state === 'awaitingHuman')
-    Object.assign(root, { state: 'working', reason: 'turnActive' });
+    Object.assign(
+      root,
+      fact.hasPendingInteraction
+        ? { state: 'awaitingHuman', reason: fact.attentionReason ?? 'pendingInteraction' }
+        : { state: 'working', reason: 'turnActive' },
+    );
   if (fact.kind === 'processExited')
     Object.assign(root, { state: 'disconnected', reason: 'processExited' });
   if (fact.kind === 'threadStatus') applyStatus(root, fact.status);

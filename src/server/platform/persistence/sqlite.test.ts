@@ -212,6 +212,75 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it('persists a retry-safe attention delivery state machine across reopen', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = openRelayDatabase(path);
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const store = new SqlitePendingInteractionStore(database);
+    store.add('s', { requestId: 'a', kind: 'orgPlanAttention', payload: { reason: 'hardBlock' } });
+    expect(store.claimOperation('s', 'a', 'one')).toBe('claimed');
+    expect(store.beginDelivery('s', 'a', 'one')).toBe(true);
+    // A pre-delivery failure returns to a visible active interaction; only the
+    // same operation can retry, so a competing browser action is stale.
+    expect(store.retryDelivery('s', 'a', 'one')).toBe(true);
+    expect(store.claimOperation('s', 'a', 'two')).toBe('stale');
+    expect(store.beginDelivery('s', 'a', 'one')).toBe(true);
+    database.close();
+
+    const reopened = openRelayDatabase(path);
+    migrate(reopened);
+    const restored = new SqlitePendingInteractionStore(reopened);
+    expect(restored.claimOperation('s', 'a', 'one')).toBe('same');
+    expect(restored.claimOperation('s', 'a', 'two')).toBe('stale');
+    expect(restored.settleOperation('s', 'a', 'one', 'later', 'answered')).toBe(true);
+    expect(restored.list('s')).toEqual([]);
+    expect(restored.resolved('s', 'a')).toEqual({ resolvedAt: 'later', outcome: 'answered' });
+    reopened.close();
+
+    // This is the recovery boundary after a crash between durable settlement
+    // and writing the optional HTTP idempotency cache.
+    const afterCrash = openRelayDatabase(path);
+    migrate(afterCrash);
+    const recovered = new SqlitePendingInteractionStore(afterCrash);
+    expect(recovered.terminalOperation('s', 'a')).toEqual({
+      resolvedAt: 'later',
+      outcome: 'answered',
+      operationKey: 'one',
+    });
+    expect(recovered.claimOperation('s', 'a', 'one')).toBe('resolved');
+    expect(recovered.claimOperation('s', 'a', 'two')).toBe('stale');
+    afterCrash.close();
+  });
+
+  it('durably claims one attention operation and never lets a duplicate request erase its audit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const store = new SqlitePendingInteractionStore(database);
+    store.add('s', { requestId: 'a', kind: 'orgPlanAttention', payload: { safe: true } });
+    expect(store.claimOperation('s', 'a', 'one')).toBe('claimed');
+    expect(store.claimOperation('s', 'a', 'one')).toBe('same');
+    expect(store.claimOperation('s', 'a', 'two')).toBe('stale');
+    expect(store.resolve('s', 'a', 'later', 'answered')).toBe(true);
+    store.add('s', { requestId: 'a', kind: 'orgPlanAttention', payload: { overwritten: true } });
+    expect(store.resolved('s', 'a')).toEqual({ resolvedAt: 'later', outcome: 'answered' });
+    expect(store.claimOperation('s', 'a', 'one')).toBe('resolved');
+    database.close();
+  });
+
   it('migrates interaction correlation and exposes resolved rows without response content', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
@@ -314,6 +383,11 @@ describe('SQLite relay persistence', () => {
       (
         database.prepare('PRAGMA table_info(pending_interactions)').all() as Array<{ name: string }>
       ).some((column) => column.name === 'outcome'),
+    ).toBe(true);
+    expect(
+      (
+        database.prepare('PRAGMA table_info(pending_interactions)').all() as Array<{ name: string }>
+      ).some((column) => column.name === 'operation_key'),
     ).toBe(true);
     const store = new SqlitePendingInteractionStore(database);
     for (const [id, outcome] of [

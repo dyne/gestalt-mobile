@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GESTALT_QUIZ_TOOL_NAME } from '../../../shared/contracts/quiz.js';
+import { GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME } from '../../../shared/contracts/org-plan-attention.js';
 import { resolvedServerRequestId, toPendingInteraction } from './server-request.js';
 
 describe('Codex server request mapping', () => {
@@ -60,6 +61,38 @@ describe('Codex server request mapping', () => {
         id: 10,
         method: 'item/tool/call',
         params: { tool: GESTALT_QUIZ_TOOL_NAME, arguments: { questions: [] } },
+      }),
+    ).toBeNull();
+  });
+
+  it('maps only a valid bounded Org Plan attention call', () => {
+    expect(
+      toPendingInteraction({
+        id: 11,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+          arguments: {
+            reason: 'permissionRequired',
+            summary: 'A protected deploy requires an approver.',
+            requestedAction: 'Grant deployment approval.',
+            resumeCondition: 'permissionGranted',
+          },
+        },
+      }),
+    ).toEqual({
+      requestId: '11',
+      kind: 'orgPlanAttention',
+      payload: expect.objectContaining({ reason: 'permissionRequired' }),
+    });
+    expect(
+      toPendingInteraction({
+        id: 12,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+          arguments: { reason: 'hardBlock', summary: 'x', requestedAction: 'y' },
+        },
       }),
     ).toBeNull();
   });

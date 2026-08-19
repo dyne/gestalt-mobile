@@ -18,7 +18,7 @@ export type ChatTurn = {
   startedAt: number | null;
   completedAt: number | null;
 };
-export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed';
+export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed' | 'failed';
 export type SafeInteractionSnapshot =
   | {
       requestId: string;
