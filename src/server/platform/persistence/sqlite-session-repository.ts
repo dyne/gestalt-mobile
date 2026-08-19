@@ -23,6 +23,7 @@ type Row = {
   desired_state: RelaySessionSnapshot['desiredState'];
   active_turn_id: string | null;
   protocol_version: string | null;
+  attention_tool_capability: string | null;
   failure_count: number;
   effective_skill_selection_json: string | null;
   last_org_plan_json: string | null;
@@ -35,7 +36,7 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
@@ -49,6 +50,7 @@ export class SqliteSessionRepository {
         session.desiredState,
         session.activeTurnId,
         session.protocolVersion,
+        session.attentionToolCapability ?? null,
         session.failureCount,
         session.effectiveSkillSelection === undefined
           ? null
@@ -96,6 +98,9 @@ function map(row: Row): RelaySessionSnapshot {
     desiredState: row.desired_state,
     activeTurnId: row.active_turn_id,
     protocolVersion: row.protocol_version,
+    ...(row.attention_tool_capability === 'supported'
+      ? { attentionToolCapability: 'supported' as const }
+      : {}),
     failureCount: row.failure_count,
     ...(effectiveSkillSelection === undefined ? {} : { effectiveSkillSelection }),
     ...(lastOrgPlan === undefined ? {} : { lastOrgPlan }),

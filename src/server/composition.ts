@@ -63,6 +63,9 @@ import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-com
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
+import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
+import { parseOrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
+import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -94,6 +97,8 @@ export type ComposeRelayAppOptions = {
   planMeasurementBaseUrl?: string;
   /** Absolute path to the trusted Org Plan helper permitted to checkpoint plans. */
   planMeasurementHelperPath?: string;
+  /** Test-only typed feature seam; adapters remain private to composition. */
+  onAttentionTransitions?: (port: OrgPlanAttentionTransitions) => void;
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
@@ -126,6 +131,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
+  const attentionResolutionOperations = new Map<
+    string,
+    Promise<
+      | { kind: 'accepted'; resolvedAt: string }
+      | { kind: 'replayed'; resolvedAt: string }
+      | {
+          kind:
+            | 'noActive'
+            | 'staleOperation'
+            | 'writerUnavailable'
+            | 'writerCleared'
+            | 'legacyUnsupported';
+          resolvedAt?: string;
+        }
+    >
+  >();
   const supervisedPlans = new SupervisedPlanRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const planMeasurementHelperPath =
@@ -134,6 +155,29 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
+  const attentionTransitions: OrgPlanAttentionTransitions = {
+    subscribe: (sessionId, listener) =>
+      events.subscribe(sessionId, (event) => {
+        if (
+          event.type !== 'org-plan.attention-required' &&
+          event.type !== 'org-plan.attention-resolved'
+        )
+          return;
+        const payload = event.payload as { requestId?: unknown; outcome?: unknown };
+        if (typeof payload.requestId !== 'string') return;
+        listener({
+          kind:
+            event.type === 'org-plan.attention-required'
+              ? 'required'
+              : payload.outcome === 'failed'
+                ? 'failed'
+                : 'resolved',
+          requestId: payload.requestId,
+          occurredAt: event.occurredAt,
+        });
+      }),
+  };
+  options.onAttentionTransitions?.(attentionTransitions);
   const activity = new AgentActivityRegistry(
     (snapshot, occurredAt) =>
       events.publish(
@@ -229,11 +273,41 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         occurredAt,
       ),
     );
+    if (interaction?.kind === 'orgPlanAttention')
+      events.publish(
+        journal.append(
+          sessionId,
+          'org-plan.attention-resolved',
+          { requestId, turnId: interaction.turnId ?? null, resolvedAt: occurredAt, outcome },
+          occurredAt,
+        ),
+      );
   };
-  const dismissPendingInteractions = (sessionId: string, occurredAt: string) => {
+  const publishAttentionSettlement = (
+    sessionId: string,
+    requestId: string,
+    occurredAt: string,
+    outcome: Extract<SafeInteractionOutcome, 'answered' | 'failed'>,
+  ) => {
+    const remaining = interactions.list(sessionId);
+    const attention = remaining.find((item) => item.kind === 'orgPlanAttention');
+    activity.observe({
+      sessionId,
+      occurredAt,
+      kind: 'interactionResolved',
+      hasPendingInteraction: remaining.length > 0,
+      ...(attention ? { attentionReason: (attention.payload as OrgPlanAttention).reason } : {}),
+    });
+    publishInteractionResolved(sessionId, requestId, occurredAt, outcome);
+  };
+  const dismissPendingInteractions = (
+    sessionId: string,
+    occurredAt: string,
+    outcome: SafeInteractionOutcome = 'dismissed',
+  ) => {
     for (const interaction of interactions.list(sessionId)) {
-      if (interactions.resolve(sessionId, interaction.requestId, occurredAt, 'dismissed'))
-        publishInteractionResolved(sessionId, interaction.requestId, occurredAt, 'dismissed');
+      if (interactions.resolve(sessionId, interaction.requestId, occurredAt, outcome))
+        publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
   };
   const runtime = options.startAppServers
@@ -245,11 +319,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const activityFact = decodeAgentActivityFact(sessionId, occurredAt, notification);
           if (activityFact) activity.observe(activityFact);
           const resolvedRequestId = resolvedServerRequestId(notification);
-          if (
-            resolvedRequestId &&
-            interactions.resolve(sessionId, resolvedRequestId, occurredAt, 'dismissed')
-          )
-            publishInteractionResolved(sessionId, resolvedRequestId, occurredAt, 'dismissed');
+          if (resolvedRequestId) {
+            const interaction = interactions.find(sessionId, resolvedRequestId);
+            const outcome = interaction?.kind === 'orgPlanAttention' ? 'failed' : 'dismissed';
+            if (interactions.resolve(sessionId, resolvedRequestId, occurredAt, outcome)) {
+              if (outcome === 'failed')
+                publishAttentionSettlement(sessionId, resolvedRequestId, occurredAt, outcome);
+              else publishInteractionResolved(sessionId, resolvedRequestId, occurredAt, outcome);
+            }
+          }
           const currentSession = sessions.find(sessionId);
           const normalized = normalizeCodexNotification(
             sessionId,
@@ -296,6 +374,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             sessionId,
             occurredAt: interaction.requestedAt,
             kind: 'interactionPending',
+            ...(interaction.kind === 'orgPlanAttention'
+              ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
+              : {}),
           });
           const updated = RelaySession.rehydrate(session).requestInteraction(
             interaction,
@@ -305,11 +386,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           events.publish(
             journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
           );
+          if (interaction.kind === 'orgPlanAttention')
+            events.publish(
+              journal.append(
+                sessionId,
+                'org-plan.attention-required',
+                interaction,
+                updated.updatedAt,
+              ),
+            );
           return true;
         },
         (sessionId) => {
           activity.disconnected(sessionId, new Date().toISOString());
-          dismissPendingInteractions(sessionId, new Date().toISOString());
+          dismissPendingInteractions(sessionId, new Date().toISOString(), 'failed');
           recoverExitedSession(sessionId);
         },
         resolveSkills,
@@ -572,7 +662,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               runtime.resolveServerRequest(sessionId, requestId, value) ? 'accepted' : 'cleared'
           : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
-          activity.observe({ sessionId, occurredAt, kind: 'interactionResolved' });
+          const remaining = interactions.list(sessionId);
+          const attention = remaining.find((item) => item.kind === 'orgPlanAttention');
+          activity.observe({
+            sessionId,
+            occurredAt,
+            kind: 'interactionResolved',
+            hasPendingInteraction: remaining.length > 0,
+            ...(attention
+              ? { attentionReason: (attention.payload as OrgPlanAttention).reason }
+              : {}),
+          });
           publishInteractionResolved(sessionId, requestId, occurredAt, outcome);
         },
       },
@@ -624,8 +724,121 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           if (!interaction) return false;
           if (interaction.kind === 'quiz')
             return isValidQuizInteractionResponse(interaction.payload, value);
+          // Attention must use its operation-keyed boundary; generic interaction
+          // responses deliberately cannot bypass durable operation identity.
+          if (interaction.kind === 'orgPlanAttention') return false;
           return isValidInteractionResponse(interaction.kind, value);
         },
+      },
+      orgPlanAttention: {
+        exists: (id) => sessions.find(id) !== null,
+        reader: {
+          active: (sessionId) => {
+            const interaction = interactions
+              .list(sessionId)
+              .find((item) => item.kind === 'orgPlanAttention');
+            const attention = interaction ? parseOrgPlanAttention(interaction.payload) : null;
+            return interaction && attention
+              ? {
+                  requestId: interaction.requestId,
+                  turnId: interaction.turnId ?? null,
+                  requestedAt: interaction.requestedAt ?? null,
+                  attention,
+                }
+              : null;
+          },
+        },
+        resolver: {
+          resolve: async ({ sessionId, requestId, operationKey, response }) => {
+            const scope = `org-plan-attention:${sessionId}:${requestId}`;
+            const stored = idempotency.get(scope, operationKey);
+            if (stored) return JSON.parse(stored.body) as { kind: 'replayed'; resolvedAt: string };
+            const terminal = interactions.terminalOperation(sessionId, requestId);
+            if (terminal)
+              return terminal.operationKey === operationKey
+                ? terminal.outcome === 'failed'
+                  ? { kind: 'writerCleared' as const, resolvedAt: terminal.resolvedAt }
+                  : { kind: 'replayed' as const, resolvedAt: terminal.resolvedAt }
+                : { kind: 'staleOperation' as const };
+            const key = `${scope}:${operationKey}`;
+            const inFlight = attentionResolutionOperations.get(key);
+            if (inFlight) return inFlight;
+            const operation = (async () => {
+              const interaction = interactions.find(sessionId, requestId);
+              if (!interaction || interaction.kind !== 'orgPlanAttention')
+                return { kind: 'noActive' as const };
+              const claim = interactions.claimOperation(sessionId, requestId, operationKey);
+              if (claim === 'resolved') {
+                const resolved = interactions.resolved(sessionId, requestId);
+                return resolved
+                  ? { kind: 'replayed' as const, resolvedAt: resolved.resolvedAt }
+                  : { kind: 'staleOperation' as const };
+              }
+              if (claim === 'stale') return { kind: 'staleOperation' as const };
+              if (claim === 'missing') return { kind: 'noActive' as const };
+              // A durable capability belongs to the session/thread, not the
+              // relay process.  A supported stopped writer is retryable;
+              // missing capability identifies a pre-rollout legacy thread.
+              if (sessions.find(sessionId)?.attentionToolCapability !== 'supported')
+                return { kind: 'legacyUnsupported' as const };
+              if (!runtime) return { kind: 'writerUnavailable' as const };
+              if (!interactions.beginDelivery(sessionId, requestId, operationKey))
+                return { kind: 'staleOperation' as const };
+              const writer = runtime.attentionWriterState(sessionId, requestId);
+              if (writer === 'unavailable') {
+                interactions.retryDelivery(sessionId, requestId, operationKey);
+                return { kind: 'writerUnavailable' as const };
+              }
+              const resolvedAt = new Date().toISOString();
+              if (writer === 'cleared') {
+                if (
+                  !interactions.settleOperation(
+                    sessionId,
+                    requestId,
+                    operationKey,
+                    resolvedAt,
+                    'failed',
+                  )
+                )
+                  return { kind: 'staleOperation' as const };
+                publishAttentionSettlement(sessionId, requestId, resolvedAt, 'failed');
+                return { kind: 'writerCleared' as const, resolvedAt };
+              }
+              if (!runtime.resolveServerRequest(sessionId, requestId, response)) {
+                // The state check and delivery are synchronous, but retain a
+                // defensive retry path for a future runtime implementation.
+                interactions.retryDelivery(sessionId, requestId, operationKey);
+                return { kind: 'writerUnavailable' as const };
+              }
+              if (
+                !interactions.settleOperation(
+                  sessionId,
+                  requestId,
+                  operationKey,
+                  resolvedAt,
+                  'answered',
+                )
+              )
+                return { kind: 'staleOperation' as const };
+              const accepted = { kind: 'accepted' as const, resolvedAt };
+              idempotency.put(
+                scope,
+                operationKey,
+                202,
+                JSON.stringify({ kind: 'replayed', resolvedAt }),
+              );
+              publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
+              return accepted;
+            })();
+            attentionResolutionOperations.set(key, operation);
+            try {
+              return await operation;
+            } finally {
+              attentionResolutionOperations.delete(key);
+            }
+          },
+        },
+        transitions: attentionTransitions,
       },
       gitSummary: {
         workspaces,
@@ -680,7 +893,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     planMeasurementRefresh?.stopAll();
     for (const session of sessions.list()) {
       activity.dispose(session.id);
-      dismissPendingInteractions(session.id, new Date().toISOString());
+      // Relay shutdown only releases this process's writer.  A typed attention
+      // request remains a durable human-visible blocker for the next relay
+      // instance; only an app-server-cleared request is a failed audit outcome.
+      for (const interaction of interactions.list(session.id)) {
+        if (interaction.kind === 'orgPlanAttention') continue;
+        const occurredAt = new Date().toISOString();
+        if (interactions.resolve(session.id, interaction.requestId, occurredAt, 'dismissed'))
+          publishInteractionResolved(session.id, interaction.requestId, occurredAt, 'dismissed');
+      }
     }
     runtime?.stopAll();
     planStatusSource.closeAll();

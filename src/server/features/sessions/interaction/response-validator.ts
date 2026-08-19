@@ -6,12 +6,16 @@
 
 import type { RelayInteractionKind } from './kind.js';
 import { isQuizToolResponseForQuiz, parseQuiz } from '../../../../shared/contracts/quiz.js';
+import {
+  isOrgPlanAttentionToolResponse,
+  parseOrgPlanAttention,
+} from '../../../../shared/contracts/org-plan-attention.js';
 
 /** Validates the relay-safe subset of Codex's generated server-request responses. */
 export function isValidInteractionResponse(kind: RelayInteractionKind, value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (kind === 'userInput') return isValidUserInputResponse(value);
-  if (kind === 'quiz') return false;
+  if (kind === 'quiz' || kind === 'orgPlanAttention') return false;
   if (kind === 'permissionsApproval')
     return isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session');
   return isValidApprovalDecision(kind, value.decision);
@@ -21,6 +25,13 @@ export function isValidInteractionResponse(kind: RelayInteractionKind, value: un
 export function isValidQuizInteractionResponse(payload: unknown, value: unknown): boolean {
   const quiz = parseQuiz(payload);
   return quiz !== null && isQuizToolResponseForQuiz(quiz, value);
+}
+
+export function isValidOrgPlanAttentionInteractionResponse(
+  payload: unknown,
+  value: unknown,
+): boolean {
+  return parseOrgPlanAttention(payload) !== null && isOrgPlanAttentionToolResponse(value);
 }
 
 function isValidUserInputResponse(value: Record<string, unknown>): boolean {

@@ -40,6 +40,8 @@ import type { SkillCatalog, SkillProfileStore } from './features/skills/applicat
 import type { SkillProfile } from './features/skills/model/skill-profile.js';
 import type { GitSummary, GitWorkspaceResolver } from './features/git/application/ports.js';
 import { registerSkillRoutes } from './features/skills/register-routes.js';
+import { registerOrgPlanAttentionRoutes } from './features/org-plan-attention/register-routes.js';
+import type { OrgPlanAttentionReader } from './features/org-plan-attention/application/ports.js';
 import type { ListAvailableSkillsDependencies } from './features/skills/list-available/endpoint.js';
 import type { ListSkillProfilesDependencies } from './features/skills/list-profiles/endpoint.js';
 import type { ReplaceSkillProfileDependencies } from './features/skills/replace-profile/endpoint.js';
@@ -148,6 +150,12 @@ export type AppDependencies = {
     snapshot?(sessionId: string): SafeInteractionSnapshot[];
     pending?(sessionId: string, requestId: string): boolean;
   };
+  orgPlanAttention?: {
+    exists(id: string): boolean;
+    reader: OrgPlanAttentionReader;
+    resolver: import('./features/org-plan-attention/application/ports.js').OrgPlanAttentionResolver;
+    transitions: import('./features/org-plan-attention/application/ports.js').OrgPlanAttentionTransitions;
+  };
   gitSummary?: {
     workspaces: GitWorkspaceResolver;
     inspect(path: string): Promise<GitSummary>;
@@ -208,6 +216,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   registerSessionRoutes(app, deps);
+  if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
   registerGitRoutes(app, deps);
   registerSkillRoutes(app, deps);

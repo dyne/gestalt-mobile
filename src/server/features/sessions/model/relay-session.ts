@@ -36,7 +36,13 @@ export function relayOwnsWriter(session: Pick<RelaySessionSnapshot, 'state'>): b
 }
 export type PendingInteraction = {
   requestId: string;
-  kind: 'commandApproval' | 'fileChangeApproval' | 'permissionsApproval' | 'userInput' | 'quiz';
+  kind:
+    | 'commandApproval'
+    | 'fileChangeApproval'
+    | 'permissionsApproval'
+    | 'userInput'
+    | 'quiz'
+    | 'orgPlanAttention';
   payload: unknown;
   turnId?: string | null;
   requestedAt?: string;
@@ -80,6 +86,8 @@ export type RelaySessionSnapshot = {
   desiredState: DesiredState;
   activeTurnId: string | null;
   protocolVersion: string | null;
+  /** Missing denotes a legacy thread that was never registered with this tool. */
+  attentionToolCapability?: 'supported';
   failureCount: number;
   effectiveSkillSelection?: EffectiveSkillSelection;
   lastOrgPlan?: LastOrgPlan;
@@ -158,6 +166,13 @@ export class RelaySession {
 
   bindThread(value: string, now: string): RelaySession {
     return this.transition({ threadId: threadId(value), state: 'ready' }, 'ThreadBound', now);
+  }
+  supportsAttentionTool(now: string): RelaySession {
+    return this.transition(
+      { attentionToolCapability: 'supported' },
+      'AttentionToolRegistered',
+      now,
+    );
   }
   selectModel(value: string, now: string): RelaySession {
     if (this.value.state !== 'ready') throw new DomainError('SESSION_NOT_READY');
