@@ -13,6 +13,19 @@ let fakeController: {
   select(id: string | null): void;
   emit(id: string, view: unknown): void;
 } | null = null;
+let activityOptions: { publish(items: ReadonlyMap<string, unknown>): void } | null = null;
+vi.mock('./features/agent-activity/agent-activity-controller.js', () => ({
+  AgentActivityController: class {
+    constructor(options: typeof activityOptions) {
+      activityOptions = options;
+    }
+    bootstrap = vi.fn();
+    sync = vi.fn();
+    select = vi.fn();
+    observe = vi.fn();
+    dispose = vi.fn();
+  },
+}));
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 vi.mock('./features/chat/chat-controller.js', () => ({
   ChatController: class {
@@ -68,6 +81,7 @@ describe('RelayApp chat controller composition', () => {
     cleanup();
     controllerOptions = null;
     fakeController = null;
+    activityOptions = null;
     vi.unstubAllGlobals();
     if (originalScrollIntoView) Element.prototype.scrollIntoView = originalScrollIntoView;
     else delete (Element.prototype as Partial<Element>).scrollIntoView;
@@ -125,5 +139,66 @@ describe('RelayApp chat controller composition', () => {
     fakeController?.emit('b', chatView('b', 'session B'));
     screen.getByRole('button', { name: /Chat/i }).click();
     await vi.waitFor(() => expect(screen.getByText('session B')).toBeTruthy());
+  });
+  it('projects one activity map to both Chat and Sessions without cross-session content', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    const fetcher = vi.fn(
+      async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify(
+            String(input) === '/api/bootstrap'
+              ? {
+                  workspaces: [],
+                  profiles: [],
+                  models: [],
+                  sessions: [
+                    { id: 'a', state: 'ready', workspacePath: '/a' },
+                    { id: 'b', state: 'ready', workspacePath: '/b' },
+                  ],
+                }
+              : String(input) === '/api/skill-profiles'
+                ? { profiles: [] }
+                : [],
+          ),
+        ),
+    );
+    render(RelayApp, {
+      authorizedFetch: fetcher,
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+    await vi.waitFor(() => expect(activityOptions).not.toBeNull());
+    activityOptions?.publish(
+      new Map([
+        [
+          'a',
+          {
+            sessionId: 'a',
+            confidence: 'fresh',
+            aggregateSubagents: 'idle',
+            root: {
+              state: 'working',
+              observedAt: '2026-01-01T00:00:00.000Z',
+              lastActivityAt: '2026-01-01T00:00:00.000Z',
+            },
+            subagents: [],
+          },
+        ],
+      ]),
+    );
+    await fireEvent.click(screen.getByRole('button', { name: /Sessions/i }));
+    await vi.waitFor(() => expect(screen.getByText('Supervisor: working')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /Chat/i }));
+    await vi.waitFor(() => expect(screen.getByText('Supervisor: working')).toBeTruthy());
   });
 });
