@@ -71,7 +71,12 @@ try {
     cleanNpmEnvironment,
   );
 
-  const environment = { ...process.env, PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}` };
+  // The packed server also owns auth state, so its home must be as isolated as npm's.
+  // Inheriting the developer's HOME can make this smoke test read unrelated passkeys.
+  const environment = {
+    ...cleanNpmEnvironment,
+    PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+  };
   const cleanNpmExecutionEnvironment = {
     ...cleanNpmEnvironment,
     PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
