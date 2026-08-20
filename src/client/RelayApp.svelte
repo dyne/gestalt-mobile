@@ -29,6 +29,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AgentActivityEvidence from './features/agent-activity/AgentActivityEvidence.svelte';
   import { AgentActivityController } from './features/agent-activity/agent-activity-controller.js';
   import type { AgentActivitySnapshot } from './features/agent-activity/contracts.js';
+  import {
+    AutopilotController,
+    type AutopilotClientState,
+  } from './features/autopilot/autopilot-controller.js';
+  import AutopilotControl from './features/autopilot/AutopilotControl.svelte';
+  import AutopilotAttention from './features/autopilot/AutopilotAttention.svelte';
+  import AutopilotSafetyStop from './features/autopilot/AutopilotSafetyStop.svelte';
+  import { createAttentionToastDedupe } from './features/autopilot/attention-toast-dedupe.js';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
@@ -118,6 +126,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
   let activitySnapshots = $state.raw<ReadonlyMap<string, AgentActivitySnapshot>>(new Map());
+  let autopilotState = $state.raw<AutopilotClientState>({
+    snapshots: new Map(),
+    attention: new Map(),
+    pending: new Set(),
+    errors: new Map(),
+  });
+  let sessionListEpoch = 0;
+  let sessionListAbort: AbortController | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
   let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
@@ -207,9 +223,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return '';
   });
   const relay = createRelayClient((input, init) => authorizedFetch(input, init));
+  const autopilotController = new AutopilotController(relay, (next) => (autopilotState = next));
   const activityController = new AgentActivityController({
     relay,
     publish: (next) => (activitySnapshots = new Map(next)),
+    onEvent: (id, event) => autopilotController.observe(id, event),
+    onAuthoritativeSnapshot: (id, snapshot) => autopilotController.applyAuthoritative(id, snapshot),
   });
   const chatController = new ChatController({
     relay,
@@ -256,6 +275,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
   const activityEvidence = new URLSearchParams(location.search).get('activity-evidence');
+  // This tracks already-announced server request IDs; it does not drive rendering.
+  const attentionToasts = createAttentionToastDedupe(window.sessionStorage);
+
+  $effect(() => {
+    for (const [id, attention] of autopilotState.attention) {
+      const key = `${id}:${attention.requestId}`;
+      if (attentionToasts.claim(key)) {
+        toastQueue.enqueue({
+          kind: 'error',
+          code: `AUTOPILOT_ATTENTION_${attention.requestId}`,
+          message: 'Autopilot needs your attention.',
+        });
+      }
+    }
+  });
 
   function openScratchpad(): void {
     scratchpadOpen = true;
@@ -298,6 +332,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       activityController.bootstrap(
         bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
         sessionId,
+      );
+      autopilotController.bootstrap(
+        bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
       );
       void refreshRecentSessions();
       planController.select(sessionId);
@@ -359,6 +396,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     followTail.cancel();
     chatController.dispose();
     activityController.dispose();
+    autopilotController.dispose();
     planController.dispose();
     gitController.dispose();
     sessionStartController.dispose();
@@ -404,11 +442,44 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function refreshSessions() {
-    sessions = await relay.listSessions();
-    activityController.bootstrap(
-      sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
-      sessionId,
-    );
+    const epoch = ++sessionListEpoch;
+    sessionListAbort?.abort();
+    const abort = new AbortController();
+    sessionListAbort = abort;
+    try {
+      const next = await relay.listSessions(abort.signal);
+      if (epoch !== sessionListEpoch || abort.signal.aborted) return;
+      sessions = next;
+      const active = sessions.filter((session) => ['ready', 'turnActive'].includes(session.state));
+      // Activity owns getSession reconciliation. Bootstrap seeds the shared
+      // projection only; a late list can never replace sequenced authority.
+      activityController.bootstrap(active, sessionId);
+      autopilotController.bootstrap(active);
+    } catch (error) {
+      if (abort.signal.aborted || isAbortError(error)) return;
+      throw error;
+    } finally {
+      if (sessionListAbort === abort) sessionListAbort = null;
+    }
+  }
+
+  async function toggleAutopilot(id: string, enabled: boolean): Promise<void> {
+    await autopilotController.toggle(id, enabled);
+    if (id === sessionId) void refreshSessions().catch(() => {});
+  }
+  async function recoverAutopilot(id: string): Promise<void> {
+    await toggleAutopilot(id, true);
+    await tick();
+    if (id === sessionId)
+      document.getElementById(`chat-autopilot-${id}-button`)?.focus({ preventScroll: true });
+  }
+  async function resolveAutopilotAttention(
+    id: string,
+    action: 'resume' | 'disableAutopilot',
+    guidance?: string,
+  ): Promise<void> {
+    await autopilotController.resolve(id, action, guidance);
+    if (id === sessionId) void refreshSessions().catch(() => {});
   }
 
   async function refreshRecentSessions() {
@@ -896,6 +967,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     void sendMessage();
   }
 
+  function isAbortError(error: unknown): boolean {
+    return error instanceof DOMException
+      ? error.name === 'AbortError'
+      : error instanceof Error && error.name === 'AbortError';
+  }
+
   function handleChatMetadataEvent(event: ProjectionEvent): void {
     const selectedId = sessionId;
     if (!selectedId) return;
@@ -970,6 +1047,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onscratchpad={openScratchpad}
         onthemechange={setTheme}
       />{/if}
+    <!-- At phone widths the viewport becomes part of the document flow, so a
+         readable notification never covers the header or an active control. -->
+    <ToastViewport queue={toastQueue} />
     {#if devicesOpen && passkeyAuthEnabled}
       <AuthorizedDevicesView
         client={deviceClient}
@@ -996,6 +1076,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           <AgentActivityIndicators
             activity={sessionId ? (activitySnapshots.get(sessionId) ?? null) : null}
           />
+          <AutopilotControl
+            autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
+            controlId={`chat-autopilot-${sessionId ?? 'none'}`}
+            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
+            error={sessionId ? (autopilotState.errors.get(sessionId) ?? null) : null}
+            ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+          />
+          <AutopilotAttention
+            attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
+            controlId={`chat-attention-${sessionId ?? 'none'}`}
+            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
+            onresolve={(action, guidance) =>
+              sessionId && resolveAutopilotAttention(sessionId, action, guidance)}
+          />
+          <AutopilotSafetyStop
+            autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
+            attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
+            controlId={`chat-autopilot-safety-${sessionId ?? 'none'}`}
+            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
+            onrecover={() => sessionId && void recoverAutopilot(sessionId)}
+            ondisable={() => sessionId && toggleAutopilot(sessionId, false)}
+          />
           <p class="visually-hidden" aria-live="polite" aria-atomic="true">
             {interactionAnnouncement}
           </p>
@@ -1004,6 +1106,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               messages={chatView ? [...chatView.messages] : []}
               activities={chatView ? [...chatView.activities] : []}
               activeTurnId={chatView?.activeTurnId ?? null}
+              autopilotAuditTruncated={chatView?.autopilotAuditTruncated ?? false}
               interactions={chatView ? [...chatView.interactions] : []}
               answers={userInputAnswers}
               onanswer={setUserInputAnswer}
@@ -1099,6 +1202,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {recentSessions}
             selectedSessionId={sessionId}
             {activitySnapshots}
+            autopilotSnapshots={autopilotState.snapshots}
+            autopilotPending={autopilotState.pending}
+            autopilotErrors={autopilotState.errors}
+            autopilotAttention={autopilotState.attention}
             {workspaceTree}
             workspaceId={sessionWorkspaceId}
             expandedIds={sessionExpandedIds}
@@ -1121,6 +1228,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onopen={openSession}
             onselectopen={openSession}
             onclose={(id) => void closeSession(id)}
+            onautopilottoggle={toggleAutopilot}
+            onautopilotresolve={resolveAutopilotAttention}
             onopenrecent={(session) => void openRecentSession(session)}
             onforget={(id) => void forgetSession(id)}
             oncopyresume={(command) => void copyResumeCommand(command)}
@@ -1138,9 +1247,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {/if}
   </main>
   {#if scratchpadOpen}<Scratchpad onclose={closeScratchpad} />{/if}
-{/if}
-{#if toastEvidence !== 'error' && toastEvidence !== 'stacked'}
-  <ToastViewport queue={toastQueue} />
 {/if}
 
 <style>

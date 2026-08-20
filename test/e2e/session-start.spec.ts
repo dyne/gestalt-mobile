@@ -1029,7 +1029,9 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
   const messageList = page.getByRole('list', { name: 'Chat messages' });
   const promptTurn = messageList.locator('.prompt-turn');
-  const answerTurn = messageList.locator('.answer-item');
+  const answerTurn = messageList
+    .locator('.answer-item')
+    .filter({ hasText: 'No changes are needed.' });
   await expect(messageList).toHaveCSS('padding-left', '0px');
   await expect(promptTurn).toHaveCSS(
     'width',
@@ -1039,17 +1041,16 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
     await promptTurn.evaluate((element) => getComputedStyle(element).backgroundColor),
   ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
   await expect(page.getByRole('button', { name: 'Send prompt' }).locator('svg')).toBeVisible();
-  const progress = page.locator('.answer-turn');
-  const answerHeading = progress.locator('.entry-heading');
+  const answerHeading = answerTurn.locator('.answer-turn .entry-heading');
   expect(
     await answerHeading
       .locator(':scope > *')
       .evaluateAll((elements) => elements.map((element) => element.tagName)),
   ).toEqual(['STRONG', 'TIME']);
-  await expect(progress.getByText('I am inspecting the branch.')).toBeVisible();
-  await expect(progress.getByText('The branch is clean.')).toBeVisible();
-  await expect(progress.locator('.live-activity')).toContainText('Command · completed');
-  await expect(progress.locator('details')).toHaveCount(0);
+  await expect(messageList.getByText('I am inspecting the branch.')).toBeVisible();
+  await expect(messageList.getByText('The branch is clean.')).toBeVisible();
+  await expect(messageList.locator('.live-activity')).toContainText('Command · completed');
+  await expect(messageList.locator('details')).toHaveCount(0);
 });
 
 test('reconciles terminal-originated history while Chat is visible', async ({ page }) => {

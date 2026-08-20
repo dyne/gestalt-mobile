@@ -18,12 +18,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
   import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
   import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
+  import AutopilotControl from '../autopilot/AutopilotControl.svelte';
+  import type { AutopilotSnapshot } from '../autopilot/contracts.js';
+  import type { OrgPlanAttention } from '../autopilot/contracts.js';
+  import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
+  import AutopilotSafetyStop from '../autopilot/AutopilotSafetyStop.svelte';
 
   type Props = {
     sessions: RelaySession[];
     recentSessions: RecentSession[];
     selectedSessionId: string | null;
     activitySnapshots?: ReadonlyMap<string, AgentActivitySnapshot>;
+    autopilotSnapshots?: ReadonlyMap<string, AutopilotSnapshot>;
+    autopilotPending?: ReadonlySet<string>;
+    autopilotErrors?: ReadonlyMap<string, string>;
+    autopilotAttention?: ReadonlyMap<string, OrgPlanAttention>;
     workspaceTree: WorkspaceOption[];
     workspaceId: string;
     expandedIds: ReadonlySet<string>;
@@ -46,6 +55,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopen: (id: string) => void;
     onselectopen: (id: string) => void;
     onclose: (id: string) => void;
+    onautopilottoggle?: (id: string, enabled: boolean) => void;
+    onautopilotresolve?: (
+      id: string,
+      action: 'resume' | 'disableAutopilot',
+      guidance?: string,
+    ) => void;
     onopenrecent: (session: RecentSession) => void;
     onforget: (id: string) => void;
     oncopyresume: (command: string) => void;
@@ -57,6 +72,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     recentSessions,
     selectedSessionId,
     activitySnapshots = new Map(),
+    autopilotSnapshots = new Map(),
+    autopilotPending = new Set(),
+    autopilotErrors = new Map(),
+    autopilotAttention = new Map(),
     workspaceTree,
     workspaceId,
     expandedIds,
@@ -79,6 +98,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopen,
     onselectopen,
     onclose,
+    onautopilottoggle = () => {},
+    onautopilotresolve = () => {},
     onopenrecent,
     onforget,
     oncopyresume,
@@ -152,6 +173,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               </button>
               <AgentActivityIndicators
                 activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+              />
+              <AutopilotControl
+                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                controlId={`session-autopilot-${session.id}`}
+                pending={autopilotPending.has(session.id)}
+                error={autopilotErrors.get(session.id) ?? null}
+                ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+              />
+              <AutopilotAttention
+                attention={autopilotAttention.get(session.id) ?? null}
+                controlId={`session-attention-${session.id}`}
+                pending={autopilotPending.has(session.id)}
+                onresolve={(action, guidance) => onautopilotresolve(session.id, action, guidance)}
+              />
+              <AutopilotSafetyStop
+                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                attention={autopilotAttention.get(session.id) ?? null}
+                controlId={`session-autopilot-safety-${session.id}`}
+                pending={autopilotPending.has(session.id)}
+                onrecover={() => onautopilottoggle(session.id, true)}
+                ondisable={() => onautopilottoggle(session.id, false)}
               />
             </div>
           </li>

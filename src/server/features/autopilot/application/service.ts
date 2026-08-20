@@ -296,14 +296,27 @@ export class AutopilotCoordinator {
       return;
     }
     const nextFingerprint = fingerprint(plan.plan);
-    if (prior.planFingerprint !== nextFingerprint)
-      this.persist({
-        ...prior,
-        planIdentity: plan.identity,
-        planFingerprint: nextFingerprint,
-        consecutiveNoProgress: 0,
-        updatedAt: this.deps.now(),
-      });
+    if (prior.planFingerprint !== nextFingerprint) {
+      const now = this.deps.now();
+      this.persist(
+        {
+          ...prior,
+          planIdentity: plan.identity,
+          planFingerprint: nextFingerprint,
+          consecutiveNoProgress: 0,
+          updatedAt: now,
+        },
+        undefined,
+        [
+          {
+            sessionId,
+            type: 'autopilot.progress-reset',
+            payload: { reason: 'planUpdated' },
+            occurredAt: now,
+          },
+        ],
+      );
+    }
     this.evaluate(sessionId);
   }
   turnCompleted(sessionId: string): void {

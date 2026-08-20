@@ -11,6 +11,10 @@ import { registerAutopilotToggle } from './toggle/endpoint.js';
 export function registerAutopilotRoutes(
   app: FastifyInstance,
   coordinator: AutopilotCoordinator,
+  idempotency?: {
+    get(scope: string, key: string): { statusCode: number; body: string } | null;
+    put(scope: string, key: string, statusCode: number, body: string): void;
+  },
 ): void {
-  registerAutopilotToggle(app, coordinator);
+  registerAutopilotToggle(app, coordinator, idempotency);
 }

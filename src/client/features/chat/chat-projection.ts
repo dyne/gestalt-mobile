@@ -46,6 +46,8 @@ export type ChatProjection = Readonly<{
   activities: readonly HistoryActivity[];
   prompts: readonly ProjectedPrompt[];
   interactions: readonly ProjectedInteraction[];
+  /** The server intentionally retained only a bounded filtered audit tail. */
+  autopilotAuditTruncated: boolean;
   buffered: ReadonlyMap<number, ProjectionEvent>;
 }>;
 export type ProjectionEvent = Readonly<{
@@ -65,6 +67,7 @@ const empty = (): ChatProjection => ({
   activities: [],
   prompts: [],
   interactions: [],
+  autopilotAuditTruncated: false,
   buffered: new Map(),
 });
 export const createChatProjection = (sessionId: string | null = null): ChatProjection => ({
@@ -73,6 +76,17 @@ export const createChatProjection = (sessionId: string | null = null): ChatProje
 });
 
 function messageFromItem(item: ChatItem): ChatMessage | null {
+  if (item.kind === 'autopilot')
+    return {
+      id: `item:${item.id}`,
+      role: 'audit',
+      text: 'Autopilot issued an automatic continuation.',
+      ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
+        ? { occurredAt: item.occurredAt }
+        : {}),
+      ...(typeof item.controlId === 'string' ? { controlId: item.controlId } : {}),
+      complete: true,
+    };
   if ((item.kind !== 'user' && item.kind !== 'agent') || typeof item.text !== 'string') return null;
   return {
     id: `item:${item.id}`,
@@ -85,6 +99,70 @@ function messageFromItem(item: ChatItem): ChatMessage | null {
     ...(typeof item.turnId === 'string' ? { turnId: item.turnId } : {}),
     complete: true,
   };
+}
+function auditMessage(item: {
+  id: string;
+  label: string;
+  occurredAt: number;
+  controlId?: string;
+}): ChatMessage {
+  return {
+    id: item.id,
+    role: 'audit',
+    text: item.label,
+    occurredAt: item.occurredAt,
+    ...(item.controlId ? { controlId: item.controlId } : {}),
+    complete: true,
+  };
+}
+const auditLabels: Readonly<Record<string, string>> = {
+  'autopilot.continuation-scheduled': 'Autopilot scheduled a continuation',
+  'autopilot.control-issued': 'Autopilot issued an automatic continuation.',
+  'autopilot.turn-started': 'Autopilot continuation started',
+  'autopilot.turn-failed': 'Autopilot continuation failed',
+  'autopilot.progress-reset': 'Autopilot reset retry progress after the plan changed',
+  'org-plan.attention-required': 'Autopilot needs attention',
+  'org-plan.attention-resolved': 'Attention resolved',
+};
+/**
+ * Coordinator state is durable through `autopilot.updated`; unlike invented
+ * UI-only vocabulary, every label below is a direct rendering of that payload.
+ */
+function snapshotAuditLabel(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const state = (payload as { state?: unknown }).state;
+  const reason = (payload as { reason?: unknown }).reason;
+  if (state === 'backoff') return 'Autopilot is backing off';
+  if (state === 'attentionRequired') return 'Autopilot needs attention';
+  if (state === 'completed') return 'Autopilot completed the plan';
+  if (state === 'disabled' && reason === 'planRequired')
+    return 'Autopilot requires an incomplete supervised plan';
+  return null;
+}
+function auditEventMessage(event: ProjectionEvent): ChatMessage | null {
+  const occurredAt = parseOccurredAt(event.occurredAt);
+  const label =
+    event.type === 'org-plan.attention-resolved' &&
+    event.payload &&
+    typeof event.payload === 'object' &&
+    (event.payload as { outcome?: unknown }).outcome === 'failed'
+      ? 'Attention resolution failed'
+      : (auditLabels[event.type] ??
+        (event.type === 'autopilot.updated' ? snapshotAuditLabel(event.payload) : null));
+  const controlId =
+    event.payload &&
+    typeof event.payload === 'object' &&
+    typeof (event.payload as { controlId?: unknown }).controlId === 'string'
+      ? (event.payload as { controlId: string }).controlId
+      : undefined;
+  return label && occurredAt !== undefined
+    ? auditMessage({
+        id: `audit:${event.sequence}`,
+        label,
+        occurredAt,
+        ...(controlId ? { controlId } : {}),
+      })
+    : null;
 }
 function parseOccurredAt(value: unknown): number | undefined {
   if (typeof value !== 'string') return undefined;
@@ -99,7 +177,11 @@ function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
     kind: snapshot.kind,
     turnId: snapshot.turnId,
     payload: 'payload' in snapshot ? snapshot.payload : null,
-    state: snapshot.resolvedAt ? 'resolved' : 'pending',
+    state: snapshot.resolvedAt
+      ? snapshot.outcome === 'failed'
+        ? 'failed'
+        : 'resolved'
+      : 'pending',
     ...(snapshot.resolvedAt ? { attemptedOutcome: snapshot.outcome } : {}),
     ...(occurredAt !== undefined ? { occurredAt } : {}),
   };
@@ -112,7 +194,8 @@ function safeOutcome(
     attemptedOutcome === 'approved' ||
     attemptedOutcome === 'denied' ||
     attemptedOutcome === 'answered' ||
-    attemptedOutcome === 'dismissed'
+    attemptedOutcome === 'dismissed' ||
+    attemptedOutcome === 'failed'
   )
     return attemptedOutcome;
   if (interaction?.kind === 'quiz' || interaction?.kind === 'userInput') return 'answered';
@@ -336,7 +419,7 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
         Boolean(
           message &&
           typeof message.id === 'string' &&
-          (message.role === 'user' || message.role === 'assistant') &&
+          (message.role === 'user' || message.role === 'assistant' || message.role === 'audit') &&
           typeof message.text === 'string' &&
           (message.occurredAt === undefined ||
             (typeof message.occurredAt === 'number' && Number.isFinite(message.occurredAt))),
@@ -448,6 +531,13 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       ? { ...item, occurredAt }
       : item;
   });
+  const auditItems = (snapshot.autopilotAudit ?? []).filter(
+    (item): item is { id: string; label: string; occurredAt: number; controlId?: string } =>
+      typeof item?.id === 'string' &&
+      typeof item.label === 'string' &&
+      typeof item.occurredAt === 'number' &&
+      Number.isFinite(item.occurredAt),
+  );
   const projected: ChatProjection = {
     ...current,
     cursor: Math.max(current.cursor, snapshot.baseSequence),
@@ -458,14 +548,43 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       current.cursor === 0 && current.lifecycle === 'finished' ? 'working' : current.lifecycle,
     ),
     prompts,
-    messages: mergeMessages(items, prompts, current.messages),
+    messages: unique(
+      mergeMessages(items, prompts, current.messages).concat(auditItems.map(auditMessage)),
+    ).sort(
+      (left, right) =>
+        (left.occurredAt ?? Number.MAX_SAFE_INTEGER) -
+        (right.occurredAt ?? Number.MAX_SAFE_INTEGER),
+    ),
     activities,
     interactions,
+    autopilotAuditTruncated: snapshot.autopilotAuditTruncated === true,
     buffered: new Map(
       [...current.buffered].filter(([sequence]) => sequence > snapshot.baseSequence),
     ),
   };
-  return replayBuffered(projected);
+  return replayBuffered({
+    ...projected,
+    messages: canonicalAutopilotAudit(projected.messages),
+  });
+}
+
+/** History items and journal records describe the same coordinator action. */
+function canonicalAutopilotAudit(messages: readonly ChatMessage[]): ChatMessage[] {
+  const seenControls = new Set<string>();
+  return messages.filter((message) => {
+    // A canonical history `kind: autopilot` item is the same action as the
+    // coordinator's later `autopilot.control-issued` journal record. Other
+    // control lifecycle records remain independently useful audit facts.
+    if (
+      message.role !== 'audit' ||
+      !message.controlId ||
+      message.text !== 'Autopilot issued an automatic continuation.'
+    )
+      return true;
+    if (seenControls.has(message.controlId)) return false;
+    seenControls.add(message.controlId);
+    return true;
+  });
 }
 
 export function beginSnapshot(current: ChatProjection): ChatProjection {
@@ -738,6 +857,9 @@ export function applyProjectionEvent(
     const id = typeof payload.activeTurnId === 'string' ? payload.activeTurnId : null;
     next = { ...next, activeTurnId: id, lifecycle: id ? 'working' : lifecycle(id, next.lifecycle) };
   }
+  const audit = auditEventMessage(event);
+  if (audit && !next.messages.some((message) => message.id === audit.id))
+    next = { ...next, messages: canonicalAutopilotAudit([...next.messages, audit]) };
   return next;
 }
 export function replayBuffered(current: ChatProjection): ChatProjection {

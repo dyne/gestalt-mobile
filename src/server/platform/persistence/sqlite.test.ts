@@ -86,6 +86,11 @@ describe('SQLite relay persistence', () => {
     journal.append('s', 'three', {}, 't3');
 
     expect(journal.since('s', 0).map((event) => event.sequence)).toEqual([2, 3]);
+    expect(journal.tail('s', 1).map((event) => event.sequence)).toEqual([3]);
+    expect(journal.tailWithTruncation('s', 1)).toMatchObject({
+      events: [expect.objectContaining({ sequence: 3 })],
+      truncated: true,
+    });
     database.close();
   });
 
@@ -110,6 +115,73 @@ describe('SQLite relay persistence', () => {
     );
     expect(replay.sequence).toBe(first.sequence);
     expect(journal.since('s', 0)).toHaveLength(1);
+    database.close();
+  });
+
+  it('returns a bounded filtered autopilot audit tail even when recent journal rows are unrelated', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const journal = new SqliteEventJournal(database);
+    journal.append('s', 'autopilot.continuation-scheduled', { controlId: 'old' }, 't1');
+    journal.append('s', 'agentMessageDelta', { text: 'not audit' }, 't2');
+    journal.append('s', 'autopilot.turn-failed', { controlId: 'new' }, 't3');
+    journal.append('s', 'agentMessageDelta', { text: 'still not audit' }, 't4');
+    expect(journal.autopilotAuditTail('s', 1)).toMatchObject({
+      events: [expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 3 })],
+      truncated: true,
+    });
+    expect(journal.autopilotAuditTail('s', 2)).toMatchObject({
+      events: [
+        expect.objectContaining({ type: 'autopilot.continuation-scheduled', sequence: 1 }),
+        expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 3 }),
+      ],
+      truncated: false,
+    });
+    database.close();
+  });
+
+  it('applies the tail limit and truncation only to renderable records under noisy monitoring', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const journal = new SqliteEventJournal(database);
+    journal.append('s', 'autopilot.turn-failed', { controlId: 'old' }, 't1');
+    for (let index = 0; index < 250; index++)
+      journal.append('s', 'autopilot.updated', { state: 'monitoring', enabled: true }, `n${index}`);
+    journal.append('s', 'autopilot.progress-reset', { reason: 'planUpdated' }, 't2');
+    journal.append('s', 'autopilot.updated', { state: 'completed', enabled: false }, 't3');
+
+    const visibleTwo = journal.autopilotAuditTail('s', 2);
+    expect(visibleTwo.events.map((event) => event.type)).toEqual([
+      'autopilot.progress-reset',
+      'autopilot.updated',
+    ]);
+    expect(visibleTwo.events[1]?.payload).toMatchObject({ state: 'completed' });
+    expect(visibleTwo.truncated).toBe(true);
+    const visibleThree = journal.autopilotAuditTail('s', 3);
+    expect(visibleThree.events.map((event) => event.type)).toEqual([
+      'autopilot.turn-failed',
+      'autopilot.progress-reset',
+      'autopilot.updated',
+    ]);
+    expect(visibleThree.truncated).toBe(false);
+    const indexes = database.prepare('PRAGMA index_list(session_events)').all() as Array<{
+      name: string;
+    }>;
+    expect(indexes.map((index) => index.name)).toContain('session_events_autopilot_audit_tail_v2');
     database.close();
   });
 

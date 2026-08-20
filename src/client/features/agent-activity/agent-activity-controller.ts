@@ -6,13 +6,22 @@
 
 import { isAgentActivitySnapshot, type AgentActivitySnapshot } from './contracts.js';
 type Event = { sequence: number; type: string; payload: unknown };
+export type AuthoritativeSessionSnapshot = {
+  agentActivity?: unknown;
+  autopilot?: unknown;
+  pendingInteractions?: unknown;
+  currentSequence?: number;
+};
 type Relay = {
-  getSession(id: string): Promise<{ agentActivity?: unknown; currentSequence?: number }>;
+  getSession(id: string): Promise<AuthoritativeSessionSnapshot>;
   refreshActivity(id: string): Promise<void>;
 };
 type Options = Readonly<{
   relay: Relay;
   publish: (items: ReadonlyMap<string, AgentActivitySnapshot>) => void;
+  onEvent?: (id: string, event: Event) => void;
+  /** The sole reconciliation owner forwards complete getSession authority. */
+  onAuthoritativeSnapshot?: (id: string, snapshot: AuthoritativeSessionSnapshot) => void;
   websocket?: (url: string) => WebSocket;
   location?: Location;
   setTimeout?: typeof setTimeout;
@@ -105,6 +114,7 @@ export class AgentActivityController {
       void this.resync(id);
     }
     this.#cursors.set(id, event.sequence);
+    this.#options.onEvent?.(id, event);
     if (event.type === 'agent.activity.updated' && isAgentActivitySnapshot(event.payload, id))
       this.#apply(id, event.sequence, event.payload);
   }
@@ -121,12 +131,14 @@ export class AgentActivityController {
         this.#cursors.set(id, responseSequence!);
         if (isAgentActivitySnapshot(response.agentActivity, id))
           this.#apply(id, responseSequence!, response.agentActivity);
+        this.#options.onAuthoritativeSnapshot?.(id, response);
       } else if (
         cursor === requestedCursor &&
         isAgentActivitySnapshot(response.agentActivity, id)
       ) {
         // An unsequenced bootstrap response is only a hint; never overwrite a socket update.
         this.#apply(id, cursor, response.agentActivity);
+        this.#options.onAuthoritativeSnapshot?.(id, response);
       }
     } catch {
       this.#stale(id);

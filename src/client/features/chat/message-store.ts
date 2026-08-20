@@ -6,9 +6,11 @@
 
 export type ChatMessage = {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'audit';
   turnId?: string;
   phase?: 'commentary' | 'final_answer';
+  /** Durable coordinator identity for canonical audit de-duplication. */
+  controlId?: string;
   text: string;
   occurredAt?: number;
   complete: boolean;

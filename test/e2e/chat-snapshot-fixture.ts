@@ -14,6 +14,17 @@ export function chatSnapshot({
   items = [],
   turns = [],
   interactions = [],
+  autopilotAudit,
+  autopilotAuditTruncated,
 }: Partial<ChatSnapshot> = {}): ChatSnapshot {
-  return { baseSequence, currentSequence, activeTurnId, items, turns, interactions };
+  return {
+    baseSequence,
+    currentSequence,
+    activeTurnId,
+    items,
+    turns,
+    interactions,
+    ...(autopilotAudit ? { autopilotAudit } : {}),
+    ...(autopilotAuditTruncated ? { autopilotAuditTruncated } : {}),
+  };
 }

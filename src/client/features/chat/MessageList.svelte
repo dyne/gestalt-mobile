@@ -18,6 +18,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     messages: ChatMessage[];
     activities: HistoryActivity[];
     activeTurnId?: string | null;
+    autopilotAuditTruncated?: boolean;
     interactions?: ProjectedInteraction[];
     answers?: Record<string, string>;
     onanswer?(requestId: string, id: string, value: string): void;
@@ -30,6 +31,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     messages,
     activities,
     activeTurnId = null,
+    autopilotAuditTruncated = false,
     interactions = [],
     answers = {},
     onanswer = () => {},
@@ -174,9 +176,45 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 <ol aria-label="Chat messages">
+  {#if autopilotAuditTruncated}
+    <li class="audit-incomplete" role="status">
+      Earlier Autopilot audit entries are not shown; this timeline contains the retained recent
+      audit.
+    </li>
+  {/if}
   {#each groups as group, index (group.id)}
-    <li class={group.kind === 'user' ? 'prompt-turn' : 'answer-item'}>
-      {#if group.kind === 'user'}
+    <li
+      class={group.kind === 'user'
+        ? 'prompt-turn'
+        : group.kind === 'audit'
+          ? 'audit-item'
+          : 'answer-item'}
+    >
+      {#if group.kind === 'audit'}
+        <aside class="autopilot-audit" aria-label="Autopilot audit entry">
+          <strong>Autopilot</strong>
+          {group.text}{group.count > 1 ? ` · ${group.count} times` : ''}
+          {#if group.occurredAt}
+            <time datetime={new Date(group.occurredAt).toISOString()}
+              >{formatMessageTime(group.occurredAt)}</time
+            >
+          {/if}
+          {#if group.count > 1}
+            <details>
+              <summary>Show {group.count} timestamps</summary>
+              <ul>
+                {#each group.timestamps as timestamp (`${group.id}:${timestamp}`)}
+                  <li>
+                    <time datetime={new Date(timestamp).toISOString()}
+                      >{formatMessageTime(timestamp)}</time
+                    >
+                  </li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+        </aside>
+      {:else if group.kind === 'user'}
         {@const ownedActivities = promptActivities(group)}
         <div class="entry-heading">
           <strong>prompt</strong>
@@ -316,6 +354,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </ol>
 
 <style>
+  .autopilot-audit {
+    border-inline-start: 0.25rem solid var(--theme-border);
+    padding-inline-start: 0.5rem;
+    overflow-wrap: anywhere;
+  }
+  .audit-incomplete {
+    border-inline-start: 0.35rem solid var(--theme-border);
+    color: var(--theme-text-muted);
+    margin-block: 0.5rem;
+    padding-inline-start: 0.65rem;
+  }
+  .autopilot-audit time {
+    color: var(--theme-text-muted);
+    margin-inline-start: 0.5rem;
+  }
+  .autopilot-audit summary {
+    scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
+  }
   ol {
     inline-size: 100%;
     margin: 0;

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { describe, expect, it, vi } from 'vitest';
-import { ChatController, type ChatViewState } from './chat-controller.js';
+import { ChatController, decodeChatSnapshot, type ChatViewState } from './chat-controller.js';
 
 class Socket {
   onopen: (() => void) | null = null;
@@ -15,6 +15,37 @@ class Socket {
     this.onmessage?.({ data: JSON.stringify(value) } as MessageEvent);
   }
 }
+
+it('rejects malformed autopilot audit arrays and accepts a failed attention settlement', () => {
+  const base = {
+    items: [],
+    turns: [],
+    activeTurnId: null,
+    interactions: [
+      {
+        requestId: 'attention',
+        kind: 'orgPlanAttention',
+        turnId: null,
+        requestedAt: '2026-08-20T00:00:00.000Z',
+        resolvedAt: '2026-08-20T00:01:00.000Z',
+        outcome: 'failed',
+      },
+    ],
+    baseSequence: 1,
+  };
+  expect(
+    decodeChatSnapshot({
+      ...base,
+      autopilotAudit: [{ id: 'audit', label: 'safe', occurredAt: 1 }],
+    }),
+  ).not.toBeNull();
+  expect(
+    decodeChatSnapshot({
+      ...base,
+      autopilotAudit: [{ id: 'audit', label: 'safe', occurredAt: 'wrong' }],
+    }),
+  ).toBeNull();
+});
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;

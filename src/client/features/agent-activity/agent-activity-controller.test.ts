@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AgentActivityController } from './agent-activity-controller.js';
-import { isAgentActivitySnapshot } from './contracts.js';
+import { isAgentActivitySnapshot, type AgentActivitySnapshot } from './contracts.js';
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   return { promise: new Promise<T>((done) => (resolve = done)), resolve };
@@ -203,6 +203,66 @@ describe('AgentActivityController', () => {
     controller.observe('a', { sequence: 5, type: 'agentMessageDelta', payload: {} });
     expect(calls).toBe(1);
     refresh.resolve();
+  });
+  it('handles a non-abort fire-and-forget refresh failure without an unhandled rejection', async () => {
+    const published: AgentActivitySnapshot[][] = [];
+    const controller = new AgentActivityController({
+      relay: {
+        getSession: async () => ({ agentActivity: snapshot('a') }),
+        refreshActivity: async () => {
+          throw new Error('relay temporarily unavailable');
+        },
+      },
+      publish: (items) => published.push([...items.values()]),
+      location: { protocol: 'http:', host: 'relay' } as Location,
+    });
+    controller.sync(['a'], 'a');
+    await Promise.resolve();
+    controller.observe('a', { sequence: 3, type: 'agentMessageDelta', payload: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.get('a')?.confidence).toBe('stale');
+    expect(published.at(-1)?.[0]?.confidence).toBe('stale');
+  });
+  it('is the only gap owner and forwards one complete authoritative snapshot after recovery', async () => {
+    const refresh = deferred<void>();
+    const forwarded: unknown[] = [];
+    let reads = 0;
+    const controller = new AgentActivityController({
+      relay: {
+        getSession: async () => ({
+          currentSequence: reads++ === 0 ? 3 : 5,
+          agentActivity: snapshot('a', 'idle'),
+          autopilot: { state: 'backoff', enabled: true },
+          pendingInteractions: [
+            {
+              requestId: 'attention-1',
+              kind: 'orgPlanAttention',
+              turnId: 'turn-1',
+              requestedAt: '2026-08-20T00:00:00.000Z',
+              payload: { reason: 'hardBlock' },
+            },
+          ],
+        }),
+        refreshActivity: () => refresh.promise,
+      },
+      publish: () => {},
+      onAuthoritativeSnapshot: (_id, session) => forwarded.push(session),
+      location: { protocol: 'http:', host: 'relay' } as Location,
+    });
+    controller.sync(['a'], 'a');
+    await Promise.resolve(); // initial sync hydrate
+    forwarded.length = 0;
+    controller.observe('a', { sequence: 5, type: 'agentMessageDelta', payload: {} });
+    refresh.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      currentSequence: 5,
+      autopilot: { state: 'backoff' },
+      pendingInteractions: [expect.objectContaining({ kind: 'orgPlanAttention' })],
+    });
   });
   it('evicts old resync ownership on remove and preserves a replacement resync', async () => {
     const refreshes = [deferred<void>(), deferred<void>()];

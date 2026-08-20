@@ -99,6 +99,15 @@ export type AppDependencies = {
       sessionId: string,
     ): import('./features/autopilot/domain/autopilot-session.js').AutopilotSnapshot;
     autopilotControlTurns?(sessionId: string): ReadonlyMap<string, string>;
+    autopilotAudit?(
+      sessionId: string,
+      limit: number,
+    ):
+      | readonly import('../shared/contracts/session-event.js').SessionEvent[]
+      | {
+          events: readonly import('../shared/contracts/session-event.js').SessionEvent[];
+          truncated: boolean;
+        };
     refreshActivity?(sessionId: string): Promise<void>;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
@@ -223,7 +232,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   registerSessionRoutes(app, deps);
-  if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot);
+  if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot, deps.sessionRoutes?.idempotency);
   if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
   registerGitRoutes(app, deps);
