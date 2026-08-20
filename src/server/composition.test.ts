@@ -427,10 +427,17 @@ describe('production composition', () => {
       clientUserMessageId: expect.stringMatching(/^autopilot-\d+-[a-f0-9]{16}$/),
       model: 'gpt-5.6-terra',
     });
-    expect(messages.some((message) => message.event.type === 'autopilot.control-issued')).toBe(
-      true,
-    );
-    expect(messages.some((message) => message.event.type === 'autopilot.turn-started')).toBe(true);
+    // The journal commits before the runtime request resolves, while the WebSocket transport
+    // delivers the committed events on its own turn of the event loop. Observe the durable
+    // boundary rather than assuming a synchronous socket delivery after `turn/start`.
+    await vi.waitFor(() => {
+      expect(messages.some((message) => message.event.type === 'autopilot.control-issued')).toBe(
+        true,
+      );
+      expect(messages.some((message) => message.event.type === 'autopilot.turn-started')).toBe(
+        true,
+      );
+    });
     const updates = messages.filter((message) => message.event.type === 'autopilot.updated');
     await Promise.all(
       [true, true].map(() =>
