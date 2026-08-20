@@ -77,6 +77,7 @@ export function registerSessionRoutes(
         currentSequence: sessions.currentSequence ?? (() => 0),
         interactions: deps.interactions?.snapshot,
         autopilotControlTurns: sessions.autopilotControlTurns,
+        autopilotAudit: sessions.autopilotAudit,
       });
     if (sessions.startTurn)
       registerStartTurn(app, {

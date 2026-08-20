@@ -76,6 +76,91 @@ describe('GET /api/sessions/:id/history', () => {
     await app.close();
   });
 
+  it('restores only redacted durable autopilot audit records from the journal', async () => {
+    const app = fastify();
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      currentSequence: () => 9,
+      read: async () => ({ turns: [], activeTurnId: null }),
+      autopilotAudit: (_id, limit) => {
+        expect(limit).toBe(100);
+        return [
+          {
+            sessionId: 's',
+            sequence: 4,
+            type: 'autopilot.continuation-scheduled',
+            occurredAt: '2026-08-20T00:00:00.000Z',
+            payload: { controlId: 'control-1', prompt: 'secret prompt' },
+          },
+          {
+            sessionId: 's',
+            sequence: 5,
+            type: 'autopilot.updated',
+            occurredAt: '2026-08-20T00:00:01.000Z',
+            payload: { state: 'completed', environment: 'secret' },
+          },
+          {
+            sessionId: 's',
+            sequence: 6,
+            type: 'org-plan.attention-resolved',
+            occurredAt: '2026-08-20T00:00:02.000Z',
+            payload: { outcome: 'failed', stack: 'secret' },
+          },
+        ];
+      },
+    });
+    const response = await app.inject('/api/sessions/s/history');
+    expect(response.json().autopilotAudit).toEqual([
+      {
+        id: 'audit:4',
+        label: 'Autopilot scheduled a continuation',
+        occurredAt: Date.parse('2026-08-20T00:00:00.000Z'),
+        controlId: 'control-1',
+      },
+      {
+        id: 'audit:5',
+        label: 'Autopilot completed the plan',
+        occurredAt: Date.parse('2026-08-20T00:00:01.000Z'),
+      },
+      {
+        id: 'audit:6',
+        label: 'Attention resolution failed',
+        occurredAt: Date.parse('2026-08-20T00:00:02.000Z'),
+      },
+    ]);
+    expect(response.body).not.toContain('secret');
+    await app.close();
+  });
+
+  it('marks a deliberately bounded audit tail as truncated without reading a journal body', async () => {
+    const app = fastify();
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      currentSequence: () => 9,
+      read: async () => ({ turns: [], activeTurnId: null }),
+      autopilotAudit: (_id, limit) => {
+        expect(limit).toBe(100);
+        return {
+          events: [
+            {
+              sessionId: 's',
+              sequence: 9,
+              type: 'autopilot.turn-failed',
+              occurredAt: '2026-08-20T00:00:00.000Z',
+              payload: { controlId: 'control-1', code: 'START_FAILED' },
+            },
+          ],
+          truncated: true,
+        };
+      },
+    });
+    expect((await app.inject('/api/sessions/s/history')).json()).toMatchObject({
+      autopilotAuditTruncated: true,
+      autopilotAudit: [expect.objectContaining({ label: 'Autopilot continuation failed' })],
+    });
+    await app.close();
+  });
+
   it('takes the replay lower bound before the upstream history read', async () => {
     const app = fastify();
     let sequence = 7;

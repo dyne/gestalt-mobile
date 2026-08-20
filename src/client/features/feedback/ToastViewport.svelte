@@ -143,7 +143,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     background: var(--theme-control-hover);
   }
 
-  @media (max-width: 24rem) {
+  /* Preserve a readable, dismissible notification without covering the task UI
+     when text is enlarged or a narrow handset is in use. */
+  @media (max-width: 30rem) {
+    .toast-viewport {
+      /* Fixed overlays obscure controls once the text scale makes the handset
+         shell multi-row. Keeping the alert in reading order preserves both
+         the notification and the target it describes. */
+      position: static;
+      inline-size: 100%;
+      max-block-size: none;
+      margin-block: 0 0.75rem;
+    }
+
     .toast {
       max-block-size: 5rem;
       overflow-y: auto;

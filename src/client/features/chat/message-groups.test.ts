@@ -60,4 +60,36 @@ describe('groupMessages', () => {
       },
     ]);
   });
+
+  it('groups retry attempts by semantic coordinator stage across distinct control ids in chronology', () => {
+    const groups = groupMessages([
+      {
+        id: 'first',
+        role: 'audit',
+        text: 'Autopilot issued an automatic continuation.',
+        controlId: 'control-1',
+        occurredAt: 10,
+        complete: true,
+      },
+      {
+        id: 'second',
+        role: 'audit',
+        text: 'Autopilot issued an automatic continuation.',
+        controlId: 'control-2',
+        occurredAt: 20,
+        complete: true,
+      },
+      {
+        id: 'older',
+        role: 'audit',
+        text: 'Autopilot issued an automatic continuation.',
+        controlId: 'control-0',
+        occurredAt: 5,
+        complete: true,
+      },
+    ]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({ kind: 'audit', count: 2, timestamps: [10, 20] });
+    expect(groups[1]).toMatchObject({ kind: 'audit', count: 1, timestamps: [5] });
+  });
 });

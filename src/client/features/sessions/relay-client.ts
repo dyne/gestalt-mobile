@@ -10,6 +10,7 @@ import type {
   SafeInteractionOutcome,
 } from '../../../shared/contracts/chat-snapshot.js';
 import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
+import type { AutopilotSnapshot } from '../autopilot/contracts.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -42,6 +43,7 @@ export type RelaySession = {
   };
   lastOrgPlan?: { filename: string; title: string };
   agentActivity?: AgentActivitySnapshot;
+  autopilot?: AutopilotSnapshot;
 };
 export type RestoreSessionResult = RelaySession & {
   recovery?: { historyUnavailable: true; replacementCreated: true };
@@ -51,6 +53,7 @@ export type RelayInteractionResponse = {
   resolvedAt: string;
   outcome: SafeInteractionOutcome;
 };
+export type RelayRequestError = Error & { code?: string; status?: number };
 export type RecentSession = {
   id: string;
   cwd: string;
@@ -145,22 +148,25 @@ export type RelaySkillProfileList = {
 };
 
 export function createRelayClient(fetcher: typeof fetch = fetch) {
-  async function failure(response: Response): Promise<Error> {
+  async function failure(response: Response): Promise<RelayRequestError> {
     const body = (await response.json().catch(() => null)) as {
       code?: unknown;
       detail?: unknown;
       title?: unknown;
     } | null;
+    const safeCode =
+      typeof body?.code === 'string' && /^[A-Z0-9_]+$/.test(body.code) ? body.code : undefined;
     const message =
-      typeof body?.detail === 'string'
-        ? body.detail
-        : typeof body?.title === 'string'
-          ? body.title
-          : `Relay request failed (${response.status}).`;
+      safeCode?.startsWith('AUTOPILOT_') && response.status === 409
+        ? `Relay request failed (${response.status}).`
+        : typeof body?.detail === 'string' && body.detail.length <= 600
+          ? body.detail
+          : typeof body?.title === 'string'
+            ? body.title
+            : `Relay request failed (${response.status}).`;
     return Object.assign(new Error(message), {
-      ...(typeof body?.code === 'string' && /^[A-Z0-9_]+$/.test(body.code)
-        ? { code: body.code }
-        : {}),
+      ...(safeCode ? { code: safeCode } : {}),
+      status: response.status,
     });
   }
   async function request<T>(
@@ -178,10 +184,14 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     if (!response.ok) throw await failure(response);
     return response.json() as Promise<T>;
   }
-  async function put<T>(path: string, body: unknown): Promise<T> {
+  async function put<T>(
+    path: string,
+    body: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<T> {
     const response = await fetcher(path, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
     });
     if (!response.ok) throw await failure(response);
@@ -204,11 +214,26 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
-    listSessions: () => get<RelaySession[]>('/api/sessions'),
+    listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
     getSession: (sessionId: string) =>
       get<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
     refreshActivity: (sessionId: string) =>
       request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/activity/refresh`, {}),
+    setAutopilot: (sessionId: string, enabled: boolean, key?: string) =>
+      put<{ autopilot: AutopilotSnapshot }>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/autopilot`,
+        { enabled },
+        key ? { 'idempotency-key': key } : {},
+      ),
+    resolveAttention: (
+      sessionId: string,
+      requestId: string,
+      input: { operationKey: string; action: 'resume' | 'disableAutopilot'; guidance?: string },
+    ) =>
+      request<unknown>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/attention/${encodeURIComponent(requestId)}/resolve`,
+        input,
+      ),
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
     openRecentSession: (threadId: string, cwd: string) =>
       request<RelaySession>('/api/sessions/recent-threads/open', { threadId, cwd }),

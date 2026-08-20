@@ -750,6 +750,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
         autopilotSnapshot: (id) => autopilot.snapshot(id),
         autopilotControlTurns: (id) => autopilot.acceptedControlTurns(id),
+        autopilotAudit: (id, limit) => journal.autopilotAuditTail(id, limit),
         refreshActivity: (id) => activity.refresh(id),
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,

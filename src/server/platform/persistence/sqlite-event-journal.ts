@@ -8,6 +8,33 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 
+export const autopilotAuditEventTypes = [
+  'autopilot.continuation-scheduled',
+  'autopilot.control-issued',
+  'autopilot.turn-started',
+  'autopilot.turn-failed',
+  'autopilot.progress-reset',
+  'autopilot.updated',
+  'org-plan.attention-required',
+  'org-plan.attention-resolved',
+] as const;
+
+/**
+ * Not every coordinator state publication is useful as a timeline record.
+ * Keep this predicate in SQL so a burst of routine `monitoring` updates cannot
+ * consume the bounded, user-visible audit tail.
+ */
+const renderableAutopilotAuditWhere = `
+  type IN (${autopilotAuditEventTypes.map(() => '?').join(',')})
+  AND (
+    type <> 'autopilot.updated'
+    OR json_extract(payload_json, '$.state') IN ('backoff', 'attentionRequired', 'completed')
+    OR (
+      json_extract(payload_json, '$.state') = 'disabled'
+      AND json_extract(payload_json, '$.reason') = 'planRequired'
+    )
+  )`;
+
 export class SqliteEventJournal {
   constructor(
     private readonly db: DatabaseSync,
@@ -93,5 +120,88 @@ export class SqliteEventJournal {
       occurredAt: row.occurred_at,
       payload: JSON.parse(row.payload_json),
     }));
+  }
+
+  /** Bounded chronological tail for redacted timeline projections. */
+  tail(sessionId: string, limit: number): SessionEvent[] {
+    const safeLimit = Math.max(1, Math.min(limit, 200));
+    return (
+      this.db
+        .prepare(
+          'SELECT sequence,type,occurred_at,payload_json FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT ?',
+        )
+        .all(sessionId, safeLimit) as Array<{
+        sequence: number;
+        type: string;
+        occurred_at: string;
+        payload_json: string;
+      }>
+    )
+      .reverse()
+      .map((row) => ({
+        sessionId,
+        sequence: row.sequence,
+        type: row.type,
+        occurredAt: row.occurred_at,
+        payload: JSON.parse(row.payload_json),
+      }));
+  }
+
+  tailWithTruncation(
+    sessionId: string,
+    limit: number,
+  ): { events: SessionEvent[]; truncated: boolean } {
+    const safeLimit = Math.max(1, Math.min(limit, 200));
+    const events = this.tail(sessionId, safeLimit);
+    const oldest = events.at(0)?.sequence;
+    const truncated =
+      oldest !== undefined &&
+      Boolean(
+        this.db
+          .prepare(
+            'SELECT 1 AS present FROM session_events WHERE session_id = ? AND sequence < ? LIMIT 1',
+          )
+          .get(sessionId, oldest),
+      );
+    return { events, truncated };
+  }
+
+  /**
+   * Reads only audit-bearing rows. A generic journal tail can otherwise be
+   * filled with chat deltas and incorrectly report an empty audit history.
+   */
+  autopilotAuditTail(
+    sessionId: string,
+    limit: number,
+  ): { events: SessionEvent[]; truncated: boolean } {
+    const safeLimit = Math.max(1, Math.min(limit, 200));
+    const rows = this.db
+      .prepare(
+        `SELECT sequence,type,occurred_at,payload_json FROM session_events WHERE session_id = ? AND ${renderableAutopilotAuditWhere} ORDER BY sequence DESC LIMIT ?`,
+      )
+      .all(sessionId, ...autopilotAuditEventTypes, safeLimit) as Array<{
+      sequence: number;
+      type: string;
+      occurred_at: string;
+      payload_json: string;
+    }>;
+    const events = rows.reverse().map((row) => ({
+      sessionId,
+      sequence: row.sequence,
+      type: row.type,
+      occurredAt: row.occurred_at,
+      payload: JSON.parse(row.payload_json),
+    }));
+    const oldest = events.at(0)?.sequence;
+    const truncated =
+      oldest !== undefined &&
+      Boolean(
+        this.db
+          .prepare(
+            `SELECT 1 AS present FROM session_events WHERE session_id = ? AND sequence < ? AND ${renderableAutopilotAuditWhere} LIMIT 1`,
+          )
+          .get(sessionId, oldest, ...autopilotAuditEventTypes),
+      );
+    return { events, truncated };
   }
 }

@@ -686,6 +686,24 @@ describe('production composition', () => {
       ),
     );
     expect(fixture.handles.flatMap((handle) => handle.calls)).not.toContain('turn/start');
+    // This coordinator safety stop has no tool request id. Recovery is the
+    // ordinary durable Autopilot toggle, not the attention resolver route.
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { enabled: true, state: expect.stringMatching(/monitoring|backoff/) },
+        },
+      ),
+    );
     await fixture.app.close();
 
     let recovered:

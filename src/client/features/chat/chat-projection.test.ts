@@ -41,6 +41,102 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('renders a durably marked automatic continuation as an audit entry, never a human prompt', () => {
+    const projection = acceptSnapshot(createChatProjection('s'), {
+      ...snapshot(),
+      items: [
+        {
+          id: 'automatic-1',
+          kind: 'autopilot',
+          controlId: 'control-1',
+          occurredAt: 1_700_000_000_000,
+        },
+      ],
+      interactions: [],
+    });
+    expect(projection.messages).toEqual([
+      expect.objectContaining({
+        role: 'audit',
+        text: 'Autopilot issued an automatic continuation.',
+      }),
+    ]);
+  });
+
+  it('projects live autopilot journal events once and keeps them out of user bubbles', () => {
+    const projection = applyProjectionEvent(createChatProjection('s'), {
+      sequence: 1,
+      type: 'autopilot.control-issued',
+      occurredAt: '2026-08-20T00:00:00.000Z',
+      payload: { controlId: 'opaque-id' },
+    });
+    const duplicate = applyProjectionEvent(projection, {
+      sequence: 1,
+      type: 'autopilot.control-issued',
+      occurredAt: '2026-08-20T00:00:00.000Z',
+      payload: { controlId: 'opaque-id' },
+    });
+    expect(duplicate.messages).toEqual([
+      expect.objectContaining({
+        id: 'audit:1',
+        role: 'audit',
+        text: 'Autopilot issued an automatic continuation.',
+      }),
+    ]);
+  });
+
+  it('labels failed attention settlements as historical failures rather than resolutions', () => {
+    const projection = applyProjectionEvent(createChatProjection('s'), {
+      sequence: 1,
+      type: 'org-plan.attention-resolved',
+      occurredAt: '2026-08-20T00:00:00.000Z',
+      payload: { outcome: 'failed' },
+    });
+    expect(projection.messages).toEqual([
+      expect.objectContaining({ role: 'audit', text: 'Attention resolution failed' }),
+    ]);
+  });
+
+  it('retains the server-provided incomplete-audit signal for visible disclosure', () => {
+    const projected = acceptSnapshot(createChatProjection('s'), {
+      items: [],
+      turns: [],
+      activeTurnId: null,
+      interactions: [],
+      autopilotAudit: [
+        {
+          id: 'audit:1',
+          label: 'Autopilot continuation failed',
+          occurredAt: 1,
+        },
+      ],
+      autopilotAuditTruncated: true,
+      baseSequence: 1,
+    });
+    expect(projected.autopilotAuditTruncated).toBe(true);
+  });
+  it('deduplicates the historical continuation item and control-issued audit by durable control id', () => {
+    const projection = acceptSnapshot(createChatProjection('s'), {
+      ...snapshot(),
+      interactions: [],
+      items: [
+        {
+          id: 'automatic-1',
+          kind: 'autopilot',
+          controlId: 'control-1',
+          occurredAt: 1_700_000_000_000,
+        },
+      ],
+      autopilotAudit: [
+        {
+          id: 'audit:4',
+          label: 'Autopilot issued an automatic continuation.',
+          occurredAt: 1_700_000_000_001,
+          controlId: 'control-1',
+        },
+      ],
+    });
+    expect(projection.messages.filter((message) => message.role === 'audit')).toHaveLength(1);
+  });
   it('merges snapshots without deleting optimistic prompts and preserves stable render keys', () => {
     const queued = queuePrompt(createChatProjection('s'), 'op', 'pending');
     const next = acceptSnapshot(queued, snapshot());

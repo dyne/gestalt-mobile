@@ -260,7 +260,14 @@ main {
 @media (max-width: 30rem) {
   :root {
     --bottom-navigation-clearance: calc(10rem + env(safe-area-inset-bottom));
-    --sticky-header-clearance: calc(14rem + env(safe-area-inset-top));
+    --sticky-header-clearance: calc(7rem + env(safe-area-inset-top));
+  }
+
+  /* The header can become multi-row at increased text size. Keeping it in
+     normal flow prevents it from covering the control or attention card when
+     focus scrolls a narrow viewport. */
+  .app-header {
+    position: static;
   }
 
   .bottom-navigation {

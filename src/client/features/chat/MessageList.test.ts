@@ -14,6 +14,32 @@ import MessageList from './MessageList.svelte';
 describe('MessageList', () => {
   afterEach(cleanup);
 
+  it('presents automatic continuation history as an audit entry, not a prompt bubble', () => {
+    render(MessageList, {
+      messages: [
+        {
+          id: 'automatic',
+          role: 'audit',
+          text: 'Autopilot issued an automatic continuation.',
+          complete: true,
+        },
+      ],
+      activities: [],
+    });
+    expect(screen.getByLabelText('Autopilot audit entry').textContent).toContain(
+      'automatic continuation',
+    );
+    expect(screen.queryByText('prompt')).toBeNull();
+  });
+  it('discloses that the durable autopilot audit is intentionally incomplete', () => {
+    render(MessageList, {
+      messages: [],
+      activities: [],
+      autopilotAuditTruncated: true,
+    });
+    expect(screen.getByRole('status').textContent).toContain('Earlier Autopilot audit entries');
+  });
+
   it('wraps commentary and activity only after the answer completes', () => {
     render(MessageList, {
       messages: [

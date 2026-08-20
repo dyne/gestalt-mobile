@@ -18,6 +18,13 @@ export type ChatTurn = {
   startedAt: number | null;
   completedAt: number | null;
 };
+/** Safe server-derived audit record. It intentionally contains no prompt, output, path, or stack. */
+export type AutopilotAuditRecord = {
+  id: string;
+  label: string;
+  occurredAt: number;
+  controlId?: string;
+};
 export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed' | 'failed';
 export type SafeInteractionSnapshot =
   | {
@@ -42,6 +49,9 @@ export type ChatSnapshot = {
   turns: ChatTurn[];
   activeTurnId: string | null;
   interactions: SafeInteractionSnapshot[];
+  autopilotAudit?: AutopilotAuditRecord[];
+  /** The bounded audit tail omitted older records; the visible list is not exhaustive. */
+  autopilotAuditTruncated?: boolean;
   baseSequence: number;
   currentSequence?: number;
 };

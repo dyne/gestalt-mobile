@@ -90,10 +90,18 @@ export const isSafeInteractionSnapshot = (
     (value.outcome === 'approved' ||
       value.outcome === 'denied' ||
       value.outcome === 'answered' ||
-      value.outcome === 'dismissed') &&
+      value.outcome === 'dismissed' ||
+      value.outcome === 'failed') &&
     !Object.hasOwn(value, 'payload')
   );
 };
+const isAutopilotAuditRecord = (value: unknown): boolean =>
+  object(value) &&
+  typeof value.id === 'string' &&
+  typeof value.label === 'string' &&
+  typeof value.occurredAt === 'number' &&
+  Number.isFinite(value.occurredAt) &&
+  (value.controlId === undefined || typeof value.controlId === 'string');
 export const decodeChatSnapshot = (value: unknown): ChatSnapshot | null => {
   if (
     !object(value) ||
@@ -106,6 +114,11 @@ export const decodeChatSnapshot = (value: unknown): ChatSnapshot | null => {
     !value.items.every(isChatItem) ||
     !value.turns.every(isChatTurn) ||
     !value.interactions.every(isSafeInteractionSnapshot) ||
+    (value.autopilotAudit !== undefined &&
+      (!Array.isArray(value.autopilotAudit) ||
+        !value.autopilotAudit.every(isAutopilotAuditRecord))) ||
+    (value.autopilotAuditTruncated !== undefined &&
+      typeof value.autopilotAuditTruncated !== 'boolean') ||
     (value.currentSequence !== undefined &&
       (!Number.isInteger(value.currentSequence) || (value.currentSequence as number) < 0))
   )
@@ -236,7 +249,8 @@ export class ChatController {
         (result.outcome === 'approved' ||
           result.outcome === 'denied' ||
           result.outcome === 'answered' ||
-          result.outcome === 'dismissed')
+          result.outcome === 'dismissed' ||
+          result.outcome === 'failed')
           ? result.outcome
           : value;
       if (this.#current(id, generation))
@@ -345,7 +359,10 @@ export class ChatController {
       event.type === 'session.updated' ||
       event.type === 'plan.updated' ||
       event.type === 'plan.closed' ||
-      event.type === 'agent.activity.updated'
+      event.type === 'agent.activity.updated' ||
+      event.type === 'autopilot.updated' ||
+      event.type === 'org-plan.attention-required' ||
+      event.type === 'org-plan.attention-resolved'
     )
       this.#options.onSessionEvent?.(event);
     if (next.snapshotting) void this.#takeSnapshot(id, generation);
@@ -377,6 +394,19 @@ export class ChatController {
       return (
         typeof value.sessionId === 'string' && Boolean(value.root) && Array.isArray(value.subagents)
       );
+    if (
+      event.type === 'autopilot.updated' ||
+      event.type === 'org-plan.attention-required' ||
+      event.type === 'org-plan.attention-resolved' ||
+      [
+        'autopilot.continuation-scheduled',
+        'autopilot.control-issued',
+        'autopilot.turn-started',
+        'autopilot.turn-failed',
+        'autopilot.progress-reset',
+      ].includes(event.type)
+    )
+      return true;
     return event.type === 'plan.updated' || event.type === 'plan.closed';
   }
   #takeSnapshot(id: string, generation: number): Promise<void> {
