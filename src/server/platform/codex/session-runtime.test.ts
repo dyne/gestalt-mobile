@@ -1744,6 +1744,65 @@ describe('CodexSessionRuntime', () => {
     expect(exited).toEqual(['session-1']);
   });
 
+  it('fails acquisition when the process exits while its resource is initialized', async () => {
+    const exited: string[] = [];
+    let exitUnsubscribed = 0;
+    let notificationsRegistered = 0;
+    let requestsRegistered = 0;
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+          onNotification: () => {
+            notificationsRegistered += 1;
+            return () => {};
+          },
+          onServerRequest: () => {
+            requestsRegistered += 1;
+            return () => {};
+          },
+        },
+        close: () => {},
+        onExit: (listener) => {
+          listener();
+          return () => {
+            exitUnsubscribed += 1;
+          };
+        },
+      }),
+      undefined,
+      undefined,
+      undefined,
+      (id) => exited.push(id),
+    );
+    await expect(
+      runtime.start(
+        {
+          id: 'session-1',
+          workspaceId: 'workspace-1',
+          workspacePath: '/workspace',
+          profile: 'default',
+          threadId: null,
+          state: 'starting',
+          desiredState: 'active',
+          activeTurnId: null,
+          protocolVersion: null,
+          failureCount: 0,
+          pendingInteractions: [],
+          createdAt: 'before',
+          updatedAt: 'before',
+        },
+        'after',
+      ),
+    ).rejects.toThrow('CODEX_SESSION_PROCESS_EXITED');
+    expect(exited).toEqual(['session-1']);
+    expect(exitUnsubscribed).toBe(1);
+    expect(notificationsRegistered).toBe(0);
+    expect(requestsRegistered).toBe(0);
+    expect(runtime.ownsWriter('session-1')).toBe(false);
+  });
+
   it('rejects an unsupported Codex server request instead of leaving it pending', async () => {
     let requestListener:
       ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;

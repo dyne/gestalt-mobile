@@ -578,6 +578,17 @@ export class CodexSessionRuntime {
       const resource = new SessionResource(session.id, process, lease, token, [], () => {
         if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
       });
+      // Own process exit before resume/initialization can make this resource appear healthy.
+      // A short-lived child could otherwise leave a durable ready session without a writer.
+      const exitUnsubscribe =
+        process.onExit?.(() => {
+          if (resource.dispose()) this.onProcessExit?.(session.id);
+        }) ?? (() => {});
+      resource.attach([exitUnsubscribe]);
+      if (!resource.active) {
+        exitUnsubscribe();
+        throw new Error('CODEX_SESSION_PROCESS_EXITED');
+      }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
         const resolvedRequestId = resolvedServerRequestId(notification);
@@ -594,10 +605,11 @@ export class CodexSessionRuntime {
       const requestUnsubscribe = process.rpc.onServerRequest((request) =>
         this.holdServerRequest(resource, request),
       );
-      const exitUnsubscribe =
-        process.onExit?.(() => {
-          if (resource.dispose()) this.onProcessExit?.(session.id);
-        }) ?? (() => {});
+      if (!resource.active) {
+        notificationUnsubscribe();
+        requestUnsubscribe();
+        throw new Error('CODEX_SESSION_PROCESS_EXITED');
+      }
       // The resource's private unsubscribe list is populated before it is published.
       resource.attach([notificationUnsubscribe, requestUnsubscribe, exitUnsubscribe]);
       return resource;
