@@ -53,6 +53,8 @@ import type {
   WebAuthnCeremonyService,
 } from './features/auth/application/ports.js';
 import type { CeremonyAttemptGate } from './features/auth/application/ceremony-attempts.js';
+import { registerAutopilotRoutes } from './features/autopilot/register-routes.js';
+import type { AutopilotCoordinator } from './features/autopilot/application/service.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -93,6 +95,10 @@ export type AppDependencies = {
     }>;
     currentSequence?(sessionId: string): number;
     agentActivity?(sessionId: string): AgentActivitySnapshot;
+    autopilotSnapshot?(
+      sessionId: string,
+    ): import('./features/autopilot/domain/autopilot-session.js').AutopilotSnapshot;
+    autopilotControlTurns?(sessionId: string): ReadonlyMap<string, string>;
     refreshActivity?(sessionId: string): Promise<void>;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
@@ -156,6 +162,7 @@ export type AppDependencies = {
     resolver: import('./features/org-plan-attention/application/ports.js').OrgPlanAttentionResolver;
     transitions: import('./features/org-plan-attention/application/ports.js').OrgPlanAttentionTransitions;
   };
+  autopilot?: AutopilotCoordinator;
   gitSummary?: {
     workspaces: GitWorkspaceResolver;
     inspect(path: string): Promise<GitSummary>;
@@ -216,6 +223,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   registerSessionRoutes(app, deps);
+  if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot);
   if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
   registerGitRoutes(app, deps);

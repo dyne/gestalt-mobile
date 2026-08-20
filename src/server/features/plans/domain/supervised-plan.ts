@@ -59,6 +59,8 @@ export type SupervisedPlan = Readonly<{
   totalSteps: number;
   doneSteps: number;
   allDone: boolean;
+  /** Complete only when every L1 is reviewed and every L2 is done. */
+  executionComplete?: boolean;
   currentStepId: string;
 }>;
 

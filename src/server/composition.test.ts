@@ -51,19 +51,22 @@ function fakeAppServer(calls: string[]) {
 
 type LiveServerHandle = {
   calls: string[];
+  requests: Array<{ method: string; params: unknown }>;
   notify?: (notification: { method: string; params: unknown }) => void;
   request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
 };
 
 function liveAppServer(handles: LiveServerHandle[]) {
   return () => {
-    const handle: LiveServerHandle = { calls: [] };
+    const handle: LiveServerHandle = { calls: [], requests: [] };
     handles.push(handle);
     return {
       rpc: {
         request: async (method: string, params: unknown) => {
           handle.calls.push(method);
+          handle.requests.push({ method, params });
           if (method === 'thread/start') return { thread: { id: `thread-${handles.length}` } };
+          if (method === 'turn/start') return { turn: { id: `turn-${handle.calls.length}` } };
           if (method === 'thread/read') return { thread: { turns: [] } };
           if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
           if (method === 'skills/list')
@@ -99,6 +102,89 @@ async function createComposedSession(app: Awaited<ReturnType<typeof composeAutho
   });
   expect(created.statusCode).toBe(202);
   return created.json().id as string;
+}
+
+const autopilotPlanText = (childState: 'TODO' | 'DONE' = 'TODO') => `#+TITLE: Autopilot fixture
+* WIP [#A] Parent
+:PROPERTIES:
+:ID: parent
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Keep moving.
+- Notes :: Coordinator fixture.
+** ${childState} [#A] Child
+:PROPERTIES:
+:ID: child
+:END:
+- Why :: Exercise the coordinator.
+- Change :: Publish a safe state.
+- Tests :: Exercise production routes.
+- Done when :: The plan remains incomplete.
+`;
+
+const completedAutopilotPlanText = () =>
+  autopilotPlanText('DONE')
+    .replace('* WIP [#A] Parent', '* DONE [#A] Parent')
+    .replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: REVIEWED');
+
+async function installAutopilotPlan(
+  app: Awaited<ReturnType<typeof composeAuthorizedApp>>,
+  sessionId: string,
+  workspacePath: string,
+  name: string,
+  childState: 'TODO' | 'DONE' = 'TODO',
+) {
+  const planPath = join(workspacePath, `${name}.org`);
+  await writeFile(planPath, autopilotPlanText(childState));
+  await writeFile(
+    planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
+    JSON.stringify({
+      schemaVersion: 1,
+      planPath,
+      reason: 'supervision-start',
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  await expect
+    .poll(async () => (await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode)
+    .toBe(200);
+  expect(
+    (await app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/restore` })).statusCode,
+  ).toBe(200);
+  return planPath;
+}
+
+async function createProductionAutopilotFixture(overrides: Partial<ComposeRelayAppOptions> = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+  temporaryPaths.push(root, dataDir);
+  const workspacePath = join(root, 'workspace');
+  await mkdir(workspacePath);
+  const handles: LiveServerHandle[] = [];
+  const app = await composeAuthorizedApp({
+    root,
+    dataDir,
+    relyingParty,
+    installedCodexVersion: 'codex-cli 0.144.3',
+    startAppServers: true,
+    launchAppServer: liveAppServer(handles),
+    profiles: {
+      list: async () => [],
+      require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+    },
+    ...overrides,
+  });
+  const sessionId = await createComposedSession(app);
+  await vi.waitFor(async () =>
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      state: 'ready',
+      threadId: expect.any(String),
+    }),
+  );
+  await installAutopilotPlan(app, sessionId, workspacePath, 'autopilot');
+  return { app, dataDir, handles, root, sessionId, workspacePath };
 }
 
 function attentionCall(id: number, reason: 'hardBlock' | 'permissionRequired' = 'hardBlock') {
@@ -197,6 +283,803 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 }
 
 describe('production composition', () => {
+  it('autopilot production composition keeps disabled sessions free of timers, reads, polls, and leaks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    await mkdir(join(root, 'workspace'));
+    const calls: string[] = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: () => fakeAppServer(calls),
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+  it('autopilot production composition authenticates concurrent toggles, schedules once, replays redacted audit, and keeps get/list safe', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath);
+    const handles: LiveServerHandle[] = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+    });
+    const sessionId = await createComposedSession(app);
+    await vi.waitFor(async () =>
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        state: 'ready',
+        threadId: expect.any(String),
+      }),
+    );
+    // An authenticated request cannot opt in until a retained incomplete plan exists.
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).json(),
+    ).toEqual({ code: 'AUTOPILOT_PLAN_REQUIRED' });
+    const planPath = join(workspacePath, 'autopilot.org');
+    await writeFile(
+      planPath,
+      `#+TITLE: Autopilot fixture
+* WIP [#A] Parent
+:PROPERTIES:
+:ID: parent
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Keep moving.
+- Notes :: Coordinator fixture.
+** TODO [#A] Child
+:PROPERTIES:
+:ID: child
+:END:
+- Why :: Exercise the coordinator.
+- Change :: Publish a safe state.
+- Tests :: Exercise production routes.
+- Done when :: The plan remains incomplete.
+`,
+    );
+    await writeFile(
+      planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
+      JSON.stringify({
+        schemaVersion: 1,
+        planPath,
+        reason: 'supervision-start',
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    await expect
+      .poll(async () => (await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode)
+      .toBe(200);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+      {
+        headers: {
+          origin: relyingParty.publicOrigin,
+          cookie: 'gestalt_mobile_session=test-session',
+        },
+      },
+    );
+    const messages: Array<{ event: { type: string; payload: Record<string, unknown> } }> = [];
+    socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+    await once(socket, 'open');
+    expect(
+      (await app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/restore` })).statusCode,
+    ).toBe(200);
+    const enabled = await app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${sessionId}/autopilot`,
+      payload: { enabled: true },
+    });
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json()).toMatchObject({ autopilot: { enabled: true } });
+    await vi.waitFor(() =>
+      expect(messages.some((message) => message.event.type === 'autopilot.updated')).toBe(true),
+    );
+    expect(
+      messages.filter((message) => message.event.type === 'autopilot.updated').at(-1)?.event
+        .payload,
+    ).toMatchObject({ enabled: true });
+    // This is production composition, not a coordinator fake: the scheduler reaches the
+    // real runtime adapter and can pass only the fixed policy-owned prompt and opaque ID.
+    await vi.waitFor(
+      () => expect(handles.at(-1)?.calls.filter((call) => call === 'turn/start')).toHaveLength(1),
+      { timeout: 2_500 },
+    );
+    const automaticStart = handles.at(-1)?.requests.find((call) => call.method === 'turn/start');
+    expect(automaticStart?.params).toEqual({
+      threadId: expect.any(String),
+      input: [
+        {
+          type: 'text',
+          text: 'Inspect the active supervised Org Plan. Invoke gestalt_org_plan_attention only for a decision-table blocker; otherwise immediately perform the next legal lifecycle action. Do not send a status-only response.',
+          text_elements: [],
+        },
+      ],
+      clientUserMessageId: expect.stringMatching(/^autopilot-\d+-[a-f0-9]{16}$/),
+      model: 'gpt-5.6-terra',
+    });
+    expect(messages.some((message) => message.event.type === 'autopilot.control-issued')).toBe(
+      true,
+    );
+    expect(messages.some((message) => message.event.type === 'autopilot.turn-started')).toBe(true);
+    const updates = messages.filter((message) => message.event.type === 'autopilot.updated');
+    await Promise.all(
+      [true, true].map(() =>
+        app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${sessionId}/autopilot`,
+          payload: { enabled: true },
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(messages.filter((message) => message.event.type === 'autopilot.updated')).toHaveLength(
+      updates.length,
+    );
+    expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+      autopilot: { enabled: true },
+    });
+    expect((await app.inject('/api/sessions')).json()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: sessionId, autopilot: expect.any(Object) }),
+      ]),
+    );
+    expect(JSON.stringify(await app.inject(`/api/sessions/${sessionId}`))).not.toContain(
+      'Inspect the active supervised Org Plan',
+    );
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${sessionId}/autopilot`,
+          payload: { enabled: false },
+        })
+      ).json(),
+    ).toMatchObject({ autopilot: { enabled: false, state: 'disabled' } });
+    socket.close();
+    const replayed: Array<{
+      type: string;
+      event?: { sequence: number; type: string; payload: unknown };
+    }> = [];
+    const replay = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+      {
+        headers: {
+          origin: relyingParty.publicOrigin,
+          cookie: 'gestalt_mobile_session=test-session',
+        },
+      },
+    );
+    replay.on('message', (data) => replayed.push(JSON.parse(String(data))));
+    await once(replay, 'open');
+    await vi.waitFor(() =>
+      expect(replayed.some((message) => message.event?.type === 'autopilot.updated')).toBe(true),
+    );
+    const sequence = replayed.flatMap((message) => (message.event ? [message.event.sequence] : []));
+    expect(new Set(sequence).size).toBe(sequence.length);
+    expect(JSON.stringify(replayed)).not.toContain('Inspect the active supervised Org Plan');
+    replay.close();
+    await app.close();
+  });
+  it('autopilot production composition isolates concurrent session enablement, disablement, and safe snapshots', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+    const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+    temporaryPaths.push(root, dataDir);
+    const workspacePath = join(root, 'workspace');
+    await mkdir(workspacePath);
+    const handles: LiveServerHandle[] = [];
+    const app = await composeAuthorizedApp({
+      root,
+      dataDir,
+      relyingParty,
+      installedCodexVersion: 'codex-cli 0.144.3',
+      startAppServers: true,
+      launchAppServer: liveAppServer(handles),
+      profiles: {
+        list: async () => [],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      },
+    });
+    const sessions = await Promise.all([createComposedSession(app), createComposedSession(app)]);
+    await vi.waitFor(async () =>
+      expect(
+        await Promise.all(
+          sessions.map(
+            async (sessionId) => (await app.inject(`/api/sessions/${sessionId}`)).json().state,
+          ),
+        ),
+      ).toEqual(['ready', 'ready']),
+    );
+    const planText = `#+TITLE: Autopilot fixture
+* WIP [#A] Parent
+:PROPERTIES:
+:ID: parent
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Keep moving.
+- Notes :: Coordinator fixture.
+** TODO [#A] Child
+:PROPERTIES:
+:ID: child
+:END:
+- Why :: Exercise the coordinator.
+- Change :: Publish a safe state.
+- Tests :: Exercise production routes.
+- Done when :: The plan remains incomplete.
+`;
+    await Promise.all(
+      sessions.map(async (sessionId, index) => {
+        const planPath = join(workspacePath, `autopilot-${index}.org`);
+        await writeFile(planPath, planText);
+        await writeFile(
+          planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
+          JSON.stringify({
+            schemaVersion: 1,
+            planPath,
+            reason: 'supervision-start',
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+        await expect
+          .poll(async () => (await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode)
+          .toBe(200);
+        expect(
+          (await app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/restore` }))
+            .statusCode,
+        ).toBe(200);
+      }),
+    );
+    await vi.waitFor(async () =>
+      expect(
+        await Promise.all(
+          sessions.map(
+            async (sessionId) => (await app.inject(`/api/sessions/${sessionId}`)).json().threadId,
+          ),
+        ),
+      ).toEqual([expect.any(String), expect.any(String)]),
+    );
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    for (const sessionId of sessions) {
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${sessionId}/autopilot`,
+            payload: { enabled: true },
+          })
+        ).statusCode,
+      ).toBe(200);
+    }
+    const [first, second] = sessions;
+    expect(
+      (
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${first}/autopilot`,
+          payload: { enabled: false },
+        })
+      ).json(),
+    ).toMatchObject({
+      autopilot: { enabled: false, state: 'disabled' },
+    });
+    expect((await app.inject(`/api/sessions/${second}`)).json()).toMatchObject({
+      autopilot: { enabled: true },
+    });
+    expect(JSON.stringify(await app.inject('/api/sessions'))).not.toContain(
+      'Inspect the active supervised Org Plan',
+    );
+    await app.close();
+  });
+  it('production same-DB restart rearms future backoff and claims overdue once', async () => {
+    const timers: Array<{ callback: () => void; delayMs: number }> = [];
+    let coordinator:
+      import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+    const fixture = await createProductionAutopilotFixture({
+      autopilotSchedule: (callback, delayMs) => {
+        timers.push({ callback, delayMs });
+        return () => undefined;
+      },
+      onAutopilotCoordinator: (value) => {
+        coordinator = value;
+      },
+    });
+    const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const timestamp = new Date().toISOString();
+    database
+      .prepare(
+        "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 7, 0, ?, 'future-control', NULL, ?)",
+      )
+      .run(fixture.sessionId, future, timestamp);
+    database
+      .prepare(
+        "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?, 'future-control', 'scheduled', ?, ?, NULL, NULL)",
+      )
+      .run(fixture.sessionId, timestamp, timestamp);
+    database.close();
+    coordinator!.restore(fixture.sessionId);
+    expect(timers).toHaveLength(1);
+    expect(timers[0]!.delayMs).toBeGreaterThan(0);
+    // A fresh process sees the same durable state after its wall-clock deadline.
+    timers[0]!.callback();
+    timers[0]!.callback();
+    await vi.waitFor(() =>
+      expect(
+        fixture.handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+      ).toHaveLength(1),
+    );
+    const audit = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const issued = audit
+      .prepare(
+        "SELECT count(*) AS count FROM autopilot_controls WHERE session_id = ? AND status = 'started'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    const events = audit
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-started'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    audit.close();
+    expect(issued.count).toBe(1);
+    expect(events.count).toBe(1);
+    await fixture.app.close();
+  });
+
+  it('production restart unexplained issued requires attention while issued persisted activeTurn records one started audit without replay', async () => {
+    let coordinator:
+      import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+    const fixture = await createProductionAutopilotFixture({
+      onAutopilotCoordinator: (value) => {
+        coordinator = value;
+      },
+    });
+    const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const timestamp = new Date().toISOString();
+    database
+      .prepare(
+        "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 1, 0, ?, 'issued-without-turn', NULL, ?)",
+      )
+      .run(fixture.sessionId, timestamp, timestamp);
+    database
+      .prepare(
+        "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?, 'issued-without-turn', 'issued', ?, ?, NULL, NULL)",
+      )
+      .run(fixture.sessionId, timestamp, timestamp);
+    database.close();
+    coordinator!.restore(fixture.sessionId);
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { enabled: false, state: 'attentionRequired', reason: 'reconcileFailed' },
+        },
+      ),
+    );
+    expect(fixture.handles.flatMap((handle) => handle.calls)).not.toContain('turn/start');
+    await fixture.app.close();
+
+    let recovered:
+      import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+    const accepted = await createProductionAutopilotFixture({
+      onAutopilotCoordinator: (value) => {
+        recovered = value;
+      },
+    });
+    const acceptedDatabase = new DatabaseSync(join(accepted.dataDir, 'relay.sqlite'));
+    acceptedDatabase
+      .prepare(
+        "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 1, 0, ?, 'issued-with-turn', NULL, ?)",
+      )
+      .run(accepted.sessionId, timestamp, timestamp);
+    acceptedDatabase
+      .prepare(
+        "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?, 'issued-with-turn', 'issued', ?, ?, NULL, NULL)",
+      )
+      .run(accepted.sessionId, timestamp, timestamp);
+    acceptedDatabase
+      .prepare("UPDATE relay_sessions SET active_turn_id = 'persisted-turn' WHERE id = ?")
+      .run(accepted.sessionId);
+    acceptedDatabase.close();
+    recovered!.restore(accepted.sessionId);
+    await vi.waitFor(async () =>
+      expect(
+        (await accepted.app.inject(`/api/sessions/${accepted.sessionId}`)).json(),
+      ).toMatchObject({
+        autopilot: { enabled: true, state: 'backoff' },
+      }),
+    );
+    const auditDatabase = new DatabaseSync(join(accepted.dataDir, 'relay.sqlite'));
+    const started = auditDatabase
+      .prepare(
+        "SELECT count(*) AS count FROM autopilot_controls WHERE session_id = ? AND status = 'started'",
+      )
+      .get(accepted.sessionId) as { count: number };
+    const audits = auditDatabase
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-started'",
+      )
+      .get(accepted.sessionId) as { count: number };
+    auditDatabase.close();
+    expect(started.count).toBe(1);
+    expect(audits.count).toBe(1);
+    recovered!.restore(accepted.sessionId);
+    expect(accepted.handles.flatMap((handle) => handle.calls)).not.toContain('turn/start');
+    await accepted.app.close();
+  });
+
+  it('production attention request requires explicit re-enable and a complete plan transitions to completed', async () => {
+    const fixture = await createProductionAutopilotFixture();
+    const handle = fixture.handles.find((candidate) => candidate.request)!;
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const attention = handle.request!(attentionCall(810));
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { state: 'attentionRequired', enabled: false, reason: 'attentionRequired' },
+        },
+      ),
+    );
+    expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain('turn/start');
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/attention/810/resolve`,
+          payload: { operationKey: 'resume-attention', action: 'resume' },
+        })
+      ).statusCode,
+    ).toBe(202);
+    await expect(attention).resolves.toEqual(toOrgPlanAttentionToolResponse({ action: 'resume' }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject({
+      autopilot: { state: 'attentionRequired', enabled: false },
+    });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { enabled: true, state: expect.stringMatching(/monitoring|backoff/) },
+        },
+      ),
+    );
+
+    await writeFile(join(fixture.workspacePath, 'autopilot.org'), completedAutopilotPlanText());
+    await expect
+      .poll(
+        async () =>
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
+            .executionComplete,
+      )
+      .toBe(true);
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { state: 'completed', enabled: false, reason: 'planComplete' },
+        },
+      ),
+    );
+    await fixture.app.close();
+  });
+
+  it('production plan removal, replacement, and session termination cancel queued continuations', async () => {
+    for (const action of ['close', 'replace', 'stop', 'release', 'delete'] as const) {
+      const fixture = await createProductionAutopilotFixture();
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: true },
+          })
+        ).statusCode,
+      ).toBe(200);
+      if (action === 'close') {
+        await writeFile(join(fixture.workspacePath, 'autopilot.org'), completedAutopilotPlanText());
+        await expect
+          .poll(
+            async () =>
+              (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json().allDone,
+          )
+          .toBe(true);
+        expect(
+          (
+            await fixture.app.inject({
+              method: 'DELETE',
+              url: `/api/sessions/${fixture.sessionId}/plan`,
+            })
+          ).statusCode,
+        ).toBe(204);
+      } else if (action === 'replace') {
+        await installAutopilotPlan(
+          fixture.app,
+          fixture.sessionId,
+          fixture.workspacePath,
+          'replacement',
+        );
+      } else {
+        const method = action === 'delete' ? 'DELETE' : 'POST';
+        const suffix = action === 'delete' ? '' : `/${action}`;
+        expect(
+          (await fixture.app.inject({ method, url: `/api/sessions/${fixture.sessionId}${suffix}` }))
+            .statusCode,
+        ).toBeGreaterThanOrEqual(200);
+      }
+      if (action === 'delete') {
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        const row = database
+          .prepare(
+            'SELECT state, requested_enabled, stop_reason FROM autopilot_sessions WHERE session_id = ?',
+          )
+          .get(fixture.sessionId) as {
+          state: string;
+          requested_enabled: number;
+          stop_reason: string;
+        };
+        database.close();
+        // Forgetting cascades the terminal row with the session itself; the
+        // absence is the durable proof that no queued control can be reopened.
+        expect(row).toBeUndefined();
+      } else {
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+          ).toMatchObject({
+            autopilot: {
+              enabled: false,
+              state: 'disabled',
+              reason:
+                action === 'replace'
+                  ? 'planReplaced'
+                  : action === 'close'
+                    ? 'planRemoved'
+                    : 'sessionEnded',
+            },
+          }),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain('turn/start');
+      await fixture.app.close();
+    }
+  }, 15_000);
+
+  it('production duplicate and missing completion notifications coalesce without double control', async () => {
+    const fixture = await createProductionAutopilotFixture();
+    const response = await fixture.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${fixture.sessionId}/autopilot`,
+      payload: { enabled: true },
+    });
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(
+      () =>
+        expect(
+          fixture.handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+        ).toHaveLength(1),
+      { timeout: 2_500 },
+    );
+    const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const active = database
+      .prepare('SELECT active_turn_id FROM relay_sessions WHERE id = ?')
+      .get(fixture.sessionId) as { active_turn_id: string };
+    database.close();
+    const handle = fixture.handles.find((candidate) => candidate.notify);
+    expect(handle?.notify).toBeDefined();
+    const completion = {
+      method: 'turn/completed',
+      params: { turn: { id: active.active_turn_id } },
+    };
+    handle!.notify!(completion);
+    handle!.notify!(completion);
+    await vi.waitFor(
+      () =>
+        expect(
+          fixture.handles
+            .flatMap((candidate) => candidate.calls)
+            .filter((call) => call === 'turn/start'),
+        ).toHaveLength(2),
+      { timeout: 3_500 },
+    );
+    const controlsDatabase = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const controls = controlsDatabase
+      .prepare('SELECT control_id FROM autopilot_controls WHERE session_id = ?')
+      .all(fixture.sessionId) as Array<{ control_id: string }>;
+    controlsDatabase.close();
+    expect(new Set(controls.map((control) => control.control_id)).size).toBe(controls.length);
+    expect(controls).toHaveLength(2);
+    await fixture.app.close();
+  });
+
+  it('production incompatible exhausted reconcile becomes typed attention with no later reads or timers', async () => {
+    let reconciliations = 0;
+    const timers: Array<() => void> = [];
+    let coordinator:
+      import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+    const fixture = await createProductionAutopilotFixture({
+      autopilotActivity: () => null,
+      autopilotReconcile: async () => {
+        reconciliations += 1;
+        return { compatible: false };
+      },
+      autopilotSchedule: (callback) => {
+        timers.push(callback);
+        return () => undefined;
+      },
+      onAutopilotCoordinator: (value) => {
+        coordinator = value;
+      },
+    });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await vi.waitFor(async () =>
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          autopilot: { state: 'attentionRequired', enabled: false, reason: 'reconcileFailed' },
+        },
+      ),
+    );
+    const stableReconciliations = reconciliations;
+    const stableTimers = timers.length;
+    coordinator!.evaluate(fixture.sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(reconciliations).toBe(stableReconciliations);
+    expect(timers).toHaveLength(stableTimers);
+    await fixture.app.close();
+  });
+
+  it('production post-acceptance fault recovers one accepted control without a second turn or audit', async () => {
+    let coordinator:
+      import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+    const fixture = await createProductionAutopilotFixture({
+      autopilotAfterTurnAccepted: () => {
+        throw new Error('fault after durable app-server acceptance');
+      },
+      onAutopilotCoordinator: (value) => {
+        coordinator = value;
+      },
+    });
+    const response = await fixture.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${fixture.sessionId}/autopilot`,
+      payload: { enabled: true },
+    });
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(
+      () =>
+        expect(
+          fixture.handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+        ).toHaveLength(1),
+      { timeout: 2_500 },
+    );
+    const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const control = database
+      .prepare(
+        "SELECT status, turn_id FROM autopilot_controls WHERE session_id = ? AND status = 'started'",
+      )
+      .get(fixture.sessionId) as { status: string; turn_id: string };
+    const startedAudits = database
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-started'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    const failedAudits = database
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-failed'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    database.close();
+    expect(control).toMatchObject({ status: 'started', turn_id: expect.any(String) });
+    expect(startedAudits.count).toBe(1);
+    expect(failedAudits.count).toBe(0);
+    // Rehydrate from the same durable store after the post-acceptance fault;
+    // the active turn fences replay and the outbox preserves one audit identity.
+    coordinator!.restore(fixture.sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(
+      fixture.handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+    ).toHaveLength(1);
+    const reopened = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    expect(
+      reopened
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-started'",
+        )
+        .get(fixture.sessionId),
+    ).toMatchObject({ count: 1 });
+    reopened.close();
+    await fixture.app.close();
+  });
+  it('production pre-acceptance runtime failure durably records one failed control and does not create a started audit', async () => {
+    const fixture = await createProductionAutopilotFixture({
+      autopilotBeforeTurnAccepted: () => {
+        throw new Error('temporary runtime transport failure');
+      },
+    });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+    const failed = database
+      .prepare(
+        "SELECT count(*) AS count FROM autopilot_controls WHERE session_id = ? AND status = 'failed'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    const started = database
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-started'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    const failedAudits = database
+      .prepare(
+        "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.turn-failed'",
+      )
+      .get(fixture.sessionId) as { count: number };
+    database.close();
+    expect(failed.count).toBe(1);
+    expect(failedAudits.count).toBe(1);
+    expect(started.count).toBe(0);
+    await fixture.app.close();
+  });
   it('publishes isolated typed required, resolved, and failed attention transitions through the feature-only seam', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
     const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -716,6 +1599,7 @@ describe('production composition', () => {
         'protected',
       ],
       ['POST', '/api/sessions/:id/model', '/api/sessions/session-1/model', 'protected'],
+      ['PUT', '/api/sessions/:id/autopilot', '/api/sessions/session-1/autopilot', 'protected'],
       ['GET', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['HEAD', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['DELETE', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],

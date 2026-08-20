@@ -7,6 +7,7 @@
 type TurnOwned = { turnId?: string; occurredAt?: number };
 
 export type ChatItem =
+  | ({ id: string; kind: 'autopilot'; controlId: string; occurredAt?: number } & TurnOwned)
   | ({
       id: string;
       kind: 'user';
@@ -43,22 +44,33 @@ export type HistoryTurn = {
 /** Canonical grouping preserves the upstream Codex turn identity across reloads. */
 export function toChatTurns(
   turns: HistoryTurn[],
+  autopilotControlTurns: ReadonlyMap<string, string> = new Map(),
 ): Array<{ id: string; items: ChatItem[]; startedAt: number | null; completedAt: number | null }> {
   return turns.map((turn, index) => {
     const turnId = turn.id ?? `history-turn-${index}`;
     return {
       id: turnId,
-      items: turn.items.flatMap((item) => toChatItem(item, occurredAt(item, turn), turnId)),
+      items: turn.items.flatMap((item) =>
+        toChatItem(item, occurredAt(item, turn), turnId, autopilotControlTurns),
+      ),
       startedAt: turn.startedAt,
       completedAt: turn.completedAt,
     };
   });
 }
 
-export function toChatItems(turns: HistoryTurn[]): ChatItem[] {
+export function toChatItems(
+  turns: HistoryTurn[],
+  autopilotControlTurns: ReadonlyMap<string, string> = new Map(),
+): ChatItem[] {
   return turns.flatMap((turn, index) =>
     turn.items.flatMap((item) =>
-      toChatItem(item, occurredAt(item, turn), turn.id ?? `history-turn-${index}`),
+      toChatItem(
+        item,
+        occurredAt(item, turn),
+        turn.id ?? `history-turn-${index}`,
+        autopilotControlTurns,
+      ),
     ),
   );
 }
@@ -67,6 +79,7 @@ function toChatItem(
   item: Record<string, unknown>,
   timestamp: number | undefined,
   turnId: string | undefined,
+  autopilotControlTurns: ReadonlyMap<string, string>,
 ): ChatItem[] {
   const owner = turnId ? { turnId } : {};
   return [item].flatMap<ChatItem>((item) => {
@@ -74,6 +87,20 @@ function toChatItem(
     if (!id) return [];
     switch (item.type) {
       case 'userMessage': {
+        if (
+          typeof item.clientId === 'string' &&
+          turnId !== undefined &&
+          autopilotControlTurns.get(turnId) === item.clientId
+        )
+          return [
+            {
+              id,
+              kind: 'autopilot',
+              controlId: item.clientId,
+              ...owner,
+              ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),
+            },
+          ];
         const text = Array.isArray(item.content)
           ? item.content
               .filter(isRecord)

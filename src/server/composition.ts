@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -61,6 +61,12 @@ import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-work
 import { OrgPlanCommandValidator } from './platform/plans/org-plan-command-validator.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
+import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
+import { AutopilotCoordinator } from './features/autopilot/application/service.js';
+import {
+  AUTOPILOT_CONTINUATION_PROMPT,
+  defaultAutopilotPolicy,
+} from './features/autopilot/application/policy.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
@@ -81,6 +87,27 @@ export type ComposeRelayAppOptions = {
   startAppServers?: boolean;
   activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
   activitySchedule?: (callback: () => void, delayMs: number) => () => void;
+  /** Test-only deterministic seam around the production coordinator timer. */
+  autopilotSchedule?: (callback: () => void, delayMs: number) => () => void;
+  /** Test-only deterministic seam for the runtime activity reconciliation boundary. */
+  autopilotReconcile?: (sessionId: string) => Promise<{ compatible: boolean }>;
+  /** Test-only activity projection seam for deterministic stale reconciliation. */
+  autopilotActivity?: (
+    sessionId: string,
+  ) => import('./features/agent-activity/model.js').AgentActivitySnapshot | null;
+  /** Test-only crash window after a runtime accepts, persists, and fences a turn. */
+  autopilotAfterTurnAccepted?: (input: {
+    sessionId: string;
+    controlId: string;
+    turnId: string;
+  }) => Promise<void> | void;
+  /** Test-only fault seam before the runtime accepts a synthetic turn. */
+  autopilotBeforeTurnAccepted?: (input: {
+    sessionId: string;
+    controlId: string;
+  }) => Promise<void> | void;
+  /** Test-only observer for driving recovery through the production composition. */
+  onAutopilotCoordinator?: (coordinator: AutopilotCoordinator) => void;
   launchAppServer?: (input: {
     profile: string;
     cwd: string;
@@ -128,9 +155,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw error;
   }
   const sessions = new SqliteSessionRepository(database);
+  // Only sessions found while opening the relay database belong to a previous
+  // process. A listen hook can run after a new session has already started in
+  // this process; detaching that live writer would make restore and activity
+  // reconciliation race their own owner.
+  const persistedSessionIds = new Set(sessions.list().map((session) => session.id));
   const journal = new SqliteEventJournal(database);
   const interactions = new SqlitePendingInteractionStore(database);
   const idempotency = new SqliteIdempotencyStore(database);
+  const autopilotStore = new SqliteAutopilotStore(database);
   const attentionResolutionOperations = new Map<
     string,
     Promise<
@@ -215,6 +248,86 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
     },
   );
+  const autopilot = new AutopilotCoordinator({
+    store: autopilotStore,
+    now: () => new Date().toISOString(),
+    policy: defaultAutopilotPolicy,
+    plan: (sessionId) => {
+      const plan = supervisedPlans.find(sessionId);
+      const identity = supervisedPlans.identity(sessionId);
+      return plan && identity ? { plan, identity } : null;
+    },
+    session: (sessionId) => sessions.find(sessionId),
+    activity: (sessionId) =>
+      options.autopilotActivity
+        ? options.autopilotActivity(sessionId)
+        : activity.snapshot(sessionId, new Date().toISOString()),
+    pendingInteraction: (sessionId) => interactions.list(sessionId).length > 0,
+    reconcile: async (sessionId) => {
+      if (options.autopilotReconcile) return options.autopilotReconcile(sessionId);
+      await activity.refresh(sessionId);
+      return {
+        compatible: activity.snapshot(sessionId, new Date().toISOString()).confidence === 'fresh',
+      };
+    },
+    schedule:
+      options.autopilotSchedule ??
+      ((callback, delayMs) => {
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      }),
+    nextControlId: (sessionId, generation) =>
+      `autopilot-${generation}-${createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex').slice(0, 16)}`,
+    turnStarter: {
+      start: async (sessionId, controlId, generation) => {
+        const current = () => {
+          const state = autopilotStore.find(sessionId);
+          return Boolean(
+            state &&
+            state.requestedEnabled &&
+            state.generation === generation &&
+            state.lastControlId === controlId,
+          );
+        };
+        if (!current()) throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        const session = sessions.find(sessionId);
+        if (!session || !runtime || session.activeTurnId || interactions.list(sessionId).length)
+          throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        // A relay restart can leave a durable, otherwise eligible session without this
+        // process's writer. Reacquire through the normal ownership boundary before a
+        // synthetic start; never bypass its single-writer and replacement semantics.
+        const writer = await runtime.ensureWriter(session, new Date().toISOString());
+        if (!current() || writer.session.activeTurnId || interactions.list(sessionId).length)
+          throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
+        const started = await runtime.startTurn(
+          writer.session,
+          AUTOPILOT_CONTINUATION_PROMPT,
+          controlId,
+          new Date().toISOString(),
+        );
+        if (!started.activeTurnId) throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        sessions.save(started);
+        await options.autopilotAfterTurnAccepted?.({
+          sessionId,
+          controlId,
+          turnId: started.activeTurnId,
+        });
+        activity.observe({
+          sessionId,
+          occurredAt: started.updatedAt,
+          kind: 'turnStarted',
+          ...(started.threadId ? { threadId: started.threadId } : {}),
+          ...(started.activeTurnId ? { turnId: started.activeTurnId } : {}),
+        });
+      },
+    },
+    publish: (sessionId, type, payload, occurredAt, outboxId) => {
+      if (!sessions.find(sessionId)) return;
+      events.publish(journal.append(sessionId, type, payload, occurredAt, outboxId));
+    },
+  });
+  options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
@@ -310,7 +423,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
   };
-  const runtime = options.startAppServers
+  let closing = false;
+  let runtime: CodexSessionRuntime | null = null;
+  runtime = options.startAppServers
     ? new CodexSessionRuntime(
         options.launchAppServer ?? launchCodexAppServer,
         undefined,
@@ -349,6 +464,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 occurredAt,
               ).snapshot;
               sessions.save(completedSession);
+              autopilot.turnCompleted(sessionId);
             }
             planMeasurementRefresh?.refreshNow(sessionId);
           }
@@ -395,6 +511,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 updated.updatedAt,
               ),
             );
+          autopilot.evaluate(sessionId);
           return true;
         },
         (sessionId) => {
@@ -405,6 +522,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         resolveSkills,
         planStatusSource,
         (sessionId, update) => {
+          if (closing) return;
           supervisedPlans.accept(sessionId, update);
           planMeasurementRefresh?.accept(sessionId, update);
           if (update.kind === 'updated') {
@@ -429,6 +547,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               ),
             );
           }
+          autopilot.planUpdated(sessionId);
         },
         options.planMeasurementBaseUrl,
         30_000,
@@ -464,6 +583,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       (!prior || prior.threadId !== session.threadId || becameRuntimeReady)
     )
       void activity.refresh(session.id);
+    if (becameRuntimeReady) autopilot.restore(session.id);
   };
   if (runtime) {
     const supervisor = new SessionSupervisor(
@@ -490,8 +610,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     recoverExitedSession = (sessionId) => {
       supervisor.cancel(sessionId);
       const session = sessions.find(sessionId);
-      if (session)
+      if (session) {
+        autopilot.cancel(sessionId, 'sessionEnded');
         saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
+      }
     };
   }
   let authorization: SqliteAuthorizationStore | undefined;
@@ -593,8 +715,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           : undefined,
         startTurn: runtime
-          ? async (session, text, clientUserMessageId) =>
-              runtime.startTurn(session, text, clientUserMessageId, new Date().toISOString())
+          ? async (session, text, clientUserMessageId) => {
+              autopilot.manualSend(session.id);
+              return runtime.startTurn(
+                session,
+                text,
+                clientUserMessageId,
+                new Date().toISOString(),
+              );
+            }
           : undefined,
         ensureWriter: runtime
           ? (session) => {
@@ -619,6 +748,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planMeasurementRefresh?.refreshNow(session.id);
         },
         agentActivity: (id) => activity.snapshot(id, new Date().toISOString()),
+        autopilotSnapshot: (id) => autopilot.snapshot(id),
+        autopilotControlTurns: (id) => autopilot.acceptedControlTurns(id),
         refreshActivity: (id) => activity.refresh(id),
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
@@ -642,15 +773,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 read: (session) => runtime.readHistory(session),
               })
           : undefined,
-        release: (session) =>
-          RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot,
+        release: (session) => {
+          autopilot.cancel(session.id, 'sessionEnded');
+          return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
+        },
         remove: (id) => {
+          autopilot.cancel(id, 'sessionEnded');
           activity.dispose(id);
           sessions.remove(id);
         },
         idempotency,
         close: runtime
           ? (id) => {
+              autopilot.cancel(id, 'sessionEnded');
               planMeasurementRefresh?.stop(id);
               dismissPendingInteractions(id, new Date().toISOString());
               activity.dispose(id);
@@ -693,12 +828,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
         clear: (id) => supervisedPlans.clear(id),
         closed: (id) => {
+          autopilot.cancel(id, 'planRemoved');
           planMeasurementRefresh?.stop(id);
           const occurredAt = new Date().toISOString();
           events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
         },
       },
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
+      autopilot,
       ...(runtime
         ? {
             planMeasurementRoutes: {
@@ -875,12 +1012,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   const detachActiveSessions = async () => {
     await mapWithConcurrency(
-      sessions.list().filter((session) => session.threadId !== null),
+      sessions
+        .list()
+        .filter((session) => persistedSessionIds.has(session.id) && session.threadId !== null),
       2,
       async (session) => {
-        if (session.desiredState === 'active')
+        // The status lease must repopulate the authoritative plan projection before
+        // a durable coordinator is restored. Writer detachment is a process concern,
+        // not a human disable: a later fenced continuation can reacquire it safely.
+        if (session.desiredState === 'active') {
           saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
+          await runtime?.release(session.id);
+        }
         await runtime?.watchPlanStatus(session);
+        autopilot.restore(session.id);
       },
     );
   };
@@ -890,8 +1035,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     await detachActiveSessions();
   });
   app.addHook('onClose', async () => {
+    closing = true;
     planMeasurementRefresh?.stopAll();
     for (const session of sessions.list()) {
+      autopilot.dispose(session.id);
       activity.dispose(session.id);
       // Relay shutdown only releases this process's writer.  A typed attention
       // request remains a durable human-visible blocker for the next relay

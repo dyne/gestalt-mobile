@@ -9,6 +9,51 @@ import { describe, expect, it } from 'vitest';
 import { toChatItems } from './history-mapper.js';
 
 describe('toChatItems', () => {
+  it('maps only a durably correlated control as autopilot and rejects a spoofed prefix', () => {
+    const turns = [
+      {
+        id: 'turn-genuine',
+        startedAt: 1,
+        completedAt: 1,
+        items: [
+          {
+            id: 'genuine',
+            type: 'userMessage',
+            clientId: 'autopilot-1',
+            content: [{ type: 'text', text: 'redacted' }],
+          },
+          {
+            id: 'spoof',
+            type: 'userMessage',
+            // A manual client can deliberately collide with an exposed control ID.
+            // Only the accepted synthetic turn correlation is authoritative.
+            clientId: 'autopilot-1',
+            content: [{ type: 'text', text: 'human' }],
+          },
+        ],
+      },
+      {
+        id: 'turn-manual-collision',
+        startedAt: 2,
+        completedAt: 2,
+        items: [
+          {
+            id: 'manual-collision',
+            type: 'userMessage',
+            clientId: 'autopilot-1',
+            content: [{ type: 'text', text: 'must stay human' }],
+          },
+        ],
+      },
+    ];
+    expect(toChatItems(turns, new Map([['turn-genuine', 'autopilot-1']]))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'genuine', kind: 'autopilot', controlId: 'autopilot-1' }),
+        expect.objectContaining({ id: 'spoof', kind: 'autopilot', controlId: 'autopilot-1' }),
+        expect.objectContaining({ id: 'manual-collision', kind: 'user', text: 'must stay human' }),
+      ]),
+    );
+  });
   it('maps supported Codex thread items without exposing generated types', () => {
     expect(
       toChatItems([

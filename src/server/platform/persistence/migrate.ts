@@ -6,7 +6,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 
-const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, last_org_plan_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, turn_id TEXT, requested_at TEXT, resolved_at TEXT, outcome TEXT, operation_key TEXT, resolution_state TEXT NOT NULL DEFAULT 'active', PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (session_id, sequence)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key));`;
+const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, last_org_plan_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, turn_id TEXT, requested_at TEXT, resolved_at TEXT, outcome TEXT, operation_key TEXT, resolution_state TEXT NOT NULL DEFAULT 'active', PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, autopilot_outbox_id INTEGER, PRIMARY KEY (session_id, sequence), UNIQUE(session_id, autopilot_outbox_id)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key)); CREATE TABLE IF NOT EXISTS autopilot_sessions (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state TEXT NOT NULL, requested_enabled INTEGER NOT NULL, plan_identity TEXT, plan_fingerprint TEXT, generation INTEGER NOT NULL, no_progress_count INTEGER NOT NULL, next_evaluation_at TEXT, last_control_id TEXT, stop_reason TEXT, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS autopilot_controls (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, control_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, failure_code TEXT, turn_id TEXT, PRIMARY KEY (session_id, control_id)); CREATE TABLE IF NOT EXISTS autopilot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, type TEXT NOT NULL, payload_json TEXT NOT NULL, occurred_at TEXT NOT NULL);`;
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   const columns = database.prepare('PRAGMA table_info(relay_sessions)').all() as Array<{
@@ -37,4 +37,18 @@ export function migrate(database: DatabaseSync): void {
     database.exec(
       "ALTER TABLE pending_interactions ADD COLUMN resolution_state TEXT NOT NULL DEFAULT 'active'",
     );
+  const eventColumns = database.prepare('PRAGMA table_info(session_events)').all() as Array<{
+    name: string;
+  }>;
+  if (!eventColumns.some((column) => column.name === 'autopilot_outbox_id')) {
+    database.exec('ALTER TABLE session_events ADD COLUMN autopilot_outbox_id INTEGER');
+    database.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS session_events_autopilot_outbox ON session_events(session_id, autopilot_outbox_id)',
+    );
+  }
+  const controlColumns = database.prepare('PRAGMA table_info(autopilot_controls)').all() as Array<{
+    name: string;
+  }>;
+  if (!controlColumns.some((column) => column.name === 'turn_id'))
+    database.exec('ALTER TABLE autopilot_controls ADD COLUMN turn_id TEXT');
 }

@@ -85,6 +85,17 @@ describe('server production architecture', () => {
       ).toBe(false);
     }
   });
+  it('keeps autopilot application and domain independent of framework, Codex, persistence, and timers', () => {
+    const root = join(serverRoot, 'features', 'autopilot');
+    for (const path of sourceFiles(root).filter(
+      (path) => path.includes('/application/') || path.includes('/domain/'),
+    )) {
+      const source = readFileSync(path, 'utf8');
+      expect(
+        importSpecifiers(source).some((specifier) => forbiddenActivityAdapter.test(specifier)),
+      ).toBe(false);
+    }
+  });
   it('recognizes forbidden imports in static, side-effect, dynamic, and require forms', () => {
     expect(
       importSpecifiers(`

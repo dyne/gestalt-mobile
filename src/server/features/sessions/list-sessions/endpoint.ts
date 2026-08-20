@@ -14,12 +14,16 @@ export function registerListSessions(
   deps: {
     list(): RelaySessionSnapshot[];
     activity?: (id: string) => import('../../agent-activity/model.js').AgentActivitySnapshot;
+    autopilot?: (
+      id: string,
+    ) => import('../../autopilot/domain/autopilot-session.js').AutopilotSnapshot;
   },
 ): void {
   app.get('/api/sessions', async () =>
     deps.list().map((session) => ({
       ...session,
       ...(deps.activity ? { agentActivity: deps.activity(session.id) } : {}),
+      ...(deps.autopilot ? { autopilot: deps.autopilot(session.id) } : {}),
       resumeCommand: session.threadId ? buildResumeCommand(session) : null,
     })),
   );

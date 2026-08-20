@@ -29,6 +29,7 @@ export function registerGetHistory(
     }>;
     currentSequence(sessionId: string): number;
     interactions?(sessionId: string): SafeInteractionSnapshot[];
+    autopilotControlTurns?(sessionId: string): ReadonlyMap<string, string>;
   },
 ): void {
   app.get('/api/sessions/:id/history', async (request, reply) => {
@@ -59,10 +60,11 @@ export function registerGetHistory(
         retryable: true,
       });
     }
-    const items: ChatItem[] = toChatItems(history.turns);
+    const controls = deps.autopilotControlTurns?.(session.id) ?? new Map<string, string>();
+    const items: ChatItem[] = toChatItems(history.turns, controls);
     const snapshot: ChatSnapshot = {
       items,
-      turns: toChatTurns(history.turns),
+      turns: toChatTurns(history.turns, controls),
       activeTurnId: history.activeTurnId,
       interactions: deps.interactions?.(session.id) ?? [],
       baseSequence,

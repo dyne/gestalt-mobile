@@ -89,6 +89,30 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it('replays a crash-surviving autopilot outbox record exactly once', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES ('s','w','/w','default','ready','active','t','t')",
+      )
+      .run();
+    const journal = new SqliteEventJournal(database);
+    const first = journal.append('s', 'autopilot.control-issued', { controlId: 'opaque' }, 't', 41);
+    const replay = journal.append(
+      's',
+      'autopilot.control-issued',
+      { controlId: 'opaque' },
+      't',
+      41,
+    );
+    expect(replay.sequence).toBe(first.sequence);
+    expect(journal.since('s', 0)).toHaveLength(1);
+    database.close();
+  });
+
   it('journals ordered plan replacement and close events per owning session', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
