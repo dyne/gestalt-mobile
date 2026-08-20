@@ -103,6 +103,7 @@ export function registerSessionRoutes(
         find: sessions.find,
         restore: sessions.restore,
         save: sessions.save,
+        ownsWriter: sessions.ownsWriter,
         idempotency: sessions.idempotency,
       });
     if (deps.recentThreads && sessions.promoteRecent)

@@ -18,6 +18,7 @@ export function registerRestoreSession(
     find(id: string): RelaySessionSnapshot | null;
     restore(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     save(session: RelaySessionSnapshot): void;
+    ownsWriter?(id: string): boolean;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
@@ -35,7 +36,8 @@ export function registerRestoreSession(
     // Opening an already live session is a safe no-op. It must not tear down or
     // replace this relay's writer merely because a client retried Open while the
     // session was becoming ready.
-    if (!canRestore(session)) {
+    const staleWriter = relayOwnsWriter(session) && deps.ownsWriter?.(id) === false;
+    if (!canRestore(session) && !staleWriter) {
       if (relayOwnsWriter(session)) return reply.send(session);
       return reply.code(409).send({ code: 'SESSION_CANNOT_RESTORE' });
     }
@@ -49,7 +51,11 @@ export function registerRestoreSession(
     } catch {
       // The pre-I/O recovery marker must never strand a saved session: keep
       // its original thread and inactive state available for a later Open.
-      deps.save(session);
+      deps.save(
+        staleWriter
+          ? RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot
+          : session,
+      );
       return reply.code(502).send({ code: 'RESTORE_FAILED' });
     }
     const response =
@@ -62,7 +68,14 @@ export function registerRestoreSession(
           }
         : restored;
     deps.save(response);
-    if (key) deps.idempotency?.put(scope, key, 200, JSON.stringify(response));
-    return reply.send(response);
+    const settled =
+      (response.state === 'ready' || response.state === 'turnActive') &&
+      deps.ownsWriter &&
+      !deps.ownsWriter(id)
+        ? RelaySession.rehydrate(response).stop(new Date().toISOString()).snapshot
+        : response;
+    if (settled !== response) deps.save(settled);
+    if (key) deps.idempotency?.put(scope, key, 200, JSON.stringify(settled));
+    return reply.send(settled);
   });
 }

@@ -157,6 +157,88 @@ describe('POST /api/sessions/:id/restore', () => {
     await app.close();
   });
 
+  it('persists and caches a stopped response when restore loses its writer before finalization', async () => {
+    const app = fastify();
+    let durable = persistedSession('stopped');
+    const cache = new Map<string, { statusCode: number; body: string }>();
+    registerRestoreSession(app, {
+      find: () => durable,
+      restore: async (session) => ({ ...session, state: 'ready', desiredState: 'active' }),
+      save: (session) => {
+        durable = session;
+      },
+      ownsWriter: () => false,
+      idempotency: {
+        get: (scope, key) => cache.get(`${scope}:${key}`) ?? null,
+        put: (scope, key, statusCode, body) => cache.set(`${scope}:${key}`, { statusCode, body }),
+      },
+    });
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/restore',
+      headers: { 'idempotency-key': 'lost' },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/restore',
+      headers: { 'idempotency-key': 'lost' },
+    });
+    expect(first.json()).toMatchObject({ state: 'stopped', desiredState: 'stopped' });
+    expect(second.body).toBe(first.body);
+    expect(durable).toMatchObject({ state: 'stopped', desiredState: 'stopped' });
+    await app.close();
+  });
+
+  it('rebinds a stale ready snapshot when the runtime no longer owns its writer', async () => {
+    const app = fastify();
+    let durable = {
+      ...persistedSession('stopped'),
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+    };
+    let restores = 0;
+    registerRestoreSession(app, {
+      find: () => durable,
+      restore: async (session) => {
+        restores += 1;
+        return { ...session, state: 'ready', desiredState: 'active' } as never;
+      },
+      save: (session) => {
+        durable = session as typeof durable;
+      },
+      ownsWriter: () => false,
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/sessions/session-1/restore' });
+    expect(response.statusCode).toBe(200);
+    expect(restores).toBe(1);
+    expect(durable).toMatchObject({ state: 'stopped', desiredState: 'stopped' });
+    await app.close();
+  });
+
+  it('normalizes a stale ready restore failure to stopped', async () => {
+    const app = fastify();
+    let durable = {
+      ...persistedSession('stopped'),
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+    };
+    registerRestoreSession(app, {
+      find: () => durable,
+      restore: async () => {
+        throw new Error('gone');
+      },
+      save: (session) => {
+        durable = session as typeof durable;
+      },
+      ownsWriter: () => false,
+    });
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/sessions/session-1/restore' })).statusCode,
+    ).toBe(502);
+    expect(durable).toMatchObject({ state: 'stopped', desiredState: 'stopped' });
+    await app.close();
+  });
+
   it('keeps generic failures retryable with their original metadata and permits a later Open', async () => {
     const app = fastify();
     let durable: RelaySessionSnapshot = {

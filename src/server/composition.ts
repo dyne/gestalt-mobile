@@ -761,9 +761,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         restore: runtime
           ? async (session) => {
               const restored = await runtime.restoreWithOutcome(session, new Date().toISOString());
+              // An exit can be reported while resume is resolving. Do not let the
+              // route persist a stale ready snapshot over that recovered exit.
+              if (!runtime.ownsWriter(session.id))
+                return {
+                  ...restored,
+                  session: RelaySession.rehydrate(restored.session).stop(new Date().toISOString())
+                    .snapshot,
+                };
               return restored;
             }
           : undefined,
+        ownsWriter: runtime ? (id) => runtime.ownsWriter(id) : undefined,
         promoteRecent: runtime
           ? (thread) =>
               promoteRecentThread(thread, {
