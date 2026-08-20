@@ -58,20 +58,25 @@ export function registerSessionRoutes(
       reportFailure: (operation, error) =>
         deps.logger.error(`${operation} failed: ${safeErrorLabel(error)}`),
     });
-    registerGetSession(app, sessions.find, sessions.agentActivity);
+    registerGetSession(app, sessions.find, sessions.agentActivity, sessions.autopilotSnapshot);
     if (sessions.refreshActivity)
       registerRefreshActivity(app, {
         exists: (id) => sessions.find(id) !== null,
         refresh: sessions.refreshActivity,
       });
     if (sessions.list)
-      registerListSessions(app, { list: sessions.list, activity: sessions.agentActivity });
+      registerListSessions(app, {
+        list: sessions.list,
+        activity: sessions.agentActivity,
+        autopilot: sessions.autopilotSnapshot,
+      });
     if (sessions.readHistory)
       registerGetHistory(app, {
         find: sessions.find,
         read: sessions.readHistory,
         currentSequence: sessions.currentSequence ?? (() => 0),
         interactions: deps.interactions?.snapshot,
+        autopilotControlTurns: sessions.autopilotControlTurns,
       });
     if (sessions.startTurn)
       registerStartTurn(app, {

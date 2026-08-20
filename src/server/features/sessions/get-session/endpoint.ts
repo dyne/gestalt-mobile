@@ -12,6 +12,9 @@ export function registerGetSession(
   app: FastifyInstance,
   find: (id: string) => RelaySessionSnapshot | null,
   activity?: (id: string) => import('../../agent-activity/model.js').AgentActivitySnapshot,
+  autopilot?: (
+    id: string,
+  ) => import('../../autopilot/domain/autopilot-session.js').AutopilotSnapshot,
 ): void {
   app.get('/api/sessions/:id', async (request, reply) => {
     const session = find((request.params as { id: string }).id);
@@ -19,6 +22,7 @@ export function registerGetSession(
       ? reply.send({
           ...session,
           ...(activity ? { agentActivity: activity(session.id) } : {}),
+          ...(autopilot ? { autopilot: autopilot(session.id) } : {}),
           resumeCommand: session.threadId ? buildResumeCommand(session) : null,
         })
       : reply.code(404).send({ code: 'SESSION_NOT_FOUND' });

@@ -7,7 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { idempotencyKey } from '../../../platform/http/idempotency.js';
-import { RelaySession } from '../model/relay-session.js';
+import { RelaySession, relayOwnsWriter } from '../model/relay-session.js';
 import type { RestoreSessionResult } from '../../../platform/codex/session-runtime.js';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { canRestore } from './use-case.js';
@@ -32,7 +32,13 @@ export function registerRestoreSession(
     if (prior) return reply.code(prior.statusCode).send(JSON.parse(prior.body));
     const session = deps.find(id);
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
-    if (!canRestore(session)) return reply.code(409).send({ code: 'SESSION_CANNOT_RESTORE' });
+    // Opening an already live session is a safe no-op. It must not tear down or
+    // replace this relay's writer merely because a client retried Open while the
+    // session was becoming ready.
+    if (!canRestore(session)) {
+      if (relayOwnsWriter(session)) return reply.send(session);
+      return reply.code(409).send({ code: 'SESSION_CANNOT_RESTORE' });
+    }
     const recovering = RelaySession.rehydrate(session).beginRecovery(
       new Date().toISOString(),
     ).snapshot;

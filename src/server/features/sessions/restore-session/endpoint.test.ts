@@ -32,7 +32,7 @@ describe('POST /api/sessions/:id/restore', () => {
     await app.close();
   });
 
-  it('rejects restore when the relay already owns the thread', async () => {
+  it('returns the current session when the relay already owns the thread', async () => {
     const app = fastify();
     let restored = false;
     registerRestoreSession(app, {
@@ -45,8 +45,12 @@ describe('POST /api/sessions/:id/restore', () => {
     });
 
     const response = await app.inject({ method: 'POST', url: '/api/sessions/session-1/restore' });
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ code: 'SESSION_CANNOT_RESTORE' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      id: 'session-1',
+      threadId: 'thread-1',
+      state: 'ready',
+    });
     expect(restored).toBe(false);
     await app.close();
   });

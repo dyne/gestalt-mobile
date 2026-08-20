@@ -14,18 +14,49 @@ export class SqliteEventJournal {
     private readonly retain = 2000,
   ) {}
 
-  append(sessionId: string, type: string, payload: unknown, occurredAt: string): SessionEvent {
+  append(
+    sessionId: string,
+    type: string,
+    payload: unknown,
+    occurredAt: string,
+    autopilotOutboxId?: number,
+  ): SessionEvent {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db
         .prepare('SELECT next_sequence AS sequence FROM relay_sessions WHERE id = ?')
         .get(sessionId) as { sequence: number } | undefined;
       if (!row) throw new Error('SESSION_NOT_FOUND');
-      this.db
+      const inserted = this.db
         .prepare(
-          'INSERT INTO session_events (session_id,sequence,occurred_at,type,payload_json) VALUES (?,?,?,?,?)',
+          'INSERT OR IGNORE INTO session_events (session_id,sequence,occurred_at,type,payload_json,autopilot_outbox_id) VALUES (?,?,?,?,?,?)',
         )
-        .run(sessionId, row.sequence, occurredAt, type, JSON.stringify(payload));
+        .run(
+          sessionId,
+          row.sequence,
+          occurredAt,
+          type,
+          JSON.stringify(payload),
+          autopilotOutboxId ?? null,
+        );
+      if (inserted.changes === 0 && autopilotOutboxId !== undefined) {
+        const existing = this.db
+          .prepare(
+            'SELECT sequence,type,occurred_at,payload_json FROM session_events WHERE session_id = ? AND autopilot_outbox_id = ?',
+          )
+          .get(sessionId, autopilotOutboxId) as
+          { sequence: number; type: string; occurred_at: string; payload_json: string } | undefined;
+        if (existing) {
+          this.db.exec('COMMIT');
+          return {
+            sessionId,
+            sequence: existing.sequence,
+            type: existing.type,
+            occurredAt: existing.occurred_at,
+            payload: JSON.parse(existing.payload_json),
+          };
+        }
+      }
       this.db
         .prepare('UPDATE relay_sessions SET next_sequence = next_sequence + 1 WHERE id = ?')
         .run(sessionId);

@@ -122,6 +122,12 @@ export function parseSupervisedPlan(input: {
 
   const allSteps = headings;
   const allDone = allSteps.every((step) => step.state === 'DONE');
+  const executionComplete = built.every(
+    (step) =>
+      step.state === 'DONE' &&
+      step.reviewStatus === 'REVIEWED' &&
+      step.children.every((child) => child.state === 'DONE'),
+  );
   const currentStepId = findCurrentStepId(allSteps, allDone);
   if (!currentStepId) return unavailable('MALFORMED_ORG');
 
@@ -136,6 +142,7 @@ export function parseSupervisedPlan(input: {
       totalSteps: allSteps.length,
       doneSteps: allSteps.filter((step) => step.state === 'DONE').length,
       allDone,
+      executionComplete,
       currentStepId,
     }),
   };
