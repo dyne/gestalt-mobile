@@ -915,13 +915,36 @@ describe('production composition', () => {
   }, 15_000);
 
   it('production duplicate and missing completion notifications coalesce without double control', async () => {
-    const fixture = await createProductionAutopilotFixture();
+    const timers: Array<{
+      callback: () => void;
+      cancelled: boolean;
+      fired: boolean;
+    }> = [];
+    const fixture = await createProductionAutopilotFixture({
+      autopilotSchedule: (callback) => {
+        const timer = { callback, cancelled: false, fired: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    const runNextTimer = async () => {
+      let timer: (typeof timers)[number] | undefined;
+      await vi.waitFor(() => {
+        timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+      });
+      timer!.fired = true;
+      timer!.callback();
+    };
     const response = await fixture.app.inject({
       method: 'PUT',
       url: `/api/sessions/${fixture.sessionId}/autopilot`,
       payload: { enabled: true },
     });
     expect(response.statusCode).toBe(200);
+    await runNextTimer();
     await vi.waitFor(
       () =>
         expect(
@@ -942,6 +965,11 @@ describe('production composition', () => {
     };
     handle!.notify!(completion);
     handle!.notify!(completion);
+    await vi.waitFor(() =>
+      expect(timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(1),
+    );
+    await runNextTimer();
+    await runNextTimer();
     await vi.waitFor(
       () =>
         expect(
