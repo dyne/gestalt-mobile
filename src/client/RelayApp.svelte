@@ -82,7 +82,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
-  import { isRelayPlanUpdate } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
   import { createSessionCache } from './features/sessions/session-cache.js';
@@ -157,7 +156,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansCatalogGeneration = 0;
   let passivePlanGeneration = 0;
   let navigationFocus = $state<Tab | null>(null);
-  let lastPlanOpenSignal = $state('');
   let plansWorkspaceId = $derived(
     (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) ||
       null,
@@ -993,18 +991,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
     planController.applyEvent(selectedId, event);
-    if (event.type !== 'plan.updated' || !isRelayPlanUpdate(event.payload)) return;
-    const reason = event.payload.reason;
-    if (
-      !reason ||
-      !['authoring-start', 'work-start', 'supervision-start', 'resync'].includes(reason)
-    )
-      return;
-    const signal = `${selectedId}:${event.sequence}`;
-    if (signal === lastPlanOpenSignal) return;
-    lastPlanOpenSignal = signal;
-    tab = 'plan';
-    scrollTabIntoInitialPosition('plan');
   }
 </script>
 

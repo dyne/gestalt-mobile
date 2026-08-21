@@ -164,7 +164,7 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('adds and removes Plan from live events without stealing focus, then isolates a session without a plan', async ({
+test('updates Plan from live events without selecting it, then isolates a session without a plan', async ({
   page,
 }) => {
   const first = session('session-1', '/projects/one');
@@ -199,16 +199,20 @@ test('adds and removes Plan from live events without stealing focus, then isolat
   const chat = navigation.getByRole('button', { name: 'Chat' });
   await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
   await expect.poll(() => typeof emitPlanEvent).toBe('function');
-  await chat.focus();
+  await chat.click();
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   emitPlanEvent!({
     sequence: 1,
     type: 'plan.updated',
-    payload: { ...activePlan, reason: 'supervision-start' },
+    payload: { plan: activePlan, reason: 'supervision-start' },
   });
 
   const plan = navigation.getByRole('button', { name: 'Plan' });
   await expect(plan).toBeVisible();
-  await expect(chat).toBeFocused();
+  await expect(chat).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+  await chat.focus();
   await chat.press('Tab');
   await expect(plan).toBeFocused();
   await plan.press('Enter');
@@ -261,6 +265,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
         {
           planName: 'plans/roadmap.org',
           title: workspacePlan.title,
+          previewAvailable: true,
           totalSteps: workspacePlan.totalSteps,
           doneSteps: workspacePlan.doneSteps,
           allDone: workspacePlan.allDone,

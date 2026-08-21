@@ -45,7 +45,7 @@ export interface PlanMeasurementSnapshotSource {
   read(sessionId: string): Promise<PlanMeasurementSnapshot>;
 }
 
-/** Reads helper-validated Org plans anywhere below a workspace without coupling to a session. */
+/** Discovers Org files anywhere below a workspace and previews supported plans. */
 export interface WorkspacePlanCatalogSource {
   list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]>;
   read(workspacePath: string, planName: string): Promise<WorkspacePlanReadResult>;

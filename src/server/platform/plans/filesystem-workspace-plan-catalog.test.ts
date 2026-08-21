@@ -7,7 +7,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { FilesystemWorkspacePlanCatalog } from './filesystem-workspace-plan-catalog.js';
 
@@ -21,8 +21,6 @@ async function workspace(): Promise<string> {
   roots.push(root);
   return root;
 }
-
-const acceptsOrgPlans = { validate: async () => true };
 
 function plan(title: string): string {
   return `#+TITLE: ${title}
@@ -43,7 +41,7 @@ function plan(title: string): string {
 }
 
 describe('FilesystemWorkspacePlanCatalog', () => {
-  it('lists every recursively discovered Org plan in relative-path order after helper validation', async () => {
+  it('lists every recursively discovered Org file in relative-path order without helper validation', async () => {
     const root = await workspace();
     await Promise.all([
       mkdir(join(root, '.gestalt')),
@@ -58,32 +56,41 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       writeFile(join(root, '.gestalt', 'invalid.org'), 'not an Org plan'),
       writeFile(join(root, '.gestalt', 'notes.txt'), plan('Ignored')),
     ]);
-    const validate = vi.fn(
-      async (_workspace: string, path: string) => !path.endsWith('rejected.org'),
-    );
-
-    const entries = await new FilesystemWorkspacePlanCatalog({ validate }).list(root);
+    const entries = await new FilesystemWorkspacePlanCatalog().list(root);
 
     expect(entries).toEqual([
-      expect.objectContaining({ planName: '.gestalt/legacy.org', title: 'Legacy' }),
+      expect.objectContaining({
+        planName: '.gestalt/invalid.org',
+        title: 'invalid',
+        previewAvailable: false,
+      }),
+      expect.objectContaining({
+        planName: '.gestalt/legacy.org',
+        title: 'Legacy',
+        previewAvailable: true,
+      }),
       expect.objectContaining({
         planName: 'plans/alpha.org',
         title: 'Alpha',
+        previewAvailable: true,
         totalSteps: 1,
         doneSteps: 0,
       }),
       expect.objectContaining({ planName: 'plans/nested/deep.org', title: 'Deep' }),
+      expect.objectContaining({
+        planName: 'rejected.org',
+        title: 'Rejected',
+        previewAvailable: true,
+      }),
       expect.objectContaining({ planName: 'zeta.org', title: 'Zeta', totalSteps: 1, doneSteps: 0 }),
     ]);
-    expect(validate).toHaveBeenCalledWith(root, join(root, 'plans', 'nested', 'deep.org'));
-    expect(entries.some((entry) => entry.planName === 'rejected.org')).toBe(false);
   });
 
   it('returns a parsed projection for an encoded relative path and rejects traversal', async () => {
     const root = await workspace();
     await mkdir(join(root, 'plans'));
     await writeFile(join(root, 'plans', 'roadmap space.org'), plan('Roadmap'));
-    const catalog = new FilesystemWorkspacePlanCatalog(acceptsOrgPlans);
+    const catalog = new FilesystemWorkspacePlanCatalog();
 
     await expect(catalog.read(root, 'plans/roadmap space.org')).resolves.toMatchObject({
       kind: 'available',
@@ -99,19 +106,21 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     await writeFile(join(outside, 'outside.org'), plan('Outside'));
     await symlink(outside, join(root, 'linked-directory'));
     await symlink(join(outside, 'outside.org'), join(root, 'linked-file.org'));
-    const catalog = new FilesystemWorkspacePlanCatalog(acceptsOrgPlans);
+    const catalog = new FilesystemWorkspacePlanCatalog();
 
     await expect(catalog.list(root)).resolves.toEqual([]);
     await expect(catalog.read(root, 'linked-file.org')).resolves.toEqual({ kind: 'unavailable' });
     await expect(catalog.list(join(root, 'missing'))).resolves.toEqual([]);
   });
 
-  it('excludes malformed plans from a catalog while exposing a typed direct-read failure', async () => {
+  it('lists malformed Org files while exposing a typed direct-read failure', async () => {
     const root = await workspace();
     await writeFile(join(root, 'bad.org'), 'bad');
-    const catalog = new FilesystemWorkspacePlanCatalog(acceptsOrgPlans);
+    const catalog = new FilesystemWorkspacePlanCatalog();
 
-    await expect(catalog.list(root)).resolves.toEqual([]);
+    await expect(catalog.list(root)).resolves.toEqual([
+      { planName: 'bad.org', title: 'bad', previewAvailable: false },
+    ]);
     await expect(catalog.read(root, 'bad.org')).resolves.toEqual({ kind: 'unavailable' });
     await expect(catalog.read(root, 'missing.org')).resolves.toEqual({ kind: 'missing' });
   });
@@ -127,10 +136,15 @@ describe('FilesystemWorkspacePlanCatalog', () => {
       writeFile(join(second, 'shared.org'), plan('Second workspace')),
       writeFile(join(first, 'shared.org'), plan('First workspace')),
     ]);
-    const catalog = new FilesystemWorkspacePlanCatalog(acceptsOrgPlans);
+    const catalog = new FilesystemWorkspacePlanCatalog();
 
     const listed = await catalog.list(first);
-    expect(listed).toHaveLength(102);
+    expect(listed).toHaveLength(103);
+    expect(listed).toContainEqual({
+      planName: 'oversized.org',
+      title: 'oversized',
+      previewAvailable: false,
+    });
     await expect(catalog.read(first, 'oversized.org')).resolves.toEqual({ kind: 'unavailable' });
     await expect(catalog.read(first, 'shared.org')).resolves.toMatchObject({
       kind: 'available',

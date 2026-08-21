@@ -58,7 +58,6 @@ import { compileSkillOverride, type SkillProfile } from './features/skills/model
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
-import { OrgPlanCommandValidator } from './platform/plans/org-plan-command-validator.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
@@ -336,12 +335,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
     skillCatalog(profile).list(workspace),
   );
-  const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog(
-    new OrgPlanCommandValidator({
-      ...(planMeasurementHelperPath ? { helperPath: planMeasurementHelperPath } : {}),
-      discoverSkills: async (workspace) => (await skillCatalog('default').list(workspace)).skills,
-    }),
-  );
+  const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {

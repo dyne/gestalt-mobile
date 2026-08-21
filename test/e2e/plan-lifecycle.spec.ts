@@ -325,6 +325,11 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           .then((plan) => plan?.title),
       )
       .toBe('Supervised browser lifecycle');
+    await expect(navigation.getByRole('button', { name: 'Sessions' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await planTab.click();
     await expect(page.getByRole('heading', { name: 'Supervised browser lifecycle' })).toBeVisible();
     await expect(planTab).toBeVisible();
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');

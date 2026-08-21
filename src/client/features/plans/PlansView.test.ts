@@ -17,6 +17,7 @@ const entry = {
   planName: 'roadmap.org',
   title: 'Roadmap',
   subtitle: 'Local',
+  previewAvailable: true,
   totalSteps: 2,
   doneSteps: 1,
   allDone: false,
@@ -52,7 +53,7 @@ describe('PlansView', () => {
       onopen: vi.fn(),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('No valid Org plans were found below this workspace.')).toBeTruthy();
+    expect(screen.getByText('No Org files were found below this workspace.')).toBeTruthy();
     rerender({
       catalog: { kind: 'error', workspaceId: 'one', error: 'Offline' },
       state: null,
@@ -109,11 +110,35 @@ describe('PlansView', () => {
       onclose: vi.fn(),
     });
 
-    expect(screen.getByText('Org plans validated below the selected workspace.')).toBeTruthy();
+    expect(screen.getByText('Org files below the selected workspace.')).toBeTruthy();
     await fireEvent.click(
       screen.getByRole('button', { name: /Roadmap.*plans\/releases\/roadmap.org/ }),
     );
     expect(onopen).toHaveBeenCalledWith('plans/releases/roadmap.org');
+  });
+
+  it('lists Org files that cannot be projected without offering a broken preview', () => {
+    render(PlansView, {
+      catalog: {
+        kind: 'ready',
+        workspaceId: 'one',
+        entries: [
+          {
+            planName: 'notes/free-form.org',
+            title: 'Free-form notes',
+            previewAvailable: false,
+          },
+        ],
+      },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
+
+    expect(screen.getByText('Free-form notes')).toBeTruthy();
+    expect(screen.getByText('notes/free-form.org')).toBeTruthy();
+    expect(screen.getByText('Preview unavailable')).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('preserves closing and error plan states for the plan viewer', () => {
