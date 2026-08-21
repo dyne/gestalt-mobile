@@ -75,18 +75,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {:else if catalog.kind === 'error'}
       <p>{catalog.error}</p>
     {:else if catalog.entries.length === 0}
-      <p>No valid Org plans were found below this workspace.</p>
+      <p>No Org files were found below this workspace.</p>
     {:else}
-      <p class="scope">Org plans validated below the selected workspace.</p>
+      <p class="scope">Org files below the selected workspace.</p>
       <ul>
         {#each catalog.entries as entry (entry.planName)}
           <li>
-            <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
-              <strong>{entry.title}</strong>
-              <code>{entry.planName}</code>
-              <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
-              {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
-            </button>
+            {#if entry.previewAvailable !== false}
+              <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
+                <strong>{entry.title}</strong>
+                <code>{entry.planName}</code>
+                <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
+                {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
+              </button>
+            {:else}
+              <div class="entry">
+                <strong>{entry.title}</strong>
+                <code>{entry.planName}</code>
+                <span>Preview unavailable</span>
+              </div>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -112,7 +120,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0;
     list-style: none;
   }
-  button {
+  button,
+  .entry {
     display: grid;
     inline-size: 100%;
     min-block-size: 2.75rem;

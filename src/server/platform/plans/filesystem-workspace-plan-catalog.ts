@@ -14,7 +14,6 @@ import type {
   WorkspacePlanEntry,
   WorkspacePlanReadResult,
 } from '../../features/plans/domain/workspace-plan-catalog.js';
-import type { WorkspaceOrgPlanValidator } from './org-plan-command-validator.js';
 
 const maximumBytes = 1_048_576;
 
@@ -23,14 +22,18 @@ type Filesystem = Pick<
   'lstat' | 'readdir' | 'readFile' | 'realpath' | 'stat'
 >;
 
+type ReadCandidateResult =
+  | Readonly<{ kind: 'readable'; source: string; canonicalPath: string }>
+  | Readonly<{ kind: 'missing' }>
+  | Readonly<{ kind: 'unavailable' }>;
+
 /**
  * Passive access to every regular `.org` file below a workspace. Symlinks are
- * never followed, and every candidate must pass the installed Org Plan helper
- * before it is projected for the browser.
+ * never followed. Supported supervised plans include a browser preview; other
+ * Org files remain visible in the catalog without one.
  */
 export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSource {
   constructor(
-    private readonly validator: WorkspaceOrgPlanValidator,
     private readonly filesystem: Filesystem = { lstat, readdir, readFile, realpath, stat },
   ) {}
 
@@ -40,9 +43,22 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     const planNames = await this.discover(workspace);
     const entries: WorkspacePlanEntry[] = [];
     for (const planName of planNames) {
-      const result = await this.readFromWorkspace(workspace, planName);
-      if (result.kind !== 'available') continue;
-      entries.push(toEntry(planName, result.plan));
+      const candidate = await this.readCandidate(workspace, planName);
+      if (candidate.kind === 'missing') continue;
+      if (candidate.kind === 'unavailable') {
+        entries.push(toFallbackEntry(planName));
+        continue;
+      }
+      const parsed = parseSupervisedPlan({
+        source: candidate.source,
+        planPath: candidate.canonicalPath,
+        workspacePath: workspace,
+      });
+      entries.push(
+        parsed.kind === 'available'
+          ? toEntry(planName, parsed.plan)
+          : toFallbackEntry(planName, candidate.source),
+      );
     }
     return entries;
   }
@@ -106,6 +122,17 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     workspace: string,
     planName: string,
   ): Promise<WorkspacePlanReadResult> {
+    const candidate = await this.readCandidate(workspace, planName);
+    if (candidate.kind !== 'readable') return candidate;
+    const parsed = parseSupervisedPlan({
+      source: candidate.source,
+      planPath: candidate.canonicalPath,
+      workspacePath: workspace,
+    });
+    return parsed.kind === 'available' ? parsed : { kind: 'unavailable' };
+  }
+
+  private async readCandidate(workspace: string, planName: string): Promise<ReadCandidateResult> {
     if (!isPlanPath(planName)) return { kind: 'missing' };
     const path = resolve(workspace, ...planName.split('/'));
     if (!isWithin(workspace, path)) return { kind: 'missing' };
@@ -120,7 +147,6 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
       )
         return { kind: 'unavailable' };
       const source = await this.filesystem.readFile(canonical, 'utf8');
-      if (!(await this.validator.validate(workspace, canonical))) return { kind: 'unavailable' };
       const after = await this.filesystem.stat(canonical);
       if (
         !after.isFile() ||
@@ -130,8 +156,7 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
         after.mtimeMs !== before.mtimeMs
       )
         return { kind: 'unavailable' };
-      const parsed = parseSupervisedPlan({ source, planPath: canonical, workspacePath: workspace });
-      return parsed.kind === 'available' ? parsed : { kind: 'unavailable' };
+      return { kind: 'readable', source, canonicalPath: canonical };
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
         ? { kind: 'missing' }
@@ -174,8 +199,23 @@ function toEntry(planName: string, plan: SupervisedPlan): WorkspacePlanEntry {
     ...(plan.subtitle === undefined ? {} : { subtitle: plan.subtitle }),
     ...(plan.date === undefined ? {} : { date: plan.date }),
     ...(plan.keywords === undefined ? {} : { keywords: plan.keywords }),
+    previewAvailable: true,
     totalSteps: plan.totalSteps,
     doneSteps: plan.doneSteps,
     allDone: plan.allDone,
+  };
+}
+
+function toFallbackEntry(planName: string, source?: string): WorkspacePlanEntry {
+  const declaredTitle = source
+    ?.replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => /^#\+TITLE:(?:[ \t](.*))?$/i.exec(line)?.[1]?.trim())
+    .find((title) => title);
+  const filename = planName.split('/').at(-1) ?? planName;
+  return {
+    planName,
+    title: declaredTitle ?? filename.slice(0, -'.org'.length),
+    previewAvailable: false,
   };
 }

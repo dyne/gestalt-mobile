@@ -6,7 +6,7 @@
 
 import type { SupervisedPlan } from './supervised-plan.js';
 
-/** A workspace-relative summary of one helper-validated Org plan. */
+/** A workspace-relative Org file, with a preview when it uses the supervised-plan dialect. */
 export type WorkspacePlanEntry = Readonly<{
   /** Normalized path below the workspace; never an absolute filesystem path. */
   planName: string;
@@ -14,9 +14,10 @@ export type WorkspacePlanEntry = Readonly<{
   subtitle?: string;
   date?: string;
   keywords?: string;
-  totalSteps: number;
-  doneSteps: number;
-  allDone: boolean;
+  previewAvailable: boolean;
+  totalSteps?: number;
+  doneSteps?: number;
+  allDone?: boolean;
 }>;
 
 export type WorkspacePlanReadResult =

@@ -32,6 +32,7 @@ describe('workspace plan catalog routes', () => {
           {
             planName: 'plans/roadmap space.org',
             title: 'Roadmap',
+            previewAvailable: true,
             totalSteps: 1,
             doneSteps: 0,
             allDone: false,

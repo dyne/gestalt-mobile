@@ -18,9 +18,10 @@ export type WorkspacePlanEntry = Readonly<{
   subtitle?: string;
   date?: string;
   keywords?: string;
-  totalSteps: number;
-  doneSteps: number;
-  allDone: boolean;
+  previewAvailable: boolean;
+  totalSteps?: number;
+  doneSteps?: number;
+  allDone?: boolean;
 }>;
 
 export type RelaySession = {
