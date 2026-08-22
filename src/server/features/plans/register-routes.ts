@@ -12,6 +12,7 @@ import { registerGetPlanMeasurement } from './get-measurement/endpoint.js';
 import { registerGetPlan } from './get-plan/endpoint.js';
 import { registerGetWorkspacePlan } from './get-workspace-plan/endpoint.js';
 import { registerListWorkspacePlans } from './list-workspace-plans/endpoint.js';
+import { registerOpenPlan } from './open-plan/endpoint.js';
 
 export function registerPlanRoutes(
   app: FastifyInstance,
@@ -20,6 +21,7 @@ export function registerPlanRoutes(
   if (deps.planRoutes) {
     registerGetPlan(app, deps.planRoutes);
     registerClosePlan(app, deps.planRoutes);
+    registerOpenPlan(app, deps.planRoutes);
   }
   if (deps.workspacePlanRoutes) {
     registerListWorkspacePlans(app, deps.workspacePlanRoutes);
