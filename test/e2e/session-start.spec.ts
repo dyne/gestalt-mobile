@@ -98,6 +98,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await page.getByText('Agents (1)').click();
   await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
   await expect(page.getByLabel('Agent activity')).toContainText('activity unavailable');
+  await page.getByText('Agents (1)').click();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(
