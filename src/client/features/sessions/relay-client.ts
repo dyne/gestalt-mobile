@@ -288,6 +288,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}`,
         signal,
       ),
+    openSessionPlan: (sessionId: string, planName: string) =>
+      put<SupervisedPlan | WorkspaceOrgPreview>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/plan`,
+        { planName },
+      ),
     getGitSummary: (workspaceId: string, signal?: AbortSignal) =>
       get<RelayGitSummary>(`/api/git/repositories/${encodeURIComponent(workspaceId)}`, signal),
     cloneGitRepository: (workspaceId: string, address: string) =>

@@ -56,6 +56,7 @@ import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
+import type { PlanStatusUpdate } from './features/plans/application/ports.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
@@ -419,6 +420,34 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
+  const acceptPlanUpdate = (sessionId: string, update: PlanStatusUpdate): void => {
+    if (closing) return;
+    supervisedPlans.accept(sessionId, update);
+    planMeasurementRefresh?.accept(sessionId, update);
+    if (update.kind === 'updated') {
+      void runtime?.syncThreadPlanName(sessionId, update.plan);
+      const occurredAt = new Date().toISOString();
+      const session = sessions.find(sessionId);
+      if (session) {
+        const updated = {
+          ...session,
+          lastOrgPlan: { filename: basename(update.planPath), title: update.plan.title },
+          updatedAt: occurredAt,
+        };
+        sessions.save(updated);
+        events.publish(journal.append(sessionId, 'session.updated', updated, occurredAt));
+      }
+      events.publish(
+        journal.append(
+          sessionId,
+          'plan.updated',
+          { plan: update.plan, reason: update.reason },
+          occurredAt,
+        ),
+      );
+    }
+    autopilot.planUpdated(sessionId);
+  };
   runtime = options.startAppServers
     ? new CodexSessionRuntime(
         options.launchAppServer ?? launchCodexAppServer,
@@ -515,34 +544,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         resolveSkills,
         planStatusSource,
-        (sessionId, update) => {
-          if (closing) return;
-          supervisedPlans.accept(sessionId, update);
-          planMeasurementRefresh?.accept(sessionId, update);
-          if (update.kind === 'updated') {
-            void runtime?.syncThreadPlanName(sessionId, update.plan);
-            const occurredAt = new Date().toISOString();
-            const session = sessions.find(sessionId);
-            if (session) {
-              const updated = {
-                ...session,
-                lastOrgPlan: { filename: basename(update.planPath), title: update.plan.title },
-                updatedAt: occurredAt,
-              };
-              sessions.save(updated);
-              events.publish(journal.append(sessionId, 'session.updated', updated, occurredAt));
-            }
-            events.publish(
-              journal.append(
-                sessionId,
-                'plan.updated',
-                { plan: update.plan, reason: update.reason },
-                occurredAt,
-              ),
-            );
-          }
-          autopilot.planUpdated(sessionId);
-        },
+        acceptPlanUpdate,
         options.planMeasurementBaseUrl,
         30_000,
         64,
@@ -827,6 +829,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const refreshed = await planStatusSource.refresh(id);
           if (refreshed?.kind === 'updated') return refreshed.plan;
           return refreshed ? null : supervisedPlans.find(id);
+        },
+        open: async (id, planName) => {
+          const session = sessions.find(id);
+          if (!session) return { kind: 'missing' };
+          const result = await workspacePlanCatalog.read(session.workspacePath, planName);
+          if (result.kind === 'available') {
+            const planPath = resolve(session.workspacePath, ...planName.split('/'));
+            acceptPlanUpdate(id, {
+              kind: 'updated',
+              plan: result.plan,
+              identity: createHash('sha256').update(planPath).digest('hex'),
+              planPath,
+              reason: 'supervision-start',
+            });
+          }
+          return result;
         },
         removeStatus: (id) =>
           planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),

@@ -134,6 +134,10 @@ export type AppDependencies = {
     exists(id: string): boolean;
     find(id: string): SupervisedPlan | null;
     refresh(id: string): Promise<SupervisedPlan | null>;
+    open(
+      id: string,
+      planName: string,
+    ): Promise<import('./features/plans/domain/workspace-plan-catalog.js').WorkspacePlanReadResult>;
     removeStatus(id: string): Promise<void>;
     clear(id: string): void;
     closed(id: string): void;

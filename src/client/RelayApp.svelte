@@ -750,8 +750,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const request = new AbortController();
     passivePlanRequest = request;
     const generation = ++passivePlanGeneration;
-    void relay
-      .getWorkspacePlan(workspaceId, planName, request.signal)
+    const opened = sessionId
+      ? relay.openSessionPlan(sessionId, planName)
+      : relay.getWorkspacePlan(workspaceId, planName, request.signal);
+    void opened
       .then((plan) => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
         passivePlan = plan;

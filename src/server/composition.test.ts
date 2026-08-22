@@ -364,18 +364,14 @@ describe('production composition', () => {
 - Done when :: The plan remains incomplete.
 `,
     );
-    await writeFile(
-      planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
-      JSON.stringify({
-        schemaVersion: 1,
-        planPath,
-        reason: 'supervision-start',
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-    await expect
-      .poll(async () => (await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode)
-      .toBe(200);
+    const opened = await app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${sessionId}/plan`,
+      payload: { planName: 'autopilot.org' },
+    });
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ title: 'Autopilot fixture', allDone: false });
+    expect((await app.inject(`/api/sessions/${sessionId}/plan`)).statusCode).toBe(200);
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
@@ -1653,6 +1649,7 @@ describe('production composition', () => {
       ],
       ['POST', '/api/sessions/:id/model', '/api/sessions/session-1/model', 'protected'],
       ['PUT', '/api/sessions/:id/autopilot', '/api/sessions/session-1/autopilot', 'protected'],
+      ['PUT', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['GET', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['HEAD', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
       ['DELETE', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
