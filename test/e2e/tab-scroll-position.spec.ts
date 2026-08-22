@@ -91,7 +91,7 @@ test('opens Chat at the bottom and every other tab at the top', async ({ page })
   const navigation = page.getByRole('navigation', { name: 'Primary' });
   const chat = navigation.getByRole('button', { name: 'Chat' });
   await chat.click();
-  await expect(chat).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeFocused();
   const tailGutter = await page.evaluate(() =>
     Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
   );

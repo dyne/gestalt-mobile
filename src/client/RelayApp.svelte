@@ -405,6 +405,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     tab = 'chat';
     scrollTabIntoInitialPosition('chat');
     scheduleTail('initial');
+    focusChatPrompt();
   }
 
   function setTheme(value: ThemeId): void {
@@ -631,7 +632,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (tab === 'chat' && sessionId) chatController.refresh();
   }
 
-  function selectTab(next: Tab, focusChatPrompt = false): void {
+  function selectTab(next: Tab): void {
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
     if (tab === 'chat' && next !== 'chat') {
@@ -644,7 +645,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       reconcileVisibleHistory();
       followTail.reset();
       scheduleTail('initial');
-      if (changedTab && focusChatPrompt) focusChatPromptOnDesktop();
+      if (changedTab) focusChatPrompt();
     }
     if (next === 'git' && gitWorkspaceId) void gitController.refresh();
     if (next === 'plan') {
@@ -836,10 +837,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
   }
 
-  function focusChatPromptOnDesktop(): void {
-    if (!window.matchMedia('(min-width: 48rem)').matches) return;
+  function focusChatPrompt(): void {
     void tick().then(() => {
-      if (tab === 'chat') document.getElementById('message')?.focus();
+      if (tab === 'chat') document.getElementById('message')?.focus({ preventScroll: true });
     });
   }
 
