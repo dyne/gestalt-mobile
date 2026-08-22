@@ -104,6 +104,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <style>
   .session-path {
+    flex: 1 1 0;
     min-inline-size: 0;
     margin: 0;
     overflow: hidden;
@@ -118,6 +119,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   @media (max-width: 34rem) {
+    .session-path {
+      font-size: max(0.625rem, 12px);
+    }
     .session-model {
       display: none;
     }

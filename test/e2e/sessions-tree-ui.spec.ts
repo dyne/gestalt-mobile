@@ -178,11 +178,15 @@ async function expectUsableLayout(page: Page): Promise<void> {
         top: box.top,
         bottom: box.bottom,
         width: box.width,
+        contentFits: button.scrollWidth <= button.clientWidth,
       };
     });
     return {
       buttons,
       withinViewport: buttons.every(({ left, right }) => left >= 0 && right <= viewportWidth),
+      oneRow:
+        Math.max(...buttons.map(({ top }) => top)) - Math.min(...buttons.map(({ top }) => top)) <=
+        1,
       nonOverlapping: buttons.every((button, index) =>
         buttons.every(
           (other, otherIndex) =>
@@ -196,12 +200,53 @@ async function expectUsableLayout(page: Page): Promise<void> {
     };
   });
   expect(navigationLayout.withinViewport, JSON.stringify(navigationLayout.buttons)).toBe(true);
+  expect(navigationLayout.oneRow, JSON.stringify(navigationLayout.buttons)).toBe(true);
+  expect(
+    navigationLayout.buttons.every(({ contentFits }) => contentFits),
+    JSON.stringify(navigationLayout.buttons),
+  ).toBe(true);
   expect(navigationLayout.nonOverlapping, JSON.stringify(navigationLayout.buttons)).toBe(true);
   expect(navigationLayout.buttons).toHaveLength(4);
   expect(
     Math.max(...navigationLayout.buttons.map(({ width }) => width)) -
       Math.min(...navigationLayout.buttons.map(({ width }) => width)),
   ).toBeLessThanOrEqual(1);
+
+  const appChrome = await page.evaluate(() => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' });
+    const header = document.querySelector<HTMLElement>('.app-header')!;
+    const brand = header.querySelector<HTMLElement>('.brand')!;
+    const actions = header.querySelector<HTMLElement>('.header-actions')!;
+    const navigation = document.querySelector<HTMLElement>('.bottom-navigation')!;
+    const headerBox = header.getBoundingClientRect();
+    const brandBox = brand.getBoundingClientRect();
+    const actionsBox = actions.getBoundingClientRect();
+    const navigationBox = navigation.getBoundingClientRect();
+    const headerStyle = getComputedStyle(header);
+    const navigationStyle = getComputedStyle(navigation);
+    return {
+      headerPosition: headerStyle.position,
+      headerTop: headerBox.top,
+      headerOneRow:
+        Math.abs(brandBox.top + brandBox.height / 2 - (actionsBox.top + actionsBox.height / 2)) <=
+        1,
+      headerBackdrop: headerStyle.backdropFilter,
+      headerBackground: headerStyle.backgroundColor,
+      navigationBackdrop: navigationStyle.backdropFilter,
+      navigationBackground: navigationStyle.backgroundColor,
+      navigationBottom: navigationBox.bottom,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(appChrome.headerPosition).toBe('sticky');
+  expect(appChrome.headerTop).toBeGreaterThanOrEqual(-0.5);
+  expect(appChrome.headerTop).toBeLessThanOrEqual(0.5);
+  expect(appChrome.headerOneRow, JSON.stringify(appChrome)).toBe(true);
+  expect(appChrome.headerBackdrop).toContain('blur');
+  expect(appChrome.navigationBackdrop).toContain('blur');
+  expect(appChrome.headerBackground).toMatch(/\/(?:\s*0?\.\d+)|rgba/);
+  expect(appChrome.navigationBackground).toMatch(/\/(?:\s*0?\.\d+)|rgba/);
+  expect(appChrome.navigationBottom).toBe(appChrome.viewportHeight);
 
   const order = await page.evaluate(() => {
     const tree = document.querySelector('[role="tree"]');

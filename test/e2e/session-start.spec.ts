@@ -652,6 +652,83 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
   );
 });
 
+test('keeps active-session glass chrome on one row at 320px with 200% text', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  const session = {
+    id: 'session-1',
+    state: 'ready',
+    workspaceId: 'workspace-1',
+    workspacePath: '/projects/a-very-long-active-workspace-name',
+    model: 'gpt-5.6-terra',
+    profile: 'work',
+    activeTurnId: null,
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree(),
+        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+        sessions: [session],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        chatSnapshot({
+          items: Array.from({ length: 20 }, (_, index) => ({
+            id: `message-${index}`,
+            kind: index % 2 === 0 ? 'user' : 'agent',
+            text: `Scrollable message ${index}`,
+            occurredAt: index,
+          })),
+        }),
+      ),
+    }),
+  );
+
+  await page.goto('/');
+  await page.locator('html').evaluate((root) => (root.style.fontSize = '200%'));
+  await openChat(page);
+  await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight }));
+
+  const layout = await page.evaluate(() => {
+    const header = document.querySelector<HTMLElement>('.app-header')!;
+    const headerChildren = [...header.children]
+      .filter((element) => !element.hasAttribute('popover'))
+      .map((element) => element.getBoundingClientRect());
+    const navigation = document.querySelector<HTMLElement>('.bottom-navigation')!;
+    const navigationButtons = [...navigation.querySelectorAll('button')].map((button) =>
+      button.getBoundingClientRect(),
+    );
+    const centers = headerChildren.map(({ top, height }) => top + height / 2);
+    const viewportWidth = document.documentElement.clientWidth;
+    return {
+      headerFits: headerChildren.every(
+        ({ left, right }) => left >= -0.5 && right <= viewportWidth + 0.5,
+      ),
+      navigationFits: navigationButtons.every(
+        ({ left, right }) => left >= -0.5 && right <= viewportWidth + 0.5,
+      ),
+      headerTop: header.getBoundingClientRect().top,
+      headerOneRow: Math.max(...centers) - Math.min(...centers) <= 1,
+      navigationOneRow:
+        Math.max(...navigationButtons.map(({ top }) => top)) -
+          Math.min(...navigationButtons.map(({ top }) => top)) <=
+        1,
+    };
+  });
+  expect(layout).toEqual({
+    headerFits: true,
+    navigationFits: true,
+    headerTop: 0,
+    headerOneRow: true,
+    navigationOneRow: true,
+  });
+});
+
 test('keeps the session controls within a 320px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await page.route('**/api/bootstrap', (route) =>
