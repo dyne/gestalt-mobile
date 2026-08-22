@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import PlanView from './PlanView.svelte';
   import type { PlanState } from './plan-controller.js';
-  import type { WorkspacePlanEntry } from '../sessions/relay-client.js';
+  import type { WorkspaceOrgPreview, WorkspacePlanEntry } from '../sessions/relay-client.js';
 
   export type PlansCatalogState =
     | Readonly<{ kind: 'no-workspace' }>
@@ -17,7 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     catalog: PlansCatalogState;
-    state: PlanState | null;
+    state: PlanState | WorkspaceOrgPreview | null;
     onopen: (planName: string) => void;
     onclose: () => void;
   };
@@ -63,7 +63,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 </script>
 
-{#if planState}
+{#if planState?.kind === 'org-source'}
+  <section class="org-preview" aria-labelledby="org-preview-title">
+    <div class="preview-header">
+      <div>
+        <h2 id="org-preview-title">{planState.title}</h2>
+        <code>{planState.planName}</code>
+      </div>
+      <button type="button" onclick={close}>Close plan and return to list</button>
+    </div>
+    <p>Org source preview</p>
+    <textarea readonly aria-label="Org source" value={planState.source}></textarea>
+  </section>
+{:else if planState}
   <PlanView state={planState} onclose={close} />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
@@ -81,20 +93,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ul>
         {#each catalog.entries as entry (entry.planName)}
           <li>
-            {#if entry.previewAvailable !== false}
-              <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
-                <strong>{entry.title}</strong>
-                <code>{entry.planName}</code>
+            <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
+              <strong>{entry.title}</strong>
+              <code>{entry.planName}</code>
+              {#if entry.previewAvailable !== false}
                 <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
                 {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
-              </button>
-            {:else}
-              <div class="entry">
-                <strong>{entry.title}</strong>
-                <code>{entry.planName}</code>
-                <span>Preview unavailable</span>
-              </div>
-            {/if}
+              {:else}
+                <span>Org source preview</span>
+              {/if}
+            </button>
           </li>
         {/each}
       </ul>
@@ -120,8 +128,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0;
     list-style: none;
   }
-  button,
-  .entry {
+  .plans button {
     display: grid;
     inline-size: 100%;
     min-block-size: 2.75rem;
@@ -135,5 +142,38 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   code {
     font: inherit;
+  }
+  .org-preview {
+    display: grid;
+    gap: 0.75rem;
+    min-inline-size: 0;
+  }
+  .preview-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .preview-header h2,
+  .org-preview p {
+    margin: 0;
+  }
+  textarea {
+    box-sizing: border-box;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    max-block-size: calc(
+      100dvh - var(--sticky-header-clearance) - var(--bottom-navigation-clearance)
+    );
+    min-block-size: 16rem;
+    margin: 0;
+    padding: 0.75rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: 0.5rem;
   }
 </style>

@@ -76,11 +76,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type RelaySession,
     type RelaySkillProfile,
     type StartSessionSettings,
+    type WorkspaceOrgPreview,
     type WorkspacePlanEntry,
   } from './features/sessions/relay-client.js';
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
+  import type { SupervisedPlan } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
   import { createSessionCache } from './features/sessions/session-cache.js';
@@ -147,7 +149,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let message = $state('');
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
   let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
-  let passivePlan = $state.raw<import('./features/plans/contracts.js').SupervisedPlan | null>(null);
+  let passivePlan = $state.raw<SupervisedPlan | WorkspaceOrgPreview | null>(null);
   let passivePlanName = $state<string | null>(null);
   let hideLivePlan = $state(false);
   let plansCatalogRequest: AbortController | null = null;
@@ -159,7 +161,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) ||
       null,
   );
-  let visiblePlanState = $derived.by<PlanState | null>(() => {
+  function isWorkspaceOrgPreview(
+    value: SupervisedPlan | WorkspaceOrgPreview,
+  ): value is WorkspaceOrgPreview {
+    return 'kind' in value && value.kind === 'org-source';
+  }
+  let visiblePlanState = $derived.by<PlanState | WorkspaceOrgPreview | null>(() => {
+    if (passivePlan && isWorkspaceOrgPreview(passivePlan)) return passivePlan;
     if (passivePlan) return { kind: 'ready', sessionId: 'catalog', plan: passivePlan };
     if (hideLivePlan) return null;
     if (planState.kind === 'ready' || planState.kind === 'closing') return planState;
@@ -274,6 +282,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const activityEvidence = new URLSearchParams(location.search).get('activity-evidence');
   // This tracks already-announced server request IDs; it does not drive rendering.
   const attentionToasts = createAttentionToastDedupe(window.sessionStorage);
+  const announcedAutopilotErrors = new Set<string>();
 
   $effect(() => {
     for (const [id, attention] of autopilotState.attention) {
@@ -285,6 +294,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           message: 'Autopilot needs your attention.',
         });
       }
+    }
+  });
+
+  $effect(() => {
+    const active = new Set<string>();
+    for (const [id, message] of autopilotState.errors) {
+      const key = `${id}:${message}`;
+      active.add(key);
+      if (announcedAutopilotErrors.has(key)) continue;
+      announcedAutopilotErrors.add(key);
+      toastQueue.enqueue({ kind: 'error', message });
+    }
+    for (const key of announcedAutopilotErrors) {
+      if (!active.has(key)) announcedAutopilotErrors.delete(key);
     }
   });
 
@@ -706,6 +729,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       })
       .catch((error: unknown) => {
         if (generation !== plansCatalogGeneration || request.signal.aborted) return;
+        if (!visiblePlanState)
+          toastQueue.enqueue({
+            kind: 'error',
+            code: 'WORKSPACE_PLANS_READ_FAILED',
+            message: 'Workspace Org files could not be listed. Try opening the Plan tab again.',
+          });
         plansCatalog = {
           kind: 'error',
           workspaceId,
@@ -729,13 +758,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         passivePlanName = planName;
         hideLivePlan = false;
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
-        plansCatalog = {
+        toastQueue.enqueue({
           kind: 'error',
-          workspaceId,
-          error: error instanceof Error ? error.message : 'Could not open this plan.',
-        };
+          code: `WORKSPACE_PLAN_OPEN_${planName}`,
+          message: 'This Org file could not be opened. Check that it is readable and try again.',
+        });
       });
   }
 
@@ -1110,7 +1139,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 autopilot={autopilotState.snapshots.get(sessionId) ?? null}
                 controlId={`chat-autopilot-${sessionId}`}
                 pending={autopilotState.pending.has(sessionId)}
-                error={autopilotState.errors.get(sessionId) ?? null}
                 ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
               />
               <AgentActivityIndicators
@@ -1186,7 +1214,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {activitySnapshots}
             autopilotSnapshots={autopilotState.snapshots}
             autopilotPending={autopilotState.pending}
-            autopilotErrors={autopilotState.errors}
             autopilotAttention={autopilotState.attention}
             {workspaceTree}
             workspaceId={sessionWorkspaceId}

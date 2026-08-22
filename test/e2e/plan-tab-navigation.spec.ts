@@ -270,11 +270,27 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
           doneSteps: workspacePlan.doneSteps,
           allDone: workspacePlan.allDone,
         },
+        {
+          planName: 'notes/free-form.org',
+          title: 'Free-form notes',
+          previewAvailable: false,
+        },
       ]),
     }),
   );
   await page.route('**/api/workspaces/workspace-1/plans/plans%2Froadmap.org', (route) =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify(workspacePlan) }),
+  );
+  await page.route('**/api/workspaces/workspace-1/plans/notes%2Ffree-form.org', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kind: 'org-source',
+        planName: 'notes/free-form.org',
+        title: 'Free-form notes',
+        source: '#+TITLE: Free-form notes\n\n* Notes',
+      }),
+    }),
   );
   await page.routeWebSocket(
     /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
@@ -304,6 +320,14 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
 
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect(roadmap).toBeFocused();
+  const notes = page.getByRole('button', {
+    name: /Free-form notes.*notes\/free-form.org.*Org source preview/,
+  });
+  await notes.click();
+  await expect(page.getByRole('heading', { name: 'Free-form notes' })).toBeVisible();
+  await expect(page.getByLabel('Org source')).toHaveValue(/#\+TITLE: Free-form notes/);
+  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  await expect(notes).toBeFocused();
   emitPlanEvent!({
     sequence: 2,
     type: 'plan.updated',

@@ -19,6 +19,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     blocked: 'blocked',
     disconnected: 'disconnected',
   };
+  type MonitorAgent = Readonly<{
+    key: string;
+    name: string;
+    role?: string;
+    state: AgentActivityState;
+    lastActivityAt: string;
+  }>;
+  const stateOrder: Record<AgentActivityState, number> = {
+    working: 0,
+    awaitingAgent: 1,
+    awaitingHuman: 1,
+    blocked: 1,
+    idle: 2,
+    disconnected: 3,
+  };
   let announcement = $state('');
   let critical = $state('');
   let previousActivity: AgentActivitySnapshot | null = null;
@@ -32,6 +47,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       : ['blocked', 'awaitingHuman', 'disconnected'].includes(activity.root.state)
         ? activity.root.state
         : activity.aggregateSubagents,
+  );
+  let orderedAgents = $derived.by<readonly MonitorAgent[]>(() => {
+    if (!activity) return [];
+    return [
+      {
+        key: 'root',
+        name: 'Root agent',
+        role: 'supervisor',
+        state: activity.root.state,
+        lastActivityAt: activity.root.lastActivityAt,
+      },
+      ...activity.subagents.map((child) => ({
+        key: `child:${child.id}`,
+        name: child.nickname ?? child.id,
+        ...(child.role ? { role: child.role } : {}),
+        state: child.state,
+        lastActivityAt: child.lastActivityAt,
+      })),
+    ].sort(
+      (left, right) =>
+        stateOrder[left.state] - stateOrder[right.state] || left.name.localeCompare(right.name),
+    );
+  });
+  let orderedSubagents = $derived(
+    activity
+      ? [...activity.subagents].sort(
+          (left, right) =>
+            stateOrder[left.state] - stateOrder[right.state] ||
+            (left.nickname ?? left.id).localeCompare(right.nickname ?? right.id),
+        )
+      : [],
   );
   onMount(() => {
     const timer = window.setInterval(() => (now = Date.now()), 60_000);
@@ -68,21 +114,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       >
       <ul>
         {#if activity}
-          <li>
-            <span><strong>Root agent</strong> · supervisor</span>
-            <time datetime={activity.root.lastActivityAt}
-              >{compactStatus(activity.root.state, activity.root.lastActivityAt)}</time
-            >
-          </li>
-          {#each activity.subagents as child (child.id)}
+          {#each orderedAgents as agent (agent.key)}
             <li>
-              <span
-                ><strong>{child.nickname ?? child.id}</strong>{child.role
-                  ? ` · ${child.role}`
-                  : ''}</span
-              >
-              <time datetime={child.lastActivityAt}
-                >{compactStatus(child.state, child.lastActivityAt)}</time
+              <span><strong>{agent.name}</strong>{agent.role ? ` · ${agent.role}` : ''}</span>
+              <time datetime={agent.lastActivityAt}
+                >{compactStatus(agent.state, agent.lastActivityAt)}</time
               >
             </li>
           {/each}
@@ -105,7 +141,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             .subagents.length})</summary
         >
         <ul>
-          {#each activity.subagents as child (child.id)}
+          {#each orderedSubagents as child (child.id)}
             <li>
               <strong>{child.nickname ?? child.id}</strong>{child.role ? ` · ${child.role}` : ''} —
               {labels[child.state]} <small>{child.lastActivityAt}</small>

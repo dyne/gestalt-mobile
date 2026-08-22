@@ -86,4 +86,29 @@ describe('workspace plan catalog routes', () => {
     });
     await invalid.close();
   });
+
+  it('returns a raw source preview for an Org file outside the supervised-plan dialect', async () => {
+    const app = fastify();
+    registerGetWorkspacePlan(app, {
+      workspaces: { resolve: async () => ({ id: 'one', name: 'one', realPath: '/workspace' }) },
+      plans: {
+        list: async () => [],
+        read: async () => ({
+          kind: 'source',
+          title: 'Meeting notes',
+          source: '#+TITLE: Meeting notes\n\n* Notes',
+        }),
+      },
+    });
+
+    const response = await app.inject('/api/workspaces/one/plans/notes%2Fmeeting.org');
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      kind: 'org-source',
+      planName: 'notes/meeting.org',
+      title: 'Meeting notes',
+      source: '#+TITLE: Meeting notes\n\n* Notes',
+    });
+    await app.close();
+  });
 });

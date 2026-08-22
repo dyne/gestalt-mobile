@@ -8,6 +8,8 @@ Organize server use cases under `src/server/features/<context>/<use-case>` as ve
 
 Domain and application code must not import Fastify, SQLite, filesystem, child-process, Svelte, or concrete Git implementations. Put those integrations in `src/server/platform`; wire adapters to slices only in `src/server/composition.ts`. Keep client behavior organized under `src/client/features`.
 
+Route every user-facing operation failure through the shared notification toast pipeline. Inline text may describe durable state or recovery guidance, but must not be the sole error channel and must not introduce a feature-local red error treatment.
+
 ## Codex compatibility
 
 The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Runtime startup reports incompatible Codex CLI versions.

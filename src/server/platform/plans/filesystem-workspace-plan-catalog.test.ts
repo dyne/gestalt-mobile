@@ -113,7 +113,7 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     await expect(catalog.list(join(root, 'missing'))).resolves.toEqual([]);
   });
 
-  it('lists malformed Org files while exposing a typed direct-read failure', async () => {
+  it('lists malformed Org files and returns their source preview', async () => {
     const root = await workspace();
     await writeFile(join(root, 'bad.org'), 'bad');
     const catalog = new FilesystemWorkspacePlanCatalog();
@@ -121,7 +121,11 @@ describe('FilesystemWorkspacePlanCatalog', () => {
     await expect(catalog.list(root)).resolves.toEqual([
       { planName: 'bad.org', title: 'bad', previewAvailable: false },
     ]);
-    await expect(catalog.read(root, 'bad.org')).resolves.toEqual({ kind: 'unavailable' });
+    await expect(catalog.read(root, 'bad.org')).resolves.toEqual({
+      kind: 'source',
+      title: 'bad',
+      source: 'bad',
+    });
     await expect(catalog.read(root, 'missing.org')).resolves.toEqual({ kind: 'missing' });
   });
 

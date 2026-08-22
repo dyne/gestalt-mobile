@@ -24,6 +24,13 @@ export type WorkspacePlanEntry = Readonly<{
   allDone?: boolean;
 }>;
 
+export type WorkspaceOrgPreview = Readonly<{
+  kind: 'org-source';
+  planName: string;
+  title: string;
+  source: string;
+}>;
+
 export type RelaySession = {
   id: string;
   state: string;
@@ -277,7 +284,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     listWorkspacePlans: (workspaceId: string, signal?: AbortSignal) =>
       get<WorkspacePlanEntry[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/plans`, signal),
     getWorkspacePlan: (workspaceId: string, planName: string, signal?: AbortSignal) =>
-      get<SupervisedPlan>(
+      get<SupervisedPlan | WorkspaceOrgPreview>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}`,
         signal,
       ),
