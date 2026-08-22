@@ -96,6 +96,12 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(
+    'Inspect this workspace\n',
+  );
+  await expect(page.getByText('Inspect this workspace')).not.toBeVisible();
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
   await expect(page.getByText('Inspect this workspace')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
 });

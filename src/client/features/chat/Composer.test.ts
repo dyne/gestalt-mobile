@@ -85,6 +85,10 @@ describe('Composer', () => {
     expect(screen.getByLabelText('Chat commands').textContent).toContain('/model');
 
     await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: false });
+    expect(onchange).toHaveBeenLastCalledWith('/');
+    expect(onsend).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(prompt, { key: 'Tab' });
     expect(onchange).toHaveBeenLastCalledWith('/model ');
     expect(onsend).not.toHaveBeenCalled();
   });
@@ -117,8 +121,26 @@ describe('Composer', () => {
       oninterrupt: () => {},
     });
 
-    await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: false });
+    await fireEvent.keyDown(prompt, { key: 'Tab' });
     expect(onscrollbottom).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends only from the side button and leaves Enter available for editing', async () => {
+    const onsend = vi.fn();
+    render(Composer, {
+      status: 'Ready.',
+      message: 'first line',
+      activeTurnId: null,
+      starting: false,
+      onchange: () => {},
+      onsend,
+      oninterrupt: () => {},
+    });
+
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Prompt' }), { key: 'Enter' });
+    expect(onsend).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    expect(onsend).toHaveBeenCalledOnce();
   });
 
   it('keeps models visible after command completion and sorts newest first', async () => {

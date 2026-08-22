@@ -199,6 +199,7 @@ describe('RelayApp chat controller composition', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Sessions/i }));
     await vi.waitFor(() => expect(screen.getByText('Supervisor: working')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Chat/i }));
-    await vi.waitFor(() => expect(screen.getByText('Supervisor: working')).toBeTruthy());
+    await vi.waitFor(() => expect(screen.getByText('Agents (1)')).toBeTruthy());
+    expect(screen.queryByText('Supervisor: working')).toBeNull();
   });
 });

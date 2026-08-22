@@ -40,7 +40,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
-  import { submitsOnEnter } from './features/chat/keyboard.js';
   import { createChatCache } from './features/chat/chat-cache.js';
   import { ChatController, type ChatViewState } from './features/chat/chat-controller.js';
   import { ChatFollowTail } from './features/chat/chat-follow-tail.js';
@@ -958,13 +957,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return feedback.message;
   }
 
-  function handleComposerKeydown(event: KeyboardEvent): void {
-    if (!submitsOnEnter(event) || chatView?.activeTurnId || chatView?.starting || !message.trim())
-      return;
-    event.preventDefault();
-    void sendMessage();
-  }
-
   function isAbortError(error: unknown): boolean {
     return error instanceof DOMException
       ? error.name === 'AbortError'
@@ -1059,16 +1051,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if tab === 'chat'}
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
-          <AgentActivityIndicators
-            activity={sessionId ? (activitySnapshots.get(sessionId) ?? null) : null}
-          />
-          <AutopilotControl
-            autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
-            controlId={`chat-autopilot-${sessionId ?? 'none'}`}
-            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
-            error={sessionId ? (autopilotState.errors.get(sessionId) ?? null) : null}
-            ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
-          />
           <AutopilotAttention
             attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
             controlId={`chat-attention-${sessionId ?? 'none'}`}
@@ -1122,6 +1104,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onretry={() => void retrySend()}
               oninterrupt={() => void interruptTurn()}
             />
+            <div class="chat-controls" aria-label="Chat controls">
+              <AutopilotControl
+                compact
+                autopilot={autopilotState.snapshots.get(sessionId) ?? null}
+                controlId={`chat-autopilot-${sessionId}`}
+                pending={autopilotState.pending.has(sessionId)}
+                error={autopilotState.errors.get(sessionId) ?? null}
+                ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+              />
+              <AgentActivityIndicators
+                compact
+                activity={activitySnapshots.get(sessionId) ?? null}
+              />
+            </div>
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
           {:else}
             <p>Start a session from the Sessions tab to chat with Codex.</p>
@@ -1243,6 +1239,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .chat-tail {
     block-size: 1px;
     scroll-margin-block-end: var(--bottom-navigation-clearance);
+  }
+
+  .chat-controls {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 0.35rem;
+    min-inline-size: 0;
+    margin-block-start: 0.35rem;
+  }
+
+  .chat-controls > :global(*) {
+    flex: 1 1 0;
+    min-inline-size: 0;
   }
 
   .swipe-surface {

@@ -306,12 +306,26 @@ for (const item of cases) {
         'Autopilot scheduled a continuation',
       );
     }
-    if (item.name === 'root-awaiting-child')
-      await expect(page.getByLabel('Agent activity')).toContainText(
-        'Supervisor: waiting for child',
-      );
+    if (item.name === 'root-awaiting-child') {
+      const prompt = page.getByRole('textbox', { name: 'Prompt' });
+      const autopilot = page.getByRole('button', { name: /^Autopilot:/ });
+      const agents = page.getByText(/^Agents \(/);
+      const [promptBox, autopilotBox, agentsBox] = await Promise.all([
+        prompt.boundingBox(),
+        autopilot.boundingBox(),
+        agents.boundingBox(),
+      ]);
+      expect(promptBox).not.toBeNull();
+      expect(autopilotBox).not.toBeNull();
+      expect(agentsBox).not.toBeNull();
+      expect(autopilotBox!.y).toBeGreaterThanOrEqual(promptBox!.y + promptBox!.height);
+      expect(Math.abs(autopilotBox!.y - agentsBox!.y)).toBeLessThanOrEqual(1);
+      await agents.click();
+      await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
+      await expect(page.getByLabel('Agent activity')).toContainText('waiting for child');
+    }
     const isEnabled = item.state === 'monitoring' || item.state === 'backoff';
-    const control = page.getByRole('button', { name: isEnabled ? 'Pause' : 'Enable' });
+    const control = page.getByRole('button', { name: /^Autopilot:/ });
     await expect(control).toHaveAttribute('aria-pressed', isEnabled ? 'true' : 'false');
     if (item.attention) {
       await expect(
@@ -373,9 +387,7 @@ for (const item of [
       zoom: 200,
     });
     await page.getByRole('button', { name: 'Chat' }).click();
-    const control = page.getByRole('button', {
-      name: item.state === 'backoff' || item.state === 'monitoring' ? 'Pause' : 'Enable',
-    });
+    const control = page.getByRole('button', { name: /^Autopilot:/ });
     await expectFocusedControlClearOfNavigation(page, control);
     await expect(control).toHaveCSS('min-height', '44px');
     if (item.name === 'attention') {
@@ -427,7 +439,7 @@ test('keyboard attention action sends safe payload without disturbing focus', as
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
-  const control = page.getByRole('button', { name: 'Enable' });
+  const control = page.getByRole('button', { name: 'Autopilot: Paused for attention' });
   await control.focus();
   await expect(control).toBeFocused();
   await page.getByLabel('Optional guidance for the resumed work').fill('Continue after repair.');
@@ -462,12 +474,12 @@ test('keyboard toggle is idempotent and preserves focus through a socket update'
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
-  const control = page.getByRole('button', { name: 'Pause' });
+  const control = page.getByRole('button', { name: 'Autopilot: Monitoring' });
   await control.focus();
   await control.press('Enter');
   await expect.poll(() => payloads.length).toBe(1);
   expect(idempotencyKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
-  const updatedControl = page.getByRole('button', { name: 'Enable' });
+  const updatedControl = page.getByRole('button', { name: 'Autopilot: Off' });
   await expect(updatedControl).toBeFocused();
   await expect(updatedControl).toHaveAttribute('aria-pressed', 'false');
   await updatedControl.press('Enter');
@@ -477,7 +489,7 @@ test('keyboard toggle is idempotent and preserves focus through a socket update'
       expect.objectContaining({ enabled: false }),
       expect.objectContaining({ enabled: true }),
     ]);
-  await expect(page.getByRole('button', { name: 'Pause' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeFocused();
 });
 
 test('typed missing-plan conflicts remain safe and actionable after the real toggle endpoint response', async ({
@@ -496,7 +508,7 @@ test('typed missing-plan conflicts remain safe and actionable after the real tog
   );
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
-  await page.getByRole('button', { name: 'Enable' }).press('Enter');
+  await page.getByRole('button', { name: 'Autopilot: Off' }).press('Enter');
   await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText(
     'An incomplete supervised plan is required before Autopilot can start.',
   );
@@ -519,7 +531,7 @@ test('safety-stop recovery uses the Autopilot toggle endpoint, never an attentio
   await page.getByRole('button', { name: 'Chat' }).click();
   await page.getByRole('button', { name: 'Retry Autopilot' }).press('Enter');
   await expect.poll(() => toggles).toEqual([expect.objectContaining({ enabled: true })]);
-  await expect(page.getByRole('button', { name: 'Pause' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeFocused();
 });
 
 test('renders historical resolved attention as audit without resurrecting the alert', async ({
@@ -557,7 +569,7 @@ test('selected Chat receives live autopilot and attention journal events without
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   await expect.poll(() => socket).toBeDefined();
-  const control = page.getByRole('button', { name: 'Enable' });
+  const control = page.getByRole('button', { name: 'Autopilot: Off' });
   await control.focus();
   socket!.send(
     JSON.stringify({
@@ -570,8 +582,11 @@ test('selected Chat receives live autopilot and attention journal events without
       },
     }),
   );
-  await expect(page.getByRole('button', { name: 'Pause' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: 'Pause' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeFocused();
   await expect(page.getByTestId('autopilot-live-status')).toHaveText(
     'Autopilot status: Monitoring. Autopilot is monitoring this supervised plan.',
   );

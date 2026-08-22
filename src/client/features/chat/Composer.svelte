@@ -11,7 +11,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     matchingCommands,
     sortModelsNewestFirst,
   } from './command-completion.js';
-  import { submitsOnEnter } from './keyboard.js';
   type Props = {
     status: string;
     message: string;
@@ -90,25 +89,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         dismissedCommandQuery = currentCommandQuery;
         return;
       }
-      if (event.key === 'Tab' || submitsOnEnter(event)) {
+      if (event.key === 'Tab') {
         event.preventDefault();
         chooseCommand();
         return;
       }
     }
-    if (!submitsOnEnter(event) || activeTurnId || starting || !message.trim()) return;
-    event.preventDefault();
-    onsend();
   }
 </script>
 
-<form
-  aria-busy={starting}
-  onsubmit={(event) => {
-    event.preventDefault();
-    onsend();
-  }}
->
+<form aria-busy={starting}>
   <p role="status" aria-live="polite" aria-atomic="true" aria-label={status}>
     {#if status === 'Ready.'}
       Ready <span class="block-cursor" aria-hidden="true"></span>
@@ -179,9 +169,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       rows="1"
       required></textarea>
     <button
-      type="submit"
+      type="button"
       aria-label="Send prompt"
       disabled={Boolean(activeTurnId) || starting || !message.trim()}
+      onclick={onsend}
     >
       <svg aria-hidden="true" viewBox="0 0 24 24">
         <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
