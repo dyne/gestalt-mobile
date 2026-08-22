@@ -257,17 +257,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <h3 id="session-base-title">Session base</h3>
         <p>Select the folder or repository Codex should use as its working directory.</p>
       </div>
-      <div class="tree-panel">
-        <FilesystemTree
-          roots={workspaceTree}
-          {expandedIds}
-          selectedId={selectedWorkspace?.id ?? null}
-          isSelectable={treeNodePolicies.sessionBase}
-          label="Session base"
-          {onexpandedchange}
-          onselect={(node) => onworkspacechange(node.id)}
-        />
-      </div>
+      <FilesystemTree
+        roots={workspaceTree}
+        {expandedIds}
+        selectedId={selectedWorkspace?.id ?? null}
+        isSelectable={treeNodePolicies.sessionBase}
+        label="Session base"
+        {onexpandedchange}
+        onselect={(node) => onworkspacechange(node.id)}
+      />
     </section>
     <section class="session-settings" aria-label="New session settings">
       <div class="session-setting-labels">
@@ -494,18 +492,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-start: 0.25rem;
   }
 
-  .tree-panel {
-    box-sizing: border-box;
-    min-inline-size: 0;
-    max-block-size: min(22rem, 48vh);
-    padding: 0.35rem;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
-    border: 1px solid var(--theme-border);
-    border-radius: 0.6rem;
-  }
-
   .session-settings {
     display: grid;
     gap: 0.5rem;
@@ -569,10 +555,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   @media (max-width: 28rem) {
-    .tree-panel {
-      padding: 0.2rem;
-    }
-
     .model-control {
       margin-inline-start: 0;
     }

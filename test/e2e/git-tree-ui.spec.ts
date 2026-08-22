@@ -166,6 +166,12 @@ async function expectUsableLayout(page: Page): Promise<void> {
     return {
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       treeOverflow: tree ? tree.scrollWidth - tree.clientWidth : 1,
+      treePanel: tree
+        ? {
+            overflowY: getComputedStyle(tree).overflowY,
+            borderBlockStartWidth: getComputedStyle(tree).borderBlockStartWidth,
+          }
+        : null,
       order:
         gitTree && clone && details
           ? {
@@ -181,6 +187,10 @@ async function expectUsableLayout(page: Page): Promise<void> {
   });
   expect(layout.documentOverflow, JSON.stringify(layout)).toBe(0);
   expect(layout.treeOverflow).toBe(0);
+  expect(layout.treePanel).toEqual({
+    overflowY: 'auto',
+    borderBlockStartWidth: '1px',
+  });
   expect(layout.undersized, JSON.stringify(layout.undersized)).toEqual([]);
   expect(layout.offenders, JSON.stringify(layout.offenders)).toEqual([]);
   expect(layout.order).not.toBeNull();
@@ -259,6 +269,11 @@ for (const viewport of evidenceViewports) {
         await expect(primary).toContainText('Git');
         const pull = page.getByRole('button', { name: 'Pull' });
         await expect(pull).toBeEnabled();
+        expect(
+          await page
+            .getByRole('tree', { name: 'Git repository and clone destination' })
+            .evaluate((tree) => tree.scrollHeight > tree.clientHeight),
+        ).toBe(true);
         await capture(page, 'repository-selected', viewport, fontScale, theme, pull);
 
         const fold = page.getByRole('button', { name: 'Collapse many-repository-siblings' });
