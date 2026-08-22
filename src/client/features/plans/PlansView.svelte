@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import PlanView from './PlanView.svelte';
+  import OrgDocumentView from './OrgDocumentView.svelte';
   import type { PlanState } from './plan-controller.js';
   import type { WorkspaceOrgPreview, WorkspacePlanEntry } from '../sessions/relay-client.js';
 
@@ -64,17 +65,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#if planState?.kind === 'org-source'}
-  <section class="org-preview" aria-labelledby="org-preview-title">
-    <div class="preview-header">
-      <div>
-        <h2 id="org-preview-title">{planState.title}</h2>
-        <code>{planState.planName}</code>
-      </div>
-      <button type="button" onclick={close}>Close plan and return to list</button>
-    </div>
-    <p>Org source preview</p>
-    <textarea readonly aria-label="Org source" value={planState.source}></textarea>
-  </section>
+  <OrgDocumentView preview={planState} onclose={close} />
 {:else if planState}
   <PlanView state={planState} onclose={close} />
 {:else}
@@ -100,7 +91,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
                 {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
               {:else}
-                <span>Org source preview</span>
+                <span>Org document</span>
               {/if}
             </button>
           </li>
@@ -142,38 +133,5 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   code {
     font: inherit;
-  }
-  .org-preview {
-    display: grid;
-    gap: 0.75rem;
-    min-inline-size: 0;
-  }
-  .preview-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-  }
-  .preview-header h2,
-  .org-preview p {
-    margin: 0;
-  }
-  textarea {
-    box-sizing: border-box;
-    inline-size: 100%;
-    max-inline-size: 100%;
-    max-block-size: calc(
-      100dvh - var(--sticky-header-clearance) - var(--bottom-navigation-clearance)
-    );
-    min-block-size: 16rem;
-    margin: 0;
-    padding: 0.75rem;
-    overflow: auto;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--theme-text);
-    background: var(--theme-surface);
-    border: 1px solid var(--theme-border);
-    border-radius: 0.5rem;
   }
 </style>

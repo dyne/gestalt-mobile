@@ -252,9 +252,24 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
     });
   });
   await routeSessionHistory(page, selected.id);
-  await page.route(`**/api/sessions/${selected.id}/plan`, (route) =>
-    route.fulfill({ status: 204 }),
-  );
+  await page.route(`**/api/sessions/${selected.id}/plan`, (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ status: 204 });
+    const planName = (route.request().postDataJSON() as { planName: string }).planName;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        planName === 'plans/roadmap.org'
+          ? workspacePlan
+          : {
+              kind: 'org-source',
+              planName: 'notes/free-form.org',
+              title: 'Free-form notes',
+              source:
+                '#+TITLE: Free-form notes\n#+DATE: 2026-08-22\n\n* WIP [#A] Notes\n- Goal :: Render this document clearly.',
+            },
+      ),
+    });
+  });
   await page.route('**/api/sessions/recent-threads', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
@@ -321,11 +336,13 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect(roadmap).toBeFocused();
   const notes = page.getByRole('button', {
-    name: /Free-form notes.*notes\/free-form.org.*Org source preview/,
+    name: /Free-form notes.*notes\/free-form.org.*Org document/,
   });
   await notes.click();
   await expect(page.getByRole('heading', { name: 'Free-form notes' })).toBeVisible();
-  await expect(page.getByLabel('Org source')).toHaveValue(/#\+TITLE: Free-form notes/);
+  await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+  await expect(page.getByText('Render this document clearly.')).toBeVisible();
+  await expect(page.getByRole('textbox')).toHaveCount(0);
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect(notes).toBeFocused();
   emitPlanEvent!({

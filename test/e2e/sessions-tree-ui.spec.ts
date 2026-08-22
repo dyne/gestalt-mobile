@@ -178,11 +178,17 @@ async function expectUsableLayout(page: Page): Promise<void> {
         top: box.top,
         bottom: box.bottom,
         width: box.width,
+        fontSize: Number.parseFloat(getComputedStyle(button).fontSize),
         contentFits: button.scrollWidth <= button.clientWidth,
       };
     });
     return {
       buttons,
+      inlineInsets: {
+        start: buttons[0]?.left ?? 0,
+        end: viewportWidth - (buttons.at(-1)?.right ?? viewportWidth),
+      },
+      fontSizes: buttons.map(({ fontSize }) => fontSize),
       withinViewport: buttons.every(({ left, right }) => left >= 0 && right <= viewportWidth),
       oneRow:
         Math.max(...buttons.map(({ top }) => top)) - Math.min(...buttons.map(({ top }) => top)) <=
@@ -200,6 +206,9 @@ async function expectUsableLayout(page: Page): Promise<void> {
     };
   });
   expect(navigationLayout.withinViewport, JSON.stringify(navigationLayout.buttons)).toBe(true);
+  expect(navigationLayout.inlineInsets.start).toBeGreaterThanOrEqual(6);
+  expect(navigationLayout.inlineInsets.end).toBeGreaterThanOrEqual(6);
+  expect(Math.min(...navigationLayout.fontSizes)).toBeGreaterThanOrEqual(13);
   expect(navigationLayout.oneRow, JSON.stringify(navigationLayout.buttons)).toBe(true);
   expect(
     navigationLayout.buttons.every(({ contentFits }) => contentFits),
@@ -284,8 +293,14 @@ async function expectUsableLayout(page: Page): Promise<void> {
   expect(treeBox!.y + treeBox!.height).toBeLessThanOrEqual(sandboxBox!.y);
 
   const start = page.getByRole('button', { name: 'Create session' });
+  const manageProfiles = page.getByRole('button', { name: 'Manage skill profiles' });
   await start.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await expect(start).toBeVisible();
+  const [startRadius, manageProfilesRadius] = await Promise.all([
+    start.evaluate((element) => getComputedStyle(element).borderRadius),
+    manageProfiles.evaluate((element) => getComputedStyle(element).borderRadius),
+  ]);
+  expect(startRadius).toBe(manageProfilesRadius);
   const [startBox, navigationBox] = await Promise.all([
     start.boundingBox(),
     page.getByLabel('Primary').boundingBox(),

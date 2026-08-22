@@ -318,8 +318,20 @@ for (const item of cases) {
       expect(promptBox).not.toBeNull();
       expect(autopilotBox).not.toBeNull();
       expect(agentsBox).not.toBeNull();
-      expect(autopilotBox!.y).toBeGreaterThanOrEqual(promptBox!.y + promptBox!.height);
+      expect(autopilotBox!.y - (promptBox!.y + promptBox!.height)).toBeGreaterThanOrEqual(6);
       expect(Math.abs(autopilotBox!.y - agentsBox!.y)).toBeLessThanOrEqual(1);
+      const shapes = await Promise.all([
+        autopilot.evaluate((element) => ({
+          radius: getComputedStyle(element).borderRadius,
+          height: element.getBoundingClientRect().height,
+        })),
+        agents.evaluate((element) => ({
+          radius: getComputedStyle(element).borderRadius,
+          height: element.getBoundingClientRect().height,
+        })),
+      ]);
+      expect(shapes[0].radius).toBe(shapes[1].radius);
+      expect(Math.abs(shapes[0].height - shapes[1].height)).toBeLessThanOrEqual(1);
       await agents.click();
       await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
       await expect(page.getByLabel('Agent activity')).toContainText('waiting for child');
@@ -633,7 +645,10 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
   const errors = captureBrowserErrors(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByLabel('Open sessions').getByRole('button', { name: 'Enable' }).press('Enter');
+  await page
+    .getByLabel('Open sessions')
+    .getByRole('button', { name: 'Autopilot: Off' })
+    .press('Enter');
   await expect.poll(() => toggles).toEqual([expect.objectContaining({ enabled: true })]);
   await page.getByRole('button', { name: 'Chat' }).click();
   await expect.poll(() => socket).toBeDefined();

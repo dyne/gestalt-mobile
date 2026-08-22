@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import AppControl from '../../components/AppControl.svelte';
   import type { AutopilotSnapshot } from './contracts.js';
 
   let {
@@ -69,37 +70,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {liveStatus}
   </p>
   {#if compact}
-    <button
-      class="compact-toggle"
+    <AppControl
       id={`${controlId}-button`}
-      type="button"
-      aria-pressed={enabled}
-      aria-describedby={`${controlId}-help`}
-      aria-disabled={pending}
+      compact
+      full
+      pressed={enabled}
+      describedby={`${controlId}-help`}
+      ariaDisabled={pending}
       onclick={() => {
         if (!pending) ontoggle(!enabled);
       }}
     >
       <span aria-hidden="true">{enabled ? '●' : '○'}</span>
       Autopilot: {pending ? 'Updating…' : status}
-    </button>
+    </AppControl>
   {:else}
     <div class="control-row">
       <span class="status" data-state={autopilot?.state ?? 'unavailable'}>
         <span aria-hidden="true">{enabled ? '●' : '○'}</span> Autopilot: {status}
       </span>
-      <button
+      <AppControl
         id={`${controlId}-button`}
-        type="button"
-        aria-pressed={enabled}
-        aria-describedby={`${controlId}-help`}
-        aria-disabled={pending}
+        pressed={enabled}
+        describedby={`${controlId}-help`}
+        ariaDisabled={pending}
         onclick={() => {
           if (!pending) ontoggle(!enabled);
         }}
       >
         {pending ? 'Updating…' : enabled ? 'Pause' : 'Enable'}
-      </button>
+      </AppControl>
     </div>
   {/if}
   <p id={`${controlId}-help`} class:visually-hidden={compact}>
@@ -122,11 +122,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .compact {
     inline-size: 100%;
   }
-  .compact-toggle {
-    inline-size: 100%;
-    padding: 0.25rem 0.4rem;
-    font-size: 0.8rem;
-  }
   .status {
     border: 1px solid var(--theme-border);
     border-radius: 999px;
@@ -137,21 +132,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .status[data-state='unavailable'] {
     font-weight: 700;
     text-decoration: underline;
-  }
-  button {
-    min-block-size: 44px;
-    min-inline-size: 44px;
-    padding: 0.45rem 0.75rem;
-    font: inherit;
-    scroll-margin-block: var(--sticky-header-clearance) var(--bottom-navigation-clearance);
-  }
-  button:focus-visible {
-    outline: 3px solid var(--theme-accent);
-    outline-offset: 2px;
-  }
-  button[aria-disabled='true'] {
-    cursor: not-allowed;
-    opacity: 0.65;
   }
   p {
     margin: 0.25rem 0 0;

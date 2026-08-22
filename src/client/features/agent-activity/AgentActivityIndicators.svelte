@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
+  import AppControl from '../../components/AppControl.svelte';
   import type { AgentActivitySnapshot, AgentActivityState } from './contracts.js';
   import { activityAnnouncement } from './announcement-policy.js';
   import { compactElapsedTime } from './relative-activity-time.js';
@@ -109,8 +110,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <section class="agent-activity" class:compact aria-label="Agent activity">
   {#if compact}
     <details class="agents">
-      <summary class="chip" data-state={compactState}
-        >Agents ({(activity?.subagents.length ?? 0) + 1})</summary
+      <AppControl element="summary" compact full state={compactState}
+        >Agents ({(activity?.subagents.length ?? 0) + 1})</AppControl
       >
       <ul>
         {#if activity}
@@ -202,18 +203,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     position: relative;
     inline-size: 100%;
   }
-  .compact .agents > summary {
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    inline-size: 100%;
-    min-block-size: 44px;
-    padding: 0.25rem 0.4rem;
-    cursor: pointer;
-    font-size: 0.8rem;
-    text-align: center;
-  }
   .compact .agents ul {
     position: absolute;
     z-index: 10;
@@ -222,7 +211,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     box-sizing: border-box;
     display: grid;
     gap: 0.35rem;
-    inline-size: min(22rem, calc(100vw - 1rem));
+    inline-size: min(22rem, calc(100vw - max(2.5rem, 48px)));
     max-block-size: min(20rem, 50vh);
     margin: 0;
     padding: 0.45rem;
@@ -262,10 +251,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
-  }
-  summary:focus-visible {
-    outline: 3px solid var(--theme-accent);
-    outline-offset: 2px;
   }
   @media (prefers-reduced-motion: reduce) {
     * {

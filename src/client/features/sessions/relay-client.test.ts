@@ -125,17 +125,27 @@ describe('relay client', () => {
     ]);
   });
 
-  it('lists and opens workspace-local plans with encoded opaque identifiers', async () => {
-    const requests: string[] = [];
+  it('lists, previews, and opens workspace-local plans with encoded opaque identifiers', async () => {
+    const requests: Array<{ method: string; url: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {
-      requests.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      requests.push({
+        method: init?.method ?? 'GET',
+        url: String(url),
+        ...(init?.body ? { body: String(init.body) } : {}),
+      });
       return new Response(JSON.stringify([]), { status: 200 });
     });
     await client.listWorkspacePlans('workspace/id');
     await client.getWorkspacePlan('workspace/id', 'roadmap space.org');
+    await client.openSessionPlan('session/id', 'roadmap space.org');
     expect(requests).toEqual([
-      'GET /api/workspaces/workspace%2Fid/plans',
-      'GET /api/workspaces/workspace%2Fid/plans/roadmap%20space.org',
+      { method: 'GET', url: '/api/workspaces/workspace%2Fid/plans' },
+      { method: 'GET', url: '/api/workspaces/workspace%2Fid/plans/roadmap%20space.org' },
+      {
+        method: 'PUT',
+        url: '/api/sessions/session%2Fid/plan',
+        body: JSON.stringify({ planName: 'roadmap space.org' }),
+      },
     ]);
   });
 

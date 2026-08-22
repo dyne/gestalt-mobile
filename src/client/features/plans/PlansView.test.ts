@@ -139,7 +139,7 @@ describe('PlansView', () => {
     expect(screen.getByText('Free-form notes')).toBeTruthy();
     expect(screen.getByText('notes/free-form.org')).toBeTruthy();
     const open = screen.getByRole('button', {
-      name: /Free-form notes.*notes\/free-form.org.*Org source preview/,
+      name: /Free-form notes.*notes\/free-form.org.*Org document/,
     });
     await fireEvent.click(open);
     expect(onopen).toHaveBeenCalledWith('notes/free-form.org');
@@ -160,15 +160,17 @@ describe('PlansView', () => {
         kind: 'org-source',
         planName: 'notes/free-form.org',
         title: 'Free-form notes',
-        source: '#+TITLE: Free-form notes\n\n* Notes',
+        source:
+          '#+TITLE: Free-form notes\n#+DATE: 2026-08-22\n\n* WIP [#A] Notes\n- Goal :: Render this document clearly.',
       },
       onopen,
       onclose: vi.fn(),
     });
-    expect((screen.getByLabelText('Org source') as HTMLTextAreaElement).value).toBe(
-      '#+TITLE: Free-form notes\n\n* Notes',
-    );
-    expect(screen.getByText('Org source preview')).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Notes' })).toBeTruthy();
+    expect(screen.getByText('WIP')).toBeTruthy();
+    expect(screen.getByText('Render this document clearly.')).toBeTruthy();
+    expect(screen.getByText('2026-08-22')).toBeTruthy();
   });
 
   it('preserves closing and error plan states for the plan viewer', () => {
