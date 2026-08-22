@@ -125,7 +125,7 @@ describe('Composer', () => {
     expect(onscrollbottom).toHaveBeenCalledTimes(1);
   });
 
-  it('sends only from the side button and leaves Enter available for editing', async () => {
+  it('sends with Ctrl+Enter or the side button and leaves plain Enter available for editing', async () => {
     const onsend = vi.fn();
     render(Composer, {
       status: 'Ready.',
@@ -137,10 +137,41 @@ describe('Composer', () => {
       oninterrupt: () => {},
     });
 
-    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Prompt' }), { key: 'Enter' });
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
     expect(onsend).not.toHaveBeenCalled();
-    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
     expect(onsend).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    expect(onsend).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not send Ctrl+Enter while unavailable or composing text', async () => {
+    const onsend = vi.fn();
+    const { rerender } = render(Composer, {
+      status: 'Ready.',
+      message: 'first line',
+      activeTurnId: 'turn-1',
+      starting: false,
+      onchange: () => {},
+      onsend,
+      oninterrupt: () => {},
+    });
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' });
+
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
+    expect(onsend).not.toHaveBeenCalled();
+    rerender({
+      status: 'Ready.',
+      message: 'first line',
+      activeTurnId: null,
+      starting: false,
+      onchange: () => {},
+      onsend,
+      oninterrupt: () => {},
+    });
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true, isComposing: true });
+    expect(onsend).not.toHaveBeenCalled();
   });
 
   it('keeps models visible after command completion and sorts newest first', async () => {

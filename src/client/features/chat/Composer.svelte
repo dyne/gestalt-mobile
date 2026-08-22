@@ -57,6 +57,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let modelMenuOpen = $derived(argumentPicker === 'models');
   let sortedModels = $derived(sortModelsNewestFirst(models));
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
+  let sendEnabled = $derived(!activeTurnId && !starting && Boolean(message.trim()));
 
   function updateMessage(value: string, requestTail = false): void {
     dismissedCommandQuery = null;
@@ -72,6 +73,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function keydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter' && event.ctrlKey && !event.isComposing && sendEnabled) {
+      event.preventDefault();
+      onsend();
+      return;
+    }
     if (commandMenuOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -168,12 +174,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onkeydown={keydown}
       rows="1"
       required></textarea>
-    <button
-      type="button"
-      aria-label="Send prompt"
-      disabled={Boolean(activeTurnId) || starting || !message.trim()}
-      onclick={onsend}
-    >
+    <button type="button" aria-label="Send prompt" disabled={!sendEnabled} onclick={onsend}>
       <svg aria-hidden="true" viewBox="0 0 24 24">
         <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
       </svg>

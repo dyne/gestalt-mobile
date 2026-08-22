@@ -545,6 +545,18 @@ for (const viewport of [
     await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, () => {});
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeFocused();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.documentElement.scrollHeight -
+            window.innerHeight -
+            window.scrollY -
+            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        ),
+      )
+      .toBeLessThanOrEqual(1);
     await expect(page.getByText('message 23')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
     await page.screenshot({
