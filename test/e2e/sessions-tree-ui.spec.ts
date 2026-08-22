@@ -293,8 +293,14 @@ async function expectUsableLayout(page: Page): Promise<void> {
   expect(treeBox!.y + treeBox!.height).toBeLessThanOrEqual(sandboxBox!.y);
 
   const start = page.getByRole('button', { name: 'Create session' });
+  const manageProfiles = page.getByRole('button', { name: 'Manage skill profiles' });
   await start.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await expect(start).toBeVisible();
+  const [startRadius, manageProfilesRadius] = await Promise.all([
+    start.evaluate((element) => getComputedStyle(element).borderRadius),
+    manageProfiles.evaluate((element) => getComputedStyle(element).borderRadius),
+  ]);
+  expect(startRadius).toBe(manageProfilesRadius);
   const [startBox, navigationBox] = await Promise.all([
     start.boundingBox(),
     page.getByLabel('Primary').boundingBox(),
