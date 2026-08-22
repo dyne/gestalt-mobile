@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import AppControl from '../../components/AppControl.svelte';
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
   import { findTreeNode, treeNodePolicies } from '../filesystem-tree/tree-state.js';
@@ -132,11 +133,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           >
             <div class="session-actions">
               {#if session.resumeCommand}
-                <button type="button" onclick={() => oncopyresume(session.resumeCommand!)}
-                  >Copy</button
-                >
+                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
               {/if}
-              <button type="button" onclick={() => onclose(session.id)}>Close</button>
+              <AppControl onclick={() => onclose(session.id)}>Close</AppControl>
             </div>
             <div class="session-details">
               <button
@@ -169,15 +168,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   </span>
                 {/if}
               </button>
-              <AgentActivityIndicators
-                activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
-              />
-              <AutopilotControl
-                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                controlId={`session-autopilot-${session.id}`}
-                pending={autopilotPending.has(session.id)}
-                ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
-              />
+              <div class="session-monitor-controls" aria-label="Session controls">
+                <AutopilotControl
+                  compact
+                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                  controlId={`session-autopilot-${session.id}`}
+                  pending={autopilotPending.has(session.id)}
+                  ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+                />
+                <AgentActivityIndicators
+                  compact
+                  activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+                />
+              </div>
               <AutopilotAttention
                 attention={autopilotAttention.get(session.id) ?? null}
                 controlId={`session-attention-${session.id}`}
@@ -204,19 +207,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {@const details = managedSessionDetails(session)}
         <li class="managed-session">
           <div class="session-actions">
-            <button
-              type="button"
+            <AppControl
               disabled={openingSessionId === session.id}
               onclick={() => onopen(session.id)}
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
-            </button>
+            </AppControl>
             {#if session.resumeCommand}
-              <button type="button" onclick={() => oncopyresume(session.resumeCommand!)}
-                >Copy</button
-              >
+              <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
             {/if}
-            <button type="button" onclick={() => onforget(session.id)}>Forget</button>
+            <AppControl onclick={() => onforget(session.id)}>Forget</AppControl>
           </div>
           <div class="session-details">
             {#if details.updatedAt !== null}
@@ -314,11 +314,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {skillProfileError}
         </p>{/if}
       <div class="session-secondary-actions">
-        <button
+        <AppControl
           id="manage-skill-profiles"
-          type="button"
-          onclick={(event) => onmanageprofiles(event.currentTarget)}>Manage skill profiles</button
-        >
+          onclick={(event) => onmanageprofiles(event.currentTarget)}
+          >Manage skill profiles
+        </AppControl>
         <div class="model-control">
           <label for="model">Model</label>
           <select
@@ -332,13 +332,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {/each}
           </select>
         </div>
-        <button
+        <AppControl
           class="new-session-button"
           type="submit"
+          primary
           disabled={!selectedWorkspace || startingSession}
         >
           {startingSession ? 'Creating…' : 'Create session'}
-        </button>
+        </AppControl>
       </div>
     </section>
   </form>
@@ -366,9 +367,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 >{/if}
             </div>
             <div class="session-actions">
-              <button type="button" onclick={() => onopenrecent(session)}>Open</button>
-              <button type="button" onclick={() => oncopyresume(session.resumeCommand)}>Copy</button
-              >
+              <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
+              <AppControl onclick={() => oncopyresume(session.resumeCommand)}>Copy</AppControl>
             </div>
           </li>
         {/each}
@@ -460,6 +460,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.5rem;
   }
 
+  .session-monitor-controls {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 0.35rem;
+    min-inline-size: 0;
+    margin-block-start: 0.625rem;
+  }
+
+  .session-monitor-controls > :global(*) {
+    flex: 1 1 0;
+    min-inline-size: 0;
+  }
+
   @media (max-width: 30rem) {
     .managed-session {
       grid-template-columns: minmax(0, 1fr);
@@ -540,15 +554,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .skills-profile-error {
     color: var(--theme-error);
-  }
-
-  .new-session-button {
-    inline-size: auto;
-    color: var(--theme-accent-contrast);
-    font-weight: 700;
-    background: var(--theme-accent);
-    border-color: var(--theme-accent);
-    box-shadow: inset 0 0.15rem 0 var(--theme-accent-contrast);
   }
 
   @media (max-width: 28rem) {

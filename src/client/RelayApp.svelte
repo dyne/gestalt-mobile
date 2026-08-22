@@ -1276,7 +1276,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     align-items: flex-start;
     gap: 0.35rem;
     min-inline-size: 0;
-    margin-block-start: 0.35rem;
+    margin-block-start: 0.625rem;
   }
 
   .chat-controls > :global(*) {

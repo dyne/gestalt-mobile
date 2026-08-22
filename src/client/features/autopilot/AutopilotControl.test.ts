@@ -63,6 +63,7 @@ describe('AutopilotControl', () => {
     });
     const button = screen.getByRole('button', { name: 'Autopilot: Monitoring' });
     expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.classList.contains('app-control')).toBe(true);
     expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
     await fireEvent.click(button);
     expect(ontoggle).toHaveBeenCalledWith(false);

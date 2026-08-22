@@ -147,7 +147,9 @@ describe('AgentActivityIndicators', () => {
       },
     });
 
-    expect(screen.getByText('Agents (2)')).toBeTruthy();
+    const agents = screen.getByText('Agents (2)');
+    expect(agents).toBeTruthy();
+    expect(agents.classList.contains('app-control')).toBe(true);
     expect(screen.queryByText('Current')).toBeNull();
     expect(screen.getByText('Root agent')).toBeTruthy();
     expect(screen.getByText('Worker')).toBeTruthy();

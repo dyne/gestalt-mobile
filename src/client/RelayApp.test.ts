@@ -197,9 +197,16 @@ describe('RelayApp chat controller composition', () => {
       ]),
     );
     await fireEvent.click(screen.getByRole('button', { name: /Sessions/i }));
-    await vi.waitFor(() => expect(screen.getByText('Supervisor: working')).toBeTruthy());
+    await vi.waitFor(() => expect(screen.getByText('/a')).toBeTruthy());
+    const sessionA = screen.getByText('/a').closest('li')!;
+    const sessionB = screen.getByText('/b').closest('li')!;
+    await vi.waitFor(() => expect(sessionA.textContent).toContain('working'));
+    expect(sessionA.textContent).not.toContain('activity unavailable');
+    expect(sessionB.textContent).toContain('activity unavailable');
     await fireEvent.click(screen.getByRole('button', { name: /Chat/i }));
     await vi.waitFor(() => expect(screen.getByText('Agents (1)')).toBeTruthy());
-    expect(screen.queryByText('Supervisor: working')).toBeNull();
+    expect(screen.getByText('Root agent')).toBeTruthy();
+    expect(screen.getByText(/working · active/)).toBeTruthy();
+    expect(screen.queryByText('activity unavailable')).toBeNull();
   });
 });

@@ -99,7 +99,8 @@ describe('SessionsView session base tree', () => {
       sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
       activitySnapshots: new Map([['live', activity]]),
     });
-    expect(screen.getByText('Supervisor: working')).toBeTruthy();
+    expect(screen.getByText('Agents (1)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Autopilot: Unavailable' })).toBeTruthy();
     expect(container.querySelector('.session-select details')).toBeNull();
   });
   it('uses clear approval labels while emitting the Codex policy value', async () => {
@@ -295,5 +296,22 @@ describe('SessionsView session base tree', () => {
     await fireEvent.click(copyButtons[1]!);
     expect(oncopyresume).toHaveBeenNthCalledWith(1, 'codex resume open');
     expect(oncopyresume).toHaveBeenNthCalledWith(2, 'codex resume saved');
+  });
+
+  it('reuses the shared rounded control for session actions', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'saved',
+          state: 'released',
+          workspacePath: '/saved',
+          resumeCommand: 'codex resume saved',
+        },
+      ],
+    });
+
+    for (const name of ['Open', 'Copy', 'Forget', 'Manage skill profiles', 'Create session']) {
+      expect(screen.getByRole('button', { name }).classList.contains('app-control')).toBe(true);
+    }
   });
 });
