@@ -94,6 +94,10 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+  await expect(page.getByText('Agents (1)')).toBeVisible();
+  await page.getByText('Agents (1)').click();
+  await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
+  await expect(page.getByLabel('Agent activity')).toContainText('activity unavailable');
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(
@@ -705,6 +709,7 @@ test('keeps active-session glass chrome on one row at 320px with 200% text', asy
     );
     const centers = headerChildren.map(({ top, height }) => top + height / 2);
     const viewportWidth = document.documentElement.clientWidth;
+    const headerBox = header.getBoundingClientRect();
     return {
       headerFits: headerChildren.every(
         ({ left, right }) => left >= -0.5 && right <= viewportWidth + 0.5,
@@ -713,6 +718,8 @@ test('keeps active-session glass chrome on one row at 320px with 200% text', asy
         ({ left, right }) => left >= -0.5 && right <= viewportWidth + 0.5,
       ),
       headerTop: header.getBoundingClientRect().top,
+      headerFullWidth:
+        Math.abs(headerBox.left) <= 0.5 && Math.abs(headerBox.right - viewportWidth) <= 0.5,
       headerOneRow: Math.max(...centers) - Math.min(...centers) <= 1,
       navigationOneRow:
         Math.max(...navigationButtons.map(({ top }) => top)) -
@@ -724,6 +731,7 @@ test('keeps active-session glass chrome on one row at 320px with 200% text', asy
     headerFits: true,
     navigationFits: true,
     headerTop: 0,
+    headerFullWidth: true,
     headerOneRow: true,
     navigationOneRow: true,
   });

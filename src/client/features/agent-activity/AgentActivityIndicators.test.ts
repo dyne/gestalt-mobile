@@ -154,6 +154,17 @@ describe('AgentActivityIndicators', () => {
     expect(screen.getByText('idle since 2m')).toBeTruthy();
     expect(screen.getByText('idle since 2h')).toBeTruthy();
   });
+  it('keeps the root agent visible while activity is unavailable', () => {
+    const { container } = render(AgentActivityIndicators, {
+      compact: true,
+      activity: null,
+    });
+
+    expect(screen.getByText('Agents (1)')).toBeTruthy();
+    expect(screen.getByText('Root agent')).toBeTruthy();
+    expect(screen.getByText('activity unavailable')).toBeTruthy();
+    expect(getComputedStyle(container.querySelector('.agent-activity')!).display).not.toBe('none');
+  });
 });
 
 afterEach(cleanup);

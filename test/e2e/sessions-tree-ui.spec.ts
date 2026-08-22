@@ -227,6 +227,9 @@ async function expectUsableLayout(page: Page): Promise<void> {
     return {
       headerPosition: headerStyle.position,
       headerTop: headerBox.top,
+      headerFullWidth:
+        Math.abs(headerBox.left) <= 0.5 &&
+        Math.abs(headerBox.right - document.documentElement.clientWidth) <= 0.5,
       headerOneRow:
         Math.abs(brandBox.top + brandBox.height / 2 - (actionsBox.top + actionsBox.height / 2)) <=
         1,
@@ -241,6 +244,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
   expect(appChrome.headerPosition).toBe('sticky');
   expect(appChrome.headerTop).toBeGreaterThanOrEqual(-0.5);
   expect(appChrome.headerTop).toBeLessThanOrEqual(0.5);
+  expect(appChrome.headerFullWidth, JSON.stringify(appChrome)).toBe(true);
   expect(appChrome.headerOneRow, JSON.stringify(appChrome)).toBe(true);
   expect(appChrome.headerBackdrop).toContain('blur');
   expect(appChrome.navigationBackdrop).toContain('blur');
@@ -272,7 +276,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
     approvalThenStart: true,
   });
 
-  const treePanel = page.locator('.tree-panel');
+  const treePanel = page.getByRole('tree', { name: 'Session base' });
   const sandbox = page.getByLabel('Sandbox');
   const [treeBox, sandboxBox] = await Promise.all([treePanel.boundingBox(), sandbox.boundingBox()]);
   expect(treeBox).not.toBeNull();
