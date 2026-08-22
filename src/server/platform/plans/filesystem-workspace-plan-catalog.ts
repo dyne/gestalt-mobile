@@ -129,7 +129,13 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
       planPath: candidate.canonicalPath,
       workspacePath: workspace,
     });
-    return parsed.kind === 'available' ? parsed : { kind: 'unavailable' };
+    return parsed.kind === 'available'
+      ? parsed
+      : {
+          kind: 'source',
+          title: fallbackTitle(planName, candidate.source),
+          source: candidate.source,
+        };
   }
 
   private async readCandidate(workspace: string, planName: string): Promise<ReadCandidateResult> {
@@ -207,15 +213,19 @@ function toEntry(planName: string, plan: SupervisedPlan): WorkspacePlanEntry {
 }
 
 function toFallbackEntry(planName: string, source?: string): WorkspacePlanEntry {
+  return {
+    planName,
+    title: fallbackTitle(planName, source),
+    previewAvailable: false,
+  };
+}
+
+function fallbackTitle(planName: string, source?: string): string {
   const declaredTitle = source
     ?.replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => /^#\+TITLE:(?:[ \t](.*))?$/i.exec(line)?.[1]?.trim())
     .find((title) => title);
   const filename = planName.split('/').at(-1) ?? planName;
-  return {
-    planName,
-    title: declaredTitle ?? filename.slice(0, -'.org'.length),
-    previewAvailable: false,
-  };
+  return declaredTitle ?? filename.slice(0, -'.org'.length);
 }

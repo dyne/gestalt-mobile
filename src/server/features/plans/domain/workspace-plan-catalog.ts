@@ -22,5 +22,6 @@ export type WorkspacePlanEntry = Readonly<{
 
 export type WorkspacePlanReadResult =
   | Readonly<{ kind: 'available'; plan: SupervisedPlan }>
+  | Readonly<{ kind: 'source'; title: string; source: string }>
   | Readonly<{ kind: 'missing' }>
   | Readonly<{ kind: 'unavailable' }>;

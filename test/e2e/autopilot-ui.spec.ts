@@ -509,8 +509,11 @@ test('typed missing-plan conflicts remain safe and actionable after the real tog
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   await page.getByRole('button', { name: 'Autopilot: Off' }).press('Enter');
-  await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText(
+  await expect(page.getByRole('alert')).toContainText(
     'An incomplete supervised plan is required before Autopilot can start.',
+  );
+  await expect(page.getByRole('region', { name: 'Autopilot' })).not.toContainText(
+    'raw server detail',
   );
   await expect(page.locator('body')).not.toContainText('/secret');
 });

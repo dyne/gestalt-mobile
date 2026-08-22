@@ -29,13 +29,19 @@ describe('AutopilotControl', () => {
     expect(ontoggle).toHaveBeenCalledWith(false);
     expect(screen.getByText('Autopilot: Monitoring')).toBeTruthy();
   });
-  it('keeps unavailable enablement focusable and explains why', () => {
-    render(AutopilotControl, { autopilot: { ...snapshot('disabled'), reason: 'planRequired' } });
+  it('lets a stale unavailable snapshot re-check eligibility and explains why', async () => {
+    const ontoggle = vi.fn();
+    render(AutopilotControl, {
+      autopilot: { ...snapshot('disabled'), reason: 'planRequired' },
+      ontoggle,
+    });
     const button = screen.getByRole('button', { name: 'Enable' });
-    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.getAttribute('aria-disabled')).toBe('false');
     expect(
       screen.getByText('An incomplete supervised plan is required before Autopilot can start.'),
     ).toBeTruthy();
+    await fireEvent.click(button);
+    expect(ontoggle).toHaveBeenCalledWith(true);
   });
   it('allows a manually paused session to enable again', async () => {
     const ontoggle = vi.fn();

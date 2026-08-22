@@ -117,8 +117,9 @@ describe('PlansView', () => {
     expect(onopen).toHaveBeenCalledWith('plans/releases/roadmap.org');
   });
 
-  it('lists Org files that cannot be projected without offering a broken preview', () => {
-    render(PlansView, {
+  it('opens a raw source preview for Org files outside the supervised-plan dialect', async () => {
+    const onopen = vi.fn();
+    const { rerender } = render(PlansView, {
       catalog: {
         kind: 'ready',
         workspaceId: 'one',
@@ -131,14 +132,43 @@ describe('PlansView', () => {
         ],
       },
       state: null,
-      onopen: vi.fn(),
+      onopen,
       onclose: vi.fn(),
     });
 
     expect(screen.getByText('Free-form notes')).toBeTruthy();
     expect(screen.getByText('notes/free-form.org')).toBeTruthy();
-    expect(screen.getByText('Preview unavailable')).toBeTruthy();
-    expect(screen.queryByRole('button')).toBeNull();
+    const open = screen.getByRole('button', {
+      name: /Free-form notes.*notes\/free-form.org.*Org source preview/,
+    });
+    await fireEvent.click(open);
+    expect(onopen).toHaveBeenCalledWith('notes/free-form.org');
+
+    rerender({
+      catalog: {
+        kind: 'ready',
+        workspaceId: 'one',
+        entries: [
+          {
+            planName: 'notes/free-form.org',
+            title: 'Free-form notes',
+            previewAvailable: false,
+          },
+        ],
+      },
+      state: {
+        kind: 'org-source',
+        planName: 'notes/free-form.org',
+        title: 'Free-form notes',
+        source: '#+TITLE: Free-form notes\n\n* Notes',
+      },
+      onopen,
+      onclose: vi.fn(),
+    });
+    expect((screen.getByLabelText('Org source') as HTMLTextAreaElement).value).toBe(
+      '#+TITLE: Free-form notes\n\n* Notes',
+    );
+    expect(screen.getByText('Org source preview')).toBeTruthy();
   });
 
   it('preserves closing and error plan states for the plan viewer', () => {

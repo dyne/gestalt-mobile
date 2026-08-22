@@ -31,7 +31,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activitySnapshots?: ReadonlyMap<string, AgentActivitySnapshot>;
     autopilotSnapshots?: ReadonlyMap<string, AutopilotSnapshot>;
     autopilotPending?: ReadonlySet<string>;
-    autopilotErrors?: ReadonlyMap<string, string>;
     autopilotAttention?: ReadonlyMap<string, OrgPlanAttention>;
     workspaceTree: WorkspaceOption[];
     workspaceId: string;
@@ -74,7 +73,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activitySnapshots = new Map(),
     autopilotSnapshots = new Map(),
     autopilotPending = new Set(),
-    autopilotErrors = new Map(),
     autopilotAttention = new Map(),
     workspaceTree,
     workspaceId,
@@ -178,7 +176,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
                 controlId={`session-autopilot-${session.id}`}
                 pending={autopilotPending.has(session.id)}
-                error={autopilotErrors.get(session.id) ?? null}
                 ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
               />
               <AutopilotAttention

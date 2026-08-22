@@ -165,6 +165,38 @@ describe('AgentActivityIndicators', () => {
     expect(screen.getByText('activity unavailable')).toBeTruthy();
     expect(getComputedStyle(container.querySelector('.agent-activity')!).display).not.toBe('none');
   });
+  it('orders working agents before idle and disconnected agents, including root', () => {
+    const now = new Date().toISOString();
+    const { container } = render(AgentActivityIndicators, {
+      compact: true,
+      activity: {
+        sessionId: 's',
+        confidence: 'fresh',
+        aggregateSubagents: 'working',
+        root: { state: 'idle', observedAt: now, lastActivityAt: now },
+        subagents: [
+          {
+            id: 'offline',
+            nickname: 'Offline',
+            state: 'disconnected',
+            observedAt: now,
+            lastActivityAt: now,
+          },
+          {
+            id: 'worker',
+            nickname: 'Worker',
+            state: 'working',
+            observedAt: now,
+            lastActivityAt: now,
+          },
+        ],
+      },
+    });
+
+    expect(
+      [...container.querySelectorAll('.agents li strong')].map((node) => node.textContent),
+    ).toEqual(['Worker', 'Root agent', 'Offline']);
+  });
 });
 
 afterEach(cleanup);
