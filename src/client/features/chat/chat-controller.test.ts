@@ -727,6 +727,93 @@ describe('ChatController', () => {
     expect(history).toHaveBeenCalledTimes(2);
     controller.dispose();
   });
+  it('silently retries a transient initial history race and accepts the recovered snapshot', async () => {
+    const settle = async () => {
+      for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    };
+    const timers: Array<{ callback: () => void; delay: number }> = [];
+    const history = vi.fn().mockRejectedValueOnce(new Error('not ready')).mockResolvedValue({
+      baseSequence: 0,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    });
+    const onHistoryError = vi.fn();
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory: history,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      setTimeout: (callback, delay) => {
+        timers.push({ callback, delay });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: vi.fn(),
+      onHistoryError,
+    });
+
+    controller.select('new-session');
+    await settle();
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(onHistoryError).not.toHaveBeenCalled();
+    expect(timers[0]?.delay).toBe(250);
+
+    timers[0]?.callback();
+    await settle();
+    expect(history).toHaveBeenCalledTimes(2);
+    expect(onHistoryError).not.toHaveBeenCalled();
+    expect(controller.view).toMatchObject({ snapshotting: false, lifecycle: 'finished' });
+    controller.dispose();
+  });
+  it('reports a persistent history failure once after bounded retries', async () => {
+    const settle = async () => {
+      for (let index = 0; index < 4; index += 1) await Promise.resolve();
+    };
+    const timers: Array<{ callback: () => void; delay: number }> = [];
+    const failure = new Error('persistent');
+    const history = vi.fn().mockRejectedValue(failure);
+    const onHistoryError = vi.fn();
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory: history,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      setTimeout: (callback, delay) => {
+        timers.push({ callback, delay });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: vi.fn(),
+      onHistoryError,
+    });
+
+    controller.select('session');
+    for (const expectedDelay of [250, 750, 1_500]) {
+      await settle();
+      expect(timers.at(-1)?.delay).toBe(expectedDelay);
+      timers.at(-1)?.callback();
+    }
+    await settle();
+    expect(history).toHaveBeenCalledTimes(4);
+    expect(onHistoryError).toHaveBeenCalledOnce();
+    expect(onHistoryError).toHaveBeenCalledWith(failure);
+
+    controller.refresh();
+    await settle();
+    expect(history).toHaveBeenCalledTimes(5);
+    expect(onHistoryError).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
   it('does not let an A command with key same block or publish into B', async () => {
     const a = deferred<{ activeTurnId?: string }>();
     const views: ChatViewState[] = [];
