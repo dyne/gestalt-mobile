@@ -227,7 +227,7 @@ async function expectUsableLayout(page: Page): Promise<void> {
     approvalThenStart: true,
   });
 
-  const treePanel = page.locator('.tree-panel');
+  const treePanel = page.getByRole('tree', { name: 'Session base' });
   const sandbox = page.getByLabel('Sandbox');
   const [treeBox, sandboxBox] = await Promise.all([treePanel.boundingBox(), sandbox.boundingBox()]);
   expect(treeBox).not.toBeNull();
