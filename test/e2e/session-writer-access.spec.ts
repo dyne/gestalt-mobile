@@ -77,7 +77,7 @@ for (const viewport of [
 
     const prompt = page.getByRole('textbox', { name: 'Prompt' });
     await prompt.fill('acquire once');
-    await prompt.press('Enter');
+    await page.getByRole('button', { name: 'Send prompt' }).click();
     await expect(page.getByRole('region', { name: 'Chat' }).getByRole('alert')).toContainText(
       'active in another Codex client',
     );
@@ -149,7 +149,7 @@ for (const viewport of [
     expect(restoreRequests).toBe(0);
 
     await page.getByRole('textbox', { name: 'Prompt' }).fill('recent acquire');
-    await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
+    await page.getByRole('button', { name: 'Send prompt' }).click();
     await expect(page.getByRole('region', { name: 'Chat' }).getByRole('alert')).toContainText(
       'active in another Codex client',
     );

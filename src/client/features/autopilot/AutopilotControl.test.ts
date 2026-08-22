@@ -48,6 +48,19 @@ describe('AutopilotControl', () => {
     await fireEvent.click(button);
     expect(ontoggle).toHaveBeenCalledWith(true);
   });
+  it('uses the compact status itself as the toggle', async () => {
+    const ontoggle = vi.fn();
+    render(AutopilotControl, {
+      autopilot: snapshot('monitoring'),
+      compact: true,
+      ontoggle,
+    });
+    const button = screen.getByRole('button', { name: 'Autopilot: Monitoring' });
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    await fireEvent.click(button);
+    expect(ontoggle).toHaveBeenCalledWith(false);
+  });
   it.each(['disabled', 'monitoring', 'backoff', 'attentionRequired', 'completed'] as const)(
     'renders %s without color-only status',
     (state) => {

@@ -121,6 +121,39 @@ describe('AgentActivityIndicators', () => {
     expect(container.querySelector('details summary')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toBe('Supervisor needs you.');
   });
+  it('combines root and child agents with compact latest-activity times', () => {
+    const now = Date.now();
+    render(AgentActivityIndicators, {
+      compact: true,
+      activity: {
+        sessionId: 's',
+        confidence: 'fresh',
+        aggregateSubagents: 'idle',
+        root: {
+          state: 'idle',
+          observedAt: new Date(now - 2 * 60_000).toISOString(),
+          lastActivityAt: new Date(now - 2 * 60_000).toISOString(),
+        },
+        subagents: [
+          {
+            id: 'child-1',
+            nickname: 'Worker',
+            role: 'explorer',
+            state: 'idle',
+            observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
+            lastActivityAt: new Date(now - 2 * 60 * 60_000).toISOString(),
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText('Agents (2)')).toBeTruthy();
+    expect(screen.queryByText('Current')).toBeNull();
+    expect(screen.getByText('Root agent')).toBeTruthy();
+    expect(screen.getByText('Worker')).toBeTruthy();
+    expect(screen.getByText('idle since 2m')).toBeTruthy();
+    expect(screen.getByText('idle since 2h')).toBeTruthy();
+  });
 });
 
 afterEach(cleanup);

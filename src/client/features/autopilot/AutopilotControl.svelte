@@ -10,12 +10,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     autopilot,
     controlId = 'autopilot-control',
+    compact = false,
     pending = false,
     error = null,
     ontoggle = () => {},
   }: {
     autopilot: AutopilotSnapshot | null;
     controlId?: string;
+    compact?: boolean;
     pending?: boolean;
     error?: string | null;
     ontoggle?: (enabled: boolean) => void;
@@ -65,7 +67,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
 </script>
 
-<section class="autopilot-control" aria-label="Autopilot">
+<section class="autopilot-control" class:compact aria-label="Autopilot">
   <p
     class="visually-hidden"
     data-testid="autopilot-live-status"
@@ -74,11 +76,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >
     {liveStatus}
   </p>
-  <div class="control-row">
-    <span class="status" data-state={autopilot?.state ?? 'unavailable'}>
-      <span aria-hidden="true">{enabled ? '●' : '○'}</span> Autopilot: {status}
-    </span>
+  {#if compact}
     <button
+      class="compact-toggle"
       id={`${controlId}-button`}
       type="button"
       aria-pressed={enabled}
@@ -88,10 +88,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         if (!pending && (enabled || !cannotEnable)) ontoggle(!enabled);
       }}
     >
-      {pending ? 'Updating…' : enabled ? 'Pause' : 'Enable'}
+      <span aria-hidden="true">{enabled ? '●' : '○'}</span>
+      Autopilot: {pending ? 'Updating…' : status}
     </button>
-  </div>
-  <p id={`${controlId}-help`} class:error={Boolean(error)}>{help}</p>
+  {:else}
+    <div class="control-row">
+      <span class="status" data-state={autopilot?.state ?? 'unavailable'}>
+        <span aria-hidden="true">{enabled ? '●' : '○'}</span> Autopilot: {status}
+      </span>
+      <button
+        id={`${controlId}-button`}
+        type="button"
+        aria-pressed={enabled}
+        aria-describedby={`${controlId}-help`}
+        aria-disabled={pending || (!enabled && cannotEnable)}
+        onclick={() => {
+          if (!pending && (enabled || !cannotEnable)) ontoggle(!enabled);
+        }}
+      >
+        {pending ? 'Updating…' : enabled ? 'Pause' : 'Enable'}
+      </button>
+    </div>
+  {/if}
+  <p
+    id={`${controlId}-help`}
+    class:visually-hidden={compact && !error}
+    class:error={Boolean(error)}
+  >
+    {help}
+  </p>
 </section>
 
 <style>
@@ -105,6 +130,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex-wrap: wrap;
     gap: 0.45rem;
     align-items: center;
+  }
+  .compact {
+    inline-size: 100%;
+  }
+  .compact-toggle {
+    inline-size: 100%;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.8rem;
   }
   .status {
     border: 1px solid var(--theme-border);
