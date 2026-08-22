@@ -59,17 +59,21 @@ main {
 .app-header {
   position: sticky;
   inset-block-start: 0;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
   /* Match the chat column's outer edge while keeping header controls aligned with page content. */
   margin: calc(-1rem - env(safe-area-inset-top)) calc(0.25rem - var(--page-inline-padding)) 1.5rem;
   padding: calc(1rem + env(safe-area-inset-top)) calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
-  background: color-mix(in srgb, var(--theme-page) 78%, transparent);
-  backdrop-filter: blur(0.75rem);
+  background: var(--theme-page);
+  background: color-mix(in srgb, var(--theme-page) 72%, transparent);
+  -webkit-backdrop-filter: blur(0.75rem) saturate(1.2);
+  backdrop-filter: blur(0.75rem) saturate(1.2);
+  border-block-end: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent);
+  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--theme-shadow) 28%, transparent);
 }
 
 .app-header [role='status'] {
@@ -82,9 +86,7 @@ main {
 .brand {
   display: flex;
   align-items: center;
-}
-
-.brand {
+  flex: 0 0 auto;
   gap: 0.4rem;
 }
 
@@ -214,21 +216,28 @@ main {
   position: fixed;
   inset-inline: 0;
   inset-block-end: 0;
+  z-index: 2;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
-  padding: 0.5rem calc(0.25rem + env(safe-area-inset-right))
-    calc(0.5rem + env(safe-area-inset-bottom)) calc(0.25rem + env(safe-area-inset-left));
+  gap: 0.125rem;
+  padding: 0.25rem calc(0.125rem + env(safe-area-inset-right))
+    calc(0.25rem + env(safe-area-inset-bottom)) calc(0.125rem + env(safe-area-inset-left));
   background: var(--theme-surface);
+  background: color-mix(in srgb, var(--theme-surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(0.75rem) saturate(1.2);
+  backdrop-filter: blur(0.75rem) saturate(1.2);
   border-block-start: 1px solid var(--theme-border);
+  box-shadow: 0 -0.35rem 1rem color-mix(in srgb, var(--theme-shadow) 28%, transparent);
 }
 
 .bottom-navigation button {
   min-inline-size: 0;
   max-inline-size: 100%;
-  padding-inline: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  padding-inline: 0.125rem;
+  overflow: hidden;
+  font-size: max(0.40625rem, 11px);
+  text-overflow: clip;
+  white-space: nowrap;
   transition:
     color var(--theme-motion-fast) ease,
     background-color var(--theme-motion-fast) ease,
@@ -258,25 +267,8 @@ main {
 }
 
 @media (max-width: 30rem) {
-  :root {
-    --bottom-navigation-clearance: calc(10rem + env(safe-area-inset-bottom));
-    --sticky-header-clearance: calc(7rem + env(safe-area-inset-top));
-  }
-
-  /* The header can become multi-row at increased text size. Keeping it in
-     normal flow prevents it from covering the control or attention card when
-     focus scrolls a narrow viewport. */
-  .app-header {
-    position: static;
-  }
-
-  .bottom-navigation {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .bottom-navigation button {
-    padding-inline: 0.25rem;
-    text-align: center;
+  .brand-logotype {
+    display: none !important;
   }
 }
 button {

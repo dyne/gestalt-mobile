@@ -36,7 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     bind:this={buttons.sessions}
     aria-pressed={activeTab === 'sessions'}
     onkeydown={handleKeydown}
-    onclick={() => onselect('sessions')}>Sess<wbr />ions</button
+    onclick={() => onselect('sessions')}>Sessions</button
   >
   <button
     bind:this={buttons.git}
