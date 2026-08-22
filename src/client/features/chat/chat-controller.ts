@@ -62,6 +62,7 @@ export type ChatControllerOptions = Readonly<{
   onSendAccepted?: (operationId: string) => void;
 }>;
 const noCache: ChatCache = { read: async () => null, write: async () => {} };
+const historyRetryDelays = [250, 750, 1_500] as const;
 const object = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object';
 export const isChatItem = (value: unknown): value is ChatSnapshot['items'][number] =>
@@ -134,6 +135,9 @@ export class ChatController {
   #authoritativeGeneration = -1;
   #socket: WebSocket | null = null;
   #snapshot: { id: string; generation: number; promise: Promise<void> } | null = null;
+  #historyRetry: Timer | null = null;
+  #historyFailures = 0;
+  #historyErrorReported = false;
   #reconnect: Timer | null = null;
   #attempt = 0;
   #disposed = false;
@@ -425,6 +429,10 @@ export class ChatController {
           this.#set({ ...this.#projection, snapshotting: false, lifecycle: 'recoverable' });
           return;
         }
+        this.#historyFailures = 0;
+        this.#historyErrorReported = false;
+        if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);
+        this.#historyRetry = null;
         this.#authoritativeGeneration = generation;
         this.#set(acceptSnapshot(this.#projection, decoded));
         if (recovering) this.#replaceSocket(id, generation);
@@ -432,7 +440,12 @@ export class ChatController {
       .catch((error: unknown) => {
         if (this.#current(id, generation)) {
           this.#set({ ...this.#projection, snapshotting: false, lifecycle: 'recoverable' });
-          this.#options.onHistoryError?.(error);
+          const delay = historyRetryDelays[this.#historyFailures++];
+          if (delay !== undefined) this.#scheduleHistoryRetry(id, generation, delay);
+          else if (!this.#historyErrorReported) {
+            this.#historyErrorReported = true;
+            this.#options.onHistoryError?.(error);
+          }
         }
       })
       .finally(() => {
@@ -444,6 +457,15 @@ export class ChatController {
       });
     this.#snapshot = { id, generation, promise };
     return promise;
+  }
+  #scheduleHistoryRetry(id: string, generation: number, delay: number): void {
+    if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);
+    const timer = this.#options.setTimeout(() => {
+      if (this.#historyRetry !== timer) return;
+      this.#historyRetry = null;
+      if (this.#current(id, generation)) void this.#takeSnapshot(id, generation);
+    }, delay);
+    this.#historyRetry = timer;
   }
   #replaceSocket(id: string, generation: number): void {
     const socket = this.#socket;
@@ -468,6 +490,10 @@ export class ChatController {
   #stop(): void {
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
+    if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);
+    this.#historyRetry = null;
+    this.#historyFailures = 0;
+    this.#historyErrorReported = false;
     const socket = this.#socket;
     this.#socket = null;
     socket?.close();

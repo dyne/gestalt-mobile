@@ -47,6 +47,7 @@ async function openChat(page: Page): Promise<void> {
 }
 
 test('starts a selected workspace session and opens chat', async ({ page }) => {
+  let historyReads = 0;
   const session = {
     id: 'session-1',
     threadId: 'codex-thread-1',
@@ -86,6 +87,23 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       body: JSON.stringify({ activeTurnId: 'turn-1' }),
     });
   });
+  await page.route('**/api/sessions/session-1/history', (route) => {
+    historyReads += 1;
+    if (historyReads === 1)
+      return route.fulfill({
+        status: 502,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          code: 'SESSION_HISTORY_READ_FAILED',
+          detail: 'History is not ready yet.',
+          retryable: true,
+        }),
+      });
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(chatSnapshot()),
+    });
+  });
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
@@ -94,6 +112,10 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+  await expect.poll(() => historyReads).toBeGreaterThanOrEqual(2);
+  await expect(page.getByLabel('Notifications')).not.toContainText(
+    'Session history could not be read',
+  );
   await expect(page.getByText('Agents (1)')).toBeVisible();
   await page.getByText('Agents (1)').click();
   await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
