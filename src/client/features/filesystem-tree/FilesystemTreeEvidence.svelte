@@ -80,19 +80,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       ? 'Select the folder Codex should use as its working directory.'
       : 'Select a repository for Git actions.'}
   </p>
-  <div class="tree-panel">
-    <FilesystemTree
-      {roots}
-      {expandedIds}
-      selectedId={currentSelectedId}
-      label={context === 'sessions' ? 'Session base' : 'Git repository'}
-      isSelectable={context === 'sessions'
-        ? treeNodePolicies.sessionBase
-        : treeNodePolicies.gitRepositoryTarget}
-      onexpandedchange={(value) => (expandedIds = value)}
-      onselect={(node) => (selectedId = node.id)}
-    />
-  </div>
+  <FilesystemTree
+    {roots}
+    {expandedIds}
+    selectedId={currentSelectedId}
+    label={context === 'sessions' ? 'Session base' : 'Git repository'}
+    isSelectable={context === 'sessions'
+      ? treeNodePolicies.sessionBase
+      : treeNodePolicies.gitRepositoryTarget}
+    onexpandedchange={(value) => (expandedIds = value)}
+    onselect={(node) => (selectedId = node.id)}
+  />
 </section>
 
 <style>
@@ -123,20 +121,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block: 0 1rem;
   }
 
-  .tree-panel {
-    min-inline-size: 0;
-    padding: 0.5rem;
-    border: 1px solid var(--theme-border);
-    border-radius: 0.6rem;
-  }
-
   @media (max-width: 24rem) {
     .evidence-shell {
       padding: 0.5rem;
-    }
-
-    .tree-panel {
-      padding: 0.25rem;
     }
   }
 </style>

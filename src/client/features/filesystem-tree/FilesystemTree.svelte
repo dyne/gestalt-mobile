@@ -158,9 +158,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   .filesystem-tree {
     display: grid;
+    box-sizing: border-box;
     inline-size: 100%;
     max-inline-size: 100%;
+    max-block-size: min(22rem, 48vh);
+    padding: 0.35rem;
     overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    border: 1px solid var(--theme-border);
+    border-radius: 0.6rem;
   }
 
   .tree-row {
@@ -267,6 +275,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   @media (max-width: 24rem) {
+    .filesystem-tree {
+      padding: 0.2rem;
+    }
+
     .tree-row {
       padding-inline-start: min(calc(var(--tree-level) * 0.25rem), 1.5rem);
     }
