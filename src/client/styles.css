@@ -65,8 +65,10 @@ main {
   justify-content: space-between;
   flex-wrap: nowrap;
   gap: 0.5rem;
-  /* Match the chat column's outer edge while keeping header controls aligned with page content. */
-  margin: calc(-1rem - env(safe-area-inset-top)) calc(0.25rem - var(--page-inline-padding)) 1.5rem;
+  /* Full-bleed from a centered content column while keeping controls aligned with page padding. */
+  box-sizing: border-box;
+  inline-size: 100vw;
+  margin: calc(-1rem - env(safe-area-inset-top)) calc(50% - 50vw) 1.5rem;
   padding: calc(1rem + env(safe-area-inset-top)) calc(var(--page-inline-padding) - 0.25rem) 0.75rem;
   background: var(--theme-page);
   background: color-mix(in srgb, var(--theme-page) 72%, transparent);
@@ -233,9 +235,9 @@ main {
 .bottom-navigation button {
   min-inline-size: 0;
   max-inline-size: 100%;
-  padding-inline: 0.125rem;
+  padding-inline: 0;
   overflow: hidden;
-  font-size: max(0.40625rem, 11px);
+  font-size: max(0.4375rem, 12px);
   text-overflow: clip;
   white-space: nowrap;
   transition:

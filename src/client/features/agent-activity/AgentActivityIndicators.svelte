@@ -27,9 +27,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activity ? `${activity.sessionId}:${activity.root.state}:${activity.aggregateSubagents}` : '',
   );
   let compactState = $derived(
-    activity && ['blocked', 'awaitingHuman', 'disconnected'].includes(activity.root.state)
-      ? activity.root.state
-      : (activity?.aggregateSubagents ?? 'idle'),
+    !activity
+      ? 'unavailable'
+      : ['blocked', 'awaitingHuman', 'disconnected'].includes(activity.root.state)
+        ? activity.root.state
+        : activity.aggregateSubagents,
   );
   onMount(() => {
     const timer = window.setInterval(() => (now = Date.now()), 60_000);
@@ -58,14 +60,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 </script>
 
-<section class="agent-activity" class:compact class:empty={!activity} aria-label="Agent activity">
-  {#if activity}
-    {#if compact}
-      <details class="agents">
-        <summary class="chip" data-state={compactState}
-          >Agents ({activity.subagents.length + 1})</summary
-        >
-        <ul>
+<section class="agent-activity" class:compact aria-label="Agent activity">
+  {#if compact}
+    <details class="agents">
+      <summary class="chip" data-state={compactState}
+        >Agents ({(activity?.subagents.length ?? 0) + 1})</summary
+      >
+      <ul>
+        {#if activity}
           <li>
             <span><strong>Root agent</strong> · supervisor</span>
             <time datetime={activity.root.lastActivityAt}
@@ -84,36 +86,43 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               >
             </li>
           {/each}
+        {:else}
+          <li>
+            <span><strong>Root agent</strong> · supervisor</span>
+            <span class="unavailable" role="status">activity unavailable</span>
+          </li>
+        {/if}
+      </ul>
+    </details>
+  {:else if activity}
+    <div class="chips">
+      <span class="chip" data-state={activity.root.state}
+        ><span aria-hidden="true">●</span> Supervisor: {labels[activity.root.state]}</span
+      >
+      <details class="children">
+        <summary class="chip" data-state={activity.aggregateSubagents}
+          ><span aria-hidden="true">◆</span> Subagents: {labels[activity.aggregateSubagents]} ({activity
+            .subagents.length})</summary
+        >
+        <ul>
+          {#each activity.subagents as child (child.id)}
+            <li>
+              <strong>{child.nickname ?? child.id}</strong>{child.role ? ` · ${child.role}` : ''} —
+              {labels[child.state]} <small>{child.lastActivityAt}</small>
+            </li>
+          {/each}
         </ul>
       </details>
-    {:else}
-      <div class="chips">
-        <span class="chip" data-state={activity.root.state}
-          ><span aria-hidden="true">●</span> Supervisor: {labels[activity.root.state]}</span
-        >
-        <details class="children">
-          <summary class="chip" data-state={activity.aggregateSubagents}
-            ><span aria-hidden="true">◆</span> Subagents: {labels[activity.aggregateSubagents]} ({activity
-              .subagents.length})</summary
-          >
-          <ul>
-            {#each activity.subagents as child (child.id)}
-              <li>
-                <strong>{child.nickname ?? child.id}</strong>{child.role ? ` · ${child.role}` : ''} —
-                {labels[child.state]} <small>{child.lastActivityAt}</small>
-              </li>
-            {/each}
-          </ul>
-        </details>
-        <span class="freshness"
-          >{activity.confidence === 'fresh'
-            ? 'Current'
-            : activity.confidence === 'reconciling'
-              ? 'Checking updates'
-              : 'May be stale'}</span
-        >
-      </div>
-    {/if}
+      <span class="freshness"
+        >{activity.confidence === 'fresh'
+          ? 'Current'
+          : activity.confidence === 'reconciling'
+            ? 'Checking updates'
+            : 'May be stale'}</span
+      >
+    </div>
+  {/if}
+  {#if activity}
     <p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
     {#if critical}<p class="visually-hidden" role="alert">{critical}</p>{/if}
   {/if}
@@ -123,9 +132,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .agent-activity {
     max-inline-size: 100%;
     overflow-wrap: anywhere;
-  }
-  .compact.empty {
-    display: none;
   }
   .chips {
     display: flex;
@@ -200,6 +206,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-block-end: 1px solid var(--theme-border);
   }
   .compact .agents time {
+    color: var(--theme-text-muted);
+    font-size: 0.78rem;
+  }
+  .compact .agents .unavailable {
     color: var(--theme-text-muted);
     font-size: 0.78rem;
   }
