@@ -4,19 +4,17 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdir } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import {
   evidenceFilename,
+  evidenceConfigurations,
   evidenceFontScales,
   evidenceThemes,
-  evidenceViewports,
   expectCleanThemeDiagnostics,
   openThemeEvidence,
 } from './theme-evidence.js';
 
-const evidenceDirectory = '/tmp/gestalt-mobile-sessions-profile-evidence';
 const states = [
   'session-form',
   'profile-manager',
@@ -51,8 +49,6 @@ const skills = {
     },
   ],
 };
-
-test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
 
 async function open(
   page: Page,
@@ -122,79 +118,75 @@ async function open(
   return diagnostics;
 }
 
-for (const viewport of evidenceViewports)
-  for (const theme of evidenceThemes)
-    for (const scale of evidenceFontScales) {
-      test(`captures Sessions profile workflow states ${viewport.width}x${viewport.height} ${theme} ${scale}%`, async ({
-        page,
-      }) => {
-        await page.setViewportSize(viewport);
-        for (const state of states) {
-          const diagnostics = await open(page, theme, scale, state);
-          if (state === 'profile-manager') {
-            const skillToggle = page.getByRole('checkbox', { name: /Long Skill/ });
-            await skillToggle.uncheck();
-            await page.getByRole('button', { name: 'Sessions', pressed: true }).click();
-            await expect(page.getByRole('button', { name: 'Manage skill profiles' })).toBeVisible();
-            await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
-            await expect(skillToggle).toBeChecked();
-            await page.getByRole('button', { name: 'Close skill profile editor' }).press('Enter');
-            await expect(page.getByRole('button', { name: 'Manage skill profiles' })).toBeFocused();
-            await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
-          }
-          if (state === 'confirmation') {
-            await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
-            await page.getByRole('button', { name: 'Delete profile' }).click();
-            await expect(
-              page.getByRole('heading', { name: 'Delete skill profile?' }),
-            ).toBeVisible();
-          }
-          if (state === 'saved') {
-            await page.getByLabel('Save as').fill('new-profile');
-            await page.getByRole('button', { name: 'Save profile' }).click();
-            await expect(page.getByText('Profile saved.')).toBeVisible();
-          }
-          if (state === 'deleted') {
-            await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
-            await page.getByRole('button', { name: 'Delete profile' }).click();
-            await page
-              .getByLabel('Delete skill profile?')
-              .getByRole('button', { name: 'Delete profile' })
-              .click();
-            await expect(page.getByText('Profile deleted.')).toBeVisible();
-          }
-          await expect(page.getByLabel('Primary')).toBeVisible();
-          const overflow = await page.evaluate(() => ({
-            amount: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            offenders: [...document.querySelectorAll<HTMLElement>('body *')]
-              .map((element) => ({
-                tag: element.tagName,
-                className: element.className,
-                right: element.getBoundingClientRect().right,
-              }))
-              .filter((element) => element.right > document.documentElement.clientWidth + 0.5)
-              .slice(0, 8),
-          }));
-          expect(overflow.amount, JSON.stringify(overflow)).toBe(0);
-          await page.screenshot({
-            path: `${evidenceDirectory}/${evidenceFilename('sessions', state, viewport, scale, theme)}`,
-            fullPage: false,
-          });
-          expectCleanThemeDiagnostics(diagnostics, {
-            ...(state === 'deleted'
-              ? { expectedRequestFailures: ['http://127.0.0.1:4173/api/skill-profiles/team'] }
-              : {}),
-            ...(state === 'error'
-              ? {
-                  expectedConsoleErrors: [
-                    'Failed to load resource: the server responded with a status of 502 (Bad Gateway)',
-                  ],
-                }
-              : {}),
-          });
-        }
+for (const { viewport, theme, fontScale: scale } of evidenceConfigurations()) {
+  test(`captures Sessions profile workflow states ${viewport.width}x${viewport.height} ${theme} ${scale}%`, async ({
+    page,
+  }, testInfo: TestInfo) => {
+    await page.setViewportSize(viewport);
+    for (const state of states) {
+      const diagnostics = await open(page, theme, scale, state);
+      if (state === 'profile-manager') {
+        const skillToggle = page.getByRole('checkbox', { name: /Long Skill/ });
+        await skillToggle.uncheck();
+        await page.getByRole('button', { name: 'Sessions', pressed: true }).click();
+        await expect(page.getByRole('button', { name: 'Manage skill profiles' })).toBeVisible();
+        await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
+        await expect(skillToggle).toBeChecked();
+        await page.getByRole('button', { name: 'Close skill profile editor' }).press('Enter');
+        await expect(page.getByRole('button', { name: 'Manage skill profiles' })).toBeFocused();
+        await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
+      }
+      if (state === 'confirmation') {
+        await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
+        await page.getByRole('button', { name: 'Delete profile' }).click();
+        await expect(page.getByRole('heading', { name: 'Delete skill profile?' })).toBeVisible();
+      }
+      if (state === 'saved') {
+        await page.getByLabel('Save as').fill('new-profile');
+        await page.getByRole('button', { name: 'Save profile' }).click();
+        await expect(page.getByText('Profile saved.')).toBeVisible();
+      }
+      if (state === 'deleted') {
+        await page.getByLabel('Skill profile', { exact: true }).selectOption('team');
+        await page.getByRole('button', { name: 'Delete profile' }).click();
+        await page
+          .getByLabel('Delete skill profile?')
+          .getByRole('button', { name: 'Delete profile' })
+          .click();
+        await expect(page.getByText('Profile deleted.')).toBeVisible();
+      }
+      await expect(page.getByLabel('Primary')).toBeVisible();
+      const overflow = await page.evaluate(() => ({
+        amount: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        offenders: [...document.querySelectorAll<HTMLElement>('body *')]
+          .map((element) => ({
+            tag: element.tagName,
+            className: element.className,
+            right: element.getBoundingClientRect().right,
+          }))
+          .filter((element) => element.right > document.documentElement.clientWidth + 0.5)
+          .slice(0, 8),
+      }));
+      expect(overflow.amount, JSON.stringify(overflow)).toBe(0);
+      await page.screenshot({
+        path: testInfo.outputPath(evidenceFilename('sessions', state, viewport, scale, theme)),
+        fullPage: false,
+      });
+      expectCleanThemeDiagnostics(diagnostics, {
+        ...(state === 'deleted'
+          ? { expectedRequestFailures: ['http://127.0.0.1:4173/api/skill-profiles/team'] }
+          : {}),
+        ...(state === 'error'
+          ? {
+              expectedConsoleErrors: [
+                'Failed to load resource: the server responded with a status of 502 (Bad Gateway)',
+              ],
+            }
+          : {}),
       });
     }
+  });
+}
 
 test('refreshes new-session profile choices after create, replace, and delete', async ({
   page,

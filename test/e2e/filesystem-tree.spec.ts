@@ -4,23 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, test, type Page } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import {
   evidenceFilename,
+  evidenceConfigurations,
   evidenceFontScales,
   evidenceThemes,
-  evidenceViewports,
   expectCleanThemeDiagnostics,
   openThemeEvidence,
 } from './theme-evidence.js';
-
-const evidenceDirectory = '/tmp/gestalt-mobile-filesystem-tree-evidence';
-
-test.beforeAll(async () => {
-  await mkdir(evidenceDirectory, { recursive: true });
-});
 
 const contexts = ['sessions', 'git'] as const;
 
@@ -84,44 +77,40 @@ test('supports deep folding, pointer selection, and ARIA tree keyboard interacti
 });
 
 for (const context of contexts) {
-  for (const viewport of evidenceViewports) {
-    for (const fontScale of evidenceFontScales) {
-      for (const theme of evidenceThemes) {
-        test(`captures ${context} tree at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
-          page,
-        }) => {
-          await page.setViewportSize(viewport);
-          const diagnostics = await openEvidence(page, context, theme, fontScale);
+  for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
+    test(`captures ${context} tree at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
+      page,
+    }, testInfo: TestInfo) => {
+      await page.setViewportSize(viewport);
+      const diagnostics = await openEvidence(page, context, theme, fontScale);
 
-          const dimensions = await page.locator('button').evaluateAll((buttons) =>
-            buttons.map((button) => {
-              const box = button.getBoundingClientRect();
-              return {
-                width: box.width,
-                height: box.height,
-                label: button.getAttribute('aria-label'),
-              };
-            }),
-          );
-          expect(dimensions.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+      const dimensions = await page.locator('button').evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const box = button.getBoundingClientRect();
+          return {
+            width: box.width,
+            height: box.height,
+            label: button.getAttribute('aria-label'),
+          };
+        }),
+      );
+      expect(dimensions.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
 
-          const overflow = await page.evaluate(() => ({
-            document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-            tree: (() => {
-              const tree = document.querySelector<HTMLElement>('[role="tree"]');
-              return tree ? tree.scrollWidth - tree.clientWidth : 1;
-            })(),
-          }));
-          expect(overflow).toEqual({ document: 0, tree: 0 });
+      const overflow = await page.evaluate(() => ({
+        document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        tree: (() => {
+          const tree = document.querySelector<HTMLElement>('[role="tree"]');
+          return tree ? tree.scrollWidth - tree.clientWidth : 1;
+        })(),
+      }));
+      expect(overflow).toEqual({ document: 0, tree: 0 });
 
-          const filename = evidenceFilename('tree', context, viewport, fontScale, theme);
-          await page.screenshot({
-            path: `${evidenceDirectory}/${filename}`,
-            fullPage: false,
-          });
-          expectCleanThemeDiagnostics(diagnostics);
-        });
-      }
-    }
+      const filename = evidenceFilename('tree', context, viewport, fontScale, theme);
+      await page.screenshot({
+        path: testInfo.outputPath(filename),
+        fullPage: false,
+      });
+      expectCleanThemeDiagnostics(diagnostics);
+    });
   }
 }

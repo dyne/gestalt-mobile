@@ -54,7 +54,7 @@
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",
     "test:e2e:functional": "playwright test --config playwright.functional.config.ts",
-    "test:e2e:evidence": "playwright test --config playwright.evidence.config.ts",
+    "test:e2e:evidence": "PLAYWRIGHT_EVIDENCE=1 playwright test --config playwright.evidence.config.ts",
     "test:e2e:real-auth": "playwright test --config playwright.auth.config.ts",
     "test:lanes": "node scripts/verify-test-lanes.mjs",
     "test:e2e:plan-lifecycle": "npm run build:client && playwright test test/e2e/plan-lifecycle.spec.ts",

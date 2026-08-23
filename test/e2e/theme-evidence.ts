@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type TestInfo } from '@playwright/test';
 
 import {
   THEME_STORAGE_KEY,
@@ -13,6 +13,8 @@ import {
 } from '../../src/client/features/theme/theme-registry.js';
 
 /** The browser evidence matrix is deliberately derived from the production registry. */
+const exhaustiveEvidence = process.env.PLAYWRIGHT_EVIDENCE === '1';
+
 export const evidenceThemes: readonly ThemeId[] = themes.map((theme) => theme.id);
 export const evidenceViewports = [
   { width: 320, height: 568 },
@@ -28,6 +30,35 @@ export type EvidenceDiagnostics = {
   requestFailures: string[];
   localAssetFailures: string[];
 };
+
+/**
+ * PR assertions use an orthogonal sample; the explicit evidence lane keeps the
+ * complete Cartesian archive.  Every sample contains a viewport/theme/font
+ * dimension, including 200% text on the narrow phone.
+ */
+export function evidenceConfigurations(): ReadonlyArray<{
+  viewport: EvidenceViewport;
+  fontScale: EvidenceFontScale;
+  theme: ThemeId;
+}> {
+  if (exhaustiveEvidence)
+    return evidenceViewports.flatMap((viewport) =>
+      evidenceFontScales.flatMap((fontScale) =>
+        evidenceThemes.map((theme) => ({ viewport, fontScale, theme })),
+      ),
+    );
+  return [
+    { viewport: evidenceViewports[0], fontScale: 100, theme: evidenceThemes[0]! },
+    { viewport: evidenceViewports[1], fontScale: 100, theme: evidenceThemes[1]! },
+    { viewport: evidenceViewports[2], fontScale: 100, theme: evidenceThemes[2]! },
+    { viewport: evidenceViewports[0], fontScale: 200, theme: evidenceThemes[2]! },
+  ];
+}
+
+/** Per-test paths are worker-safe and are collected by Playwright as artifacts. */
+export function evidenceOutputPath(testInfo: TestInfo, filename: string): string {
+  return testInfo.outputPath(filename);
+}
 
 export function evidenceFilename(
   component: string,
