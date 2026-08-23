@@ -79,7 +79,7 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     () => {},
   );
 
@@ -183,13 +183,13 @@ test('updates Plan from live events without selecting it, then isolates a sessio
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       emitPlanEvent = (event) => socket.send(JSON.stringify({ type: 'relay.event', event }));
     },
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-2\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-2\/events\?after=\d+/,
     () => {},
   );
 
@@ -308,7 +308,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
     }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     (socket) => {
       emitPlanEvent = (event) => socket.send(JSON.stringify({ type: 'relay.event', event }));
     },

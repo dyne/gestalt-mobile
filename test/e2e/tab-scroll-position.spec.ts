@@ -42,7 +42,7 @@ test('focuses the prompt when Chat is selected on desktop', async ({ page }) => 
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ profiles: [] }) }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     () => {},
   );
 
@@ -83,7 +83,7 @@ test('opens Chat at the bottom and every other tab at the top', async ({ page })
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ profiles: [] }) }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     () => {},
   );
 

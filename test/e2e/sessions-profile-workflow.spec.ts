@@ -174,7 +174,11 @@ for (const { viewport, theme, fontScale: scale } of evidenceConfigurations()) {
       });
       expectCleanThemeDiagnostics(diagnostics, {
         ...(state === 'deleted'
-          ? { expectedRequestFailures: ['http://127.0.0.1:4173/api/skill-profiles/team'] }
+          ? {
+              expectedRequestFailures: [
+                `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4173}/api/skill-profiles/team`,
+              ],
+            }
           : {}),
         ...(state === 'error'
           ? {

@@ -20,7 +20,10 @@ async function openDevices(page: Page, fontScale = 100): Promise<void> {
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'authenticated', publicOrigin: 'http://127.0.0.1:4173' }),
+      body: JSON.stringify({
+        status: 'authenticated',
+        publicOrigin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4173}`,
+      }),
     }),
   );
   await page.route('**/api/bootstrap', (route) =>
@@ -48,7 +51,7 @@ async function openDevices(page: Page, fontScale = 100): Promise<void> {
       contentType: 'application/json',
       body: JSON.stringify({
         ticket: 'ticket-only-client-memory',
-        url: 'http://127.0.0.1:4173/#enroll=ticket-only-client-memory',
+        url: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4173}/#enroll=ticket-only-client-memory`,
         expiresAt: new Date(Date.now() + 600_000).toISOString(),
       }),
     }),

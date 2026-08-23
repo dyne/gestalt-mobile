@@ -8,13 +8,16 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify
+  quality:
+    name: Quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,21 +40,140 @@ jobs:
         run: npm run license:check
       - name: Check types and Svelte
         run: npm run check
-      - name: Run tests
-        run: npm test
       - name: Lint
         run: npm run lint
+
+  vitest:
+    name: Vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Build production application
         run: npm run build
+
+  browser-functional:
+    name: Browser functional (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1/4
+            port: 4173
+            output_id: shard-1
+          - shard: 2/4
+            port: 4174
+            output_id: shard-2
+          - shard: 3/4
+            port: 4175
+            output_id: shard-3
+          - shard: 4/4
+            port: 4176
+            output_id: shard-4
+    env:
+      PLAYWRIGHT_PORT: ${{ matrix.port }}
+      PLAYWRIGHT_OUTPUT_ID: ${{ matrix.output_id }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - name: Run browser tests
-        run: npm run test:e2e
+        run: npx playwright test --config playwright.functional.config.ts --shard=${{ matrix.shard }}
       - name: Upload failed Playwright traces
         if: failure() && hashFiles('test-results/**') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-traces
-          path: test-results/
+          name: playwright-traces-${{ matrix.output_id }}
+          path: test-results/browser-functional-${{ matrix.output_id }}/
           retention-days: 3
+
+  real-auth:
+    name: Real authentication
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:real-auth
+      - if: always() && hashFiles('test-results/auth-real-artifacts/**') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          { name: real-auth-artifacts, path: test-results/auth-real-artifacts/, retention-days: 14 }
+
+  browser-evidence:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:evidence
+      - if: always() && hashFiles('test-results/browser-evidence/**', 'output/playwright/**') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-evidence
+          path: |
+            test-results/browser-evidence/
+            output/playwright/
+          retention-days: 14
+
+  authorization-stress:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run test:auth:stress
+      - if: always() && hashFiles('test-results/auth-stress.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          {
+            name: authorization-stress-summary,
+            path: test-results/auth-stress.json,
+            retention-days: 14,
+          }
 
   package-smoke:
     name: Package smoke
@@ -73,7 +195,7 @@ jobs:
   release:
     name: Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'dyne/gestalt-mobile'
-    needs: [verify, package-smoke]
+    needs: [quality, vitest, build, browser-functional, package-smoke, real-auth]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
