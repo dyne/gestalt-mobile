@@ -617,14 +617,27 @@ describe('production composition', () => {
         coordinator = value;
       },
     });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await vi.waitFor(() => expect(timers.length).toBeGreaterThan(0));
+    coordinator!.dispose(fixture.sessionId);
+    timers.length = 0;
     const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
     const future = new Date(Date.now() + 60_000).toISOString();
     const timestamp = new Date().toISOString();
     database
       .prepare(
-        "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 7, 0, ?, 'future-control', NULL, ?)",
+        "UPDATE autopilot_sessions SET state = 'backoff', generation = 7, no_progress_count = 0, next_evaluation_at = ?, last_control_id = 'future-control', stop_reason = NULL, updated_at = ? WHERE session_id = ?",
       )
-      .run(fixture.sessionId, future, timestamp);
+      .run(future, timestamp, fixture.sessionId);
+    database.prepare('DELETE FROM autopilot_controls WHERE session_id = ?').run(fixture.sessionId);
     database
       .prepare(
         "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?, 'future-control', 'scheduled', ?, ?, NULL, NULL)",
@@ -1050,6 +1063,78 @@ describe('production composition', () => {
       timer!.fired = true;
       timer!.callback();
     }
+    await vi.waitFor(() =>
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.calls)
+          .filter((call) => call === 'turn/start'),
+      ).toHaveLength(1),
+    );
+    await fixture.app.close();
+  });
+
+  it('production blocked child wakes the idle supervisor for bounded recovery', async () => {
+    const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+    const fixture = await createProductionAutopilotFixture({
+      autopilotSchedule: (callback) => {
+        const timer = { callback, cancelled: false, fired: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    const handle = fixture.handles.find((candidate) => candidate.notify)!;
+    handle.notify!({
+      method: 'thread/started',
+      params: { thread: { id: 'thread-1', status: { type: 'idle' } } },
+    });
+    handle.notify!({
+      method: 'item/started',
+      params: {
+        item: {
+          type: 'collabToolCall',
+          tool: 'spawn_agent',
+          status: 'inProgress',
+          senderThreadId: 'thread-1',
+          receiverThreadId: 'child-1',
+          agentStatus: 'working',
+        },
+      },
+    });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(timers).toHaveLength(0);
+
+    handle.notify!({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'collabToolCall',
+          tool: 'wait',
+          status: 'failed',
+          senderThreadId: 'thread-1',
+          receiverThreadId: 'child-1',
+          agentStatus: 'failed',
+        },
+      },
+    });
+
+    const quietTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
+    expect(quietTimer).toBeDefined();
+    quietTimer!.fired = true;
+    quietTimer!.callback();
+    const continuationTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
+    expect(continuationTimer).toBeDefined();
+    continuationTimer!.fired = true;
+    continuationTimer!.callback();
     await vi.waitFor(() =>
       expect(
         fixture.handles

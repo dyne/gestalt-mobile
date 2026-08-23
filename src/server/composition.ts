@@ -188,7 +188,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
-  let notifyAutopilotQuiescence: (sessionId: string) => void = () => undefined;
+  let notifyAutopilotSettled: (sessionId: string) => void = () => undefined;
   const attentionTransitions: OrgPlanAttentionTransitions = {
     subscribe: (sessionId, listener) =>
       events.subscribe(sessionId, (event) => {
@@ -219,10 +219,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       );
       if (
         snapshot.confidence === 'fresh' &&
-        snapshot.root.state === 'idle' &&
-        snapshot.aggregateSubagents === 'idle'
+        ['idle', 'blocked'].includes(snapshot.root.state) &&
+        ['idle', 'blocked'].includes(snapshot.aggregateSubagents)
       )
-        notifyAutopilotQuiescence(snapshot.sessionId);
+        notifyAutopilotSettled(snapshot.sessionId);
     },
     {
       // Evidence arms one bounded reconciliation; healthy sessions are never polled.
@@ -335,7 +335,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       events.publish(journal.append(sessionId, type, payload, occurredAt, outboxId));
     },
   });
-  notifyAutopilotQuiescence = (sessionId) => autopilot.activityQuiescent(sessionId);
+  notifyAutopilotSettled = (sessionId) => autopilot.activitySettled(sessionId);
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);

@@ -104,6 +104,8 @@ describe('autopilot policy', () => {
     ['typed attention', {}, false, 'requestAttention'],
     ['stale sensor', { confidence: 'stale' }, false, 'reconcile'],
     ['healthy idle', {}, false, 'scheduleContinuation'],
+    ['blocked root', { root: { state: 'blocked' } }, false, 'scheduleContinuation'],
+    ['blocked child', { aggregateSubagents: 'blocked' }, false, 'scheduleContinuation'],
     ['disconnected child', { aggregateSubagents: 'disconnected' }, false, 'reconcile'],
   ] as ReadonlyArray<readonly [string, ActivityChange, boolean, string]>)(
     'decides safely for %s',

@@ -83,7 +83,10 @@ export function decideAutopilot(input: {
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
   if (Date.parse(now) - Date.parse(activity.root.lastActivityAt) > policy.staleAfterMs)
     return { kind: 'reconcile' };
-  if (activity.root.state !== 'idle' || activity.aggregateSubagents !== 'idle')
+  const rootSettled = activity.root.state === 'idle' || activity.root.state === 'blocked';
+  const subagentsSettled =
+    activity.aggregateSubagents === 'idle' || activity.aggregateSubagents === 'blocked';
+  if (!rootSettled || !subagentsSettled)
     return activity.aggregateSubagents === 'disconnected'
       ? { kind: 'reconcile' }
       : { kind: 'observe' };
