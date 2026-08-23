@@ -34,10 +34,15 @@ const plan = {
 describe('AutopilotCoordinator', () => {
   it('makes repeated enable idempotent for the same retained plan', () => {
     let state: AutopilotSession | null = null;
+    let currentPlan = plan;
+    let saves = 0;
+    let schedules = 0;
+    const events: string[] = [];
     const coordinator = new AutopilotCoordinator({
       store: {
         find: () => state,
         save: (next) => {
+          saves += 1;
           state = next;
         },
         remove: () => {
@@ -49,7 +54,7 @@ describe('AutopilotCoordinator', () => {
       },
       now: () => now,
       policy: defaultAutopilotPolicy,
-      plan: () => ({ plan, identity: 'p1' }),
+      plan: () => ({ plan: currentPlan, identity: 'p1' }),
       session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
       activity: () => ({
         ...createAgentActivitySnapshot('s', now),
@@ -58,15 +63,27 @@ describe('AutopilotCoordinator', () => {
       }),
       pendingInteraction: () => false,
       reconcile: async () => ({ compatible: true }),
-      schedule: () => () => {},
+      schedule: () => {
+        schedules += 1;
+        return () => {};
+      },
       nextControlId: () => 'control',
       turnStarter: { start: async () => {} },
-      publish: () => {},
+      publish: (_sessionId, type) => events.push(type),
     });
     coordinator.enable('s');
     const first = state!.generation;
+    const firstFingerprint = state!.planFingerprint;
+    const enabledSaves = saves;
+    const enabledSchedules = schedules;
+    const enabledEvents = events.length;
+    currentPlan = { ...plan, doneSteps: 1 };
     coordinator.enable('s');
     expect(state!.generation).toBe(first);
+    expect(state!.planFingerprint).toBe(firstFingerprint);
+    expect(saves).toBe(enabledSaves);
+    expect(schedules).toBe(enabledSchedules);
+    expect(events).toHaveLength(enabledEvents);
     coordinator.disable('s');
     const disabled = state!.generation;
     coordinator.disable('s');
@@ -679,6 +696,126 @@ describe('AutopilotCoordinator', () => {
     });
     expect(timerCancelled).toBe(true);
     expect(events).not.toContain('autopilot.progress-reset');
+  });
+  it.each([
+    ['idle', true],
+    ['blocked', true],
+    ['working', false],
+    ['awaitingAgent', false],
+  ] as const)(
+    'treats a root awaitingAgent with %s subagents as continuation eligible: %s',
+    (aggregateSubagents, eligible) => {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        updatedAt: now,
+      };
+      const timers: Array<() => void> = [];
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: { ...defaultAutopilotPolicy, quiescenceMs: 0 },
+        plan: () => ({ plan, identity: 'p' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => ({
+          ...createAgentActivitySnapshot('s', now),
+          confidence: 'fresh',
+          root: {
+            ...createAgentActivitySnapshot('s', now).root,
+            state: 'awaitingAgent',
+            lastActivityAt: now,
+          },
+          aggregateSubagents,
+        }),
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: (callback) => {
+          timers.push(callback);
+          return () => {};
+        },
+        nextControlId: () => 'next',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+
+      coordinator.activityChanged('s');
+      expect(timers).toHaveLength(eligible ? 1 : 0);
+    },
+  );
+  it('stops once when fresh actor status requires human attention without a stored interaction', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    const events: string[] = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: {
+          ...createAgentActivitySnapshot('s', now).root,
+          state: 'awaitingHuman',
+          lastActivityAt: now,
+        },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'next',
+      turnStarter: { start: async () => {} },
+      publish: (_sessionId, type) => events.push(type),
+    });
+
+    coordinator.activityChanged('s');
+    coordinator.activityChanged('s');
+
+    expect(state).toMatchObject({
+      state: 'attentionRequired',
+      requestedEnabled: false,
+      stopReason: 'attentionRequired',
+      generation: 2,
+    });
+    expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(1);
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {
     let state: AutopilotSession | null = null;
