@@ -237,7 +237,7 @@ main {
   max-inline-size: 100%;
   padding-inline: 0;
   overflow: hidden;
-  font-size: max(0.453125rem, 13px);
+  font-size: max(0.453125rem, 18px);
   text-overflow: clip;
   white-space: nowrap;
   transition:
