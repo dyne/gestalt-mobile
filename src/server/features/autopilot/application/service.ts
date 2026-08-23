@@ -190,20 +190,8 @@ export class AutopilotCoordinator {
   evaluate(sessionId: string): AutopilotSnapshot {
     const prior = this.deps.store.find(sessionId);
     if (!prior) return this.snapshot(sessionId);
-    const plan = this.deps.plan(sessionId);
     const session = this.deps.session(sessionId);
-    const decision = decideAutopilot({
-      state: prior,
-      plan: plan?.plan ?? null,
-      planIdentity: plan?.identity,
-      planFingerprint: plan ? fingerprint(plan.plan) : null,
-      activity: this.deps.activity(sessionId),
-      hasPendingInteraction: this.deps.pendingInteraction(sessionId),
-      hasActiveAttention: prior.state === 'attentionRequired',
-      lastTurnOutcome: this.lastTurnOutcome(sessionId, prior.lastControlId),
-      now: this.deps.now(),
-      policy: this.deps.policy,
-    });
+    const decision = this.decision(sessionId, prior);
     const now = this.deps.now();
     this.deps.diagnostic?.(sessionId, decision.kind);
     let next = prior;
@@ -216,6 +204,21 @@ export class AutopilotCoordinator {
         break;
       case 'scheduleContinuation':
         if (session?.activeTurnId || this.deps.pendingInteraction(sessionId)) break;
+        const existingControl = prior.lastControlId
+          ? this.deps.store.findControl(sessionId, prior.lastControlId)
+          : null;
+        if (existingControl?.status === 'scheduled') {
+          const evaluationAt = prior.nextEvaluationAt ?? decision.at;
+          if (prior.state !== 'backoff' || prior.nextEvaluationAt !== evaluationAt)
+            this.persist({
+              ...prior,
+              state: 'backoff',
+              nextEvaluationAt: evaluationAt,
+              updatedAt: now,
+            });
+          this.arm(sessionId, prior.generation, evaluationAt);
+          break;
+        }
         const scheduledControlId = this.deps.nextControlId(sessionId, prior.generation);
         next = {
           ...prior,
@@ -320,9 +323,9 @@ export class AutopilotCoordinator {
     this.evaluate(sessionId);
   }
   turnCompleted(sessionId: string): void {
-    this.activityQuiescent(sessionId);
+    this.activitySettled(sessionId);
   }
-  activityQuiescent(sessionId: string): void {
+  activitySettled(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled || prior.state !== 'monitoring') return;
     this.completionTimers.get(sessionId)?.();
@@ -407,15 +410,22 @@ export class AutopilotCoordinator {
   private async fire(sessionId: string, generation: number): Promise<void> {
     this.timers.delete(sessionId);
     const current = this.deps.store.find(sessionId);
+    if (!current || current.generation !== generation || !current.requestedEnabled) return;
     const session = this.deps.session(sessionId);
     if (
-      !current ||
-      current.generation !== generation ||
-      !current.requestedEnabled ||
       session?.activeTurnId ||
-      this.deps.pendingInteraction(sessionId)
-    )
+      this.deps.pendingInteraction(sessionId) ||
+      this.decision(sessionId, current).kind !== 'scheduleContinuation'
+    ) {
+      this.persist({
+        ...current,
+        state: 'monitoring',
+        nextEvaluationAt: null,
+        updatedAt: this.deps.now(),
+      });
+      this.evaluate(sessionId);
       return;
+    }
     const id = current.lastControlId;
     if (!id) return;
     if (!this.recordControlIssued(sessionId, id)) return;
@@ -575,6 +585,21 @@ export class AutopilotCoordinator {
     if (control?.status === 'failed') return 'failed';
     if (control?.status === 'started') return 'completed';
     return 'unknown';
+  }
+  private decision(sessionId: string, state: AutopilotSession) {
+    const plan = this.deps.plan(sessionId);
+    return decideAutopilot({
+      state,
+      plan: plan?.plan ?? null,
+      planIdentity: plan?.identity,
+      planFingerprint: plan ? fingerprint(plan.plan) : null,
+      activity: this.deps.activity(sessionId),
+      hasPendingInteraction: this.deps.pendingInteraction(sessionId),
+      hasActiveAttention: state.state === 'attentionRequired',
+      lastTurnOutcome: this.lastTurnOutcome(sessionId, state.lastControlId),
+      now: this.deps.now(),
+      policy: this.deps.policy,
+    });
   }
   private async reconcile(sessionId: string, generation: number): Promise<void> {
     try {

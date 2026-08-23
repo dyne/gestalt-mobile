@@ -3,7 +3,7 @@
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AutopilotCoordinator } from './service.js';
 import { defaultAutopilotPolicy } from './policy.js';
 import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
@@ -210,6 +210,126 @@ describe('AutopilotCoordinator', () => {
     coordinator.manualSend('s');
     expect(events.filter((event) => event.type === 'autopilot.turn-started')).toHaveLength(1);
     expect(controls.get(`s:${scheduled}`)?.status).toBe('started');
+  });
+  it('revalidates activity before firing and rearms the same control after work becomes idle', async () => {
+    let state: AutopilotSession | null = null;
+    let activityState: 'idle' | 'working' = 'idle';
+    let starts = 0;
+    const controls = new Map<string, import('./ports.js').AutopilotControl>();
+    const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: (sessionId, controlId) => controls.get(`${sessionId}:${controlId}`) ?? null,
+        saveControl: (control) =>
+          controls.set(`${control.sessionId}:${control.controlId}`, control),
+        controlIds: () => new Set([...controls.values()].map((control) => control.controlId)),
+      },
+      now: () => now,
+      policy: { ...defaultAutopilotPolicy, quiescenceMs: 0, backoffMs: () => 0 },
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+        aggregateSubagents: activityState,
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: (callback) => {
+        const timer = { callback, cancelled: false, fired: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+      nextControlId: () => 'activity-control',
+      turnStarter: {
+        start: async () => {
+          starts += 1;
+        },
+      },
+      publish: () => {},
+    });
+    const runNextTimer = async () => {
+      const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+      expect(timer).toBeDefined();
+      timer!.fired = true;
+      timer!.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    coordinator.enable('s');
+    activityState = 'working';
+    await runNextTimer();
+    expect(starts).toBe(0);
+    expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
+
+    activityState = 'idle';
+    coordinator.activitySettled('s');
+    await runNextTimer();
+    await runNextTimer();
+    expect(starts).toBe(1);
+    expect(controls.size).toBe(1);
+    expect(controls.get('s:activity-control')?.status).toBe('started');
+  });
+  it('keeps one durable scheduled control across repeated backoff evaluations', () => {
+    let state: AutopilotSession | null = null;
+    const controls = new Map<string, import('./ports.js').AutopilotControl>();
+    const timers: Array<{ cancelled: boolean }> = [];
+    const events: string[] = [];
+    const nextControlId = vi.fn(() => `control-${controls.size + 1}`);
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: (sessionId, controlId) => controls.get(`${sessionId}:${controlId}`) ?? null,
+        saveControl: (control) =>
+          controls.set(`${control.sessionId}:${control.controlId}`, control),
+        controlIds: () => new Set([...controls.values()].map((control) => control.controlId)),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => {
+        const timer = { cancelled: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+      nextControlId,
+      turnStarter: { start: async () => {} },
+      publish: (_sessionId, type) => events.push(type),
+    });
+
+    coordinator.enable('s');
+    const scheduledControlId = state!.lastControlId;
+    coordinator.evaluate('s');
+    coordinator.evaluate('s');
+
+    expect(state).toMatchObject({ state: 'backoff', lastControlId: scheduledControlId });
+    expect(nextControlId).toHaveBeenCalledTimes(1);
+    expect(controls.size).toBe(1);
+    expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1);
+    expect(events.filter((type) => type === 'autopilot.continuation-scheduled')).toHaveLength(1);
   });
   it('does not replay an issued command after a restart boundary', () => {
     let state: AutopilotSession | null = {
