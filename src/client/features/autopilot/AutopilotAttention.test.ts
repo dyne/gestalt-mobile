@@ -14,7 +14,7 @@ const attention = {
   turnId: 't',
   requestedAt: '2026-08-20T00:00:00Z',
   attention: {
-    reason: 'hardBlock',
+    reason: 'missingDependency',
     summary: 'A dependency is unavailable.',
     requestedAction: 'Restore it.',
     resumeCondition: 'dependencyInstalled',
