@@ -320,11 +320,18 @@ export class AutopilotCoordinator {
     this.evaluate(sessionId);
   }
   turnCompleted(sessionId: string): void {
+    this.activityQuiescent(sessionId);
+  }
+  activityQuiescent(sessionId: string): void {
+    const prior = this.deps.store.find(sessionId);
+    if (!prior?.requestedEnabled || prior.state !== 'monitoring') return;
     this.completionTimers.get(sessionId)?.();
     this.completionTimers.set(
       sessionId,
       this.deps.schedule(() => {
         this.completionTimers.delete(sessionId);
+        const current = this.deps.store.find(sessionId);
+        if (!current?.requestedEnabled || current.state !== 'monitoring') return;
         this.evaluate(sessionId);
       }, this.deps.policy.quiescenceMs),
     );

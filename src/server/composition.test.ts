@@ -985,6 +985,81 @@ describe('production composition', () => {
     await fixture.app.close();
   });
 
+  it('production child-idle transition wakes an idle supervised autopilot', async () => {
+    const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+    const fixture = await createProductionAutopilotFixture({
+      autopilotSchedule: (callback) => {
+        const timer = { callback, cancelled: false, fired: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+    });
+    const handle = fixture.handles.find((candidate) => candidate.notify)!;
+    handle.notify!({
+      method: 'thread/started',
+      params: { thread: { id: 'thread-1', status: { type: 'active' } } },
+    });
+    handle.notify!({
+      method: 'item/started',
+      params: {
+        item: {
+          type: 'collabToolCall',
+          tool: 'spawn_agent',
+          status: 'inProgress',
+          senderThreadId: 'thread-1',
+          receiverThreadId: 'child-1',
+          agentStatus: 'working',
+        },
+      },
+    });
+    handle.notify!({
+      method: 'thread/status/changed',
+      params: { threadId: 'thread-1', status: { type: 'idle' } },
+    });
+    expect(
+      (
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(timers).toHaveLength(0);
+
+    handle.notify!({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'collabToolCall',
+          tool: 'wait',
+          status: 'completed',
+          senderThreadId: 'thread-1',
+          receiverThreadId: 'child-1',
+          agentStatus: 'idle',
+        },
+      },
+    });
+
+    expect(timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(1);
+    for (let index = 0; index < 2; index += 1) {
+      const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+      expect(timer).toBeDefined();
+      timer!.fired = true;
+      timer!.callback();
+    }
+    await vi.waitFor(() =>
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.calls)
+          .filter((call) => call === 'turn/start'),
+      ).toHaveLength(1),
+    );
+    await fixture.app.close();
+  });
+
   it('production incompatible exhausted reconcile becomes typed attention with no later reads or timers', async () => {
     let reconciliations = 0;
     const timers: Array<() => void> = [];
