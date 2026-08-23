@@ -34,8 +34,6 @@ jobs:
         run: npm run format:check
       - name: Audit production dependencies
         run: npm run audit:prod
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
       - name: Check source licenses
         run: npm run license:check
       - name: Check types and Svelte
@@ -110,6 +108,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Build relay client
+        run: npm run build:client
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Run browser tests
