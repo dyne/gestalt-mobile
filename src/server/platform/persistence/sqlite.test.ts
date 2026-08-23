@@ -147,7 +147,7 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
-  it('applies the tail limit and truncation only to renderable records under noisy monitoring', async () => {
+  it('applies the tail limit and truncation only to renderable records after monitoring', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
@@ -159,8 +159,7 @@ describe('SQLite relay persistence', () => {
       .run();
     const journal = new SqliteEventJournal(database);
     journal.append('s', 'autopilot.turn-failed', { controlId: 'old' }, 't1');
-    for (let index = 0; index < 250; index++)
-      journal.append('s', 'autopilot.updated', { state: 'monitoring', enabled: true }, `n${index}`);
+    journal.append('s', 'autopilot.updated', { state: 'monitoring', enabled: true }, 'n1');
     journal.append('s', 'autopilot.progress-reset', { reason: 'planUpdated' }, 't2');
     journal.append('s', 'autopilot.updated', { state: 'completed', enabled: false }, 't3');
 

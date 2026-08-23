@@ -47,7 +47,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.reporter=json-summary",
     "test:vitest": "vitest run --config vitest.unit.config.ts",
-    "test:auth:stress": "vitest run --config vitest.auth-stress.config.ts",
+    "test:auth:stress": "AUTH_CONTENTION_STRESS=1 vitest run --config vitest.auth-stress.config.ts",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test:open-profile-smoke": "tsx scripts/open-profile-smoke.ts",
     "test:watch": "vitest",

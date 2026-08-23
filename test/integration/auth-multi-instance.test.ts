@@ -35,6 +35,7 @@ const rp = {
   rpName: 'Gestalt Mobile' as const,
 };
 const expiresAt = '2026-09-01T00:00:00.000Z';
+const contentionRepetitions = process.env.AUTH_CONTENTION_STRESS === '1' ? 10 : 1;
 
 afterEach(async () => {
   await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -391,8 +392,8 @@ describe('shared authorization across independently composed relays', () => {
     ).rejects.toThrow('hostname changed');
   });
 
-  it.each([1, 2, 3, 4, 5])(
-    'preserves bootstrap and final-device invariants under concurrent process repeat %i',
+  it.each(Array.from({ length: contentionRepetitions }, (_, index) => index + 1))(
+    'preserves bootstrap and final-device invariants under barrier-synchronized concurrent processes %i',
     async () => {
       const home = await temporary('gestalt-multi-contention-');
       expect(await runContenders(home, 'first-claim', ['one', 'two'])).toEqual(
