@@ -20,15 +20,15 @@ describe('MessageList', () => {
         {
           id: 'automatic',
           role: 'audit',
-          text: 'Autopilot issued an automatic continuation.',
+          text: 'Issued an automatic continuation.',
           complete: true,
         },
       ],
       activities: [],
     });
-    expect(screen.getByLabelText('Autopilot audit entry').textContent).toContain(
-      'automatic continuation',
-    );
+    const audit = screen.getByLabelText('Autopilot audit entry');
+    expect(audit.textContent).toContain('automatic continuation');
+    expect(audit.textContent?.match(/Autopilot/g)).toHaveLength(1);
     expect(screen.queryByText('prompt')).toBeNull();
   });
   it('discloses that the durable autopilot audit is intentionally incomplete', () => {

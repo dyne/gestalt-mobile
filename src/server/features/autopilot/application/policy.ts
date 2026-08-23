@@ -58,8 +58,6 @@ export function executionComplete(plan: SupervisedPlan): boolean {
 export function decideAutopilot(input: {
   state: AutopilotSession;
   plan: SupervisedPlan | null;
-  planIdentity?: string | null;
-  planFingerprint?: string | null;
   activity: AgentActivitySnapshot | null;
   hasPendingInteraction: boolean;
   hasActiveAttention?: boolean;
@@ -73,13 +71,6 @@ export function decideAutopilot(input: {
   if (executionComplete(plan)) return { kind: 'complete' };
   if (hasPendingInteraction || input.hasActiveAttention || state.state === 'attentionRequired')
     return { kind: 'requestAttention', reason: 'attentionRequired' };
-  if (
-    (input.planIdentity && state.planIdentity && input.planIdentity !== state.planIdentity) ||
-    (input.planFingerprint &&
-      state.planFingerprint &&
-      input.planFingerprint !== state.planFingerprint)
-  )
-    return { kind: 'observe' };
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
   if (Date.parse(now) - Date.parse(activity.root.lastActivityAt) > policy.staleAfterMs)
     return { kind: 'reconcile' };

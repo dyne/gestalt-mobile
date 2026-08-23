@@ -66,7 +66,7 @@ describe('groupMessages', () => {
       {
         id: 'first',
         role: 'audit',
-        text: 'Autopilot issued an automatic continuation.',
+        text: 'Issued an automatic continuation.',
         controlId: 'control-1',
         occurredAt: 10,
         complete: true,
@@ -74,7 +74,7 @@ describe('groupMessages', () => {
       {
         id: 'second',
         role: 'audit',
-        text: 'Autopilot issued an automatic continuation.',
+        text: 'Issued an automatic continuation.',
         controlId: 'control-2',
         occurredAt: 20,
         complete: true,
@@ -82,7 +82,7 @@ describe('groupMessages', () => {
       {
         id: 'older',
         role: 'audit',
-        text: 'Autopilot issued an automatic continuation.',
+        text: 'Issued an automatic continuation.',
         controlId: 'control-0',
         occurredAt: 5,
         complete: true,

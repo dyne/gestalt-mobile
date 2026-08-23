@@ -13,7 +13,6 @@ export const autopilotAuditEventTypes = [
   'autopilot.control-issued',
   'autopilot.turn-started',
   'autopilot.turn-failed',
-  'autopilot.progress-reset',
   'autopilot.updated',
   'org-plan.attention-required',
   'org-plan.attention-resolved',

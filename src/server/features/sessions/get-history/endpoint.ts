@@ -97,23 +97,22 @@ function isBoundedAudit(
 }
 
 const auditLabels: Readonly<Record<string, string>> = {
-  'autopilot.continuation-scheduled': 'Autopilot scheduled a continuation',
-  'autopilot.control-issued': 'Autopilot issued an automatic continuation.',
-  'autopilot.turn-started': 'Autopilot continuation started',
-  'autopilot.turn-failed': 'Autopilot continuation failed',
-  'autopilot.progress-reset': 'Autopilot reset retry progress after the plan changed',
-  'org-plan.attention-required': 'Autopilot needs attention',
+  'autopilot.continuation-scheduled': 'Scheduled a continuation',
+  'autopilot.control-issued': 'Issued an automatic continuation.',
+  'autopilot.turn-started': 'Continuation started',
+  'autopilot.turn-failed': 'Continuation failed',
+  'org-plan.attention-required': 'Needs attention',
   'org-plan.attention-resolved': 'Attention resolved',
 };
 
 function snapshotAuditLabel(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const { state, reason } = payload as { state?: unknown; reason?: unknown };
-  if (state === 'backoff') return 'Autopilot is backing off';
-  if (state === 'attentionRequired') return 'Autopilot needs attention';
-  if (state === 'completed') return 'Autopilot completed the plan';
+  if (state === 'backoff') return 'Backing off';
+  if (state === 'attentionRequired') return 'Needs attention';
+  if (state === 'completed') return 'Completed the plan';
   if (state === 'disabled' && reason === 'planRequired')
-    return 'Autopilot requires an incomplete supervised plan';
+    return 'Requires an incomplete supervised plan';
   return null;
 }
 

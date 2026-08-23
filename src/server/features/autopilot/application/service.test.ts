@@ -574,20 +574,23 @@ describe('AutopilotCoordinator', () => {
       lastControlId: null,
     });
   });
-  it('requires explicit re-enable when the retained plan identity changes', () => {
-    let state: AutopilotSession | null = {
+  it('ignores ordinary updates within the retained incomplete plan', () => {
+    const initial: AutopilotSession = {
       sessionId: 's',
       state: 'monitoring',
       requestedEnabled: true,
-      planIdentity: 'old',
-      planFingerprint: 'f',
+      planIdentity: 'p',
+      planFingerprint: 'old-fingerprint',
       generation: 1,
-      consecutiveNoProgress: 0,
+      consecutiveNoProgress: 2,
       nextEvaluationAt: null,
-      lastControlId: null,
+      lastControlId: 'prior',
       stopReason: null,
       updatedAt: now,
     };
+    let state: AutopilotSession | null = initial;
+    const publish = vi.fn();
+    const schedule = vi.fn(() => () => {});
     const coordinator = new AutopilotCoordinator({
       store: {
         find: () => state,
@@ -601,22 +604,81 @@ describe('AutopilotCoordinator', () => {
       },
       now: () => now,
       policy: defaultAutopilotPolicy,
-      plan: () => ({ plan, identity: 'new' }),
+      plan: () => ({ plan: { ...plan, doneSteps: 1 }, identity: 'p' }),
       session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
       activity: () => null,
       pendingInteraction: () => false,
       reconcile: async () => ({ compatible: true }),
-      schedule: () => () => {},
+      schedule,
       nextControlId: () => 'next',
       turnStarter: { start: async () => {} },
-      publish: () => {},
+      publish,
     });
-    coordinator.planUpdated('s');
+
+    coordinator.planStatusChanged('s');
+
+    expect(state).toBe(initial);
+    expect(schedule).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+  it('cancels pending continuation and resets retries only when subagents resume work', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'backoff',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 2,
+      nextEvaluationAt: '2026-08-20T12:01:00.000Z',
+      lastControlId: 'pending',
+      stopReason: null,
+      updatedAt: now,
+    };
+    let timerCancelled = false;
+    const events: string[] = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+        aggregateSubagents: 'working',
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {
+        timerCancelled = true;
+      },
+      nextControlId: () => 'next',
+      turnStarter: { start: async () => {} },
+      publish: (_id, type) => events.push(type),
+    });
+    coordinator.restore('s');
+    coordinator.activityChanged('s');
     expect(state).toMatchObject({
-      state: 'disabled',
-      requestedEnabled: false,
-      stopReason: 'planReplaced',
+      state: 'monitoring',
+      requestedEnabled: true,
+      generation: 2,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
     });
+    expect(timerCancelled).toBe(true);
+    expect(events).not.toContain('autopilot.progress-reset');
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {
     let state: AutopilotSession | null = null;

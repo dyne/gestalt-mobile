@@ -57,7 +57,7 @@ describe('chat projection', () => {
     expect(projection.messages).toEqual([
       expect.objectContaining({
         role: 'audit',
-        text: 'Autopilot issued an automatic continuation.',
+        text: 'Issued an automatic continuation.',
       }),
     ]);
   });
@@ -79,7 +79,7 @@ describe('chat projection', () => {
       expect.objectContaining({
         id: 'audit:1',
         role: 'audit',
-        text: 'Autopilot issued an automatic continuation.',
+        text: 'Issued an automatic continuation.',
       }),
     ]);
   });
@@ -105,7 +105,7 @@ describe('chat projection', () => {
       autopilotAudit: [
         {
           id: 'audit:1',
-          label: 'Autopilot continuation failed',
+          label: 'Continuation failed',
           occurredAt: 1,
         },
       ],
@@ -129,7 +129,7 @@ describe('chat projection', () => {
       autopilotAudit: [
         {
           id: 'audit:4',
-          label: 'Autopilot issued an automatic continuation.',
+          label: 'Issued an automatic continuation.',
           occurredAt: 1_700_000_000_001,
           controlId: 'control-1',
         },

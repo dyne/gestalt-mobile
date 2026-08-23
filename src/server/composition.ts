@@ -188,7 +188,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
-  let notifyAutopilotSettled: (sessionId: string) => void = () => undefined;
+  let notifyAutopilotActivity: (sessionId: string) => void = () => undefined;
   const attentionTransitions: OrgPlanAttentionTransitions = {
     subscribe: (sessionId, listener) =>
       events.subscribe(sessionId, (event) => {
@@ -217,12 +217,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       events.publish(
         journal.append(snapshot.sessionId, 'agent.activity.updated', snapshot, occurredAt),
       );
-      if (
-        snapshot.confidence === 'fresh' &&
-        ['idle', 'blocked'].includes(snapshot.root.state) &&
-        ['idle', 'blocked'].includes(snapshot.aggregateSubagents)
-      )
-        notifyAutopilotSettled(snapshot.sessionId);
+      notifyAutopilotActivity(snapshot.sessionId);
     },
     {
       // Evidence arms one bounded reconciliation; healthy sessions are never polled.
@@ -335,7 +330,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       events.publish(journal.append(sessionId, type, payload, occurredAt, outboxId));
     },
   });
-  notifyAutopilotSettled = (sessionId) => autopilot.activitySettled(sessionId);
+  notifyAutopilotActivity = (sessionId) => autopilot.activityChanged(sessionId);
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
@@ -455,7 +450,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ),
       );
     }
-    autopilot.planUpdated(sessionId);
+    autopilot.planStatusChanged(sessionId);
   };
   runtime = options.startAppServers
     ? new CodexSessionRuntime(

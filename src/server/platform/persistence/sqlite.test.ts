@@ -147,7 +147,7 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
-  it('applies the tail limit and truncation only to renderable records after monitoring', async () => {
+  it('excludes monitoring and obsolete plan-progress records from the renderable tail', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
     const database = openRelayDatabase(join(directory, 'relay.sqlite'));
@@ -163,20 +163,16 @@ describe('SQLite relay persistence', () => {
     journal.append('s', 'autopilot.progress-reset', { reason: 'planUpdated' }, 't2');
     journal.append('s', 'autopilot.updated', { state: 'completed', enabled: false }, 't3');
 
+    const visibleOne = journal.autopilotAuditTail('s', 1);
+    expect(visibleOne.events.map((event) => event.type)).toEqual(['autopilot.updated']);
+    expect(visibleOne.events[0]?.payload).toMatchObject({ state: 'completed' });
+    expect(visibleOne.truncated).toBe(true);
     const visibleTwo = journal.autopilotAuditTail('s', 2);
     expect(visibleTwo.events.map((event) => event.type)).toEqual([
-      'autopilot.progress-reset',
-      'autopilot.updated',
-    ]);
-    expect(visibleTwo.events[1]?.payload).toMatchObject({ state: 'completed' });
-    expect(visibleTwo.truncated).toBe(true);
-    const visibleThree = journal.autopilotAuditTail('s', 3);
-    expect(visibleThree.events.map((event) => event.type)).toEqual([
       'autopilot.turn-failed',
-      'autopilot.progress-reset',
       'autopilot.updated',
     ]);
-    expect(visibleThree.truncated).toBe(false);
+    expect(visibleTwo.truncated).toBe(false);
     const indexes = database.prepare('PRAGMA index_list(session_events)').all() as Array<{
       name: string;
     }>;

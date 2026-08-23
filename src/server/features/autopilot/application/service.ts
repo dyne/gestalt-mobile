@@ -290,40 +290,60 @@ export class AutopilotCoordinator {
     if (next !== prior) this.persist(next);
     return this.snapshot(sessionId);
   }
-  planUpdated(sessionId: string): void {
+  turnCompleted(sessionId: string): void {
+    this.activitySettled(sessionId);
+  }
+  /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
+  planStatusChanged(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
+    if (!prior?.requestedEnabled) return;
     const plan = this.deps.plan(sessionId);
-    if (!prior || !plan) return;
+    if (!plan) {
+      this.cancel(sessionId, 'planRemoved');
+      return;
+    }
     if (prior.planIdentity && prior.planIdentity !== plan.identity) {
       this.cancel(sessionId, 'planReplaced');
       return;
     }
-    const nextFingerprint = fingerprint(plan.plan);
-    if (prior.planFingerprint !== nextFingerprint) {
-      const now = this.deps.now();
-      this.persist(
-        {
-          ...prior,
-          planIdentity: plan.identity,
-          planFingerprint: nextFingerprint,
-          consecutiveNoProgress: 0,
-          updatedAt: now,
-        },
-        undefined,
-        [
-          {
-            sessionId,
-            type: 'autopilot.progress-reset',
-            payload: { reason: 'planUpdated' },
-            occurredAt: now,
-          },
-        ],
-      );
-    }
-    this.evaluate(sessionId);
+    if (executionComplete(plan.plan)) this.evaluate(sessionId);
   }
-  turnCompleted(sessionId: string): void {
-    this.activitySettled(sessionId);
+  /** Reacts only to fresh actor status; plan mutations are not scheduling signals. */
+  activityChanged(sessionId: string): void {
+    const prior = this.deps.store.find(sessionId);
+    if (!prior?.requestedEnabled) return;
+    const activity = this.deps.activity(sessionId);
+    if (!activity || activity.confidence !== 'fresh') return;
+    const actorsWorking =
+      activity.root.state === 'working' ||
+      activity.aggregateSubagents === 'working' ||
+      activity.aggregateSubagents === 'awaitingAgent';
+    if (actorsWorking) {
+      this.cancelTimer(sessionId);
+      const subagentsWorking =
+        activity.aggregateSubagents === 'working' ||
+        activity.aggregateSubagents === 'awaitingAgent';
+      if (
+        prior.state !== 'monitoring' ||
+        prior.nextEvaluationAt ||
+        (subagentsWorking && prior.consecutiveNoProgress > 0)
+      )
+        this.persist({
+          ...prior,
+          state: 'monitoring',
+          ...(prior.state === 'backoff'
+            ? { generation: prior.generation + 1, lastControlId: null }
+            : {}),
+          ...(subagentsWorking ? { consecutiveNoProgress: 0 } : {}),
+          nextEvaluationAt: null,
+          updatedAt: this.deps.now(),
+        });
+      return;
+    }
+    const rootSettled = activity.root.state === 'idle' || activity.root.state === 'blocked';
+    const subagentsSettled =
+      activity.aggregateSubagents === 'idle' || activity.aggregateSubagents === 'blocked';
+    if (rootSettled && subagentsSettled) this.activitySettled(sessionId);
   }
   activitySettled(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
@@ -591,8 +611,6 @@ export class AutopilotCoordinator {
     return decideAutopilot({
       state,
       plan: plan?.plan ?? null,
-      planIdentity: plan?.identity,
-      planFingerprint: plan ? fingerprint(plan.plan) : null,
       activity: this.deps.activity(sessionId),
       hasPendingInteraction: this.deps.pendingInteraction(sessionId),
       hasActiveAttention: state.state === 'attentionRequired',
