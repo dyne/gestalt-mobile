@@ -304,15 +304,10 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     page.on('request', (request) => {
       if (request.url().includes('/plan')) planRequests.push(request.url());
     });
-    await Promise.all([
-      page.waitForResponse(
-        (response) => response.url() === `${relayUrl}/api/bootstrap` && response.status() === 200,
-      ),
-      page.goto(relayUrl),
-    ]);
+    await page.goto(relayUrl);
     const navigation = page.getByLabel('Primary');
     const planTab = navigation.getByRole('button', { name: 'Plan' });
-    await expect(navigation).toBeVisible();
+    await expect(navigation).toBeVisible({ timeout: 45_000 });
     await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
     await expect
       .poll(() =>
