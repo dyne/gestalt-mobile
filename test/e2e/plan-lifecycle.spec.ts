@@ -307,6 +307,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await page.goto(relayUrl);
     const navigation = page.getByLabel('Primary');
     const planTab = navigation.getByRole('button', { name: 'Plan' });
+    await expect(navigation).toBeVisible();
     await expect(navigation.getByRole('button')).toHaveText(['Sessions', 'Git', 'Chat', 'Plan']);
     await expect
       .poll(() =>
