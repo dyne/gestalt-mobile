@@ -844,7 +844,16 @@ describe('production composition', () => {
 
   it('production plan removal, replacement, and session termination cancel queued continuations', async () => {
     for (const action of ['close', 'replace', 'stop', 'release', 'delete'] as const) {
-      const fixture = await createProductionAutopilotFixture();
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
       expect(
         (
           await fixture.app.inject({
@@ -854,6 +863,8 @@ describe('production composition', () => {
           })
         ).statusCode,
       ).toBe(200);
+      await vi.waitFor(() => expect(timers).toHaveLength(1));
+      const staleTimer = timers[0];
       if (action === 'close') {
         await writeFile(join(fixture.workspacePath, 'autopilot.org'), completedAutopilotPlanText());
         await expect
@@ -918,7 +929,9 @@ describe('production composition', () => {
           }),
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      expect(staleTimer.cancelled).toBe(true);
+      staleTimer.callback();
+      await Promise.resolve();
       expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain('turn/start');
       await fixture.app.close();
     }
