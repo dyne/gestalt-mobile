@@ -19,7 +19,7 @@ describe('get active Org Plan attention endpoint', () => {
           turnId: 'turn',
           requestedAt: 'now',
           attention: {
-            reason: 'hardBlock',
+            reason: 'missingDependency',
             summary: 'A dependency is unavailable.',
             requestedAction: 'Restore it.',
             resumeCondition: 'dependencyInstalled',
@@ -31,7 +31,7 @@ describe('get active Org Plan attention endpoint', () => {
       requestId: 'request',
       turnId: 'turn',
       requestedAt: 'now',
-      attention: expect.objectContaining({ reason: 'hardBlock' }),
+      attention: expect.objectContaining({ reason: 'missingDependency' }),
     });
     await app.close();
   });

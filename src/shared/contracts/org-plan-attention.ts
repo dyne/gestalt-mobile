@@ -26,6 +26,15 @@ export const orgPlanAttentionResumeConditions = [
 ] as const;
 export type OrgPlanAttentionResumeCondition = (typeof orgPlanAttentionResumeConditions)[number];
 
+export const orgPlanAttentionResumeConditionByReason = {
+  planChange: 'planRevision',
+  hardBlock: 'externalStateChanged',
+  missingDependency: 'dependencyInstalled',
+  permissionRequired: 'permissionGranted',
+  externalState: 'externalStateChanged',
+  materialAmbiguity: 'userGuidance',
+} as const satisfies Record<OrgPlanAttentionReason, OrgPlanAttentionResumeCondition>;
+
 export type OrgPlanAttention = Readonly<{
   reason: OrgPlanAttentionReason;
   summary: string;
@@ -53,6 +62,13 @@ export const gestaltOrgPlanAttentionDynamicTool = {
       requestedAction: { type: 'string', minLength: 1, maxLength: 600 },
       resumeCondition: { type: 'string', enum: orgPlanAttentionResumeConditions },
     },
+    oneOf: orgPlanAttentionReasons.map((reason) => ({
+      properties: {
+        reason: { const: reason },
+        resumeCondition: { const: orgPlanAttentionResumeConditionByReason[reason] },
+      },
+      required: ['reason', 'resumeCondition'],
+    })),
   },
 } as const;
 
@@ -62,7 +78,8 @@ export function parseOrgPlanAttention(value: unknown): OrgPlanAttention | null {
     !isReason(value.reason) ||
     !isBoundedText(value.summary, 600) ||
     !isBoundedText(value.requestedAction, 600) ||
-    !isResumeCondition(value.resumeCondition)
+    !isResumeCondition(value.resumeCondition) ||
+    orgPlanAttentionResumeConditionByReason[value.reason] !== value.resumeCondition
   )
     return null;
   return {

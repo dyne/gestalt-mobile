@@ -58,7 +58,7 @@ const attention = {
   turnId: 'turn-1',
   requestedAt: '2026-08-20T00:00:00.000Z',
   payload: {
-    reason: 'hardBlock',
+    reason: 'missingDependency',
     summary: 'A required dependency is unavailable.',
     requestedAction: 'Restore it.',
     resumeCondition: 'dependencyInstalled',

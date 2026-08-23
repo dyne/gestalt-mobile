@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "toolName": "gestalt_org_plan_attention",
+  "reasons": [
+    "planChange",
+    "hardBlock",
+    "missingDependency",
+    "permissionRequired",
+    "externalState",
+    "materialAmbiguity"
+  ],
+  "resumeConditions": [
+    "userGuidance",
+    "planRevision",
+    "dependencyInstalled",
+    "permissionGranted",
+    "externalStateChanged"
+  ],
+  "reasonResumeConditions": {
+    "planChange": "planRevision",
+    "hardBlock": "externalStateChanged",
+    "missingDependency": "dependencyInstalled",
+    "permissionRequired": "permissionGranted",
+    "externalState": "externalStateChanged",
+    "materialAmbiguity": "userGuidance"
+  },
+  "scenarios": [
+    {
+      "reason": "planChange",
+      "positive": "material scope, goal, or plan change",
+      "negative": "L1/L2 progress"
+    },
+    {
+      "reason": "hardBlock",
+      "positive": "exhausted hard block",
+      "negative": "waiting on a live child"
+    },
+    {
+      "reason": "missingDependency",
+      "positive": "declared task skill",
+      "negative": "diagnosable or recoverable failing test"
+    },
+    {
+      "reason": "permissionRequired",
+      "positive": "authority, credentials, or permission",
+      "negative": "review readiness"
+    },
+    {
+      "reason": "externalState",
+      "positive": "external state changed",
+      "negative": "ordinary merge conflict"
+    },
+    { "reason": "materialAmbiguity", "positive": "material ambiguity", "negative": "idle executor" }
+  ]
+}

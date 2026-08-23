@@ -95,6 +95,21 @@ describe('Codex server request mapping', () => {
         },
       }),
     ).toBeNull();
+    expect(
+      toPendingInteraction({
+        id: 13,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+          arguments: {
+            reason: 'permissionRequired',
+            summary: 'A protected deploy requires an approver.',
+            requestedAction: 'Grant deployment approval.',
+            resumeCondition: 'planRevision',
+          },
+        },
+      }),
+    ).toBeNull();
   });
 
   it('decodes only bounded server-request resolution notifications', () => {

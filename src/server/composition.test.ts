@@ -197,7 +197,8 @@ function attentionCall(id: number, reason: 'hardBlock' | 'permissionRequired' = 
         reason,
         summary: 'A bounded human decision is required.',
         requestedAction: 'Provide the requested decision.',
-        resumeCondition: reason === 'permissionRequired' ? 'permissionGranted' : 'userGuidance',
+        resumeCondition:
+          reason === 'permissionRequired' ? 'permissionGranted' : 'externalStateChanged',
       },
     },
   };

@@ -5,12 +5,16 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import fixture from './fixtures/org-plan-attention-contract.v1.json';
 import {
   GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
   gestaltOrgPlanAttentionDynamicTool,
   isOrgPlanAttentionToolResponse,
   parseOrgPlanAttention,
   parseOrgPlanAttentionResponse,
+  orgPlanAttentionReasons,
+  orgPlanAttentionResumeConditionByReason,
+  orgPlanAttentionResumeConditions,
   toOrgPlanAttentionToolResponse,
 } from './org-plan-attention.js';
 
@@ -35,6 +39,7 @@ describe('Org Plan attention contract', () => {
           reason: { type: 'string', enum: expect.arrayContaining(['planChange', 'hardBlock']) },
           summary: { type: 'string', minLength: 1, maxLength: 600 },
         }),
+        oneOf: expect.any(Array),
       },
     });
   });
@@ -45,6 +50,34 @@ describe('Org Plan attention contract', () => {
     expect(parseOrgPlanAttention({ ...attention, reason: 'anythingElse' })).toBeNull();
     expect(parseOrgPlanAttention({ ...attention, summary: 'x'.repeat(601) })).toBeNull();
     expect(parseOrgPlanAttention({ ...attention, resumeCondition: 'later' })).toBeNull();
+  });
+
+  it('matches the Gestalt Agents schema-v1 fixture and rejects every cross-pair', () => {
+    expect(fixture).toMatchObject({
+      schemaVersion: 1,
+      toolName: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+      reasons: orgPlanAttentionReasons,
+      resumeConditions: orgPlanAttentionResumeConditions,
+      reasonResumeConditions: orgPlanAttentionResumeConditionByReason,
+    });
+    expect(gestaltOrgPlanAttentionDynamicTool.inputSchema.oneOf).toEqual(
+      orgPlanAttentionReasons.map((reason) => ({
+        properties: {
+          reason: { const: reason },
+          resumeCondition: { const: orgPlanAttentionResumeConditionByReason[reason] },
+        },
+        required: ['reason', 'resumeCondition'],
+      })),
+    );
+    for (const reason of orgPlanAttentionReasons) {
+      const resumeCondition = orgPlanAttentionResumeConditionByReason[reason];
+      expect(parseOrgPlanAttention({ ...attention, reason, resumeCondition })).not.toBeNull();
+      for (const mismatched of orgPlanAttentionResumeConditions)
+        if (mismatched !== resumeCondition)
+          expect(
+            parseOrgPlanAttention({ ...attention, reason, resumeCondition: mismatched }),
+          ).toBeNull();
+    }
   });
 
   it('accepts only bounded human resolution results', () => {

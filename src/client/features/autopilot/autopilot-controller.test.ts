@@ -21,7 +21,7 @@ const attention = {
   turnId: 'turn-1',
   requestedAt: '2026-08-20T00:00:00.000Z',
   payload: {
-    reason: 'hardBlock',
+    reason: 'missingDependency',
     summary: 'A dependency is unavailable.',
     requestedAction: 'Restore the dependency.',
     resumeCondition: 'dependencyInstalled',
@@ -151,7 +151,7 @@ describe('AutopilotController', () => {
       () => 'operation-key',
     );
     controller.bootstrap([{ id: 'a', pendingInteractions: [attention] }]);
-    expect(published.attention.get('a')?.attention.reason).toBe('hardBlock');
+    expect(published.attention.get('a')?.attention.reason).toBe('missingDependency');
     await controller.resolve('a', 'disableAutopilot');
     expect(calls).toEqual([{ operationKey: 'operation-key', action: 'disableAutopilot' }]);
   });
@@ -275,7 +275,7 @@ describe('AutopilotController', () => {
     });
     expect(published.attention.get('a')).toMatchObject({
       requestId: 'attention-1',
-      attention: { reason: 'hardBlock' },
+      attention: { reason: 'missingDependency' },
     });
     controller.observe('a', {
       sequence: 2,
