@@ -27,6 +27,8 @@ export function autopilotAuditLabel(type: string, payload: unknown): string | nu
     return 'Automatic continuation stopped: no agent progress';
   if (state === 'attentionRequired' && reason === 'reconcileFailed')
     return 'Automatic continuation stopped: agent status unavailable';
+  if (state === 'attentionRequired' && reason === 'actionRateExceeded')
+    return 'Automatic continuation stopped: too many automatic actions';
   return null;
 }
 

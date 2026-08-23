@@ -106,6 +106,13 @@ describe('GET /api/sessions/:id/history', () => {
             occurredAt: '2026-08-20T00:00:02.000Z',
             payload: { outcome: 'failed', stack: 'secret' },
           },
+          {
+            sessionId: 's',
+            sequence: 7,
+            type: 'autopilot.updated',
+            occurredAt: '2026-08-20T00:00:03.000Z',
+            payload: { state: 'attentionRequired', reason: 'actionRateExceeded' },
+          },
         ];
       },
     });
@@ -120,6 +127,11 @@ describe('GET /api/sessions/:id/history', () => {
         id: 'audit:6',
         label: 'Attention resolution failed',
         occurredAt: Date.parse('2026-08-20T00:00:02.000Z'),
+      },
+      {
+        id: 'audit:7',
+        label: 'Automatic continuation stopped: too many automatic actions',
+        occurredAt: Date.parse('2026-08-20T00:00:03.000Z'),
       },
     ]);
     expect(response.body).not.toContain('secret');

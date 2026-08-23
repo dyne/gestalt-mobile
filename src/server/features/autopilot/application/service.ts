@@ -163,32 +163,41 @@ export class AutopilotCoordinator {
   disable(sessionId: string): AutopilotSnapshot {
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
-    if (!prior.requestedEnabled && prior.state === 'disabled') return this.snapshot(sessionId);
+    const cancelled = this.cancelScheduledControl(prior, now);
+    if (!prior.requestedEnabled && prior.state === 'disabled' && !cancelled)
+      return this.snapshot(sessionId);
     const next: AutopilotSession = {
       ...prior,
       state: 'disabled',
       requestedEnabled: false,
       generation: prior.generation + 1,
       nextEvaluationAt: null,
+      ...(cancelled ? { lastControlId: null } : {}),
       stopReason: 'manualDisabled',
       updatedAt: now,
     };
-    this.persist(next);
+    this.persist(next, cancelled);
     this.cancelTimer(sessionId);
     return this.snapshot(sessionId);
   }
   cancel(sessionId: string, reason: 'planRemoved' | 'planReplaced' | 'sessionEnded'): void {
     const prior = this.deps.store.find(sessionId);
     if (!prior) return;
-    this.persist({
-      ...prior,
-      state: 'disabled',
-      requestedEnabled: false,
-      generation: prior.generation + 1,
-      nextEvaluationAt: null,
-      stopReason: reason,
-      updatedAt: this.deps.now(),
-    });
+    const now = this.deps.now();
+    const cancelled = this.cancelScheduledControl(prior, now);
+    this.persist(
+      {
+        ...prior,
+        state: 'disabled',
+        requestedEnabled: false,
+        generation: prior.generation + 1,
+        nextEvaluationAt: null,
+        ...(cancelled ? { lastControlId: null } : {}),
+        stopReason: reason,
+        updatedAt: now,
+      },
+      cancelled,
+    );
     this.cancelTimer(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
@@ -291,7 +300,15 @@ export class AutopilotCoordinator {
       decision.kind === 'disable'
     )
       this.cancelTimer(sessionId);
-    if (next !== prior) this.persist(next);
+    if (next !== prior) {
+      const cancelled =
+        decision.kind === 'requestAttention' ||
+        decision.kind === 'complete' ||
+        decision.kind === 'disable'
+          ? this.cancelScheduledControl(prior, now)
+          : undefined;
+      this.persist(cancelled ? { ...next, lastControlId: null } : next, cancelled);
+    }
     return this.snapshot(sessionId);
   }
   turnCompleted(sessionId: string): void {
@@ -325,24 +342,28 @@ export class AutopilotCoordinator {
     }
     if (disposition === 'active') {
       this.cancelTimer(sessionId);
+      const now = this.deps.now();
+      const cancelled = this.cancelScheduledControl(prior, now);
       const subagentsWorking =
         activity.aggregateSubagents === 'working' ||
         activity.aggregateSubagents === 'awaitingAgent';
       if (
+        cancelled ||
         prior.state !== 'monitoring' ||
         prior.nextEvaluationAt ||
         (subagentsWorking && prior.consecutiveNoProgress > 0)
       )
-        this.persist({
-          ...prior,
-          state: 'monitoring',
-          ...(prior.state === 'backoff'
-            ? { generation: prior.generation + 1, lastControlId: null }
-            : {}),
-          ...(subagentsWorking ? { consecutiveNoProgress: 0 } : {}),
-          nextEvaluationAt: null,
-          updatedAt: this.deps.now(),
-        });
+        this.persist(
+          {
+            ...prior,
+            state: 'monitoring',
+            ...(cancelled ? { generation: prior.generation + 1, lastControlId: null } : {}),
+            ...(subagentsWorking ? { consecutiveNoProgress: 0 } : {}),
+            nextEvaluationAt: null,
+            updatedAt: now,
+          },
+          cancelled,
+        );
       return;
     }
     if (disposition === 'settled') this.activitySettled(sessionId);
@@ -365,14 +386,19 @@ export class AutopilotCoordinator {
     this.cancelTimer(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior || !prior.requestedEnabled) return;
-    this.persist({
-      ...prior,
-      state: 'monitoring',
-      generation: prior.generation + 1,
-      nextEvaluationAt: null,
-      lastControlId: null,
-      updatedAt: this.deps.now(),
-    });
+    const now = this.deps.now();
+    const cancelled = this.cancelScheduledControl(prior, now);
+    this.persist(
+      {
+        ...prior,
+        state: 'monitoring',
+        generation: prior.generation + 1,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        updatedAt: now,
+      },
+      cancelled,
+    );
   }
   recordControlIssued(sessionId: string, controlId: string): boolean {
     const prior = this.deps.store.find(sessionId);
@@ -439,12 +465,18 @@ export class AutopilotCoordinator {
       this.deps.pendingInteraction(sessionId) ||
       this.decision(sessionId, current).kind !== 'scheduleContinuation'
     ) {
-      this.persist({
-        ...current,
-        state: 'monitoring',
-        nextEvaluationAt: null,
-        updatedAt: this.deps.now(),
-      });
+      const now = this.deps.now();
+      const cancelled = this.cancelScheduledControl(current, now);
+      this.persist(
+        {
+          ...current,
+          state: 'monitoring',
+          ...(cancelled ? { generation: current.generation + 1, lastControlId: null } : {}),
+          nextEvaluationAt: null,
+          updatedAt: now,
+        },
+        cancelled,
+      );
       this.evaluate(sessionId);
       return;
     }
@@ -504,6 +536,16 @@ export class AutopilotCoordinator {
     this.timers.delete(sessionId);
     this.completionTimers.get(sessionId)?.();
     this.completionTimers.delete(sessionId);
+  }
+  private cancelScheduledControl(
+    state: AutopilotSession,
+    updatedAt: string,
+  ): AutopilotControl | undefined {
+    if (!state.lastControlId) return undefined;
+    const control = this.deps.store.findControl(state.sessionId, state.lastControlId);
+    return control?.status === 'scheduled'
+      ? { ...control, status: 'cancelled', updatedAt }
+      : undefined;
   }
   private updateControl(
     sessionId: string,
@@ -610,6 +652,7 @@ export class AutopilotCoordinator {
   }
   private decision(sessionId: string, state: AutopilotSession) {
     const plan = this.deps.plan(sessionId);
+    const now = this.deps.now();
     return decideAutopilot({
       state,
       plan: plan?.plan ?? null,
@@ -617,7 +660,12 @@ export class AutopilotCoordinator {
       hasPendingInteraction: this.deps.pendingInteraction(sessionId),
       hasActiveAttention: state.state === 'attentionRequired',
       lastTurnOutcome: this.lastTurnOutcome(sessionId, state.lastControlId),
-      now: this.deps.now(),
+      automaticActionCount:
+        this.deps.store.automaticActionsSince?.(
+          sessionId,
+          new Date(Date.parse(now) - this.deps.policy.actionWindowMs).toISOString(),
+        ) ?? 0,
+      now,
       policy: this.deps.policy,
     });
   }

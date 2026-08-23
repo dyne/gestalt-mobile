@@ -92,6 +92,12 @@ describe('AutopilotControl', () => {
     ).toBeTruthy();
     expect(screen.queryByText(/until the attention request is resolved/i)).toBeNull();
   });
+  it('explains the automatic-action safety window', () => {
+    render(AutopilotControl, {
+      autopilot: { ...snapshot('attentionRequired'), reason: 'actionRateExceeded' },
+    });
+    expect(screen.getAllByText(/too many automatic actions in ten minutes/i)).toHaveLength(2);
+  });
   it('does not invent retry progress while monitoring and exposes a dedicated polite status', () => {
     render(AutopilotControl, {
       autopilot: { ...snapshot('monitoring'), retry: { position: 0, limit: 3 } },

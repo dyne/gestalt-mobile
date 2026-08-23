@@ -228,6 +228,28 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'requestAttention', reason: 'noPlanProgress' });
     expect(
       decideAutopilot({
+        state: enabled,
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'requestAttention', reason: 'actionRateExceeded' });
+    expect(
+      decideAutopilot({
+        state: enabled,
+        plan: incomplete,
+        activity: { ...active, root: { ...active.root, state: 'working' } },
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'observe' });
+    expect(
+      decideAutopilot({
         state: {
           ...enabled,
           state: 'attentionRequired',

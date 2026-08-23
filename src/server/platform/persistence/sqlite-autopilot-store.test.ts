@@ -33,6 +33,13 @@ describe('SqliteAutopilotStore', () => {
       updatedAt: '2026-08-20T00:00:00.000Z',
     });
     expect(store.find('s')).toMatchObject({ state: 'monitoring', generation: 2 });
+    store.save({
+      ...store.find('s')!,
+      state: 'attentionRequired',
+      requestedEnabled: false,
+      stopReason: 'startUnavailable',
+    });
+    expect(store.find('s')).toMatchObject({ stopReason: 'startUnavailable' });
     store.saveControl({
       sessionId: 's',
       controlId: 'control',
@@ -63,6 +70,35 @@ describe('SqliteAutopilotStore', () => {
     expect(store.findControl('s', 'control')).toMatchObject({ status: 'started' });
     store.saveControl({
       sessionId: 's',
+      controlId: 'cancelled-control',
+      status: 'scheduled',
+      createdAt: 't',
+      updatedAt: 't',
+      failureCode: null,
+    });
+    store.saveControl({
+      sessionId: 's',
+      controlId: 'cancelled-control',
+      status: 'cancelled',
+      createdAt: 't',
+      updatedAt: 'cancelled',
+      failureCode: null,
+    });
+    store.saveControl({
+      sessionId: 's',
+      controlId: 'cancelled-control',
+      status: 'issued',
+      createdAt: 't',
+      updatedAt: 'late-claim',
+      failureCode: null,
+    });
+    expect(store.findControl('s', 'cancelled-control')).toMatchObject({
+      status: 'cancelled',
+      updatedAt: 'cancelled',
+    });
+    expect(store.claimControlIssued('s', 'cancelled-control', 'claim')).toBeNull();
+    store.saveControl({
+      sessionId: 's',
       controlId: 'accepted-control',
       status: 'started',
       createdAt: 't',
@@ -86,6 +122,8 @@ describe('SqliteAutopilotStore', () => {
       updatedAt: 'claimed',
     });
     expect(store.claimControlIssued('s', 'atomic-control', 'again')).toBeNull();
+    expect(store.automaticActionsSince('s', '')).toBe(3);
+    expect(store.automaticActionsSince('s', 'zzzz')).toBe(0);
     db.prepare("UPDATE autopilot_sessions SET state = 'bad' WHERE session_id = 's'").run();
     expect(store.find('s')).toBeNull();
     db.close();
