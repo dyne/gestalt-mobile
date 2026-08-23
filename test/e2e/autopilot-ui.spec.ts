@@ -235,6 +235,13 @@ const cases: ReadonlyArray<{
     attention: false,
   },
   {
+    name: 'runtime-unavailable',
+    state: 'attentionRequired',
+    reason: 'startUnavailable',
+    text: 'Restore or reopen',
+    attention: false,
+  },
+  {
     name: 'tool-attention',
     state: 'attentionRequired',
     text: 'Paused for attention',
@@ -654,7 +661,7 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
     {
       sequence: 5,
       type: 'autopilot.turn-failed',
-      payload: { controlId: 'control-1', code: 'START_FAILED' },
+      payload: { controlId: 'control-2', code: 'START_FAILED' },
     },
     // Deliberately skip 6: activity reconciliation owns this single refresh.
     { sequence: 7, type: 'autopilot.updated', payload: autopilot('backoff') },
@@ -667,9 +674,13 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
       }),
     );
   await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText('Complete');
-  await expect(page.getByLabel('Chat messages')).toContainText('Continuation started');
+  await expect(page.getByLabel('Chat messages')).toContainText('Continued execution automatically');
+  await expect(page.getByLabel('Chat messages')).not.toContainText('Scheduled a continuation');
+  await expect(page.getByLabel('Chat messages')).not.toContainText(
+    'Issued an automatic continuation',
+  );
   await expect(page.getByLabel('Chat messages')).not.toContainText('plan changed');
-  await expect(page.getByLabel('Chat messages')).toContainText('Continuation failed');
+  await expect(page.getByLabel('Chat messages')).toContainText('Automatic continuation failed');
   await expect.poll(() => refreshes).toBe(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);

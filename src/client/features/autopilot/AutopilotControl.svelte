@@ -33,9 +33,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     planRequired: 'An incomplete supervised plan is required before Autopilot can start.',
     planComplete: 'This plan is complete, so Autopilot is unavailable.',
     sessionUnavailable: 'This session is unavailable for Autopilot.',
-    attentionRequired: 'Autopilot is paused until the attention request is resolved.',
+    attentionRequired: 'Autopilot is paused because an agent is waiting for human input.',
     noPlanProgress: 'Autopilot paused because the plan did not make durable progress.',
     reconcileFailed: 'Autopilot paused because it could not safely confirm session state.',
+    startUnavailable:
+      'Automatic continuation could not start because the session runtime is unavailable. Restore or reopen the session, then retry Autopilot.',
     planRemoved: 'The retained plan was removed.',
     planReplaced: 'The retained plan changed. Enable Autopilot again after reviewing it.',
     sessionEnded: 'This session ended.',
@@ -53,7 +55,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       (autopilot?.state === 'monitoring'
         ? 'Autopilot is monitoring this supervised plan.'
         : autopilot?.state === 'attentionRequired'
-          ? 'Autopilot is paused for a pending attention request.'
+          ? 'Autopilot is paused because human attention is required.'
           : 'Autopilot state is loading from the relay.'),
   );
   let liveStatus = $derived(`Autopilot status: ${status}. ${help}`);

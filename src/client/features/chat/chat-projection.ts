@@ -10,6 +10,7 @@ import type {
   SafeInteractionOutcome,
   SafeInteractionSnapshot,
 } from '../../../shared/contracts/chat-snapshot.js';
+import { autopilotAuditLabel } from '../../../shared/contracts/autopilot-audit.js';
 import { toActivity, type HistoryActivity } from './activity-summary.js';
 import type { ChatMessage } from './message-store.js';
 
@@ -80,7 +81,7 @@ function messageFromItem(item: ChatItem): ChatMessage | null {
     return {
       id: `item:${item.id}`,
       role: 'audit',
-      text: 'Issued an automatic continuation.',
+      text: 'Continued execution automatically',
       ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
         ? { occurredAt: item.occurredAt }
         : {}),
@@ -115,39 +116,9 @@ function auditMessage(item: {
     complete: true,
   };
 }
-const auditLabels: Readonly<Record<string, string>> = {
-  'autopilot.continuation-scheduled': 'Scheduled a continuation',
-  'autopilot.control-issued': 'Issued an automatic continuation.',
-  'autopilot.turn-started': 'Continuation started',
-  'autopilot.turn-failed': 'Continuation failed',
-  'org-plan.attention-required': 'Needs attention',
-  'org-plan.attention-resolved': 'Attention resolved',
-};
-/**
- * Coordinator state is durable through `autopilot.updated`; unlike invented
- * UI-only vocabulary, every label below is a direct rendering of that payload.
- */
-function snapshotAuditLabel(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const state = (payload as { state?: unknown }).state;
-  const reason = (payload as { reason?: unknown }).reason;
-  if (state === 'backoff') return 'Backing off';
-  if (state === 'attentionRequired') return 'Needs attention';
-  if (state === 'completed') return 'Completed the plan';
-  if (state === 'disabled' && reason === 'planRequired')
-    return 'Requires an incomplete supervised plan';
-  return null;
-}
 function auditEventMessage(event: ProjectionEvent): ChatMessage | null {
   const occurredAt = parseOccurredAt(event.occurredAt);
-  const label =
-    event.type === 'org-plan.attention-resolved' &&
-    event.payload &&
-    typeof event.payload === 'object' &&
-    (event.payload as { outcome?: unknown }).outcome === 'failed'
-      ? 'Attention resolution failed'
-      : (auditLabels[event.type] ??
-        (event.type === 'autopilot.updated' ? snapshotAuditLabel(event.payload) : null));
+  const label = autopilotAuditLabel(event.type, event.payload);
   const controlId =
     event.payload &&
     typeof event.payload === 'object' &&
@@ -567,19 +538,11 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
   });
 }
 
-/** History items and journal records describe the same coordinator action. */
+/** History items and turn-started journal records describe the same coordinator action. */
 function canonicalAutopilotAudit(messages: readonly ChatMessage[]): ChatMessage[] {
   const seenControls = new Set<string>();
   return messages.filter((message) => {
-    // A canonical history `kind: autopilot` item is the same action as the
-    // coordinator's later `autopilot.control-issued` journal record. Other
-    // control lifecycle records remain independently useful audit facts.
-    if (
-      message.role !== 'audit' ||
-      !message.controlId ||
-      message.text !== 'Issued an automatic continuation.'
-    )
-      return true;
+    if (message.role !== 'audit' || !message.controlId) return true;
     if (seenControls.has(message.controlId)) return false;
     seenControls.add(message.controlId);
     return true;

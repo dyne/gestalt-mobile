@@ -77,7 +77,20 @@ describe('AutopilotControl', () => {
   );
   it('does not mislabel a known attention-required state as loading', () => {
     render(AutopilotControl, { autopilot: snapshot('attentionRequired') });
-    expect(screen.getByText('Autopilot is paused for a pending attention request.')).toBeTruthy();
+    expect(
+      screen.getByText('Autopilot is paused because human attention is required.'),
+    ).toBeTruthy();
+  });
+  it('explains runtime unavailability without inventing a pending attention request', () => {
+    render(AutopilotControl, {
+      autopilot: { ...snapshot('attentionRequired'), reason: 'startUnavailable' },
+    });
+    expect(
+      screen.getByText(
+        'Automatic continuation could not start because the session runtime is unavailable. Restore or reopen the session, then retry Autopilot.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/until the attention request is resolved/i)).toBeNull();
   });
   it('does not invent retry progress while monitoring and exposes a dedicated polite status', () => {
     render(AutopilotControl, {

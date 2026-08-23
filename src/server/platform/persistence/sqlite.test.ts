@@ -129,18 +129,19 @@ describe('SQLite relay persistence', () => {
       )
       .run();
     const journal = new SqliteEventJournal(database);
-    journal.append('s', 'autopilot.continuation-scheduled', { controlId: 'old' }, 't1');
-    journal.append('s', 'agentMessageDelta', { text: 'not audit' }, 't2');
-    journal.append('s', 'autopilot.turn-failed', { controlId: 'new' }, 't3');
-    journal.append('s', 'agentMessageDelta', { text: 'still not audit' }, 't4');
+    journal.append('s', 'autopilot.turn-started', { controlId: 'old' }, 't1');
+    journal.append('s', 'autopilot.continuation-scheduled', { controlId: 'cancelled' }, 't2');
+    journal.append('s', 'agentMessageDelta', { text: 'not audit' }, 't3');
+    journal.append('s', 'autopilot.turn-failed', { controlId: 'new' }, 't4');
+    journal.append('s', 'agentMessageDelta', { text: 'still not audit' }, 't5');
     expect(journal.autopilotAuditTail('s', 1)).toMatchObject({
-      events: [expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 3 })],
+      events: [expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 4 })],
       truncated: true,
     });
     expect(journal.autopilotAuditTail('s', 2)).toMatchObject({
       events: [
-        expect.objectContaining({ type: 'autopilot.continuation-scheduled', sequence: 1 }),
-        expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 3 }),
+        expect.objectContaining({ type: 'autopilot.turn-started', sequence: 1 }),
+        expect.objectContaining({ type: 'autopilot.turn-failed', sequence: 4 }),
       ],
       truncated: false,
     });

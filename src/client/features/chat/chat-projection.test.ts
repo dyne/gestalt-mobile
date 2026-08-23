@@ -57,29 +57,41 @@ describe('chat projection', () => {
     expect(projection.messages).toEqual([
       expect.objectContaining({
         role: 'audit',
-        text: 'Issued an automatic continuation.',
+        text: 'Continued execution automatically',
       }),
     ]);
   });
 
-  it('projects live autopilot journal events once and keeps them out of user bubbles', () => {
-    const projection = applyProjectionEvent(createChatProjection('s'), {
+  it('keeps scheduling internals silent and projects one successful automatic action', () => {
+    const scheduled = applyProjectionEvent(createChatProjection('s'), {
       sequence: 1,
+      type: 'autopilot.continuation-scheduled',
+      occurredAt: '2026-08-20T00:00:00.000Z',
+      payload: { controlId: 'opaque-id' },
+    });
+    const issued = applyProjectionEvent(scheduled, {
+      sequence: 2,
       type: 'autopilot.control-issued',
       occurredAt: '2026-08-20T00:00:00.000Z',
       payload: { controlId: 'opaque-id' },
     });
+    const projection = applyProjectionEvent(issued, {
+      sequence: 3,
+      type: 'autopilot.turn-started',
+      occurredAt: '2026-08-20T00:00:00.000Z',
+      payload: { controlId: 'opaque-id' },
+    });
     const duplicate = applyProjectionEvent(projection, {
-      sequence: 1,
-      type: 'autopilot.control-issued',
+      sequence: 3,
+      type: 'autopilot.turn-started',
       occurredAt: '2026-08-20T00:00:00.000Z',
       payload: { controlId: 'opaque-id' },
     });
     expect(duplicate.messages).toEqual([
       expect.objectContaining({
-        id: 'audit:1',
+        id: 'audit:3',
         role: 'audit',
-        text: 'Issued an automatic continuation.',
+        text: 'Continued execution automatically',
       }),
     ]);
   });
@@ -114,7 +126,7 @@ describe('chat projection', () => {
     });
     expect(projected.autopilotAuditTruncated).toBe(true);
   });
-  it('deduplicates the historical continuation item and control-issued audit by durable control id', () => {
+  it('deduplicates the historical continuation item and turn-started audit by durable control id', () => {
     const projection = acceptSnapshot(createChatProjection('s'), {
       ...snapshot(),
       interactions: [],
@@ -129,7 +141,7 @@ describe('chat projection', () => {
       autopilotAudit: [
         {
           id: 'audit:4',
-          label: 'Issued an automatic continuation.',
+          label: 'Continued execution automatically',
           occurredAt: 1_700_000_000_001,
           controlId: 'control-1',
         },
