@@ -40,6 +40,17 @@ describe('GitHub verification workflow', () => {
     );
   });
 
+  it('builds the relay-served client before running browser shards', () => {
+    const browserJob = workflow.slice(
+      workflow.indexOf('\n  browser-functional:'),
+      workflow.indexOf('\n  real-auth:'),
+    );
+    expect(browserJob.indexOf('run: npm run build:client')).toBeGreaterThan(-1);
+    expect(browserJob.indexOf('run: npm run build:client')).toBeLessThan(
+      browserJob.indexOf('run: npx playwright test'),
+    );
+  });
+
   it('pins all actions to full commit SHAs with version comments', () => {
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s]+)(?:\s+#\s+(v\S+))?$/gm)];
     expect(uses.length).toBeGreaterThan(0);
