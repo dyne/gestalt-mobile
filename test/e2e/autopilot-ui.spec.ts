@@ -139,9 +139,7 @@ async function install(
                 autopilotAudit: Array.from({ length: 4 }, (_, index) => ({
                   id: `audit-${continuationPhase ?? 'backoff'}-${index}`,
                   label:
-                    continuationPhase === 'scheduled'
-                      ? 'Autopilot scheduled a continuation'
-                      : 'Autopilot is backing off',
+                    continuationPhase === 'scheduled' ? 'Scheduled a continuation' : 'Backing off',
                   occurredAt: Date.parse('2026-08-20T00:00:00.000Z') + index * 1000,
                   controlId: 'control-1',
                 })),
@@ -294,17 +292,13 @@ for (const item of cases) {
         'Waiting to continue',
       );
       await expect(page.getByRole('region', { name: 'Autopilot' })).not.toContainText('Retry');
-      await expect(page.getByLabel('Chat messages')).toContainText(
-        'Autopilot scheduled a continuation',
-      );
-      await expect(page.getByLabel('Chat messages')).not.toContainText('Autopilot is backing off');
+      await expect(page.getByLabel('Chat messages')).toContainText('Scheduled a continuation');
+      await expect(page.getByLabel('Chat messages')).not.toContainText('Backing off');
     }
     if (item.name === 'backoff') {
       await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText('Retry 2 of 3');
-      await expect(page.getByLabel('Chat messages')).toContainText('Autopilot is backing off');
-      await expect(page.getByLabel('Chat messages')).not.toContainText(
-        'Autopilot scheduled a continuation',
-      );
+      await expect(page.getByLabel('Chat messages')).toContainText('Backing off');
+      await expect(page.getByLabel('Chat messages')).not.toContainText('Scheduled a continuation');
     }
     if (item.name === 'root-awaiting-child') {
       const prompt = page.getByRole('textbox', { name: 'Prompt' });
@@ -618,7 +612,7 @@ test('selected Chat receives live autopilot and attention journal events without
     }),
   );
   await expect(page.getByRole('alert', { name: 'Autopilot needs your attention' })).toBeVisible();
-  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot needs attention');
+  await expect(page.getByLabel('Chat messages')).toContainText('Needs attention');
   await expect(page.getByText('Autopilot needs your attention.')).toHaveCount(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
@@ -657,15 +651,14 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
     { sequence: 2, type: 'autopilot.continuation-scheduled', payload: { controlId: 'control-1' } },
     { sequence: 3, type: 'autopilot.control-issued', payload: { controlId: 'control-1' } },
     { sequence: 4, type: 'autopilot.turn-started', payload: { controlId: 'control-1' } },
-    { sequence: 5, type: 'autopilot.progress-reset', payload: { reason: 'planUpdated' } },
     {
-      sequence: 6,
+      sequence: 5,
       type: 'autopilot.turn-failed',
       payload: { controlId: 'control-1', code: 'START_FAILED' },
     },
-    // Deliberately skip 7: activity reconciliation owns this single refresh.
-    { sequence: 8, type: 'autopilot.updated', payload: autopilot('backoff') },
-    { sequence: 9, type: 'autopilot.updated', payload: autopilot('completed', 'planComplete') },
+    // Deliberately skip 6: activity reconciliation owns this single refresh.
+    { sequence: 7, type: 'autopilot.updated', payload: autopilot('backoff') },
+    { sequence: 8, type: 'autopilot.updated', payload: autopilot('completed', 'planComplete') },
   ])
     socket!.send(
       JSON.stringify({
@@ -674,11 +667,9 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
       }),
     );
   await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText('Complete');
-  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot continuation started');
-  await expect(page.getByLabel('Chat messages')).toContainText(
-    'Autopilot reset retry progress after the plan changed',
-  );
-  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot continuation failed');
+  await expect(page.getByLabel('Chat messages')).toContainText('Continuation started');
+  await expect(page.getByLabel('Chat messages')).not.toContainText('plan changed');
+  await expect(page.getByLabel('Chat messages')).toContainText('Continuation failed');
   await expect.poll(() => refreshes).toBe(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);

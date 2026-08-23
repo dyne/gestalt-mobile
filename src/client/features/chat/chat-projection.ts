@@ -80,7 +80,7 @@ function messageFromItem(item: ChatItem): ChatMessage | null {
     return {
       id: `item:${item.id}`,
       role: 'audit',
-      text: 'Autopilot issued an automatic continuation.',
+      text: 'Issued an automatic continuation.',
       ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
         ? { occurredAt: item.occurredAt }
         : {}),
@@ -116,12 +116,11 @@ function auditMessage(item: {
   };
 }
 const auditLabels: Readonly<Record<string, string>> = {
-  'autopilot.continuation-scheduled': 'Autopilot scheduled a continuation',
-  'autopilot.control-issued': 'Autopilot issued an automatic continuation.',
-  'autopilot.turn-started': 'Autopilot continuation started',
-  'autopilot.turn-failed': 'Autopilot continuation failed',
-  'autopilot.progress-reset': 'Autopilot reset retry progress after the plan changed',
-  'org-plan.attention-required': 'Autopilot needs attention',
+  'autopilot.continuation-scheduled': 'Scheduled a continuation',
+  'autopilot.control-issued': 'Issued an automatic continuation.',
+  'autopilot.turn-started': 'Continuation started',
+  'autopilot.turn-failed': 'Continuation failed',
+  'org-plan.attention-required': 'Needs attention',
   'org-plan.attention-resolved': 'Attention resolved',
 };
 /**
@@ -132,11 +131,11 @@ function snapshotAuditLabel(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const state = (payload as { state?: unknown }).state;
   const reason = (payload as { reason?: unknown }).reason;
-  if (state === 'backoff') return 'Autopilot is backing off';
-  if (state === 'attentionRequired') return 'Autopilot needs attention';
-  if (state === 'completed') return 'Autopilot completed the plan';
+  if (state === 'backoff') return 'Backing off';
+  if (state === 'attentionRequired') return 'Needs attention';
+  if (state === 'completed') return 'Completed the plan';
   if (state === 'disabled' && reason === 'planRequired')
-    return 'Autopilot requires an incomplete supervised plan';
+    return 'Requires an incomplete supervised plan';
   return null;
 }
 function auditEventMessage(event: ProjectionEvent): ChatMessage | null {
@@ -578,7 +577,7 @@ function canonicalAutopilotAudit(messages: readonly ChatMessage[]): ChatMessage[
     if (
       message.role !== 'audit' ||
       !message.controlId ||
-      message.text !== 'Autopilot issued an automatic continuation.'
+      message.text !== 'Issued an automatic continuation.'
     )
       return true;
     if (seenControls.has(message.controlId)) return false;

@@ -106,10 +106,10 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
 
 /** Retry attempts receive distinct durable control IDs but share a coordinator stage. */
 function retryFamily(text: string): string | null {
-  if (text === 'Autopilot scheduled a continuation') return 'continuation-scheduled';
-  if (text === 'Autopilot issued an automatic continuation.') return 'continuation-issued';
-  if (text === 'Autopilot continuation started') return 'continuation-started';
-  if (text === 'Autopilot continuation failed') return 'continuation-failed';
-  if (text === 'Autopilot is backing off') return 'continuation-backoff';
+  if (text === 'Scheduled a continuation') return 'continuation-scheduled';
+  if (text === 'Issued an automatic continuation.') return 'continuation-issued';
+  if (text === 'Continuation started') return 'continuation-started';
+  if (text === 'Continuation failed') return 'continuation-failed';
+  if (text === 'Backing off') return 'continuation-backoff';
   return null;
 }

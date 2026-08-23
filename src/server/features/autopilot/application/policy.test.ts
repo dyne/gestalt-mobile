@@ -133,8 +133,6 @@ describe('autopilot policy', () => {
       const result = decideAutopilot({
         state,
         plan: incomplete,
-        planIdentity: 'i',
-        planFingerprint: 'f',
         activity,
         hasPendingInteraction: pending,
         hasActiveAttention: _name === 'typed attention',
@@ -147,8 +145,6 @@ describe('autopilot policy', () => {
         decideAutopilot({
           state,
           plan: incomplete,
-          planIdentity: 'i',
-          planFingerprint: 'f',
           activity,
           hasPendingInteraction: pending,
           hasActiveAttention: _name === 'typed attention',

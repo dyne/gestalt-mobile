@@ -407,7 +407,6 @@ export class ChatController {
         'autopilot.control-issued',
         'autopilot.turn-started',
         'autopilot.turn-failed',
-        'autopilot.progress-reset',
       ].includes(event.type)
     )
       return true;
