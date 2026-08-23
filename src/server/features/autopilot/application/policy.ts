@@ -54,6 +54,29 @@ export function executionComplete(plan: SupervisedPlan): boolean {
   );
 }
 
+export type AgentActivityDisposition = 'active' | 'settled' | 'attention' | 'reconcile' | 'observe';
+
+/** Classifies fresh actor topology; the caller owns freshness and durable interaction checks. */
+export function classifyAgentActivity(activity: AgentActivitySnapshot): AgentActivityDisposition {
+  if (activity.root.state === 'awaitingHuman' || activity.aggregateSubagents === 'awaitingHuman')
+    return 'attention';
+  if (activity.root.state === 'disconnected' || activity.aggregateSubagents === 'disconnected')
+    return 'reconcile';
+  if (
+    activity.root.state === 'working' ||
+    activity.aggregateSubagents === 'working' ||
+    activity.aggregateSubagents === 'awaitingAgent'
+  )
+    return 'active';
+  const rootSettled =
+    activity.root.state === 'idle' ||
+    activity.root.state === 'blocked' ||
+    activity.root.state === 'awaitingAgent';
+  const subagentsSettled =
+    activity.aggregateSubagents === 'idle' || activity.aggregateSubagents === 'blocked';
+  return rootSettled && subagentsSettled ? 'settled' : 'observe';
+}
+
 /** A deliberately pure, exhaustive safety gate. Adapters may only enact this result. */
 export function decideAutopilot(input: {
   state: AutopilotSession;
@@ -66,21 +89,19 @@ export function decideAutopilot(input: {
   policy: AutopilotPolicy;
 }): AutopilotDecision {
   const { state, plan, activity, hasPendingInteraction, now, policy } = input;
+  if (input.hasActiveAttention || state.state === 'attentionRequired')
+    return { kind: 'requestAttention', reason: 'attentionRequired' };
   if (!state.requestedEnabled) return { kind: 'disable', reason: 'manualDisabled' };
   if (!plan) return { kind: 'disable', reason: 'planRequired' };
   if (executionComplete(plan)) return { kind: 'complete' };
-  if (hasPendingInteraction || input.hasActiveAttention || state.state === 'attentionRequired')
-    return { kind: 'requestAttention', reason: 'attentionRequired' };
+  if (hasPendingInteraction) return { kind: 'requestAttention', reason: 'attentionRequired' };
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
   if (Date.parse(now) - Date.parse(activity.root.lastActivityAt) > policy.staleAfterMs)
     return { kind: 'reconcile' };
-  const rootSettled = activity.root.state === 'idle' || activity.root.state === 'blocked';
-  const subagentsSettled =
-    activity.aggregateSubagents === 'idle' || activity.aggregateSubagents === 'blocked';
-  if (!rootSettled || !subagentsSettled)
-    return activity.aggregateSubagents === 'disconnected'
-      ? { kind: 'reconcile' }
-      : { kind: 'observe' };
+  const disposition = classifyAgentActivity(activity);
+  if (disposition === 'attention') return { kind: 'requestAttention', reason: 'attentionRequired' };
+  if (disposition === 'reconcile') return { kind: 'reconcile' };
+  if (disposition !== 'settled') return { kind: 'observe' };
   // The outcome is intentionally interpreted only through durable lack of plan
   // progress: a failed or unknown automatic turn may retry within the same
   // bounded budget, while a completed turn with no fingerprint change does too.

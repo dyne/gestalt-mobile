@@ -98,14 +98,35 @@ describe('autopilot policy', () => {
   > & { root?: Pick<AgentActivitySnapshot['root'], 'state'> };
   it.each([
     ['active root', { root: { state: 'working' } }, false, 'observe'],
+    [
+      'solo root awaiting a settled child',
+      { root: { state: 'awaitingAgent' } },
+      false,
+      'scheduleContinuation',
+    ],
+    [
+      'root awaiting an active child',
+      { root: { state: 'awaitingAgent' }, aggregateSubagents: 'working' },
+      false,
+      'observe',
+    ],
+    [
+      'root awaiting settled blocked children',
+      { root: { state: 'awaitingAgent' }, aggregateSubagents: 'blocked' },
+      false,
+      'scheduleContinuation',
+    ],
     ['awaiting child', { aggregateSubagents: 'awaitingAgent' }, false, 'observe'],
     ['working child', { aggregateSubagents: 'working' }, false, 'observe'],
+    ['root awaiting human', { root: { state: 'awaitingHuman' } }, false, 'requestAttention'],
+    ['child awaiting human', { aggregateSubagents: 'awaitingHuman' }, false, 'requestAttention'],
     ['pending interaction', {}, true, 'requestAttention'],
     ['typed attention', {}, false, 'requestAttention'],
     ['stale sensor', { confidence: 'stale' }, false, 'reconcile'],
     ['healthy idle', {}, false, 'scheduleContinuation'],
     ['blocked root', { root: { state: 'blocked' } }, false, 'scheduleContinuation'],
     ['blocked child', { aggregateSubagents: 'blocked' }, false, 'scheduleContinuation'],
+    ['disconnected root', { root: { state: 'disconnected' } }, false, 'reconcile'],
     ['disconnected child', { aggregateSubagents: 'disconnected' }, false, 'reconcile'],
   ] as ReadonlyArray<readonly [string, ActivityChange, boolean, string]>)(
     'decides safely for %s',
@@ -205,5 +226,21 @@ describe('autopilot policy', () => {
         policy: defaultAutopilotPolicy,
       }),
     ).toEqual({ kind: 'requestAttention', reason: 'noPlanProgress' });
+    expect(
+      decideAutopilot({
+        state: {
+          ...enabled,
+          state: 'attentionRequired',
+          requestedEnabled: false,
+          stopReason: 'attentionRequired',
+        },
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        hasActiveAttention: true,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'requestAttention', reason: 'attentionRequired' });
   });
 });

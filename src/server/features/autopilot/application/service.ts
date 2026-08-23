@@ -12,7 +12,12 @@ import {
   type AutopilotSession,
   type AutopilotSnapshot,
 } from '../domain/autopilot-session.js';
-import { decideAutopilot, executionComplete, type AutopilotPolicy } from './policy.js';
+import {
+  classifyAgentActivity,
+  decideAutopilot,
+  executionComplete,
+  type AutopilotPolicy,
+} from './policy.js';
 import type {
   AutopilotAuditEvent,
   AutopilotControl,
@@ -136,7 +141,6 @@ export class AutopilotCoordinator {
     if (
       prior.requestedEnabled &&
       prior.planIdentity === currentPlan.identity &&
-      prior.planFingerprint === nextFingerprint &&
       prior.state !== 'attentionRequired'
     )
       return this.snapshot(sessionId);
@@ -314,11 +318,12 @@ export class AutopilotCoordinator {
     if (!prior?.requestedEnabled) return;
     const activity = this.deps.activity(sessionId);
     if (!activity || activity.confidence !== 'fresh') return;
-    const actorsWorking =
-      activity.root.state === 'working' ||
-      activity.aggregateSubagents === 'working' ||
-      activity.aggregateSubagents === 'awaitingAgent';
-    if (actorsWorking) {
+    const disposition = classifyAgentActivity(activity);
+    if (disposition === 'attention') {
+      this.evaluate(sessionId);
+      return;
+    }
+    if (disposition === 'active') {
       this.cancelTimer(sessionId);
       const subagentsWorking =
         activity.aggregateSubagents === 'working' ||
@@ -340,10 +345,7 @@ export class AutopilotCoordinator {
         });
       return;
     }
-    const rootSettled = activity.root.state === 'idle' || activity.root.state === 'blocked';
-    const subagentsSettled =
-      activity.aggregateSubagents === 'idle' || activity.aggregateSubagents === 'blocked';
-    if (rootSettled && subagentsSettled) this.activitySettled(sessionId);
+    if (disposition === 'settled') this.activitySettled(sessionId);
   }
   activitySettled(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
