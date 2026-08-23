@@ -6,15 +6,18 @@
 
 import { defineConfig } from '@playwright/test';
 
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
+const outputId = process.env.PLAYWRIGHT_OUTPUT_ID ?? 'local';
+
 /** Browser assertions, including orthogonal checks from evidence specs, excluding real auth. */
 export default defineConfig({
   testDir: './test/e2e',
   testIgnore: 'real-auth-journey.spec.ts',
-  outputDir: 'test-results/browser-functional',
-  use: { baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure' },
+  outputDir: `test-results/browser-functional-${outputId}`,
+  use: { baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure' },
   webServer: {
-    command: 'npm run dev:client -- --host 127.0.0.1 --port 4173 --strictPort',
-    port: 4173,
+    command: `npm run dev:client -- --host 127.0.0.1 --port ${port} --strictPort`,
+    port,
     reuseExistingServer: false,
   },
 });

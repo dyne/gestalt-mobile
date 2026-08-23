@@ -202,7 +202,7 @@ for (const configuration of evidenceConfigurations())
       route.fulfill({ contentType: 'application/json', body: JSON.stringify({ profiles: [] }) }),
     );
     await page.routeWebSocket(
-      /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/evidence-session\/events\?after=\d+/,
+      /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/evidence-session\/events\?after=\d+/,
       () => {},
     );
     const cdp = await page.context().newCDPSession(page);

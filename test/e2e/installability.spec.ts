@@ -10,7 +10,10 @@ test('the relay exposes an installable standalone web app', async ({ page, reque
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'bootstrap', publicOrigin: 'http://127.0.0.1:4173' }),
+      body: JSON.stringify({
+        status: 'bootstrap',
+        publicOrigin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4173}`,
+      }),
     }),
   );
 

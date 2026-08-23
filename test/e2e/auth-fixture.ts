@@ -10,7 +10,10 @@ export async function mockAuthenticatedStatus(page: Page): Promise<void> {
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ status: 'authenticated', publicOrigin: 'http://127.0.0.1:4173' }),
+      body: JSON.stringify({
+        status: 'authenticated',
+        publicOrigin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? 4173}`,
+      }),
     }),
   );
 }

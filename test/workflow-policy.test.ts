@@ -14,7 +14,10 @@ describe('GitHub verification workflow', () => {
   it('runs stable verification jobs for pull requests and main', () => {
     expect(workflow).toContain('pull_request:');
     expect(workflow).toContain('branches: [main]');
-    expect(workflow).toContain('verify:');
+    expect(workflow).toContain('quality:');
+    expect(workflow).toContain('vitest:');
+    expect(workflow).toContain('build:');
+    expect(workflow).toContain('browser-functional:');
     expect(workflow).toContain('package-smoke:');
     expect(workflow).toContain('node-version: 24');
   });
@@ -26,10 +29,15 @@ describe('GitHub verification workflow', () => {
     'npm test',
     'npm run lint',
     'npm run build',
-    'npm run test:e2e',
     'npm run test:package',
   ])('runs %s', (command) => {
     expect(workflow).toContain(`run: ${command}`);
+  });
+
+  it('runs the audited functional browser lane', () => {
+    expect(workflow).toContain(
+      'npx playwright test --config playwright.functional.config.ts --shard=${{ matrix.shard }}',
+    );
   });
 
   it('pins all actions to full commit SHAs with version comments', () => {
@@ -52,7 +60,9 @@ describe('GitHub verification workflow', () => {
   });
 
   it('releases only verified canonical main with pinned semver and explicit tags', () => {
-    expect(workflow).toContain('needs: [verify, package-smoke]');
+    expect(workflow).toContain(
+      'needs: [quality, vitest, build, browser-functional, package-smoke, real-auth]',
+    );
     expect(workflow).toContain("github.repository == 'dyne/gestalt-mobile'");
     expect(workflow).toContain(
       'ietf-tools/semver-action@c90370b2958652d71c06a3484129a4d423a6d8a8 # v1.11.0',
@@ -63,5 +73,12 @@ describe('GitHub verification workflow', () => {
     expect(workflow).not.toContain('git push --tags');
     expect(workflow).toContain("require('./package.json').name");
     expect(workflow).toContain('node scripts/check-package-contents.mjs');
+  });
+
+  it('isolates each browser shard by port, output directory, and artifact name', () => {
+    for (const port of [4173, 4174, 4175, 4176]) expect(workflow).toContain(`port: ${port}`);
+    expect(workflow).toContain('--shard=${{ matrix.shard }}');
+    expect(workflow).toContain('PLAYWRIGHT_OUTPUT_ID: ${{ matrix.output_id }}');
+    expect(workflow).toContain('playwright-traces-${{ matrix.output_id }}');
   });
 });

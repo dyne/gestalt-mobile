@@ -58,7 +58,7 @@ async function openChat(page: Page, pendingInteractions: PendingInteraction[]): 
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
   await page.routeWebSocket(
-    /ws:\/\/127\.0\.0\.1:4173\/api\/sessions\/session-1\/events\?after=\d+/,
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
     () => {},
   );
   await page.goto('/');
