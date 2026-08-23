@@ -54,6 +54,10 @@ main {
   main {
     --page-inline-padding: 0.5rem;
   }
+
+  .bottom-navigation.bottom-navigation button {
+    font-size: max(0.453125rem, 13px);
+  }
 }
 
 .app-header {

@@ -276,6 +276,27 @@ npm start -- --cwd <relay-root>
 
 Run `npm run check`, `npm test`, `npm run lint`, and `npm run build`.
 
+### Test lanes
+
+The aggregate commands remain the default required checks: `npm test` runs every
+Vitest test and `npm run test:e2e` runs every browser test except the isolated
+real-auth journey. The additive lanes make ownership inspectable without changing
+those defaults:
+
+- `npm run test:vitest` — all Vitest tests.
+- `npm run test:coverage` — all Vitest tests with a V8 JSON summary at
+  `coverage/vitest/coverage-summary.json` (the generated directory is ignored).
+- `npm run test:e2e:functional` — browser-functional specs excluding the exhaustive
+  visual-evidence files and real-auth journey.
+- `npm run test:e2e:evidence` — the exhaustive visual/responsive evidence files.
+- `npm run test:auth:stress` — the existing multi-process authorization contention
+  repetitions.
+- `npm run test:e2e:real-auth` — the serial real SimpleWebAuthn browser journey.
+
+Run `npm run test:lanes` to list every lane and fail if a current Vitest or
+Playwright spec is unassigned. The evidence files can overlap the aggregate
+browser command while lane separation is introduced; no assertions are removed.
+
 Maintainers should follow the [npm release operations guide](docs/releasing.md)
 when configuring GitHub, rotating credentials, or recovering a partial release.
 

@@ -7,19 +7,12 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
+/** Re-runs the current multi-process authorization contention contract on demand. */
 export default defineConfig({
   plugins: [svelte()],
   resolve: { conditions: ['browser'] },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'scripts/**/*.test.ts'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['json-summary'],
-      reportsDirectory: 'coverage/vitest',
-      all: true,
-      include: ['src/**/*.ts', 'src/**/*.svelte'],
-      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts'],
-    },
+    include: ['test/integration/auth-multi-instance.test.ts'],
   },
 });
