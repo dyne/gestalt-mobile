@@ -6,7 +6,7 @@
 
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 
-export type AutopilotControlStatus = 'scheduled' | 'issued' | 'started' | 'failed';
+export type AutopilotControlStatus = 'scheduled' | 'issued' | 'started' | 'failed' | 'cancelled';
 
 export type AutopilotAuditEvent = Readonly<{
   sessionId: string;
@@ -63,6 +63,8 @@ export interface AutopilotStore {
   acknowledgeOutbox?(id: number): void;
   /** A control ID alone is not provenance: clients choose their own idempotency keys. */
   acceptedControlTurns?(sessionId: string): ReadonlyMap<string, string>;
+  /** Counts non-cancelled automatic starts in a bounded ISO-8601 time window. */
+  automaticActionsSince?(sessionId: string, since: string): number;
   /** Legacy diagnostic surface; never use for history provenance. */
   controlIds(sessionId: string): ReadonlySet<string>;
 }

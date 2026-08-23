@@ -28,7 +28,7 @@ const renderableAutopilotAuditWhere = `
     OR json_extract(payload_json, '$.state') = 'completed'
     OR (
       json_extract(payload_json, '$.state') = 'attentionRequired'
-      AND json_extract(payload_json, '$.reason') IN ('noPlanProgress', 'reconcileFailed')
+      AND json_extract(payload_json, '$.reason') IN ('noPlanProgress', 'reconcileFailed', 'actionRateExceeded')
     )
   )`;
 

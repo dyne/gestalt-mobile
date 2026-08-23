@@ -242,6 +242,13 @@ const cases: ReadonlyArray<{
     attention: false,
   },
   {
+    name: 'automatic-action-limit',
+    state: 'attentionRequired',
+    reason: 'actionRateExceeded',
+    text: 'ten-minute safety window',
+    attention: false,
+  },
+  {
     name: 'tool-attention',
     state: 'attentionRequired',
     text: 'Paused for attention',

@@ -32,6 +32,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       'The coordinator stopped because it could not safely confirm the session state.',
     startUnavailable:
       'The coordinator stopped because the session runtime was unavailable when it tried to start an automatic turn.',
+    actionRateExceeded:
+      'The coordinator stopped because it reached the automatic-action safety limit.',
   };
   let message = $derived(
     autopilot?.reason && !attention ? (reasons[autopilot.reason] ?? null) : null,
@@ -39,7 +41,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let recovery = $derived(
     autopilot?.reason === 'startUnavailable'
       ? 'There is no pending agent attention request to answer. Restore or reopen this session, then retry Autopilot.'
-      : 'There is no pending agent attention request to answer. Retry the supported Autopilot coordinator after addressing the cause, or disable it.',
+      : autopilot?.reason === 'actionRateExceeded'
+        ? 'There is no pending agent attention request to answer. Wait for the ten-minute safety window to clear, or continue manually.'
+        : 'There is no pending agent attention request to answer. Retry the supported Autopilot coordinator after addressing the cause, or disable it.',
   );
 </script>
 

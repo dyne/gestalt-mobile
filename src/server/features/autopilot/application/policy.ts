@@ -16,6 +16,8 @@ export type AutopilotPolicy = Readonly<{
   quiescenceMs: number;
   staleAfterMs: number;
   retryLimit: number;
+  actionLimit: number;
+  actionWindowMs: number;
   backoffMs(attempt: number): number;
   promptVersion: typeof AUTOPILOT_PROMPT_VERSION;
 }>;
@@ -24,6 +26,8 @@ export const defaultAutopilotPolicy: AutopilotPolicy = Object.freeze({
   quiescenceMs: 1_000,
   staleAfterMs: 30_000,
   retryLimit: 3,
+  actionLimit: 12,
+  actionWindowMs: 10 * 60_000,
   backoffMs: (attempt) => Math.min(60_000, 1_000 * 2 ** Math.max(0, attempt)),
   promptVersion: AUTOPILOT_PROMPT_VERSION,
 });
@@ -34,7 +38,12 @@ export type AutopilotDecision =
   | Readonly<{ kind: 'scheduleContinuation'; at: string }>
   | Readonly<{
       kind: 'requestAttention';
-      reason: 'attentionRequired' | 'noPlanProgress' | 'reconcileFailed' | 'startUnavailable';
+      reason:
+        | 'attentionRequired'
+        | 'noPlanProgress'
+        | 'reconcileFailed'
+        | 'startUnavailable'
+        | 'actionRateExceeded';
     }>
   | Readonly<{ kind: 'complete' }>
   | Readonly<{
@@ -85,6 +94,7 @@ export function decideAutopilot(input: {
   hasPendingInteraction: boolean;
   hasActiveAttention?: boolean;
   lastTurnOutcome?: 'completed' | 'failed' | 'unknown';
+  automaticActionCount?: number;
   now: string;
   policy: AutopilotPolicy;
 }): AutopilotDecision {
@@ -95,7 +105,8 @@ export function decideAutopilot(input: {
       reason:
         state.stopReason === 'noPlanProgress' ||
         state.stopReason === 'reconcileFailed' ||
-        state.stopReason === 'startUnavailable'
+        state.stopReason === 'startUnavailable' ||
+        state.stopReason === 'actionRateExceeded'
           ? state.stopReason
           : 'attentionRequired',
     };
@@ -110,6 +121,8 @@ export function decideAutopilot(input: {
   if (disposition === 'attention') return { kind: 'requestAttention', reason: 'attentionRequired' };
   if (disposition === 'reconcile') return { kind: 'reconcile' };
   if (disposition !== 'settled') return { kind: 'observe' };
+  if ((input.automaticActionCount ?? 0) >= policy.actionLimit)
+    return { kind: 'requestAttention', reason: 'actionRateExceeded' };
   // The outcome is intentionally interpreted only through durable lack of plan
   // progress: a failed or unknown automatic turn may retry within the same
   // bounded budget, while a completed turn with no fingerprint change does too.

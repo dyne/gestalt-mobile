@@ -11,7 +11,12 @@ import AutopilotSafetyStop from './AutopilotSafetyStop.svelte';
 
 afterEach(cleanup);
 const safety = (
-  reason: 'attentionRequired' | 'noPlanProgress' | 'reconcileFailed' | 'startUnavailable',
+  reason:
+    | 'attentionRequired'
+    | 'noPlanProgress'
+    | 'reconcileFailed'
+    | 'startUnavailable'
+    | 'actionRateExceeded',
 ) => ({
   state: 'attentionRequired' as const,
   enabled: false,
@@ -21,26 +26,29 @@ const safety = (
 });
 
 describe('AutopilotSafetyStop', () => {
-  it.each(['attentionRequired', 'noPlanProgress', 'reconcileFailed', 'startUnavailable'] as const)(
-    'presents %s with supported recovery and disable toggles',
-    async (reason) => {
-      const onrecover = vi.fn();
-      const ondisable = vi.fn();
-      render(AutopilotSafetyStop, {
-        autopilot: safety(reason),
-        attention: null,
-        onrecover,
-        ondisable,
-      });
-      expect(screen.getByRole('alert').textContent).toContain(
-        'There is no pending agent attention request',
-      );
-      await fireEvent.click(screen.getByRole('button', { name: 'Retry Autopilot' }));
-      await fireEvent.click(screen.getByRole('button', { name: 'Disable Autopilot' }));
-      expect(onrecover).toHaveBeenCalledOnce();
-      expect(ondisable).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    'attentionRequired',
+    'noPlanProgress',
+    'reconcileFailed',
+    'startUnavailable',
+    'actionRateExceeded',
+  ] as const)('presents %s with supported recovery and disable toggles', async (reason) => {
+    const onrecover = vi.fn();
+    const ondisable = vi.fn();
+    render(AutopilotSafetyStop, {
+      autopilot: safety(reason),
+      attention: null,
+      onrecover,
+      ondisable,
+    });
+    expect(screen.getByRole('alert').textContent).toContain(
+      'There is no pending agent attention request',
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry Autopilot' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Disable Autopilot' }));
+    expect(onrecover).toHaveBeenCalledOnce();
+    expect(ondisable).toHaveBeenCalledOnce();
+  });
 
   it('does not replace a tool-declared attention alert', () => {
     render(AutopilotSafetyStop, {

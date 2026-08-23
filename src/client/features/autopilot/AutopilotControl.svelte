@@ -38,6 +38,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     reconcileFailed: 'Autopilot paused because it could not safely confirm session state.',
     startUnavailable:
       'Automatic continuation could not start because the session runtime is unavailable. Restore or reopen the session, then retry Autopilot.',
+    actionRateExceeded:
+      'Autopilot paused after too many automatic actions in ten minutes. Wait for the safety window to clear, or continue manually.',
     planRemoved: 'The retained plan was removed.',
     planReplaced: 'The retained plan changed. Enable Autopilot again after reviewing it.',
     sessionEnded: 'This session ended.',

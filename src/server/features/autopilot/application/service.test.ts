@@ -124,6 +124,69 @@ describe('AutopilotCoordinator', () => {
     coordinator.cancel('s', 'sessionEnded');
     expect(state).toMatchObject({ stopReason: 'sessionEnded' });
   });
+  it.each(['disable', 'lifecycle'] as const)(
+    'atomically cancels a scheduled control on %s invalidation',
+    (action) => {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: 'backoff',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 2,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: '2026-08-20T12:01:00.000Z',
+        lastControlId: 'scheduled',
+        stopReason: null,
+        updatedAt: now,
+      };
+      let control: import('./ports.js').AutopilotControl = {
+        sessionId: 's',
+        controlId: 'scheduled',
+        status: 'scheduled',
+        createdAt: now,
+        updatedAt: now,
+        failureCode: null,
+      };
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => control,
+          saveControl: (next) => {
+            control = next;
+          },
+          controlIds: () => new Set([control.controlId]),
+        },
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity: 'p' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => () => {},
+        nextControlId: () => 'next',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+
+      if (action === 'disable') coordinator.disable('s');
+      else coordinator.cancel('s', 'sessionEnded');
+
+      expect(state).toMatchObject({
+        state: 'disabled',
+        requestedEnabled: false,
+        generation: 3,
+        lastControlId: null,
+      });
+      expect(control.status).toBe('cancelled');
+      expect(coordinator.recordControlIssued('s', control.controlId)).toBe(false);
+    },
+  );
   it('restores only enabled actionable rows and rearms a future backoff', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
@@ -265,7 +328,7 @@ describe('AutopilotCoordinator', () => {
           timer.cancelled = true;
         };
       },
-      nextControlId: () => 'activity-control',
+      nextControlId: (_sessionId, generation) => `activity-control-${generation}`,
       turnStarter: {
         start: async () => {
           starts += 1;
@@ -293,8 +356,9 @@ describe('AutopilotCoordinator', () => {
     await runNextTimer();
     await runNextTimer();
     expect(starts).toBe(1);
-    expect(controls.size).toBe(1);
-    expect(controls.get('s:activity-control')?.status).toBe('started');
+    expect(controls.size).toBe(2);
+    expect(controls.get('s:activity-control-1')?.status).toBe('cancelled');
+    expect(controls.get('s:activity-control-2')?.status).toBe('started');
   });
   it('keeps one durable scheduled control across repeated backoff evaluations', () => {
     let state: AutopilotSession | null = null;
@@ -560,6 +624,14 @@ describe('AutopilotCoordinator', () => {
       stopReason: null,
       updatedAt: now,
     };
+    let control: import('./ports.js').AutopilotControl = {
+      sessionId: 's',
+      controlId: 'control',
+      status: 'scheduled',
+      createdAt: now,
+      updatedAt: now,
+      failureCode: null,
+    };
     const coordinator = new AutopilotCoordinator({
       store: {
         find: () => state,
@@ -567,8 +639,10 @@ describe('AutopilotCoordinator', () => {
           state = next;
         },
         remove: () => {},
-        findControl: () => null,
-        saveControl: () => {},
+        findControl: () => control,
+        saveControl: (next) => {
+          control = next;
+        },
         controlIds: () => new Set(),
       },
       now: () => now,
@@ -590,6 +664,7 @@ describe('AutopilotCoordinator', () => {
       nextEvaluationAt: null,
       lastControlId: null,
     });
+    expect(control.status).toBe('cancelled');
   });
   it('ignores ordinary updates within the retained incomplete plan', () => {
     const initial: AutopilotSession = {
@@ -652,6 +727,14 @@ describe('AutopilotCoordinator', () => {
       stopReason: null,
       updatedAt: now,
     };
+    let control: import('./ports.js').AutopilotControl = {
+      sessionId: 's',
+      controlId: 'pending',
+      status: 'scheduled',
+      createdAt: now,
+      updatedAt: now,
+      failureCode: null,
+    };
     let timerCancelled = false;
     const events: string[] = [];
     const coordinator = new AutopilotCoordinator({
@@ -661,8 +744,10 @@ describe('AutopilotCoordinator', () => {
           state = next;
         },
         remove: () => {},
-        findControl: () => null,
-        saveControl: () => {},
+        findControl: () => control,
+        saveControl: (next) => {
+          control = next;
+        },
         controlIds: () => new Set(),
       },
       now: () => now,
@@ -695,6 +780,7 @@ describe('AutopilotCoordinator', () => {
       lastControlId: null,
     });
     expect(timerCancelled).toBe(true);
+    expect(control.status).toBe('cancelled');
     expect(events).not.toContain('autopilot.progress-reset');
   });
   it.each([
@@ -816,6 +902,66 @@ describe('AutopilotCoordinator', () => {
       generation: 2,
     });
     expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(1);
+  });
+  it('stops a settled oscillating session at the durable automatic-action limit', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 4,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    let since = '';
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        automaticActionsSince: (_sessionId, value) => {
+          since = value;
+          return defaultAutopilotPolicy.actionLimit;
+        },
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: {
+          ...createAgentActivitySnapshot('s', now).root,
+          state: 'idle',
+          lastActivityAt: now,
+        },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'unused',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+
+    coordinator.evaluate('s');
+
+    expect(since).toBe('2026-08-20T11:50:00.000Z');
+    expect(state).toMatchObject({
+      state: 'attentionRequired',
+      requestedEnabled: false,
+      stopReason: 'actionRateExceeded',
+    });
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {
     let state: AutopilotSession | null = null;

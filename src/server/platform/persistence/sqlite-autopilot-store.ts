@@ -33,6 +33,8 @@ export class SqliteAutopilotStore implements AutopilotStore {
         'attentionRequired',
         'noPlanProgress',
         'reconcileFailed',
+        'startUnavailable',
+        'actionRateExceeded',
         'planRemoved',
         'planReplaced',
         'sessionEnded',
@@ -82,7 +84,10 @@ export class SqliteAutopilotStore implements AutopilotStore {
     const row = this.db
       .prepare('SELECT * FROM autopilot_controls WHERE session_id = ? AND control_id = ?')
       .get(sessionId, controlId) as Record<string, unknown> | undefined;
-    if (!row || !['scheduled', 'issued', 'started', 'failed'].includes(String(row.status)))
+    if (
+      !row ||
+      !['scheduled', 'issued', 'started', 'failed', 'cancelled'].includes(String(row.status))
+    )
       return null;
     const failureCode = row.failure_code === null ? null : String(row.failure_code);
     if (failureCode !== null && !['START_FAILED', 'START_UNAVAILABLE'].includes(failureCode))
@@ -100,7 +105,7 @@ export class SqliteAutopilotStore implements AutopilotStore {
   saveControl(control: AutopilotControl): void {
     this.db
       .prepare(
-        "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(session_id,control_id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at,failure_code=excluded.failure_code,turn_id=COALESCE(excluded.turn_id,autopilot_controls.turn_id) WHERE CASE autopilot_controls.status WHEN 'scheduled' THEN 0 WHEN 'issued' THEN 1 WHEN 'started' THEN 2 WHEN 'failed' THEN 2 END <= CASE excluded.status WHEN 'scheduled' THEN 0 WHEN 'issued' THEN 1 WHEN 'started' THEN 2 WHEN 'failed' THEN 2 END",
+        "INSERT INTO autopilot_controls (session_id,control_id,status,created_at,updated_at,failure_code,turn_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(session_id,control_id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at,failure_code=excluded.failure_code,turn_id=COALESCE(excluded.turn_id,autopilot_controls.turn_id) WHERE autopilot_controls.status = excluded.status OR (autopilot_controls.status = 'scheduled' AND excluded.status IN ('issued','cancelled')) OR (autopilot_controls.status = 'issued' AND excluded.status IN ('started','failed'))",
       )
       .run(
         control.sessionId,
@@ -200,6 +205,14 @@ export class SqliteAutopilotStore implements AutopilotStore {
           .all(sessionId) as Array<{ turn_id: string; control_id: string }>
       ).map((row) => [row.turn_id, row.control_id]),
     );
+  }
+  automaticActionsSince(sessionId: string, since: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT count(*) AS count FROM autopilot_controls WHERE session_id = ? AND status IN ('issued','started','failed') AND updated_at >= ?",
+      )
+      .get(sessionId, since) as { count: number };
+    return row.count;
   }
   controlIds(sessionId: string): ReadonlySet<string> {
     return new Set(
