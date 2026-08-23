@@ -6,12 +6,11 @@
 
 import { defineConfig } from '@playwright/test';
 
-import { browserEvidenceSpecs } from './scripts/test-lanes.mjs';
-
-/** Browser assertions excluding the exhaustive visual-evidence files and real-auth journey. */
+/** Browser assertions, including orthogonal checks from evidence specs, excluding real auth. */
 export default defineConfig({
   testDir: './test/e2e',
-  testIgnore: ['real-auth-journey.spec.ts', ...browserEvidenceSpecs],
+  testIgnore: 'real-auth-journey.spec.ts',
+  outputDir: 'test-results/browser-functional',
   use: { baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure' },
   webServer: {
     command: 'npm run dev:client -- --host 127.0.0.1 --port 4173 --strictPort',

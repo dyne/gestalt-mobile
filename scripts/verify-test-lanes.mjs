@@ -44,9 +44,7 @@ const vitestFiles = (
 const browserFiles = (await files('test/e2e', (path) => path.endsWith('.spec.ts')))
   .map((path) => relative('test/e2e', path))
   .sort();
-const browserFunctional = browserFiles.filter(
-  (file) => !browserEvidenceSpecs.includes(file) && !browserRealAuthSpecs.includes(file),
-);
+const browserFunctional = browserFiles.filter((file) => !browserRealAuthSpecs.includes(file));
 
 const lanes = {
   vitest: vitestFiles,

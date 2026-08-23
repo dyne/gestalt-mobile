@@ -4,23 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { expect, test, type Locator, type Page } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import {
   evidenceFilename,
+  evidenceConfigurations,
   evidenceFontScales,
   evidenceThemes,
-  evidenceViewports,
   expectCleanThemeDiagnostics,
   expectNoHorizontalOverflow,
   openThemeEvidence,
 } from './theme-evidence.js';
 
-const evidenceDirectory = '/tmp/gestalt-mobile-toast-evidence';
 const variants = ['error', 'stacked'] as const;
 
-test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
 async function openEvidence(
@@ -77,47 +74,43 @@ test('announces feedback, is non-modal, keyboard-dismissible, and does not steal
 });
 
 for (const variant of variants) {
-  for (const viewport of evidenceViewports) {
-    for (const fontScale of evidenceFontScales) {
-      for (const theme of evidenceThemes) {
-        test(`captures ${variant} feedback at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
-          page,
-        }) => {
-          await page.setViewportSize(viewport);
-          const diagnostics = await openEvidence(page, variant, theme, fontScale);
-          const alerts = page.getByRole('alert');
-          const statuses = page.getByRole('status');
-          await expect(alerts).toHaveCount(1);
-          await expect(statuses).toHaveCount(variant === 'stacked' ? 1 : 0);
-          await expect(alerts).toHaveAttribute('aria-live', 'assertive');
-          if (variant === 'stacked') {
-            await expect(statuses).toContainText('Cloned.');
-            await expect(statuses).toHaveAttribute('aria-live', 'polite');
-          }
-
-          const dismiss = page.getByRole('button', { name: 'Dismiss error notification' });
-          const dimensions = await dismiss.boundingBox();
-          expect(dimensions?.width).toBeGreaterThanOrEqual(44);
-          expect(dimensions?.height).toBeGreaterThanOrEqual(44);
-
-          for (const toast of await page.locator('.toast').all()) {
-            expect(await boxesOverlap(toast, page.getByRole('textbox', { name: 'Prompt' }))).toBe(
-              false,
-            );
-            expect(
-              await boxesOverlap(
-                toast,
-                page.getByRole('navigation', { name: 'Primary evidence navigation' }),
-              ),
-            ).toBe(false);
-          }
-          await expectNoHorizontalOverflow(page);
-
-          const filename = evidenceFilename('toast', variant, viewport, fontScale, theme);
-          await page.screenshot({ path: `${evidenceDirectory}/${filename}`, fullPage: false });
-          expectCleanThemeDiagnostics(diagnostics);
-        });
+  for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
+    test(`captures ${variant} feedback at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
+      page,
+    }, testInfo: TestInfo) => {
+      await page.setViewportSize(viewport);
+      const diagnostics = await openEvidence(page, variant, theme, fontScale);
+      const alerts = page.getByRole('alert');
+      const statuses = page.getByRole('status');
+      await expect(alerts).toHaveCount(1);
+      await expect(statuses).toHaveCount(variant === 'stacked' ? 1 : 0);
+      await expect(alerts).toHaveAttribute('aria-live', 'assertive');
+      if (variant === 'stacked') {
+        await expect(statuses).toContainText('Cloned.');
+        await expect(statuses).toHaveAttribute('aria-live', 'polite');
       }
-    }
+
+      const dismiss = page.getByRole('button', { name: 'Dismiss error notification' });
+      const dimensions = await dismiss.boundingBox();
+      expect(dimensions?.width).toBeGreaterThanOrEqual(44);
+      expect(dimensions?.height).toBeGreaterThanOrEqual(44);
+
+      for (const toast of await page.locator('.toast').all()) {
+        expect(await boxesOverlap(toast, page.getByRole('textbox', { name: 'Prompt' }))).toBe(
+          false,
+        );
+        expect(
+          await boxesOverlap(
+            toast,
+            page.getByRole('navigation', { name: 'Primary evidence navigation' }),
+          ),
+        ).toBe(false);
+      }
+      await expectNoHorizontalOverflow(page);
+
+      const filename = evidenceFilename('toast', variant, viewport, fontScale, theme);
+      await page.screenshot({ path: testInfo.outputPath(filename), fullPage: false });
+      expectCleanThemeDiagnostics(diagnostics);
+    });
   }
 }

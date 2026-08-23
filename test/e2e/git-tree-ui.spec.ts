@@ -4,19 +4,17 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { mkdir } from 'node:fs/promises';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import {
   evidenceFilename,
+  evidenceConfigurations,
   evidenceFontScales,
   evidenceThemes,
   evidenceViewports,
   expectCleanThemeDiagnostics,
   openThemeEvidence,
 } from './theme-evidence.js';
-
-const evidenceDirectory = '/tmp/gestalt-mobile-git-tree-evidence';
 
 type Workspace = {
   id: string;
@@ -85,8 +83,6 @@ const summary = {
   })),
   fetchedAt: '2026-07-21T08:00:00.000Z',
 };
-
-test.beforeAll(async () => mkdir(evidenceDirectory, { recursive: true }));
 
 async function openGit(
   page: Page,
@@ -205,13 +201,14 @@ async function capture(
   fontScale: (typeof evidenceFontScales)[number],
   theme: (typeof evidenceThemes)[number],
   focus: Locator,
+  testInfo: TestInfo,
   scrollBlock: ScrollLogicalPosition = 'center',
 ): Promise<void> {
   await focus.evaluate((element, block) => element.scrollIntoView({ block }), scrollBlock);
   await expect(focus).toBeVisible();
   await expectUsableLayout(page);
   await page.screenshot({
-    path: `${evidenceDirectory}/${evidenceFilename('git', state, viewport, fontScale, theme)}`,
+    path: testInfo.outputPath(evidenceFilename('git', state, viewport, fontScale, theme)),
     fullPage: false,
   });
 }
@@ -245,82 +242,95 @@ async function expectActionAboveNavigation(action: Locator, navigation: Locator)
   ).toBeLessThanOrEqual(navigationBox!.y);
 }
 
-for (const viewport of evidenceViewports) {
-  for (const fontScale of evidenceFontScales) {
-    for (const theme of evidenceThemes) {
-      test(`captures five Git states at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
-        page,
-      }) => {
-        await page.setViewportSize(viewport);
-        const diagnostics = await openGit(page, theme, fontScale);
+for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
+  test(`captures five Git states at ${viewport.width}x${viewport.height}, ${fontScale}% font, ${theme}`, async ({
+    page,
+  }, testInfo: TestInfo) => {
+    await page.setViewportSize(viewport);
+    const diagnostics = await openGit(page, theme, fontScale);
 
-        const ordinary = page.getByRole('treeitem', { name: /^ordinary-clone-destination/ });
-        await ordinary.click();
-        await expect(ordinary).toHaveAttribute('aria-selected', 'true');
-        await expect(ordinary).toBeFocused();
-        await expect(page.getByRole('button', { name: 'Clone' })).toBeEnabled();
-        await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
-        await capture(page, 'ordinary-selected', viewport, fontScale, theme, ordinary);
+    const ordinary = page.getByRole('treeitem', { name: /^ordinary-clone-destination/ });
+    await ordinary.click();
+    await expect(ordinary).toHaveAttribute('aria-selected', 'true');
+    await expect(ordinary).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Clone' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
+    await capture(page, 'ordinary-selected', viewport, fontScale, theme, ordinary, testInfo);
 
-        const primary = page.getByRole('treeitem', { name: /^primary-repository/ });
-        await primary.click();
-        await expect(primary).toHaveAttribute('aria-selected', 'true');
-        await expect(primary).toBeFocused();
-        await expect(primary).toContainText('Git');
-        const pull = page.getByRole('button', { name: 'Pull' });
-        await expect(pull).toBeEnabled();
-        expect(
-          await page
-            .getByRole('tree', { name: 'Git repository and clone destination' })
-            .evaluate((tree) => tree.scrollHeight > tree.clientHeight),
-        ).toBe(true);
-        await capture(page, 'repository-selected', viewport, fontScale, theme, pull);
+    const primary = page.getByRole('treeitem', { name: /^primary-repository/ });
+    await primary.click();
+    await expect(primary).toHaveAttribute('aria-selected', 'true');
+    await expect(primary).toBeFocused();
+    await expect(primary).toContainText('Git');
+    const pull = page.getByRole('button', { name: 'Pull' });
+    await expect(pull).toBeEnabled();
+    expect(
+      await page
+        .getByRole('tree', { name: 'Git repository and clone destination' })
+        .evaluate((tree) => tree.scrollHeight > tree.clientHeight),
+    ).toBe(true);
+    await capture(page, 'repository-selected', viewport, fontScale, theme, pull, testInfo);
 
-        const fold = page.getByRole('button', { name: 'Collapse many-repository-siblings' });
-        const repositoryGroup = page.getByRole('treeitem', {
-          name: /^many-repository-siblings/,
-        });
-        await fold.click();
-        await expect(repositoryGroup).toHaveAttribute('aria-expanded', 'false');
-        await expect(primary).toBeHidden();
-        await capture(page, 'many-siblings-folded', viewport, fontScale, theme, repositoryGroup);
+    const fold = page.getByRole('button', { name: 'Collapse many-repository-siblings' });
+    const repositoryGroup = page.getByRole('treeitem', {
+      name: /^many-repository-siblings/,
+    });
+    await fold.click();
+    await expect(repositoryGroup).toHaveAttribute('aria-expanded', 'false');
+    await expect(primary).toBeHidden();
+    await capture(
+      page,
+      'many-siblings-folded',
+      viewport,
+      fontScale,
+      theme,
+      repositoryGroup,
+      testInfo,
+    );
 
-        await page.getByRole('button', { name: 'Expand many-repository-siblings' }).click();
-        await primary.click();
-        await page.getByLabel('Git address').fill('https://example.test/invalid-target.git');
-        await page.getByRole('button', { name: 'Clone' }).click();
-        const errorToast = page
-          .getByLabel('Notifications')
-          .getByRole('alert')
-          .filter({ hasText: 'Select a non-repository folder before cloning.' });
-        await expect(errorToast).toBeVisible();
-        const cloneButton = page.getByRole('button', { name: 'Clone' });
-        const navigation = page.getByLabel('Primary');
-        await expectActionAboveNavigation(cloneButton, navigation);
-        await expectNoOverlap(errorToast, cloneButton);
-        await expectNoOverlap(errorToast, navigation);
-        await capture(page, 'clone-error-toast', viewport, fontScale, theme, cloneButton, 'end');
-        await errorToast.getByRole('button', { name: 'Dismiss error notification' }).click();
+    await page.getByRole('button', { name: 'Expand many-repository-siblings' }).click();
+    await primary.click();
+    await page.getByLabel('Git address').fill('https://example.test/invalid-target.git');
+    await page.getByRole('button', { name: 'Clone' }).click();
+    const errorToast = page
+      .getByLabel('Notifications')
+      .getByRole('alert')
+      .filter({ hasText: 'Select a non-repository folder before cloning.' });
+    await expect(errorToast).toBeVisible();
+    const cloneButton = page.getByRole('button', { name: 'Clone' });
+    const navigation = page.getByLabel('Primary');
+    await expectActionAboveNavigation(cloneButton, navigation);
+    await expectNoOverlap(errorToast, cloneButton);
+    await expectNoOverlap(errorToast, navigation);
+    await capture(
+      page,
+      'clone-error-toast',
+      viewport,
+      fontScale,
+      theme,
+      cloneButton,
+      testInfo,
+      'end',
+    );
+    await errorToast.getByRole('button', { name: 'Dismiss error notification' }).click();
 
-        await ordinary.click();
-        await page
-          .getByLabel('Git address')
-          .fill('https://example.test/newly-cloned-responsive-repository.git');
-        await page.getByRole('button', { name: 'Clone' }).click();
-        const successToast = page
-          .getByLabel('Notifications')
-          .getByRole('status')
-          .filter({ hasText: 'Repository cloned.' });
-        await expect(successToast).toBeVisible();
-        const clonedRepository = page.getByRole('treeitem', {
-          name: /^newly-cloned-responsive-repository/,
-        });
-        await expect(clonedRepository).toHaveAttribute('aria-selected', 'true');
-        await expectNoOverlap(successToast, page.getByLabel('Primary'));
-        await capture(page, 'clone-success', viewport, fontScale, theme, clonedRepository);
+    await ordinary.click();
+    await page
+      .getByLabel('Git address')
+      .fill('https://example.test/newly-cloned-responsive-repository.git');
+    await page.getByRole('button', { name: 'Clone' }).click();
+    const successToast = page
+      .getByLabel('Notifications')
+      .getByRole('status')
+      .filter({ hasText: 'Repository cloned.' });
+    await expect(successToast).toBeVisible();
+    const clonedRepository = page.getByRole('treeitem', {
+      name: /^newly-cloned-responsive-repository/,
+    });
+    await expect(clonedRepository).toHaveAttribute('aria-selected', 'true');
+    await expectNoOverlap(successToast, page.getByLabel('Primary'));
+    await capture(page, 'clone-success', viewport, fontScale, theme, clonedRepository, testInfo);
 
-        expectCleanThemeDiagnostics(diagnostics);
-      });
-    }
-  }
+    expectCleanThemeDiagnostics(diagnostics);
+  });
 }
