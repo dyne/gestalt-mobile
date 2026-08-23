@@ -59,4 +59,15 @@ describe('AutopilotSafetyStop', () => {
     });
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('gives runtime recovery guidance without claiming there is a request to resolve', () => {
+    render(AutopilotSafetyStop, {
+      autopilot: safety('startUnavailable'),
+      attention: null,
+    });
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Restore or reopen this session, then retry Autopilot.',
+    );
+    expect(screen.getByRole('alert').textContent).not.toContain('request is resolved');
+  });
 });

@@ -61,12 +61,12 @@ describe('groupMessages', () => {
     ]);
   });
 
-  it('groups retry attempts by semantic coordinator stage across distinct control ids in chronology', () => {
+  it('keeps distinct successful automatic actions individually inspectable', () => {
     const groups = groupMessages([
       {
         id: 'first',
         role: 'audit',
-        text: 'Issued an automatic continuation.',
+        text: 'Continued execution automatically',
         controlId: 'control-1',
         occurredAt: 10,
         complete: true,
@@ -74,7 +74,7 @@ describe('groupMessages', () => {
       {
         id: 'second',
         role: 'audit',
-        text: 'Issued an automatic continuation.',
+        text: 'Continued execution automatically',
         controlId: 'control-2',
         occurredAt: 20,
         complete: true,
@@ -82,14 +82,13 @@ describe('groupMessages', () => {
       {
         id: 'older',
         role: 'audit',
-        text: 'Issued an automatic continuation.',
+        text: 'Continued execution automatically',
         controlId: 'control-0',
         occurredAt: 5,
         complete: true,
       },
     ]);
-    expect(groups).toHaveLength(2);
-    expect(groups[0]).toMatchObject({ kind: 'audit', count: 2, timestamps: [10, 20] });
-    expect(groups[1]).toMatchObject({ kind: 'audit', count: 1, timestamps: [5] });
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.id)).toEqual(['first', 'second', 'older']);
   });
 });

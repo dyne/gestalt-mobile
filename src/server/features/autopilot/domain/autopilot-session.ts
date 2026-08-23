@@ -15,6 +15,7 @@ export type AutopilotStopReason =
   | 'attentionRequired'
   | 'noPlanProgress'
   | 'reconcileFailed'
+  | 'startUnavailable'
   | 'planRemoved'
   | 'planReplaced'
   | 'sessionEnded';

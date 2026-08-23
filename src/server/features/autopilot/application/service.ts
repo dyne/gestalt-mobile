@@ -491,7 +491,7 @@ export class AutopilotCoordinator {
             requestedEnabled: false,
             generation: latest.generation + 1,
             nextEvaluationAt: null,
-            stopReason: 'attentionRequired',
+            stopReason: 'startUnavailable',
             updatedAt: this.deps.now(),
           });
         return;

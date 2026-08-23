@@ -242,5 +242,21 @@ describe('autopilot policy', () => {
         policy: defaultAutopilotPolicy,
       }),
     ).toEqual({ kind: 'requestAttention', reason: 'attentionRequired' });
+    expect(
+      decideAutopilot({
+        state: {
+          ...enabled,
+          state: 'attentionRequired',
+          requestedEnabled: false,
+          stopReason: 'startUnavailable',
+        },
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        hasActiveAttention: true,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'requestAttention', reason: 'startUnavailable' });
   });
 });

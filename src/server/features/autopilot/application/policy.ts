@@ -34,7 +34,7 @@ export type AutopilotDecision =
   | Readonly<{ kind: 'scheduleContinuation'; at: string }>
   | Readonly<{
       kind: 'requestAttention';
-      reason: 'attentionRequired' | 'noPlanProgress' | 'reconcileFailed';
+      reason: 'attentionRequired' | 'noPlanProgress' | 'reconcileFailed' | 'startUnavailable';
     }>
   | Readonly<{ kind: 'complete' }>
   | Readonly<{
@@ -90,7 +90,15 @@ export function decideAutopilot(input: {
 }): AutopilotDecision {
   const { state, plan, activity, hasPendingInteraction, now, policy } = input;
   if (input.hasActiveAttention || state.state === 'attentionRequired')
-    return { kind: 'requestAttention', reason: 'attentionRequired' };
+    return {
+      kind: 'requestAttention',
+      reason:
+        state.stopReason === 'noPlanProgress' ||
+        state.stopReason === 'reconcileFailed' ||
+        state.stopReason === 'startUnavailable'
+          ? state.stopReason
+          : 'attentionRequired',
+    };
   if (!state.requestedEnabled) return { kind: 'disable', reason: 'manualDisabled' };
   if (!plan) return { kind: 'disable', reason: 'planRequired' };
   if (executionComplete(plan)) return { kind: 'complete' };

@@ -446,7 +446,7 @@ describe('AutopilotCoordinator', () => {
     });
     coordinator.enable('s');
     await fire?.();
-    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'attentionRequired' });
+    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'startUnavailable' });
     expect(controls.get('s:c')).toMatchObject({
       status: 'failed',
       failureCode: 'START_UNAVAILABLE',
@@ -498,7 +498,7 @@ describe('AutopilotCoordinator', () => {
     });
     coordinator.enable('s');
     await fire?.();
-    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'attentionRequired' });
+    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'startUnavailable' });
     expect(controls.get('s:writer-control')).toMatchObject({
       status: 'failed',
       failureCode: 'START_UNAVAILABLE',

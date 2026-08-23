@@ -11,6 +11,7 @@ import type {
   SafeInteractionSnapshot,
 } from '../../../../shared/contracts/chat-snapshot.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
+import { autopilotAuditLabel } from '../../../../shared/contracts/autopilot-audit.js';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { toChatItems, toChatTurns, type ChatItem, type HistoryTurn } from './history-mapper.js';
@@ -96,39 +97,12 @@ function isBoundedAudit(
   return !Array.isArray(source) && 'events' in source;
 }
 
-const auditLabels: Readonly<Record<string, string>> = {
-  'autopilot.continuation-scheduled': 'Scheduled a continuation',
-  'autopilot.control-issued': 'Issued an automatic continuation.',
-  'autopilot.turn-started': 'Continuation started',
-  'autopilot.turn-failed': 'Continuation failed',
-  'org-plan.attention-required': 'Needs attention',
-  'org-plan.attention-resolved': 'Attention resolved',
-};
-
-function snapshotAuditLabel(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const { state, reason } = payload as { state?: unknown; reason?: unknown };
-  if (state === 'backoff') return 'Backing off';
-  if (state === 'attentionRequired') return 'Needs attention';
-  if (state === 'completed') return 'Completed the plan';
-  if (state === 'disabled' && reason === 'planRequired')
-    return 'Requires an incomplete supervised plan';
-  return null;
-}
-
 /** Maps journal vocabulary to a deliberately redacted, durable timeline projection. */
 function toAutopilotAudit(events: readonly SessionEvent[]): AutopilotAuditRecord[] {
   return events.flatMap((event) => {
     const occurredAt = Date.parse(event.occurredAt);
     if (!Number.isFinite(occurredAt)) return [];
-    const label =
-      event.type === 'org-plan.attention-resolved' &&
-      event.payload &&
-      typeof event.payload === 'object' &&
-      (event.payload as { outcome?: unknown }).outcome === 'failed'
-        ? 'Attention resolution failed'
-        : (auditLabels[event.type] ??
-          (event.type === 'autopilot.updated' ? snapshotAuditLabel(event.payload) : null));
+    const label = autopilotAuditLabel(event.type, event.payload);
     if (!label) return [];
     const controlId =
       event.payload &&

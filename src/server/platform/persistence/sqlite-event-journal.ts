@@ -9,8 +9,6 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 
 export const autopilotAuditEventTypes = [
-  'autopilot.continuation-scheduled',
-  'autopilot.control-issued',
   'autopilot.turn-started',
   'autopilot.turn-failed',
   'autopilot.updated',
@@ -27,10 +25,10 @@ const renderableAutopilotAuditWhere = `
   type IN (${autopilotAuditEventTypes.map(() => '?').join(',')})
   AND (
     type <> 'autopilot.updated'
-    OR json_extract(payload_json, '$.state') IN ('backoff', 'attentionRequired', 'completed')
+    OR json_extract(payload_json, '$.state') = 'completed'
     OR (
-      json_extract(payload_json, '$.state') = 'disabled'
-      AND json_extract(payload_json, '$.reason') = 'planRequired'
+      json_extract(payload_json, '$.state') = 'attentionRequired'
+      AND json_extract(payload_json, '$.reason') IN ('noPlanProgress', 'reconcileFailed')
     )
   )`;
 

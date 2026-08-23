@@ -30,10 +30,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       'The coordinator stopped because recent automatic turns made no durable plan progress.',
     reconcileFailed:
       'The coordinator stopped because it could not safely confirm the session state.',
-    startUnavailable: 'The coordinator stopped because it could not start an automatic turn.',
+    startUnavailable:
+      'The coordinator stopped because the session runtime was unavailable when it tried to start an automatic turn.',
   };
   let message = $derived(
     autopilot?.reason && !attention ? (reasons[autopilot.reason] ?? null) : null,
+  );
+  let recovery = $derived(
+    autopilot?.reason === 'startUnavailable'
+      ? 'There is no pending agent attention request to answer. Restore or reopen this session, then retry Autopilot.'
+      : 'There is no pending agent attention request to answer. Retry the supported Autopilot coordinator after addressing the cause, or disable it.',
   );
 </script>
 
@@ -41,10 +47,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <section class="safety-stop" role="alert" aria-labelledby={`${controlId}-title`}>
     <h3 id={`${controlId}-title`}>Autopilot safety stop</h3>
     <p>{message}</p>
-    <p>
-      There is no pending agent attention request to answer. Retry the supported Autopilot
-      coordinator after addressing the cause, or disable it.
-    </p>
+    <p>{recovery}</p>
     <div class="actions">
       <button type="button" disabled={pending} onclick={onrecover}
         >{pending ? 'Updating…' : 'Retry Autopilot'}</button

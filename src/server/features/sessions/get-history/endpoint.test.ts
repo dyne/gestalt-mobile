@@ -112,14 +112,8 @@ describe('GET /api/sessions/:id/history', () => {
     const response = await app.inject('/api/sessions/s/history');
     expect(response.json().autopilotAudit).toEqual([
       {
-        id: 'audit:4',
-        label: 'Scheduled a continuation',
-        occurredAt: Date.parse('2026-08-20T00:00:00.000Z'),
-        controlId: 'control-1',
-      },
-      {
         id: 'audit:5',
-        label: 'Completed the plan',
+        label: 'Completed the supervised plan',
         occurredAt: Date.parse('2026-08-20T00:00:01.000Z'),
       },
       {
@@ -156,7 +150,7 @@ describe('GET /api/sessions/:id/history', () => {
     });
     expect((await app.inject('/api/sessions/s/history')).json()).toMatchObject({
       autopilotAuditTruncated: true,
-      autopilotAudit: [expect.objectContaining({ label: 'Continuation failed' })],
+      autopilotAudit: [expect.objectContaining({ label: 'Automatic continuation failed' })],
     });
     await app.close();
   });
