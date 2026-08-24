@@ -134,14 +134,16 @@ async function install(
               occurredAt: Date.parse('2026-08-20T00:00:00.000Z'),
             },
           ],
-          ...(state === 'backoff'
+          ...(state === 'backoff' && continuationPhase === undefined
             ? {
                 autopilotAudit: Array.from({ length: 4 }, (_, index) => ({
-                  id: `audit-${continuationPhase ?? 'backoff'}-${index}`,
+                  id: `audit-dense-${index}`,
                   label:
-                    continuationPhase === 'scheduled' ? 'Scheduled a continuation' : 'Backing off',
+                    index === 0
+                      ? 'Continued execution automatically'
+                      : 'Automatic continuation failed',
                   occurredAt: Date.parse('2026-08-20T00:00:00.000Z') + index * 1000,
-                  controlId: 'control-1',
+                  controlId: `control-${index + 1}`,
                 })),
               }
             : {}),
@@ -245,7 +247,7 @@ const cases: ReadonlyArray<{
     name: 'automatic-action-limit',
     state: 'attentionRequired',
     reason: 'actionRateExceeded',
-    text: 'ten-minute safety window',
+    text: 'too many automatic actions in ten minutes',
     attention: false,
   },
   {
@@ -306,12 +308,18 @@ for (const item of cases) {
         'Waiting to continue',
       );
       await expect(page.getByRole('region', { name: 'Autopilot' })).not.toContainText('Retry');
-      await expect(page.getByLabel('Chat messages')).toContainText('Scheduled a continuation');
+      await expect(page.getByLabel('Chat messages')).toContainText(
+        'Continued execution automatically',
+      );
+      await expect(page.getByLabel('Chat messages')).not.toContainText('Scheduled a continuation');
       await expect(page.getByLabel('Chat messages')).not.toContainText('Backing off');
     }
     if (item.name === 'backoff') {
       await expect(page.getByRole('region', { name: 'Autopilot' })).toContainText('Retry 2 of 3');
-      await expect(page.getByLabel('Chat messages')).toContainText('Backing off');
+      await expect(page.getByLabel('Chat messages')).toContainText(
+        'Continued execution automatically',
+      );
+      await expect(page.getByLabel('Chat messages')).not.toContainText('Backing off');
       await expect(page.getByLabel('Chat messages')).not.toContainText('Scheduled a continuation');
     }
     if (item.name === 'root-awaiting-child') {
@@ -362,6 +370,11 @@ for (const item of cases) {
         'There is no pending agent attention request',
       );
       await expect(page.getByRole('button', { name: 'Retry Autopilot' })).toBeVisible();
+    }
+    if (item.name === 'automatic-action-limit') {
+      await expect(page.getByRole('alert', { name: 'Autopilot safety stop' })).toContainText(
+        'ten-minute safety window',
+      );
     }
     await expect(page.locator('body')).not.toContainText(secret);
     await page.getByRole('button', { name: 'Sessions' }).click();
@@ -415,16 +428,12 @@ for (const item of [
       await expectFocusedControlClearOfNavigation(page, resume);
     }
     if (item.name === 'dense-audit') {
-      await expect(
-        page.getByLabel('Autopilot audit entry', { exact: true }).filter({ hasText: '4 times' }),
-      ).toContainText('4 times');
-      const timestamps = page.locator('summary', { hasText: 'Show 4 timestamps' });
-      await timestamps.focus();
-      await expect(timestamps).toBeFocused();
-      await timestamps.press('Space');
-      await expect(timestamps.locator('..')).toHaveAttribute('open', '');
-      await timestamps.scrollIntoViewIfNeeded();
-      await expectFocusedControlClearOfNavigation(page, timestamps);
+      const auditEntries = page.getByLabel('Autopilot audit entry', { exact: true });
+      await expect(auditEntries).toHaveCount(4);
+      await expect(auditEntries.filter({ hasText: 'Automatic continuation failed' })).toHaveCount(
+        3,
+      );
+      await auditEntries.last().scrollIntoViewIfNeeded();
     }
     await expectNoHorizontalOverflow(page);
     await page.screenshot({
