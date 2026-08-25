@@ -89,16 +89,6 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   });
   await page.route('**/api/sessions/session-1/history', (route) => {
     historyReads += 1;
-    if (historyReads === 1)
-      return route.fulfill({
-        status: 502,
-        contentType: 'application/problem+json',
-        body: JSON.stringify({
-          code: 'SESSION_HISTORY_READ_FAILED',
-          detail: 'History is not ready yet.',
-          retryable: true,
-        }),
-      });
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(chatSnapshot()),
@@ -112,7 +102,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
-  await expect.poll(() => historyReads).toBeGreaterThanOrEqual(2);
+  expect(historyReads).toBe(0);
   await expect(page.getByLabel('Notifications')).not.toContainText(
     'Session history could not be read',
   );

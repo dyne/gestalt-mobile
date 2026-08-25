@@ -29,6 +29,7 @@ import {
 
 type Timer = ReturnType<typeof setTimeout>;
 export type ChatViewState = Readonly<ChatProjection & { status: string; starting: boolean }>;
+export type ChatSelectionOptions = Readonly<{ history?: 'load' | 'empty' }>;
 export type ChatRelay = Readonly<{
   getHistory(sessionId: string): Promise<unknown>;
   startTurn(sessionId: string, text: string, key?: string): Promise<{ activeTurnId?: string }>;
@@ -145,6 +146,7 @@ export class ChatController {
   #historyRetry: Timer | null = null;
   #historyFailures = 0;
   #historyErrorReported = false;
+  #historyKnownEmpty = false;
   #reconnect: Timer | null = null;
   #attempt = 0;
   #disposed = false;
@@ -188,10 +190,11 @@ export class ChatController {
       starting: this.#projection.lifecycle === 'starting',
     });
   }
-  select(sessionId: string | null): void {
+  select(sessionId: string | null, options: ChatSelectionOptions = {}): void {
     if (this.#disposed || this.#sessionId === sessionId) return;
     this.#stop();
     this.#sessionId = sessionId;
+    this.#historyKnownEmpty = sessionId !== null && options.history === 'empty';
     const generation = ++this.#generation;
     this.#projection = createChatProjection(sessionId);
     this.#publish();
@@ -207,6 +210,7 @@ export class ChatController {
     try {
       const turn = await this.#options.relay.startTurn(id, text.trim(), operationId);
       if (this.#current(id, generation)) {
+        this.#historyKnownEmpty = false;
         this.#set(promotePrompt(this.#projection, operationId, turn.activeTurnId ?? null));
         this.#options.onSendAccepted?.(operationId);
       }
@@ -335,7 +339,8 @@ export class ChatController {
     await this.respond(requestId, value, interaction.operationId);
   }
   refresh(): void {
-    if (this.#sessionId) void this.#takeSnapshot(this.#sessionId, this.#generation);
+    if (this.#sessionId && !this.#historyKnownEmpty)
+      void this.#takeSnapshot(this.#sessionId, this.#generation);
   }
   dispose(): void {
     if (this.#disposed) return;
@@ -348,8 +353,10 @@ export class ChatController {
     if (this.#options.document.visibilityState === 'visible') this.refresh();
   };
   async #hydrate(id: string, generation: number): Promise<void> {
-    void this.#takeSnapshot(id, generation);
+    const historyKnownEmpty = this.#historyKnownEmpty;
+    if (!historyKnownEmpty) void this.#takeSnapshot(id, generation);
     this.#open(id, generation);
+    if (historyKnownEmpty) return;
     const cached = await this.#options.cache.read(id).catch(() => null);
     if (!this.#current(id, generation) || this.#authoritativeGeneration === generation || !cached)
       return;
@@ -377,7 +384,7 @@ export class ChatController {
     socket.onopen = () => {
       if (this.#current(id, generation) && this.#socket === socket) {
         this.#attempt = 0;
-        void this.#takeSnapshot(id, generation);
+        if (!this.#historyKnownEmpty) void this.#takeSnapshot(id, generation);
       }
     };
     socket.onmessage = (event) => this.#receive(id, generation, String(event.data));
@@ -399,6 +406,7 @@ export class ChatController {
       return;
     }
     if (envelope.type === 'relay.resyncRequired') {
+      this.#historyKnownEmpty = false;
       void this.#takeSnapshot(id, generation);
       return;
     }
@@ -411,6 +419,7 @@ export class ChatController {
       !this.#validEvent(event)
     )
       return;
+    this.#historyKnownEmpty = false;
     const next = applyProjectionEvent(this.#projection, event);
     this.#set(next);
     this.#options.onRelayEvent?.(event);
@@ -570,6 +579,7 @@ export class ChatController {
     this.#historyRetry = null;
     this.#historyFailures = 0;
     this.#historyErrorReported = false;
+    this.#historyKnownEmpty = false;
     const socket = this.#socket;
     this.#socket = null;
     socket?.close();

@@ -65,6 +65,39 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('does not read history for a newly created session whose timeline is known to be empty', async () => {
+    const env = environment();
+    const history = vi.fn();
+    const onHistoryError = vi.fn();
+    const socket = new Socket();
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: history,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => socket as unknown as WebSocket,
+      onHistoryError,
+    });
+
+    controller.select('new-session', { history: 'empty' });
+    socket.onopen?.();
+    await Promise.resolve();
+
+    expect(history).not.toHaveBeenCalled();
+    expect(onHistoryError).not.toHaveBeenCalled();
+    expect(controller.view).toMatchObject({
+      sessionId: 'new-session',
+      snapshotting: false,
+      lifecycle: 'finished',
+      messages: [],
+    });
+    controller.dispose();
+  });
+
   it('queues active-turn input through Codex steering and keeps the turn working', async () => {
     const env = environment();
     const queueTurnInput = vi.fn().mockResolvedValue({ activeTurnId: 'turn-1' });

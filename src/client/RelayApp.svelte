@@ -453,7 +453,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();
       message = await sessionCache.readDraft(session.id);
-      chatController.select(session.id);
+      chatController.select(session.id, { history: 'empty' });
       activityController.select(session.id);
       enterChatContext();
       shellStatus = 'Session started.';
