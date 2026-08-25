@@ -99,6 +99,9 @@ describe('PlanView', () => {
     ).toEqual(['l1-parent', 'l2-current', 'l1-manual']);
     expect(detail(l1.id).open).toBe(true);
     expect(detail(l2.id).open).toBe(true);
+    expect(screen.getByText('L1')).toBeTruthy();
+    expect(screen.getByText('L1.1')).toBeTruthy();
+    expect(screen.getByText('L2')).toBeTruthy();
     expect(screen.getByText(/TODO.*Priority A.*UNREVIEWED/)).toBeTruthy();
     expect(screen.getByText(/WIP.*Priority B.*REVIEWED/)).toBeTruthy();
     expect(screen.getByText(/DONE.*Priority C/)).toBeTruthy();
@@ -207,13 +210,13 @@ describe('PlanView', () => {
   it('announces meaningful current step changes once without replacing the same announcement', async () => {
     const { rerender } = render(PlanView, { state: ready(), onclose: vi.fn() });
     const live = document.querySelector('[aria-live="polite"]')!;
-    expect(live.textContent).toContain('Parent step, TODO');
+    expect(live.textContent).toContain('L1 Parent step, TODO');
     const before = live.textContent;
     rerender({ state: ready(), onclose: vi.fn() });
     expect(live.textContent).toBe(before);
 
     rerender({ state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
-    await vi.waitFor(() => expect(live.textContent).toContain('Nested current ✓, WIP'));
+    await vi.waitFor(() => expect(live.textContent).toContain('L1.1 Nested current ✓, WIP'));
     expect(document.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
   });
 

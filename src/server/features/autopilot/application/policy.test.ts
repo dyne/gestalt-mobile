@@ -90,7 +90,11 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'requestAttention', reason: 'attentionRequired' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v1');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v2');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('task_name l<a> or l<a>_<b>');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
   });
   type ActivityChange = Partial<

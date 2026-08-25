@@ -8,9 +8,9 @@ import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 
-export const AUTOPILOT_PROMPT_VERSION = 'v1';
+export const AUTOPILOT_PROMPT_VERSION = 'v2';
 export const AUTOPILOT_CONTINUATION_PROMPT =
-  'Inspect the active supervised Org Plan. Invoke gestalt_org_plan_attention only for a decision-table blocker; otherwise immediately perform the next legal lifecycle action. Do not send a status-only response.';
+  'Inspect the active supervised Org Plan. Refer to every L1 as L<a> and each nested L2 as L<a>.<b>, using one-based positions. For a subagent dedicated to that position, use the collaboration-safe task_name l<a> or l<a>_<b> and refer to it by its canonical L label. Invoke gestalt_org_plan_attention only for a decision-table blocker; otherwise immediately perform the next legal lifecycle action. Do not send a status-only response.';
 
 export type AutopilotPolicy = Readonly<{
   quiescenceMs: number;
