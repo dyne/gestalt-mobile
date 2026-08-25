@@ -13,6 +13,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
+import { AUTOPILOT_CONTINUATION_PROMPT } from './features/autopilot/application/policy.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import {
   authorizationSessionId,
@@ -435,7 +436,7 @@ describe('production composition', () => {
         input: [
           {
             type: 'text',
-            text: 'Inspect the active supervised Org Plan. Invoke gestalt_org_plan_attention only for a decision-table blocker; otherwise immediately perform the next legal lifecycle action. Do not send a status-only response.',
+            text: AUTOPILOT_CONTINUATION_PROMPT,
             text_elements: [],
           },
         ],

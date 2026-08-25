@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
+  import { orgPlanAgentDisplayName } from '../../../shared/org-plan-position.js';
   import type { AgentActivitySnapshot, AgentActivityState } from './contracts.js';
   import { activityAnnouncement } from './announcement-policy.js';
   import { compactElapsedTime } from './relative-activity-time.js';
@@ -61,7 +62,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       },
       ...activity.subagents.map((child) => ({
         key: `child:${child.id}`,
-        name: child.nickname ?? child.id,
+        name: orgPlanAgentDisplayName(child.nickname ?? child.id),
         ...(child.role ? { role: child.role } : {}),
         state: child.state,
         lastActivityAt: child.lastActivityAt,
@@ -76,7 +77,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       ? [...activity.subagents].sort(
           (left, right) =>
             stateOrder[left.state] - stateOrder[right.state] ||
-            (left.nickname ?? left.id).localeCompare(right.nickname ?? right.id),
+            orgPlanAgentDisplayName(left.nickname ?? left.id).localeCompare(
+              orgPlanAgentDisplayName(right.nickname ?? right.id),
+            ),
         )
       : [],
   );
@@ -144,7 +147,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <ul>
           {#each orderedSubagents as child (child.id)}
             <li>
-              <strong>{child.nickname ?? child.id}</strong>{child.role ? ` · ${child.role}` : ''} —
+              <strong>{orgPlanAgentDisplayName(child.nickname ?? child.id)}</strong>{child.role
+                ? ` · ${child.role}`
+                : ''} —
               {labels[child.state]} <small>{child.lastActivityAt}</small>
             </li>
           {/each}

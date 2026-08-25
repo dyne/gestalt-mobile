@@ -199,6 +199,28 @@ describe('AgentActivityIndicators', () => {
       [...container.querySelectorAll('.agents li strong')].map((node) => node.textContent),
     ).toEqual(['Worker', 'Root agent', 'Offline']);
   });
+  it('presents a dedicated plan subagent with its canonical position label', () => {
+    const now = new Date().toISOString();
+    render(AgentActivityIndicators, {
+      activity: {
+        sessionId: 's',
+        confidence: 'fresh',
+        aggregateSubagents: 'idle',
+        root: { state: 'idle', observedAt: now, lastActivityAt: now },
+        subagents: [
+          {
+            id: 'child',
+            nickname: 'l2_5',
+            state: 'idle',
+            observedAt: now,
+            lastActivityAt: now,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText('L2.5')).toBeTruthy();
+    expect(screen.queryByText('l2_5')).toBeNull();
+  });
 });
 
 afterEach(cleanup);

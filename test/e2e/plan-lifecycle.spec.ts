@@ -341,7 +341,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
 
     await invokeHelper('set', 'deliver-lifecycle', 'WIP');
     await invokeHelper('l2', 'publish-first-status', 'WIP');
-    await expect(page.getByText('Current: Publish the first status (WIP)')).toBeVisible();
+    await expect(page.getByText('Current: L1.1 Publish the first status (WIP)')).toBeVisible();
     await expect(page.locator('details[data-step-id="publish-first-status"]')).toHaveAttribute(
       'open',
       '',
@@ -354,7 +354,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
 
     await invokeHelper('l2', 'publish-first-status', 'DONE');
     await invokeHelper('l2', 'finish-after-reconnect', 'WIP');
-    await expect(page.getByText('Current: Finish after reconnect (WIP)')).toBeVisible();
+    await expect(page.getByText('Current: L1.2 Finish after reconnect (WIP)')).toBeVisible();
     await expect(page.locator('details[data-step-id="finish-after-reconnect"]')).toHaveAttribute(
       'open',
       '',
@@ -397,7 +397,9 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
         ),
       )
       .toBeTruthy();
-    await expect(page.getByText('Current: Deliver the supervised lifecycle (WIP)')).toBeVisible();
+    await expect(
+      page.getByText('Current: L1 Deliver the supervised lifecycle (WIP)'),
+    ).toBeVisible();
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');
 
     await invokeHelper('set', 'deliver-lifecycle', 'DONE');

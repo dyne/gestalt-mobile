@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { tick } from 'svelte';
 
+  import { orgPlanPosition } from '../../../shared/org-plan-position.js';
   import type { PlanStep, SupervisedPlan } from './contracts.js';
   import type { PlanState } from './plan-controller.js';
 
@@ -36,6 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : undefined,
   );
   let currentStep = $derived(plan ? findStep(plan.steps, plan.currentStepId) : undefined);
+  let currentPosition = $derived(plan ? findPosition(plan.steps, plan.currentStepId) : undefined);
   let automaticOpenIds = $derived(
     plan ? currentPath(plan.steps, plan.currentStepId) : new Set<string>(),
   );
@@ -47,7 +49,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (!plan) return '';
     if (!currentStep)
       return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
-    return `Current step: ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
+    return `Current step: ${currentPosition} ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
   });
 
   $effect(() => {
@@ -71,6 +73,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (step.id === id) return step;
       const child = findStep(step.children, id);
       if (child) return child;
+    }
+    return undefined;
+  }
+
+  function findPosition(steps: readonly PlanStep[], id: string): string | undefined {
+    for (const [l1Index, step] of steps.entries()) {
+      if (step.id === id) return orgPlanPosition(l1Index + 1);
+      const l2Index = step.children.findIndex((child) => child.id === id);
+      if (l2Index >= 0) return orgPlanPosition(l1Index + 1, l2Index + 1);
     }
     return undefined;
   }
@@ -157,7 +168,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {plan.doneSteps} of {plan.totalSteps} complete
     </progress>
     <p>
-      Current: {currentStep ? `${currentStep.title} (${currentStep.state})` : 'No current step'}
+      Current: {currentStep
+        ? `${currentPosition} ${currentStep.title} (${currentStep.state})`
+        : 'No current step'}
     </p>
     {#if viewState.kind === 'error'}
       <p>{viewState.error}</p>
@@ -182,7 +195,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <p>No plan steps have been retained yet.</p>
     {:else}
       <ol class="plan-steps">
-        {#each plan.steps as step (step.id)}
+        {#each plan.steps as step, l1Index (step.id)}
           <li>
             <details
               bind:this={detailsById[step.id]}
@@ -191,7 +204,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ontoggle={(event) => toggle(step.id, event.currentTarget.open)}
             >
               <summary>
-                <strong>{step.title}</strong>
+                <strong
+                  ><span class="position">{orgPlanPosition(l1Index + 1)}</span> {step.title}</strong
+                >
                 <span
                   >{step.state} · Priority {step.priority}{step.reviewStatus
                     ? ` · ${step.reviewStatus}`
@@ -206,7 +221,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {#if step.skills?.length}<p><strong>Skills:</strong> {step.skills.join(', ')}</p>{/if}
               {#if step.children.length}
                 <ol>
-                  {#each step.children as child (child.id)}
+                  {#each step.children as child, l2Index (child.id)}
                     <li>
                       <details
                         bind:this={detailsById[child.id]}
@@ -215,7 +230,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                         ontoggle={(event) => toggle(child.id, event.currentTarget.open)}
                       >
                         <summary>
-                          <strong>{child.title}</strong>
+                          <strong
+                            ><span class="position"
+                              >{orgPlanPosition(l1Index + 1, l2Index + 1)}</span
+                            >
+                            {child.title}</strong
+                          >
                           <span
                             >{child.state} · Priority {child.priority}{child.reviewStatus
                               ? ` · ${child.reviewStatus}`
@@ -274,6 +294,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .measurement {
     color: var(--muted, currentColor);
+    font-variant-numeric: tabular-nums;
+  }
+  .position {
+    color: var(--theme-text-muted, currentColor);
     font-variant-numeric: tabular-nums;
   }
   .metadata {
