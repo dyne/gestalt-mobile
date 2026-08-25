@@ -110,6 +110,12 @@ export type AppDependencies = {
         };
     refreshActivity?(sessionId: string): Promise<void>;
     interruptTurn?(session: RelaySessionSnapshot, turnId: string): Promise<void>;
+    queueTurnInput?(
+      session: RelaySessionSnapshot,
+      turnId: string,
+      text: string,
+      clientUserMessageId?: string,
+    ): Promise<void>;
     restore?(session: RelaySessionSnapshot): Promise<RestoreSessionResult | RelaySessionSnapshot>;
     ownsWriter?(sessionId: string): boolean;
     promoteRecent?(thread: RecentThread): Promise<RelaySessionSnapshot>;

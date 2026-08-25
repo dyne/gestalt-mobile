@@ -174,6 +174,58 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
+  it('uses the side control to interrupt an active turn when the prompt is empty', async () => {
+    const oninterrupt = vi.fn();
+    render(Composer, {
+      status: 'Codex is working…',
+      message: '',
+      activeTurnId: 'turn-1',
+      starting: false,
+      onchange: () => {},
+      onsend: () => {},
+      oninterrupt,
+    });
+
+    expect(screen.queryByRole('button', { name: 'Send prompt' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Interrupt' }));
+    expect(oninterrupt).toHaveBeenCalledOnce();
+  });
+
+  it('reveals queue and interrupt-send choices from the active prompt control', async () => {
+    const onqueue = vi.fn();
+    const oninterruptsend = vi.fn();
+    const { rerender } = render(Composer, {
+      status: 'Codex is working…',
+      message: 'focus on tests',
+      activeTurnId: 'turn-1',
+      starting: false,
+      onchange: () => {},
+      onsend: () => {},
+      onqueue,
+      oninterruptsend,
+      oninterrupt: () => {},
+    });
+
+    expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose prompt action' }));
+    await fireEvent.click(screen.getByText('Queue message'));
+    expect(onqueue).toHaveBeenCalledOnce();
+    rerender({
+      status: 'Codex is working…',
+      message: 'start over',
+      activeTurnId: 'turn-1',
+      starting: false,
+      onchange: () => {},
+      onsend: () => {},
+      onqueue,
+      oninterruptsend,
+      oninterrupt: () => {},
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose prompt action' }));
+    await fireEvent.click(screen.getByText('Interrupt and send'));
+    expect(oninterruptsend).toHaveBeenCalledOnce();
+  });
+
   it('keeps models visible after command completion and sorts newest first', async () => {
     const onmodelselect = vi.fn();
     const onscrollbottom = vi.fn();

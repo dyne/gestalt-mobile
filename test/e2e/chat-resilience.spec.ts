@@ -83,6 +83,76 @@ async function expectTimeline(page: Page, labels: string[]): Promise<void> {
   labels.forEach((label, index) => expect(actual[index]).toContain(label));
 }
 
+test('queues or replaces an active turn from the composer action control', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'session-1',
+      state: 'turnActive',
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: 'turn-1',
+      pendingInteractions: [],
+    },
+  ]);
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({
+      activeTurnId: 'turn-1',
+      items: [{ id: 'prompt-1', kind: 'user', text: 'working prompt', turnId: 'turn-1' }],
+    }),
+  );
+  const queued: Array<{ body: unknown; idempotencyKey: string | null }> = [];
+  let interrupts = 0;
+  await page.route('**/api/sessions/session-1/turns/turn-1/queue', async (route) => {
+    queued.push({
+      body: route.request().postDataJSON(),
+      idempotencyKey: await route.request().headerValue('idempotency-key'),
+    });
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ accepted: true, activeTurnId: 'turn-1' }),
+    });
+  });
+  await page.route('**/api/sessions/session-1/turns/turn-1/interrupt', async (route) => {
+    interrupts++;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ accepted: true }),
+    });
+  });
+  const replacement = fixture.deferTurn('session-1');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  const prompt = page.getByRole('textbox', { name: 'Prompt' });
+  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+  await prompt.fill('focus on tests');
+  await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Choose prompt action' }).click();
+  await page.getByRole('button', { name: 'Queue message' }).click();
+  await expect.poll(() => queued.length).toBe(1);
+  expect(queued[0]?.body).toEqual({ text: 'focus on tests' });
+  expect(queued[0]?.idempotencyKey).toBeTruthy();
+  await expect(prompt).toHaveValue('');
+  await expect(page.getByText('focus on tests')).toBeVisible();
+
+  await prompt.fill('start over');
+  await page.getByRole('button', { name: 'Choose prompt action' }).click();
+  await page.getByRole('button', { name: 'Interrupt and send' }).click();
+  await expect.poll(() => interrupts).toBe(1);
+  await expect.poll(() => fixture.commands.length).toBe(1);
+  expect(fixture.commands[0]?.body).toEqual({ text: 'start over' });
+  replacement.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-2' } });
+  await expect(page.getByText('start over')).toBeVisible();
+});
+
 for (const viewport of [
   { name: 'mobile-100', width: 390, height: 844, fontScale: 100 },
   { name: 'tablet-200', width: 768, height: 1024, fontScale: 200 },
