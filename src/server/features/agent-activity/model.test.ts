@@ -122,4 +122,28 @@ describe('agent activity projector', () => {
       confidence: 'reconciling',
     });
   });
+  it('settles a current-protocol executor after its final review report', () => {
+    let snapshot = projectAgentActivity(createAgentActivitySnapshot('s', at), fact('turnStarted'));
+    snapshot = projectAgentActivity(
+      snapshot,
+      fact('collaboration', {
+        childId: 'executor',
+        childStatus: 'running',
+        collaborationAction: 'spawn_agent',
+      }),
+    );
+    snapshot = projectAgentActivity(
+      snapshot,
+      fact('collaboration', {
+        childId: 'executor',
+        childStatus: 'completed',
+        collaborationAction: 'wait',
+      }),
+    );
+    expect(snapshot).toMatchObject({
+      root: { state: 'awaitingAgent' },
+      aggregateSubagents: 'idle',
+      subagents: [{ id: 'executor', state: 'idle', reason: 'collaborationWait' }],
+    });
+  });
 });

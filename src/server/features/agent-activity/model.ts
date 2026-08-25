@@ -237,20 +237,37 @@ function childState(
   action?: string,
   previous: AgentActivityState = 'working',
 ): AgentActivityState {
-  if (status === 'error' || status === 'failed' || status === 'systemError') return 'blocked';
+  if (status === 'error' || status === 'failed' || status === 'systemError' || status === 'errored')
+    return 'blocked';
   if (status === 'completed' || status === 'idle' || action === 'close_agent') return 'idle';
   // `wait` belongs to the caller/root; it does not rewrite the child which may
   // still be working.  A child can explicitly report its own waiting status.
-  if (status === 'disconnected' || status === 'notLoaded') return 'disconnected';
+  if (
+    status === 'disconnected' ||
+    status === 'notLoaded' ||
+    status === 'shutdown' ||
+    status === 'notFound'
+  )
+    return 'disconnected';
   return previous === 'idle' && action === 'resume_agent'
     ? 'working'
-    : status === 'working' || status === 'active'
+    : status === 'working' ||
+        status === 'active' ||
+        status === 'running' ||
+        status === 'pendingInit'
       ? 'working'
       : previous;
 }
 function childReason(status?: string, action?: string): AgentActivityReason {
-  if (status === 'error' || status === 'failed' || status === 'systemError') return 'agentError';
-  if (status === 'disconnected' || status === 'notLoaded') return 'processExited';
+  if (status === 'error' || status === 'failed' || status === 'systemError' || status === 'errored')
+    return 'agentError';
+  if (
+    status === 'disconnected' ||
+    status === 'notLoaded' ||
+    status === 'shutdown' ||
+    status === 'notFound'
+  )
+    return 'processExited';
   if (action === 'wait') return 'collaborationWait';
   if (status === 'completed' || status === 'idle' || action === 'close_agent')
     return 'turnCompleted';
