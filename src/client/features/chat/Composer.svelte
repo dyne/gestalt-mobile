@@ -24,6 +24,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onscrollbottom?(): void;
     onmodelselect?(model: string): void;
     onsend(): void;
+    onqueue?(): void;
+    oninterruptsend?(): void;
     onretry?(): void;
     oninterrupt(): void;
   };
@@ -40,12 +42,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onscrollbottom = () => {},
     onmodelselect = () => {},
     onsend,
+    onqueue = () => {},
+    oninterruptsend = () => {},
     onretry = () => {},
     oninterrupt,
   }: Props = $props();
 
   let selectedCommandIndex = $state(0);
   let dismissedCommandQuery = $state<string | null>(null);
+  let actionMenuOpen = $state(false);
   let commandMatches = $derived(matchingCommands(message));
   let currentCommandQuery = $derived(commandQuery(message));
   let commandMenuOpen = $derived(
@@ -58,6 +63,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sortedModels = $derived(sortModelsNewestFirst(models));
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
   let sendEnabled = $derived(!activeTurnId && !starting && Boolean(message.trim()));
+  let hasPrompt = $derived(Boolean(message.trim()));
+
+  function chooseActiveAction(action: 'queue' | 'interrupt-send'): void {
+    actionMenuOpen = false;
+    if (action === 'queue') onqueue();
+    else oninterruptsend();
+  }
 
   function updateMessage(value: string, requestTail = false): void {
     dismissedCommandQuery = null;
@@ -174,13 +186,44 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onkeydown={keydown}
       rows="1"
       required></textarea>
-    <button type="button" aria-label="Send prompt" disabled={!sendEnabled} onclick={onsend}>
-      <svg aria-hidden="true" viewBox="0 0 24 24">
-        <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
-      </svg>
-    </button>
+    {#if activeTurnId && hasPrompt}
+      <div class="prompt-action">
+        <button
+          type="button"
+          aria-label="Choose prompt action"
+          aria-expanded={actionMenuOpen}
+          aria-controls="prompt-action-panel"
+          onclick={() => (actionMenuOpen = !actionMenuOpen)}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <circle cx="6" cy="12" r="1.5" />
+            <circle cx="12" cy="12" r="1.5" />
+            <circle cx="18" cy="12" r="1.5" />
+          </svg>
+        </button>
+        {#if actionMenuOpen}
+          <div id="prompt-action-panel" class="action-panel" aria-label="Prompt actions">
+            <button type="button" onclick={() => chooseActiveAction('queue')}>Queue message</button>
+            <button type="button" onclick={() => chooseActiveAction('interrupt-send')}
+              >Interrupt and send</button
+            >
+          </div>
+        {/if}
+      </div>
+    {:else if activeTurnId}
+      <button type="button" aria-label="Interrupt" disabled={starting} onclick={oninterrupt}>
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="m7 7 10 10M17 7 7 17" />
+        </svg>
+      </button>
+    {:else}
+      <button type="button" aria-label="Send prompt" disabled={!sendEnabled} onclick={onsend}>
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
+        </svg>
+      </button>
+    {/if}
   </div>
-  {#if activeTurnId}<button type="button" onclick={oninterrupt}>Interrupt</button>{/if}
 </form>
 
 <style>
@@ -251,7 +294,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-block-size: 2.75rem;
     resize: vertical;
   }
-  .prompt-row button {
+  .prompt-row > button,
+  .prompt-action > button {
     display: grid;
     place-items: center;
     flex: 0 0 auto;
@@ -267,6 +311,51 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     stroke-width: 2;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+  .prompt-action {
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .prompt-action > button {
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: 0.375rem;
+    cursor: pointer;
+  }
+  .prompt-action > button:hover {
+    background: var(--theme-control-hover);
+  }
+  .prompt-action > button:focus-visible {
+    outline: 2px solid var(--theme-focus);
+    outline-offset: 2px;
+  }
+  .action-panel {
+    position: absolute;
+    z-index: 2;
+    display: grid;
+    gap: 0.125rem;
+    min-inline-size: max-content;
+    inset-block-end: calc(100% + 0.35rem);
+    inset-inline-end: 0;
+    padding: 0.25rem;
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: 0.375rem;
+    box-shadow: 0 0.35rem 1rem rgb(0 0 0 / 18%);
+  }
+  .action-panel button {
+    inline-size: 100%;
+    padding: 0.5rem 0.65rem;
+    color: var(--theme-text);
+    text-align: start;
+    white-space: nowrap;
+    background: transparent;
+    border: 0;
+    border-radius: 0.25rem;
+  }
+  .action-panel button:hover {
+    background: var(--theme-control-hover);
   }
   .block-cursor {
     display: inline-block;

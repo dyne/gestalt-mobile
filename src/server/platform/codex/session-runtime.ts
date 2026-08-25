@@ -280,6 +280,22 @@ export class CodexSessionRuntime {
     await resource.process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
   }
 
+  async queueTurnInput(
+    session: RelaySessionSnapshot,
+    turnId: string,
+    text: string,
+    clientUserMessageId?: string,
+  ): Promise<void> {
+    const resource = this.sessions.get(session.id);
+    if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    await resource.process.rpc.request('turn/steer', {
+      threadId: session.threadId,
+      expectedTurnId: turnId,
+      input: [{ type: 'text', text, text_elements: [] }],
+      ...(clientUserMessageId ? { clientUserMessageId } : {}),
+    });
+  }
+
   async readPlanMeasurement(session: RelaySessionSnapshot) {
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');

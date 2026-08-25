@@ -16,6 +16,7 @@ import { registerInterruptTurn } from './interrupt-turn/endpoint.js';
 import { registerListRecentThreads } from './list-recent-threads/endpoint.js';
 import { registerListSessions } from './list-sessions/endpoint.js';
 import { registerPromoteRecentThread } from './promote-recent-thread/endpoint.js';
+import { registerQueueTurnInput } from './queue-turn-input/endpoint.js';
 import { registerReleaseSession } from './release-session/endpoint.js';
 import { registerRestoreSession } from './restore-session/endpoint.js';
 import { registerRespondInteraction } from './respond-interaction/endpoint.js';
@@ -98,6 +99,8 @@ export function registerSessionRoutes(
       });
     if (sessions.interruptTurn)
       registerInterruptTurn(app, { find: sessions.find, interrupt: sessions.interruptTurn });
+    if (sessions.queueTurnInput)
+      registerQueueTurnInput(app, { find: sessions.find, queue: sessions.queueTurnInput });
     if (sessions.restore)
       registerRestoreSession(app, {
         find: sessions.find,

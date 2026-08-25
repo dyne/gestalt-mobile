@@ -1154,7 +1154,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   expect(
     await promptTurn.evaluate((element) => getComputedStyle(element).backgroundColor),
   ).not.toBe(await answerTurn.evaluate((element) => getComputedStyle(element).backgroundColor));
-  await expect(page.getByRole('button', { name: 'Send prompt' }).locator('svg')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Interrupt' }).locator('svg')).toBeVisible();
   const answerHeading = answerTurn.locator('.answer-turn .entry-heading');
   expect(
     await answerHeading

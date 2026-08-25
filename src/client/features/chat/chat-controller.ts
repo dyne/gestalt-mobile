@@ -20,6 +20,7 @@ import {
   failPrompt,
   hydrateCache,
   promotePrompt,
+  queueActivePrompt,
   queuePrompt,
   resolveInteraction,
   type ChatProjection,
@@ -32,6 +33,12 @@ export type ChatRelay = Readonly<{
   getHistory(sessionId: string): Promise<unknown>;
   startTurn(sessionId: string, text: string, key?: string): Promise<{ activeTurnId?: string }>;
   interruptTurn(sessionId: string, turnId: string): Promise<void>;
+  queueTurnInput?(
+    sessionId: string,
+    turnId: string,
+    text: string,
+    key?: string,
+  ): Promise<{ activeTurnId: string }>;
   respondInteraction(
     sessionId: string,
     requestId: string,
@@ -215,6 +222,54 @@ export class ChatController {
   async retryPrompt(operationId: string): Promise<void> {
     const prompt = this.#projection.prompts.find((item) => item.operationId === operationId);
     if (prompt?.state === 'failed') await this.send(prompt.text, operationId);
+  }
+  async queue(text: string, operationId = this.#options.createKey()): Promise<void> {
+    const id = this.#sessionId;
+    const turn = this.#projection.activeTurnId;
+    const queueTurnInput = this.#options.relay.queueTurnInput;
+    const generation = this.#generation;
+    const command = `${id}:${generation}:${operationId}`;
+    if (!id || !turn || !queueTurnInput || !text.trim() || this.#commands.has(command)) return;
+    this.#commands.add(command);
+    this.#set(queueActivePrompt(this.#projection, operationId, text.trim(), this.#options.now()));
+    try {
+      const accepted = await queueTurnInput(id, turn, text.trim(), operationId);
+      if (this.#current(id, generation)) {
+        this.#set(promotePrompt(this.#projection, operationId, accepted.activeTurnId));
+        this.#options.onSendAccepted?.(operationId);
+      }
+    } catch (error: unknown) {
+      if (this.#current(id, generation)) {
+        this.#set(failPrompt(this.#projection, operationId));
+        this.#options.onSendError?.(error, operationId);
+      }
+    } finally {
+      this.#commands.delete(command);
+    }
+  }
+  async interruptAndSend(text: string, operationId = this.#options.createKey()): Promise<void> {
+    const id = this.#sessionId;
+    const turn = this.#projection.activeTurnId;
+    const generation = this.#generation;
+    const command = `${id}:${generation}:${operationId}`;
+    if (!id || !turn || !text.trim() || this.#commands.has(command)) return;
+    this.#commands.add(command);
+    this.#set(queuePrompt(this.#projection, operationId, text.trim(), this.#options.now()));
+    try {
+      await this.#options.relay.interruptTurn(id, turn).catch(() => undefined);
+      const started = await this.#startAfterInterrupt(id, generation, text.trim(), operationId);
+      if (this.#current(id, generation)) {
+        this.#set(promotePrompt(this.#projection, operationId, started.activeTurnId ?? null));
+        this.#options.onSendAccepted?.(operationId);
+      }
+    } catch (error: unknown) {
+      if (this.#current(id, generation)) {
+        this.#set(failPrompt(this.#projection, operationId));
+        this.#options.onSendError?.(error, operationId);
+      }
+    } finally {
+      this.#commands.delete(command);
+    }
   }
   async interrupt(): Promise<void> {
     const id = this.#sessionId;
@@ -486,6 +541,28 @@ export class ChatController {
   #current(id: string, generation: number): boolean {
     return !this.#disposed && this.#sessionId === id && this.#generation === generation;
   }
+  async #startAfterInterrupt(
+    id: string,
+    generation: number,
+    text: string,
+    operationId: string,
+  ): Promise<{ activeTurnId?: string }> {
+    let lastError: unknown;
+    for (const delay of [0, 50, 150, 300]) {
+      if (!this.#current(id, generation)) throw new Error('SESSION_CHANGED');
+      if (delay) await this.#delay(delay);
+      try {
+        return await this.#options.relay.startTurn(id, text, operationId);
+      } catch (error: unknown) {
+        if (!hasCode(error, 'SESSION_TURN_ACTIVE')) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+  #delay(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => this.#options.setTimeout(resolve, milliseconds));
+  }
   #stop(): void {
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
@@ -497,4 +574,8 @@ export class ChatController {
     this.#socket = null;
     socket?.close();
   }
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return object(error) && error.code === code;
 }

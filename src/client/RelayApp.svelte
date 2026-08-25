@@ -613,6 +613,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   async function sendMessage() {
     const operationId = createIdempotencyKey();
     void chatController.send(message, operationId);
+    clearDraftAfterSend();
+  }
+
+  async function queueMessage() {
+    const operationId = createIdempotencyKey();
+    void chatController.queue(message, operationId);
+    clearDraftAfterSend();
+  }
+
+  async function interruptAndSendMessage() {
+    const operationId = createIdempotencyKey();
+    void chatController.interruptAndSend(message, operationId);
+    clearDraftAfterSend();
+  }
+
+  function clearDraftAfterSend(): void {
     message = '';
     scheduleTail('explicit');
     if (sessionId) void sessionCache.saveDraft(sessionId, '');
@@ -1132,6 +1148,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onscrollbottom={() => scheduleTail('explicit')}
               onmodelselect={(model) => void selectSessionModel(model)}
               onsend={() => void sendMessage()}
+              onqueue={() => void queueMessage()}
+              oninterruptsend={() => void interruptAndSendMessage()}
               onretry={() => void retrySend()}
               oninterrupt={() => void interruptTurn()}
             />

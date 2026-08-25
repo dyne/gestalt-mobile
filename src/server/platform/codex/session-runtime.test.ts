@@ -1506,6 +1506,48 @@ describe('CodexSessionRuntime', () => {
     });
   });
 
+  it('queues active-turn input through turn steering with an exact turn precondition', async () => {
+    let steerParams: unknown;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+          if (method === 'turn/steer') steerParams = params;
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const ready = await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+
+    await runtime.queueTurnInput(ready, 'turn-1', 'focus on tests', 'message-1');
+    expect(steerParams).toEqual({
+      threadId: 'thread-1',
+      expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'focus on tests', text_elements: [] }],
+      clientUserMessageId: 'message-1',
+    });
+  });
+
   it('preserves bounded canonical user messages and client identifiers from thread history', async () => {
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {

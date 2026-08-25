@@ -758,6 +758,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         interruptTurn: runtime
           ? (session, turnId) => runtime.interruptTurn(session, turnId)
           : undefined,
+        queueTurnInput: runtime
+          ? (session, turnId, text, clientUserMessageId) => {
+              autopilot.manualSend(session.id);
+              return runtime.queueTurnInput(session, turnId, text, clientUserMessageId);
+            }
+          : undefined,
         restore: runtime
           ? async (session) => {
               const restored = await runtime.restoreWithOutcome(session, new Date().toISOString());

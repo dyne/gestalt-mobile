@@ -584,6 +584,15 @@ export function queuePrompt(
     ],
   };
 }
+export function queueActivePrompt(
+  current: ChatProjection,
+  operationId: string,
+  text: string,
+  occurredAt?: number,
+): ChatProjection {
+  const queued = queuePrompt(current, operationId, text, occurredAt);
+  return queued === current ? current : { ...queued, lifecycle: 'working' };
+}
 export function promotePrompt(
   current: ChatProjection,
   operationId: string,

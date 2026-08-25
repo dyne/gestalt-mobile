@@ -266,6 +266,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/interrupt`,
         {},
       ),
+    queueTurnInput: (sessionId: string, turnId: string, text: string, key?: string) =>
+      request<{ activeTurnId: string }>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/queue`,
+        { text },
+        key ? { 'idempotency-key': key } : {},
+      ),
     restoreSession: (sessionId: string) =>
       request<RestoreSessionResult>(`/api/sessions/${encodeURIComponent(sessionId)}/restore`, {}),
     releaseSession: (sessionId: string) =>

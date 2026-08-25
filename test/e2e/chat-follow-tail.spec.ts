@@ -188,7 +188,7 @@ for (const viewport of [
         }),
       );
       await expect(page.getByText('after approval')).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
     });
   if (viewport.name === 'compact')
     test('reduced motion uses instant tail scrolling', async ({ page }) => {

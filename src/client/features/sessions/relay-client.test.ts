@@ -51,6 +51,24 @@ describe('relay client', () => {
     expect(headers).toEqual({ 'content-type': 'application/json', 'idempotency-key': 'turn-key' });
   });
 
+  it('queues text against the exact active turn with a stable client message id', async () => {
+    let request: { url: string; body?: string; headers?: HeadersInit } | undefined;
+    const client = createRelayClient(async (url, init) => {
+      request = {
+        url: String(url),
+        body: init?.body as string | undefined,
+        headers: init?.headers,
+      };
+      return new Response(JSON.stringify({ activeTurnId: 'turn/1' }), { status: 202 });
+    });
+    await client.queueTurnInput('session/1', 'turn/1', 'next instruction', 'message-1');
+    expect(request).toEqual({
+      url: '/api/sessions/session%2F1/turns/turn%2F1/queue',
+      body: JSON.stringify({ text: 'next instruction' }),
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'message-1' },
+    });
+  });
+
   it('targets every repository operation with the exact opaque catalog ID', async () => {
     const requests: string[] = [];
     const client = createRelayClient(async (url, init) => {

@@ -65,6 +65,112 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('queues active-turn input through Codex steering and keeps the turn working', async () => {
+    const env = environment();
+    const queueTurnInput = vi.fn().mockResolvedValue({ activeTurnId: 'turn-1' });
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: 'turn-1',
+        }),
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        queueTurnInput,
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    await controller.queue('  focus on tests  ', 'queued-message');
+    expect(queueTurnInput).toHaveBeenCalledWith('s', 'turn-1', 'focus on tests', 'queued-message');
+    expect(controller.view).toMatchObject({ activeTurnId: 'turn-1', lifecycle: 'working' });
+    expect(controller.view.prompts[0]).toMatchObject({
+      operationId: 'queued-message',
+      state: 'accepted',
+      turnId: 'turn-1',
+    });
+    controller.dispose();
+  });
+
+  it('interrupts the active turn before starting the replacement prompt', async () => {
+    const env = environment();
+    const order: string[] = [];
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: 'turn-1',
+        }),
+        startTurn: vi.fn(async () => {
+          order.push('start');
+          return { activeTurnId: 'turn-2' };
+        }),
+        interruptTurn: vi.fn(async () => {
+          order.push('interrupt');
+        }),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    await controller.interruptAndSend('restart here', 'replacement-message');
+    expect(order).toEqual(['interrupt', 'start']);
+    expect(controller.view).toMatchObject({ activeTurnId: 'turn-2', lifecycle: 'working' });
+    controller.dispose();
+  });
+
+  it('retries interrupt-and-send while the interrupted turn is still settling', async () => {
+    const env = environment();
+    const active = Object.assign(new Error('still active'), { code: 'SESSION_TURN_ACTIVE' });
+    const startTurn = vi
+      .fn()
+      .mockRejectedValueOnce(active)
+      .mockResolvedValue({ activeTurnId: 'turn-2' });
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: 'turn-1',
+        }),
+        startTurn,
+        interruptTurn: vi.fn().mockResolvedValue(undefined),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      setTimeout: (callback) => {
+        callback();
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      },
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    await controller.interruptAndSend('restart here', 'replacement-message');
+    expect(startTurn).toHaveBeenCalledTimes(2);
+    expect(controller.view.activeTurnId).toBe('turn-2');
+    controller.dispose();
+  });
+
   it('uses its injected clock for the optimistic prompt occurrence time', async () => {
     const env = environment();
     const controller = new ChatController({
