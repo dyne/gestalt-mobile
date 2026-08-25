@@ -44,7 +44,7 @@ import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import { RelaySession } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
-import { decodeAgentActivityFact } from './platform/codex/activity-facts.js';
+import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
 import {
   isValidInteractionResponse,
@@ -458,8 +458,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification) => {
           const occurredAt = new Date().toISOString();
-          const activityFact = decodeAgentActivityFact(sessionId, occurredAt, notification);
-          if (activityFact) activity.observe(activityFact);
+          for (const activityFact of decodeAgentActivityFacts(sessionId, occurredAt, notification))
+            activity.observe(activityFact);
           const resolvedRequestId = resolvedServerRequestId(notification);
           if (resolvedRequestId) {
             const interaction = interactions.find(sessionId, resolvedRequestId);

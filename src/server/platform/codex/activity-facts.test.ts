@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { describe, expect, it } from 'vitest';
-import { decodeAgentActivityFact } from './activity-facts.js';
+import { decodeAgentActivityFact, decodeAgentActivityFacts } from './activity-facts.js';
 const at = '2026-01-01T00:00:00.000Z';
 describe('agent activity app-server characterization', () => {
   it('maps bounded current root and collaboration shapes', () => {
@@ -126,5 +126,61 @@ describe('agent activity app-server characterization', () => {
         },
       }),
     ).toMatchObject({ kind: 'collaboration' });
+  });
+  it('decodes the current multi-agent collaboration status map', () => {
+    expect(
+      decodeAgentActivityFacts('s', at, {
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'collabAgentToolCall',
+            tool: 'wait',
+            status: 'completed',
+            senderThreadId: 'root',
+            receiverThreadIds: ['executor', 'researcher'],
+            agentsStates: {
+              executor: { status: 'completed', message: 'Ready for review.' },
+              researcher: { status: 'running', message: null },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        kind: 'collaboration',
+        childId: 'executor',
+        childStatus: 'completed',
+        collaborationAction: 'wait',
+      }),
+      expect.objectContaining({
+        kind: 'collaboration',
+        childId: 'researcher',
+        childStatus: 'running',
+        collaborationAction: 'wait',
+      }),
+    ]);
+  });
+  it('maps current camel-case collaboration tools to stable internal actions', () => {
+    for (const [tool, collaborationAction] of [
+      ['spawnAgent', 'spawn_agent'],
+      ['sendInput', 'send_input'],
+      ['resumeAgent', 'resume_agent'],
+      ['closeAgent', 'close_agent'],
+    ] as const)
+      expect(
+        decodeAgentActivityFact('s', at, {
+          method: 'item/started',
+          params: {
+            item: {
+              type: 'collabAgentToolCall',
+              tool,
+              status: 'inProgress',
+              senderThreadId: 'root',
+              receiverThreadIds: ['child'],
+              agentsStates: { child: { status: 'running', message: null } },
+            },
+          },
+        }),
+      ).toMatchObject({ childId: 'child', childStatus: 'running', collaborationAction });
   });
 });
