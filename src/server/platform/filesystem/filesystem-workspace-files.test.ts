@@ -4,7 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { lstat, mkdtemp, mkdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -132,5 +141,57 @@ describe('FilesystemWorkspaceFiles', () => {
     expect(await unreadable.list(root, { directory: directory(''), limit: 1 })).toEqual({
       kind: 'unreadable',
     });
+  });
+
+  it('copies, moves, uploads and deletes only workspace-relative regular entries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    await mkdir(join(root, 'from', 'nested'), { recursive: true });
+    await mkdir(join(root, 'to'));
+    await writeFile(join(root, 'from', 'nested', 'source'), 'bytes');
+    const files = new FilesystemWorkspaceFiles();
+    expect(
+      await files.copy(root, { source: 'from', destinationDirectory: 'to', conflict: 'reject' }),
+    ).toMatchObject({ kind: 'available', path: 'to/from', entryKind: 'directory' });
+    expect(await readFile(join(root, 'to', 'from', 'nested', 'source'), 'utf8')).toBe('bytes');
+    expect(
+      await files.move(root, {
+        source: 'to/from/nested/source',
+        destinationDirectory: '',
+        conflict: 'reject',
+      }),
+    ).toMatchObject({ kind: 'available', path: 'source' });
+    expect(
+      await files.upload(root, {
+        directory: '',
+        filename: 'upload.bin',
+        conflict: 'reject',
+        content: Buffer.from([0, 255]),
+      }),
+    ).toMatchObject({ kind: 'available', path: 'upload.bin' });
+    expect(await readFile(join(root, 'upload.bin'))).toEqual(Buffer.from([0, 255]));
+    expect(await files.delete(root, { path: 'to', recursive: true })).toMatchObject({
+      kind: 'available',
+      entryKind: 'directory',
+    });
+    expect(await files.delete(root, { path: '.git', recursive: true })).toEqual({
+      kind: 'protected',
+    });
+    await mkdir(join(root, '.git'));
+    await writeFile(join(root, '.git', 'sentinel'), 'protected');
+    expect(
+      await files.copy(root, {
+        source: 'source',
+        destinationDirectory: '.git',
+        conflict: 'reject',
+      }),
+    ).toEqual({ kind: 'invalid-destination' });
+    expect(
+      await files.move(root, {
+        source: 'source',
+        destinationDirectory: '.git',
+        conflict: 'reject',
+      }),
+    ).toEqual({ kind: 'invalid-destination' });
+    expect(await readFile(join(root, '.git', 'sentinel'), 'utf8')).toBe('protected');
   });
 });

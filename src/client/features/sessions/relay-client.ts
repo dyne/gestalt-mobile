@@ -218,6 +218,30 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     if (!response.ok) throw await failure(response);
     return response.json() as Promise<T>;
   }
+  async function upload<T>(
+    path: string,
+    body: Blob,
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const response = await fetcher(path, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream', 'idempotency-key': key },
+      body,
+      signal,
+    });
+    if (!response.ok) throw await failure(response);
+    return response.json() as Promise<T>;
+  }
+  async function deleteJson<T>(path: string, body: unknown, key: string): Promise<T> {
+    const response = await fetcher(path, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json', 'idempotency-key': key },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw await failure(response);
+    return response.json() as Promise<T>;
+  }
   async function remove(path: string): Promise<void> {
     const response = await fetcher(path, { method: 'DELETE' });
     if (!response.ok) throw await failure(response);
@@ -251,6 +275,63 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         signal,
       );
     },
+    copyWorkspaceEntry: (
+      workspaceId: string,
+      input: {
+        source: string;
+        destinationDirectory: string;
+        conflict: 'reject' | 'replace' | 'keep-both';
+      },
+      key: string,
+    ) =>
+      request<{ path: string; kind: string }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files/copy`,
+        input,
+        { 'idempotency-key': key },
+      ),
+    moveWorkspaceEntry: (
+      workspaceId: string,
+      input: {
+        source: string;
+        destinationDirectory: string;
+        conflict: 'reject' | 'replace' | 'keep-both';
+      },
+      key: string,
+    ) =>
+      request<{ path: string; kind: string }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files/move`,
+        input,
+        { 'idempotency-key': key },
+      ),
+    uploadWorkspaceFile: (
+      workspaceId: string,
+      input: {
+        directory: string;
+        filename: string;
+        conflict: 'reject' | 'replace' | 'keep-both';
+        file: Blob;
+      },
+      key: string,
+      signal?: AbortSignal,
+    ) => {
+      const query = new URLSearchParams({
+        directory: input.directory,
+        filename: input.filename,
+        conflict: input.conflict,
+      });
+      return upload<{ path: string; kind: string }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files/upload?${query}`,
+        input.file,
+        key,
+        signal,
+      );
+    },
+    deleteWorkspaceEntry: (workspaceId: string, path: string, key: string) =>
+      deleteJson<{ path: string; kind: string }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files`,
+        { path, recursive: true },
+        key,
+      ),
     getSession: (sessionId: string) =>
       get<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
     refreshActivity: (sessionId: string) =>
