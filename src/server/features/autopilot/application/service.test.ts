@@ -32,6 +32,121 @@ const plan = {
 };
 
 describe('AutopilotCoordinator', () => {
+  describe('supervision start', () => {
+    function subject(options: Readonly<{ sessionState?: string; threadId?: string | null }> = {}) {
+      let state: AutopilotSession | null = null;
+      let identity = 'p1';
+      let currentPlan = plan;
+      let session = {
+        state: options.sessionState ?? 'ready',
+        threadId: options.threadId === undefined ? 't' : options.threadId,
+        activeTurnId: null as string | null,
+      };
+      let schedules = 0;
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan: currentPlan, identity }),
+        session: () => session,
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => {
+          schedules += 1;
+          return () => {};
+        },
+        nextControlId: () => 'control',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+      return {
+        coordinator,
+        get state() {
+          return state;
+        },
+        get schedules() {
+          return schedules;
+        },
+        set identity(value: string) {
+          identity = value;
+        },
+        set plan(value: typeof plan) {
+          currentPlan = value;
+        },
+        set session(value: typeof session) {
+          session = value;
+        },
+      };
+    }
+
+    it('records one enabled intent for a fresh supervision signal and ignores duplicates', () => {
+      const fixture = subject();
+      fixture.coordinator.supervisionStarted('s');
+      const first = fixture.state!;
+      fixture.coordinator.supervisionStarted('s');
+
+      expect(fixture.state).toBe(first);
+      expect(fixture.state).toMatchObject({
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p1',
+      });
+      expect(fixture.schedules).toBe(0);
+    });
+
+    it('retains a supervision request before readiness and evaluates it once on restore', () => {
+      const fixture = subject({ sessionState: 'starting', threadId: null });
+      fixture.coordinator.supervisionStarted('s');
+      expect(fixture.state).toMatchObject({ requestedEnabled: true, state: 'monitoring' });
+      expect(fixture.schedules).toBe(0);
+
+      fixture.session = { state: 'ready', threadId: 't', activeTurnId: null };
+      fixture.coordinator.restore('s');
+      fixture.coordinator.restore('s');
+      expect(fixture.state).toMatchObject({ requestedEnabled: true, planIdentity: 'p1' });
+      expect(fixture.schedules).toBe(0);
+    });
+
+    it('keeps a manual Off for the retained plan but allows a new plan supervision request', () => {
+      const fixture = subject();
+      fixture.coordinator.disable('s');
+      fixture.coordinator.supervisionStarted('s');
+      expect(fixture.state).toMatchObject({
+        requestedEnabled: false,
+        state: 'disabled',
+        planIdentity: 'p1',
+        stopReason: 'manualDisabled',
+      });
+
+      fixture.identity = 'p2';
+      fixture.coordinator.supervisionStarted('s');
+      expect(fixture.state).toMatchObject({
+        requestedEnabled: true,
+        state: 'monitoring',
+        planIdentity: 'p2',
+      });
+    });
+
+    it('does not arm a completed plan', () => {
+      const fixture = subject();
+      fixture.plan = { ...plan, executionComplete: true, allDone: true, doneSteps: 1 };
+
+      expect(fixture.coordinator.supervisionStarted('s')).toEqual({
+        code: 'AUTOPILOT_PLAN_COMPLETE',
+      });
+      expect(fixture.state).toBeNull();
+    });
+  });
   it('makes repeated enable idempotent for the same retained plan', () => {
     let state: AutopilotSession | null = null;
     let currentPlan = plan;

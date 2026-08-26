@@ -456,6 +456,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ),
       );
     }
+    if (update.kind === 'updated' && update.reason === 'supervision-start')
+      autopilot.supervisionStarted(sessionId);
     autopilot.planStatusChanged(sessionId);
   };
   runtime = options.startAppServers
