@@ -4,12 +4,30 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import {
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { WorkspaceFileSource } from '../../features/files/application/ports.js';
+import type {
+  CopyMoveInput,
+  DeleteInput,
+  FileMutationResult,
+  UploadInput,
+} from '../../features/files/application/ports.js';
 import type {
   ListWorkspaceDirectory,
   WorkspaceDirectoryPage,
@@ -106,6 +124,190 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     }
   }
 
+  async copy(rootPath: string, input: CopyMoveInput): Promise<FileMutationResult> {
+    return this.transfer(rootPath, input, false);
+  }
+
+  async move(rootPath: string, input: CopyMoveInput): Promise<FileMutationResult> {
+    return this.transfer(rootPath, input, true);
+  }
+
+  async upload(rootPath: string, input: UploadInput): Promise<FileMutationResult> {
+    if (!validName(input.filename)) return { kind: 'invalid-destination' };
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return { kind: 'unreadable' };
+    const parent = await this.safeDirectory(root, input.directory);
+    if (!parent) return { kind: 'invalid-destination' };
+    const target = await this.targetName(parent, input.filename, input.conflict, 'file');
+    if (typeof target !== 'string') return target;
+    const temp = join(parent, `.${randomUUID()}.upload`);
+    try {
+      await writeFile(temp, input.content, { flag: 'wx' });
+      await this.publishFile(temp, target, input.conflict);
+      return {
+        kind: 'available',
+        source: '',
+        path: relative(root, target).split(sep).join('/'),
+        entryKind: 'file',
+        conflict: input.conflict,
+      };
+    } catch {
+      await rm(temp, { force: true }).catch(() => undefined);
+      return { kind: 'unreadable' };
+    }
+  }
+
+  async delete(rootPath: string, input: DeleteInput): Promise<FileMutationResult> {
+    if (!input.recursive) return { kind: 'invalid-destination' };
+    if (input.path === '.git' || input.path.startsWith('.git/')) return { kind: 'protected' };
+    if (!validRelative(input.path)) return { kind: 'invalid-destination' };
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return { kind: 'unreadable' };
+    const entry = await this.safeEntry(root, input.path);
+    if (!entry) return { kind: 'missing' };
+    const { path: target, metadata } = entry;
+    try {
+      await rm(target, { recursive: metadata.isDirectory(), force: false });
+    } catch {
+      return { kind: 'unreadable' };
+    }
+    return {
+      kind: 'available',
+      source: input.path,
+      path: input.path,
+      entryKind: metadata.isDirectory() ? 'directory' : 'file',
+      conflict: 'reject',
+    };
+  }
+
+  private async transfer(
+    rootPath: string,
+    input: CopyMoveInput,
+    moving: boolean,
+  ): Promise<FileMutationResult> {
+    if (
+      !validRelative(input.source) ||
+      (input.destinationDirectory !== '' && !validRelative(input.destinationDirectory))
+    )
+      return { kind: 'invalid-destination' };
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return { kind: 'unreadable' };
+    if (input.source === '.git' || input.source.startsWith('.git/')) return { kind: 'protected' };
+    const sourceEntry = await this.safeEntry(root, input.source);
+    if (!sourceEntry) return { kind: 'missing' };
+    const { path: source, metadata: sourceMetadata } = sourceEntry;
+    const parent = await this.safeDirectory(root, input.destinationDirectory);
+    if (!parent) return { kind: 'invalid-destination' };
+    if (dirname(source) === parent && moving) return { kind: 'same-parent' };
+    if (sourceMetadata.isDirectory() && (parent === source || parent.startsWith(`${source}${sep}`)))
+      return { kind: 'source-inside-destination' };
+    const target = await this.targetName(
+      parent,
+      basename(source),
+      input.conflict,
+      sourceMetadata.isFile() ? 'file' : 'directory',
+    );
+    if (typeof target !== 'string') return target;
+    try {
+      if (sourceMetadata.isFile()) {
+        const temp = join(parent, `.${randomUUID()}.copy`);
+        try {
+          await copyFile(source, temp, 0);
+          await this.publishFile(temp, target, input.conflict);
+        } finally {
+          await rm(temp, { force: true }).catch(() => undefined);
+        }
+        if (moving) await unlink(source);
+      } else {
+        const temp = join(parent, `.${randomUUID()}.copy-directory`);
+        try {
+          await copyTree(source, temp, true);
+          await this.publishDirectory(temp, target);
+        } finally {
+          await rm(temp, { recursive: true, force: true }).catch(() => undefined);
+        }
+        if (moving) await rm(source, { recursive: true, force: false });
+      }
+      return {
+        kind: 'available',
+        source: input.source,
+        path: relative(root, target).split(sep).join('/'),
+        entryKind: sourceMetadata.isDirectory() ? 'directory' : 'file',
+        conflict: input.conflict,
+      };
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }
+
+  private async safeDirectory(root: string, directory: string): Promise<string | null> {
+    if (directory !== '' && !validRelative(directory)) return null;
+    const entry = await this.safeEntry(root, directory, true);
+    return entry?.metadata.isDirectory() ? entry.path : null;
+  }
+
+  private async targetName(
+    parent: string,
+    name: string,
+    conflict: string,
+    sourceKind: 'file' | 'directory',
+  ): Promise<string | Exclude<FileMutationResult, { kind: 'available' }>> {
+    let target = join(parent, name);
+    const existing = await safeLstat(target);
+    if (!existing) return target;
+    if (existing.isSymbolicLink()) return { kind: 'symlink' };
+    if (conflict === 'reject')
+      return { kind: 'conflict', replaceAllowed: sourceKind === 'file' && existing.isFile() };
+    if (conflict === 'replace') {
+      if (sourceKind !== 'file' || !existing.isFile()) return { kind: 'replace-unsupported' };
+      return target;
+    }
+    const extension = extname(name);
+    const stem = extension ? name.slice(0, -extension.length) : name;
+    for (let index = 1; index < 10000; index += 1) {
+      target = join(parent, `${stem} (${index === 1 ? 'copy' : index})${extension}`);
+      if (!(await safeLstat(target))) return target;
+    }
+    return { kind: 'unreadable' };
+  }
+
+  private async safeEntry(
+    root: string,
+    value: string,
+    allowRoot = false,
+  ): Promise<{ path: string; metadata: Stats } | null> {
+    if (value === '' && !allowRoot) return null;
+    let path = root;
+    for (const segment of value === '' ? [] : value.split('/')) {
+      if (!validName(segment)) return null;
+      path = join(path, segment);
+      const metadata = await safeLstat(path);
+      if (!metadata || metadata.isSymbolicLink()) return null;
+      try {
+        if (!within(root, await realpath(path))) return null;
+      } catch {
+        return null;
+      }
+    }
+    const metadata = await safeLstat(path);
+    return metadata && !metadata.isSymbolicLink() ? { path, metadata } : null;
+  }
+
+  private async publishFile(temp: string, target: string, conflict: string): Promise<void> {
+    if (conflict === 'keep-both') {
+      await link(temp, target);
+      await unlink(temp);
+      return;
+    }
+    await rename(temp, target);
+  }
+
+  private async publishDirectory(temp: string, target: string): Promise<void> {
+    const existing = await safeLstat(target);
+    if (existing) throw new Error('destination raced');
+    await rename(temp, target);
+  }
+
   private rememberCursor(cursor: Cursor): string {
     const token = randomUUID();
     this.cursors.set(token, cursor);
@@ -183,4 +385,44 @@ function compareCodePoints(left: string, right: string): number {
 }
 function snapshot(entries: readonly WorkspaceFileEntry[]): string {
   return entries.map((entry) => `${entry.kind}\0${entry.name}`).join('\0');
+}
+
+function validRelative(value: string): boolean {
+  return (
+    value !== '' &&
+    !value.includes('\\') &&
+    !value.includes('\0') &&
+    value.split('/').every(validName)
+  );
+}
+function validName(value: string): boolean {
+  return (
+    value !== '' &&
+    value !== '.' &&
+    value !== '..' &&
+    value !== '.git' &&
+    !value.includes('/') &&
+    !value.includes('\\') &&
+    !value.includes('\0')
+  );
+}
+async function safeLstat(path: string): Promise<Stats | null> {
+  try {
+    return await lstat(path);
+  } catch {
+    return null;
+  }
+}
+async function copyTree(source: string, target: string, directory: boolean): Promise<void> {
+  if (!directory) {
+    await copyFile(source, target, 0);
+    return;
+  }
+  await mkdir(target);
+  for (const name of await readdir(source)) {
+    const childSource = join(source, name);
+    const metadata = await lstat(childSource);
+    if (metadata.isSymbolicLink() || name === '.git') throw new Error('unsupported source');
+    await copyTree(childSource, join(target, name), metadata.isDirectory());
+  }
 }

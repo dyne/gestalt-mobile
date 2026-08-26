@@ -1925,6 +1925,30 @@ describe('production composition', () => {
           'protected',
         ],
         [
+          'POST',
+          '/api/workspaces/:workspaceId/files/copy',
+          '/api/workspaces/workspace-1/files/copy',
+          'protected',
+        ],
+        [
+          'POST',
+          '/api/workspaces/:workspaceId/files/move',
+          '/api/workspaces/workspace-1/files/move',
+          'protected',
+        ],
+        [
+          'PUT',
+          '/api/workspaces/:workspaceId/files/upload',
+          '/api/workspaces/workspace-1/files/upload',
+          'protected',
+        ],
+        [
+          'DELETE',
+          '/api/workspaces/:workspaceId/files',
+          '/api/workspaces/workspace-1/files',
+          'protected',
+        ],
+        [
           'GET',
           '/api/workspaces/:workspaceId/plans',
           '/api/workspaces/workspace-1/plans',
