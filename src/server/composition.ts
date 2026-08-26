@@ -713,10 +713,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
         activate: runtime
-          ? async (session, settings) => {
+          ? async (session) => {
               const now = new Date().toISOString();
               dismissPendingInteractions(session.id, now);
-              const started = await runtime.start(session, now, settings);
+              const started = await runtime.start(session, now);
               return started;
             }
           : undefined,

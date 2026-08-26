@@ -63,6 +63,39 @@ export type LastOrgPlan = {
   title: string;
 };
 
+export type SessionSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type SessionApprovalPolicy = 'untrusted' | 'on-request' | 'never';
+
+/** Codex thread settings selected for this relay session, never host permissions. */
+export type SessionExecutionPolicy = {
+  sandbox?: SessionSandbox;
+  approvalPolicy: SessionApprovalPolicy;
+};
+
+const sandboxes = new Set<SessionSandbox>(['read-only', 'workspace-write', 'danger-full-access']);
+const approvalPolicies = new Set<SessionApprovalPolicy>(['untrusted', 'on-request', 'never']);
+
+export function createSessionExecutionPolicy(input: {
+  sandbox?: unknown;
+  approvalPolicy?: unknown;
+}): SessionExecutionPolicy {
+  if (
+    input.sandbox !== undefined &&
+    (typeof input.sandbox !== 'string' || !sandboxes.has(input.sandbox as SessionSandbox))
+  )
+    throw new DomainError('SESSION_EXECUTION_POLICY_INVALID');
+  const approvalPolicy = input.approvalPolicy ?? 'on-request';
+  if (
+    typeof approvalPolicy !== 'string' ||
+    !approvalPolicies.has(approvalPolicy as SessionApprovalPolicy)
+  )
+    throw new DomainError('SESSION_EXECUTION_POLICY_INVALID');
+  return {
+    ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox as SessionSandbox }),
+    approvalPolicy: approvalPolicy as SessionApprovalPolicy,
+  };
+}
+
 export function createEffectiveSkillSelection(
   input: EffectiveSkillSelection,
 ): EffectiveSkillSelection {
@@ -90,6 +123,8 @@ export type RelaySessionSnapshot = {
   attentionToolCapability?: 'supported';
   failureCount: number;
   effectiveSkillSelection?: EffectiveSkillSelection;
+  /** Missing is reserved for rows created before execution policy was durable. */
+  executionPolicy?: SessionExecutionPolicy;
   lastOrgPlan?: LastOrgPlan;
   pendingInteractions: PendingInteraction[];
   createdAt: string;
@@ -109,6 +144,8 @@ export class RelaySession {
     profile: string;
     model?: string;
     branch?: string;
+    sandbox?: SessionSandbox;
+    approvalPolicy?: SessionApprovalPolicy;
     effectiveSkillSelection: EffectiveSkillSelection;
     now: string;
   }): RelaySession {
@@ -120,6 +157,7 @@ export class RelaySession {
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.branch === undefined ? {} : { branch: input.branch }),
       effectiveSkillSelection: createEffectiveSkillSelection(input.effectiveSkillSelection),
+      executionPolicy: createSessionExecutionPolicy(input),
       threadId: null,
       state: 'starting',
       desiredState: 'active',

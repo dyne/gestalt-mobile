@@ -10,7 +10,8 @@ export type DomainErrorCode =
   | 'SESSION_TURN_ACTIVE'
   | 'TURN_NOT_ACTIVE'
   | 'INTERACTION_ALREADY_PENDING'
-  | 'INTERACTION_NOT_PENDING';
+  | 'INTERACTION_NOT_PENDING'
+  | 'SESSION_EXECUTION_POLICY_INVALID';
 
 export class DomainError extends Error {
   constructor(public readonly code: DomainErrorCode) {
