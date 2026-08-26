@@ -31,6 +31,19 @@ export type WorkspaceOrgPreview = Readonly<{
   source: string;
 }>;
 
+export type RelayWorkspaceFile = Readonly<{
+  name: string;
+  path: string;
+  kind: 'file' | 'directory' | 'symlink';
+  size?: number;
+  modifiedAt?: string;
+}>;
+export type RelayWorkspaceDirectory = Readonly<{
+  directory: string;
+  entries: readonly RelayWorkspaceFile[];
+  nextCursor?: string;
+}>;
+
 export type RelaySession = {
   id: string;
   state: string;
@@ -223,6 +236,21 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
 
   return {
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
+    listWorkspaceDirectory: (
+      workspaceId: string,
+      input: { directory?: string; cursor?: string; limit?: number } = {},
+      signal?: AbortSignal,
+    ) => {
+      const query = new URLSearchParams();
+      if (input.directory !== undefined) query.set('directory', input.directory);
+      if (input.cursor !== undefined) query.set('cursor', input.cursor);
+      if (input.limit !== undefined) query.set('limit', String(input.limit));
+      const suffix = query.size === 0 ? '' : `?${query}`;
+      return get<RelayWorkspaceDirectory>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files${suffix}`,
+        signal,
+      );
+    },
     getSession: (sessionId: string) =>
       get<RelaySession>(`/api/sessions/${encodeURIComponent(sessionId)}`),
     refreshActivity: (sessionId: string) =>

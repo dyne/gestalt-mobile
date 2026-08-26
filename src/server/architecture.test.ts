@@ -96,6 +96,20 @@ describe('server production architecture', () => {
       ).toBe(false);
     }
   });
+  it('keeps file domain/application behind ports and composes one filesystem adapter', () => {
+    const filesRoot = join(serverRoot, 'features', 'files');
+    for (const path of sourceFiles(filesRoot).filter(
+      (path) => path.includes('/application/') || path.includes('/domain/'),
+    )) {
+      expect(
+        importSpecifiers(readFileSync(path, 'utf8')).some((specifier) =>
+          forbiddenActivityAdapter.test(specifier),
+        ),
+      ).toBe(false);
+    }
+    const composition = readFileSync(join(serverRoot, 'composition.ts'), 'utf8');
+    expect(composition.match(/new FilesystemWorkspaceFiles\(\)/g)).toHaveLength(1);
+  });
   it('recognizes forbidden imports in static, side-effect, dynamic, and require forms', () => {
     expect(
       importSpecifiers(`

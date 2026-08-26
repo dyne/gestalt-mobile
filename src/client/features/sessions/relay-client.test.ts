@@ -9,6 +9,23 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient } from './relay-client.js';
 
 describe('relay client', () => {
+  it('lists a workspace directory with encoded identifiers and cancellation', async () => {
+    let request: { url: string; signal?: AbortSignal | null } | undefined;
+    const controller = new AbortController();
+    const client = createRelayClient(async (url, init) => {
+      request = { url: String(url), signal: init?.signal };
+      return new Response(JSON.stringify({ directory: '', entries: [] }));
+    });
+    await client.listWorkspaceDirectory(
+      'workspace/id',
+      { directory: '文書', cursor: 'opaque', limit: 2 },
+      controller.signal,
+    );
+    expect(request).toEqual({
+      url: '/api/workspaces/workspace%2Fid/files?directory=%E6%96%87%E6%9B%B8&cursor=opaque&limit=2',
+      signal: controller.signal,
+    });
+  });
   it('creates a selected session and submits a text turn through relay routes', async () => {
     const requests: Array<{ url: string; body?: string }> = [];
     const client = createRelayClient(async (url, init) => {

@@ -12,6 +12,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { buildApp } from './app.js';
 import type { ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
+import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-workspace-files.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
@@ -333,6 +334,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   notifyAutopilotActivity = (sessionId) => autopilot.activityChanged(sessionId);
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
+  const workspaceFiles = new FilesystemWorkspaceFiles();
   const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const skillCatalog = (profile: string) =>
@@ -867,6 +869,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
       },
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
+      workspaceFileRoutes: { workspaces, files: workspaceFiles },
       autopilot,
       ...(runtime
         ? {
