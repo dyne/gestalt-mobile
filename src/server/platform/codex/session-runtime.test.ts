@@ -814,7 +814,7 @@ describe('CodexSessionRuntime', () => {
     expect(closed).toEqual(['session-1', 'session-1']);
   });
 
-  it('passes requested Codex settings through to thread start', async () => {
+  it('passes the durable Codex settings through to thread start', async () => {
     let threadStartParams: unknown;
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {
@@ -837,6 +837,8 @@ describe('CodexSessionRuntime', () => {
         workspaceId: 'workspace-1',
         workspacePath: '/workspace',
         profile: 'default',
+        model: 'gpt-5.4',
+        executionPolicy: { sandbox: 'workspace-write', approvalPolicy: 'never' },
         threadId: null,
         state: 'starting',
         desiredState: 'active',
@@ -848,7 +850,6 @@ describe('CodexSessionRuntime', () => {
         updatedAt: 'before',
       },
       'after',
-      { model: 'gpt-5.4', sandbox: 'workspace-write', approvalPolicy: 'never' },
     );
 
     expect(threadStartParams).toEqual({
@@ -1081,6 +1082,55 @@ describe('CodexSessionRuntime', () => {
     });
   });
 
+  it('derives start, resume, and writer reacquisition overrides from the durable policy', async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          calls.push({ method, params });
+          return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const policy = { sandbox: 'danger-full-access' as const, approvalPolicy: 'never' as const };
+    const starting = {
+      id: 'policy-session',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      model: 'gpt-5.4',
+      executionPolicy: policy,
+      threadId: null,
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    const started = await runtime.start(starting, 'after');
+    runtime.stop(starting.id);
+    await runtime.ensureWriter(started, 'later');
+    const writerCalls = calls.filter(
+      (call) => call.method === 'thread/start' || call.method === 'thread/resume',
+    );
+    expect(writerCalls).toEqual([
+      expect.objectContaining({
+        method: 'thread/start',
+        params: expect.objectContaining({ model: 'gpt-5.4', ...policy }),
+      }),
+      expect.objectContaining({
+        method: 'thread/resume',
+        params: expect.objectContaining({ ...policy }),
+      }),
+    ]);
+  });
+
   it.each(['stopped', 'released', 'attentionRequired'] as const)(
     'creates and binds a replacement for a missing rollout from %s',
     async (state) => {
@@ -1106,6 +1156,7 @@ describe('CodexSessionRuntime', () => {
           workspacePath: '/workspace',
           profile: 'default',
           model: 'gpt-5.4',
+          executionPolicy: { sandbox: 'workspace-write', approvalPolicy: 'untrusted' },
           threadId: 'old-thread',
           state,
           desiredState: 'stopped',
@@ -1133,8 +1184,9 @@ describe('CodexSessionRuntime', () => {
       ]);
       expect(calls.at(-1)?.params).toEqual({
         cwd: '/workspace',
-        approvalPolicy: 'on-request',
+        approvalPolicy: 'untrusted',
         model: 'gpt-5.4',
+        sandbox: 'workspace-write',
         dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
       });
     },

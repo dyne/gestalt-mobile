@@ -72,16 +72,14 @@ export async function startSession(
     profile: input.profile,
     model,
     ...(branch ? { branch } : {}),
+    sandbox: input.sandbox,
+    approvalPolicy: input.approvalPolicy,
     effectiveSkillSelection,
     now: deps.now(),
   }).snapshot;
   deps.save(session);
   if (!deps.activate) return session;
-  const active = await deps.activate(session, {
-    model,
-    sandbox: input.sandbox,
-    approvalPolicy: input.approvalPolicy,
-  });
+  const active = await deps.activate(session, {});
   deps.save(active);
   return active;
 }

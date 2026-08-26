@@ -71,6 +71,38 @@ describe('RelaySession', () => {
     expect(original.effectiveSkillSelection?.skills[0]?.enabled).toBe(true);
   });
 
+  it.each([
+    ['read-only', 'untrusted'],
+    ['workspace-write', 'on-request'],
+    ['danger-full-access', 'never'],
+  ] as const)('captures the selected execution policy %s / %s', (sandbox, approvalPolicy) => {
+    expect(
+      RelaySession.create({
+        id: 'session-policy',
+        workspaceId: 'workspace-1',
+        workspacePath: '/work/project',
+        profile: 'default',
+        sandbox,
+        approvalPolicy,
+        effectiveSkillSelection: { skills: [] },
+        now: createdAt,
+      }).snapshot.executionPolicy,
+    ).toEqual({ sandbox, approvalPolicy });
+  });
+
+  it('normalizes an omitted approval policy without guessing a sandbox', () => {
+    expect(
+      RelaySession.create({
+        id: 'session-default-policy',
+        workspaceId: 'workspace-1',
+        workspacePath: '/work/project',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: createdAt,
+      }).snapshot.executionPolicy,
+    ).toEqual({ approvalPolicy: 'on-request' });
+  });
+
   it('binds a thread and allows exactly one active turn', () => {
     const ready = session().bindThread('thread-1', createdAt);
     const active = ready.startTurn('turn-1', createdAt);

@@ -14,7 +14,6 @@ import {
   type RateLimitWindow,
   type ThreadTokenBreakdown,
 } from '../../features/plans/application/measurement-snapshot.js';
-import type { StartSessionSettings } from '../../features/sessions/application/start-settings.js';
 import type { HistoryTurn } from '../../features/sessions/get-history/history-mapper.js';
 import type { PlanStatusLease, PlanStatusSource } from '../../features/plans/application/ports.js';
 import {
@@ -160,18 +159,14 @@ export class CodexSessionRuntime {
   >();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
 
-  async start(
-    session: RelaySessionSnapshot,
-    now: string,
-    settings: StartSessionSettings = {},
-  ): Promise<RelaySessionSnapshot> {
+  async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const resource = await this.createResource(session);
     try {
       await resource.process.rpc.request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
-      const startedThreadId = await this.startThread(resource.process, session, settings);
+      const startedThreadId = await this.startThread(resource.process, session);
       resource.threadId = startedThreadId;
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
@@ -479,6 +474,10 @@ export class CodexSessionRuntime {
         await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
+          ...(session.executionPolicy?.approvalPolicy
+            ? { approvalPolicy: session.executionPolicy.approvalPolicy }
+            : {}),
+          ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
           dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
         });
         result = {
@@ -488,9 +487,7 @@ export class CodexSessionRuntime {
         };
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
-        const replacementThreadId = await this.startThread(resource.process, session, {
-          model: session.model,
-        });
+        const replacementThreadId = await this.startThread(resource.process, session);
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
       resource.threadId = result.session.threadId!;
@@ -553,26 +550,19 @@ export class CodexSessionRuntime {
     });
   }
 
-  private async startThread(
-    process: AppServer,
-    session: RelaySessionSnapshot,
-    settings: StartSessionSettings = {},
-  ): Promise<string> {
+  private async startThread(process: AppServer, session: RelaySessionSnapshot): Promise<string> {
     return decodeThreadStart(
-      await process.rpc.request('thread/start', this.threadStartParams(session, settings)),
+      await process.rpc.request('thread/start', this.threadStartParams(session)),
     );
   }
 
-  private threadStartParams(
-    session: RelaySessionSnapshot,
-    settings: StartSessionSettings,
-  ): Record<string, unknown> {
+  private threadStartParams(session: RelaySessionSnapshot): Record<string, unknown> {
     return {
       cwd: session.workspacePath,
-      approvalPolicy: settings.approvalPolicy ?? 'on-request',
+      approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
       dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
-      ...(settings.model ? { model: settings.model } : {}),
-      ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
+      ...(session.model ? { model: session.model } : {}),
+      ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
     };
   }
 

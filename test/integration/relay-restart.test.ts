@@ -81,11 +81,12 @@ async function composeRelayApp(options: ComposeRelayAppOptions) {
   }) as never;
   return app;
 }
-function fakeAppServer(calls: string[]) {
+function fakeAppServer(calls: string[], parameters?: Array<{ method: string; params: unknown }>) {
   return {
     rpc: {
       request: async (method: string, params: unknown) => {
         calls.push(method);
+        parameters?.push({ method, params });
         if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
         if (method === 'skills/list')
           return {
@@ -137,10 +138,16 @@ test('keeps a persisted thread detached after an HTTP relay restart', async () =
       cookie: 'gestalt_mobile_session=test-session',
       origin: relyingParty.publicOrigin,
     },
-    body: JSON.stringify({ workspaceId: workspace?.id, profile: 'default' }),
+    body: JSON.stringify({
+      workspaceId: workspace?.id,
+      profile: 'default',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    }),
   }).then((response) => response.json() as Promise<{ id: string }>);
   await first.close();
   const restoredCalls: string[] = [];
+  const restoredParameters: Array<{ method: string; params: unknown }> = [];
   const second = await composeRelayApp({
     root,
     dataDir,
@@ -148,13 +155,21 @@ test('keeps a persisted thread detached after an HTTP relay restart', async () =
     profiles,
     installedCodexVersion: 'codex-cli 0.144.3',
     startAppServers: true,
-    launchAppServer: () => fakeAppServer(restoredCalls),
+    launchAppServer: () => fakeAppServer(restoredCalls, restoredParameters),
   });
   await second.listen({ host: '127.0.0.1', port: 0 });
   await expect.poll(() => restoredCalls, { timeout: 1_000 }).toEqual(['initialize', 'skills/list']);
   expect((await second.inject(`/api/sessions/${created.id}`)).json()).toMatchObject({
     threadId: 'thread-1',
     state: 'stopped',
+  });
+  expect(
+    (await second.inject({ method: 'POST', url: `/api/sessions/${created.id}/restore` }))
+      .statusCode,
+  ).toBe(200);
+  expect(restoredParameters.find((call) => call.method === 'thread/resume')?.params).toMatchObject({
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
   });
   await second.close();
 });
