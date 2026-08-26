@@ -125,13 +125,13 @@ export function mapNativeUserInputToQuiz(value: unknown): Quiz | null {
 
 /** Converts a completed quiz into the app-server dynamic-tool response shape. */
 export function toQuizToolResponse(answers: QuizAnswer[]): {
-  contentItems: Array<{ type: 'input_text'; text: string }>;
+  contentItems: Array<{ type: 'inputText'; text: string }>;
   success: true;
 } {
   return {
     contentItems: [
       {
-        type: 'input_text',
+        type: 'inputText',
         text: JSON.stringify({
           answers: Object.fromEntries(
             answers
@@ -152,7 +152,7 @@ export function isQuizToolResponseForQuiz(quiz: Quiz, value: unknown): boolean {
   if (
     value.contentItems.length !== 1 ||
     !isRecord(item) ||
-    item.type !== 'input_text' ||
+    item.type !== 'inputText' ||
     typeof item.text !== 'string'
   )
     return false;

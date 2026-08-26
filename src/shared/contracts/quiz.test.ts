@@ -100,7 +100,7 @@ describe('quiz contract', () => {
     const response = toQuizToolResponse([{ id: 'mode', answer: 'Fast' }]);
     expect(response).toEqual({
       success: true,
-      contentItems: [{ type: 'input_text', text: '{"answers":{"mode":"Fast"}}' }],
+      contentItems: [{ type: 'inputText', text: '{"answers":{"mode":"Fast"}}' }],
     });
     expect(isQuizToolResponseForQuiz(quiz, response)).toBe(true);
     expect(

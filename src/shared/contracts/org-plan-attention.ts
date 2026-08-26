@@ -103,12 +103,12 @@ export function parseOrgPlanAttentionResponse(value: unknown): OrgPlanAttentionR
 
 /** The only result accepted by the held app-server dynamic-tool request. */
 export function toOrgPlanAttentionToolResponse(response: OrgPlanAttentionResponse): {
-  contentItems: Array<{ type: 'input_text'; text: string }>;
+  contentItems: Array<{ type: 'inputText'; text: string }>;
   success: true;
 } {
   return {
     success: true,
-    contentItems: [{ type: 'input_text', text: JSON.stringify(response) }],
+    contentItems: [{ type: 'inputText', text: JSON.stringify(response) }],
   };
 }
 
@@ -119,7 +119,7 @@ export function isOrgPlanAttentionToolResponse(value: unknown): boolean {
   if (
     value.contentItems.length !== 1 ||
     !isRecord(item) ||
-    item.type !== 'input_text' ||
+    item.type !== 'inputText' ||
     typeof item.text !== 'string'
   )
     return false;
