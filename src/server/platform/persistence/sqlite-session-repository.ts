@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import {
   createEffectiveSkillSelection,
+  createSessionExecutionPolicy,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
 
@@ -18,6 +19,8 @@ type Row = {
   profile: string;
   model: string | null;
   branch: string | null;
+  sandbox: string | null;
+  approval_policy: string | null;
   thread_id: string | null;
   state: RelaySessionSnapshot['state'];
   desired_state: RelaySessionSnapshot['desiredState'];
@@ -36,7 +39,7 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,sandbox,approval_policy,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,sandbox=excluded.sandbox,approval_policy=excluded.approval_policy,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
@@ -45,6 +48,8 @@ export class SqliteSessionRepository {
         session.profile,
         session.model ?? null,
         session.branch ?? null,
+        session.executionPolicy?.sandbox ?? null,
+        session.executionPolicy?.approvalPolicy ?? null,
         session.threadId,
         session.state,
         session.desiredState,
@@ -75,6 +80,14 @@ export class SqliteSessionRepository {
   }
 }
 function map(row: Row): RelaySessionSnapshot {
+  const sandbox = row.sandbox ?? null;
+  const approvalPolicy = row.approval_policy ?? null;
+  if (approvalPolicy === null && sandbox !== null)
+    throw new Error('SESSION_EXECUTION_POLICY_INVALID');
+  const executionPolicy =
+    approvalPolicy === null
+      ? undefined
+      : createSessionExecutionPolicy({ sandbox: sandbox ?? undefined, approvalPolicy });
   const effectiveSkillSelection = row.effective_skill_selection_json
     ? createEffectiveSkillSelection(
         JSON.parse(row.effective_skill_selection_json) as {
@@ -93,6 +106,7 @@ function map(row: Row): RelaySessionSnapshot {
     profile: row.profile,
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.branch === null ? {} : { branch: row.branch }),
+    ...(executionPolicy === undefined ? {} : { executionPolicy }),
     threadId: row.thread_id,
     state: row.state,
     desiredState: row.desired_state,

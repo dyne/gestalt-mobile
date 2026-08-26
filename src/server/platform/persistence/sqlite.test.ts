@@ -69,6 +69,69 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it.each([
+    ['read-only', 'untrusted'],
+    ['workspace-write', 'on-request'],
+    ['danger-full-access', 'never'],
+  ] as const)(
+    'persists the exact execution policy %s / %s across a reopen',
+    async (sandbox, approvalPolicy) => {
+      const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+      directories.push(directory);
+      const path = join(directory, 'relay.sqlite');
+      const database = openRelayDatabase(path);
+      migrate(database);
+      const snapshot = RelaySession.create({
+        id: 'policy',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        sandbox,
+        approvalPolicy,
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot;
+      new SqliteSessionRepository(database).save({
+        ...snapshot,
+        model: 'gpt-5.4',
+        branch: 'main',
+        lastOrgPlan: { filename: 'plan.org', title: 'Plan' },
+      });
+      database.close();
+      const reopened = openRelayDatabase(path);
+      migrate(reopened);
+      expect(new SqliteSessionRepository(reopened).find('policy')).toMatchObject({
+        executionPolicy: { sandbox, approvalPolicy },
+        model: 'gpt-5.4',
+        branch: 'main',
+        lastOrgPlan: { filename: 'plan.org', title: 'Plan' },
+      });
+      reopened.close();
+    },
+  );
+
+  it('migrates an oldest schema row as a legacy policy omission and rejects corrupt stored policy', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    database.exec(
+      'CREATE TABLE relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+    );
+    database.exec(
+      "INSERT INTO relay_sessions VALUES ('legacy','w','/w','default','thread','ready','active',NULL,NULL,0,'t','t')",
+    );
+    migrate(database);
+    const sessions = new SqliteSessionRepository(database);
+    expect(sessions.find('legacy')?.executionPolicy).toBeUndefined();
+    database
+      .prepare(
+        "UPDATE relay_sessions SET sandbox = 'unknown', approval_policy = 'on-request' WHERE id = 'legacy'",
+      )
+      .run();
+    expect(() => sessions.find('legacy')).toThrow('SESSION_EXECUTION_POLICY_INVALID');
+    database.close();
+  });
+
   it('orders events atomically and prunes the oldest entries', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
