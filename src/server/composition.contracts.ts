@@ -1788,6 +1788,7 @@ describe('production composition', () => {
       await mkdir(join(root, 'workspace'));
       const writers: Array<{
         releaseRead?: () => void;
+        rejectRead?: () => void;
         notify?: (notification: { method: string; params: unknown }) => void;
       }> = [];
       const unhandled: unknown[] = [];
@@ -1820,8 +1821,9 @@ describe('production composition', () => {
                   return { thread: { id: `thread-${writers.length}` } };
                 }
                 if (method === 'thread/read')
-                  return await new Promise((resolve) => {
+                  return await new Promise((resolve, reject) => {
                     writer.releaseRead = () => resolve({ thread: { turns: [] } });
+                    writer.rejectRead = () => reject(new Error('LATE_READ_FAILURE'));
                   });
                 if (method === 'thread/list') return { data: [] };
                 if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
@@ -1847,7 +1849,7 @@ describe('production composition', () => {
       expect(
         (await app.inject({ method: 'DELETE', url: `/api/sessions/${forgottenId}` })).statusCode,
       ).toBe(204);
-      writers[0]!.releaseRead!();
+      writers[0]!.rejectRead!();
       await Promise.resolve();
       await Promise.resolve();
       expect(unhandled).toEqual([]);

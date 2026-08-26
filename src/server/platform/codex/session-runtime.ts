@@ -202,7 +202,11 @@ export class CodexSessionRuntime {
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
-    for (const resource of [...this.sessions.values()]) resource.dispose();
+    // Exit delivery can already be queued when shutdown begins. Declare the
+    // shared intent for every owner before closing any process.
+    const resources = [...this.sessions.values()];
+    for (const resource of resources) resource.beginExplicitShutdown();
+    for (const resource of resources) resource.dispose();
   }
 
   /** Keeps a detached session's supervised-plan status observable without launching Codex. */
