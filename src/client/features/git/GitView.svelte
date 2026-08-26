@@ -29,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     oncancelpush: () => void;
     onselect: (node: WorkspaceOption) => void;
     onexpandedchange: (expandedIds: Set<string>) => void;
+    onbrowsefiles: (trigger: HTMLButtonElement) => void;
     onclone: (address: string) => void;
   };
 
@@ -50,6 +51,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     oncancelpush,
     onselect,
     onexpandedchange,
+    onbrowsefiles,
     onclone,
   }: Props = $props();
   let cloneAddress = $state('');
@@ -82,6 +84,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {onexpandedchange}
       {onselect}
     />
+    <button
+      id="browse-files"
+      type="button"
+      disabled={!selectedWorkspace}
+      onclick={(event) => onbrowsefiles(event.currentTarget)}>Browse files</button
+    >
   </section>
   <form class="clone-form" onsubmit={submitClone}>
     <div class="clone-controls">
