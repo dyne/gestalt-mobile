@@ -43,6 +43,21 @@ function client(overrides: Partial<SkillsClient> = {}): SkillsClient {
 }
 
 describe('SkillsState', () => {
+  it('discovers skills when the profile manager is opened', async () => {
+    const listAvailableSkills = vi.fn(async () => available);
+    const state = new SkillsState(client({ listAvailableSkills }));
+
+    await state.load('workspace/a', 'default');
+
+    expect(listAvailableSkills).toHaveBeenCalledWith(
+      'workspace/a',
+      'default',
+      true,
+      expect.any(AbortSignal),
+    );
+    expect(state.status).toEqual({ kind: 'ready' });
+  });
+
   it('loads path-keyed skills and prepares a complete deterministic save payload', async () => {
     const state = new SkillsState(client());
     await state.load('workspace/a', 'default');

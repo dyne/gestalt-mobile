@@ -79,7 +79,9 @@ export class SkillsState {
     this.status = { kind: 'loading' };
     try {
       const [available, profiles] = await Promise.all([
-        this.client.listAvailableSkills(workspaceId, codexProfile, false, request.signal),
+        // The profile manager is an editing surface, so entering it must establish a
+        // workspace/profile catalog instead of relying on an unrelated startup cache.
+        this.client.listAvailableSkills(workspaceId, codexProfile, true, request.signal),
         this.client.listSkillProfiles(request.signal),
       ]);
       if (!this.current(generation, request)) return;
