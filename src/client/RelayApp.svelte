@@ -1312,8 +1312,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <FileBrowser
           root={fileBrowserRoot}
           listDirectory={relay.listWorkspaceDirectory}
+          copyEntry={relay.copyWorkspaceEntry}
+          moveEntry={relay.moveWorkspaceEntry}
+          deleteEntry={relay.deleteWorkspaceEntry}
           onclose={() => void closeFileBrowser()}
           onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
+          onsuccess={(message) => toastQueue.enqueue({ kind: 'success', message })}
         />
       {/if}
 

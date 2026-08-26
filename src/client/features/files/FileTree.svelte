@@ -9,15 +9,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { RelayWorkspaceFile } from '../sessions/relay-client.js';
   import type { FileBrowserController } from './file-browser-controller.js';
   type Node = { entry: RelayWorkspaceFile; level: number; parent: string };
-  let { controller, revision }: { controller: FileBrowserController; revision: number } = $props();
+  let {
+    controller,
+    revision,
+    destinationMode = false,
+    ondestinationselect = () => {},
+    onselectionchange = () => {},
+  }: {
+    controller: FileBrowserController;
+    revision: number;
+    destinationMode?: boolean;
+    ondestinationselect?: (path: string) => void;
+    onselectionchange?: (path: string) => void;
+  } = $props();
   let elements = $state<Record<string, HTMLElement>>({});
   let focused = $state('');
   let rootState = $derived.by(() => {
-    revision;
+    if (revision < 0) return { entries: [], loading: false, error: false };
     return controller.state('');
   });
   let nodes = $derived.by(() => {
-    revision;
+    if (revision < 0) return [];
     const result: Node[] = [];
     const visit = (directory: string, level: number) => {
       for (const entry of controller.state(directory).entries) {
@@ -77,9 +89,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       case 'Enter':
       case ' ':
         event.preventDefault();
-        if (item.kind !== 'symlink') controller.select(item.path);
+        select(item);
         break;
     }
+  }
+  function select(entry: RelayWorkspaceFile): void {
+    if (entry.kind === 'symlink') return;
+    if (destinationMode) {
+      if (entry.kind === 'directory') ondestinationselect(entry.path);
+      return;
+    }
+    controller.select(entry.path);
+    onselectionchange(entry.path);
   }
 </script>
 
@@ -106,7 +127,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         tabindex={focused === entry.path || (!focused && index === 0) ? 0 : -1}
         onfocus={() => (focused = entry.path)}
         onkeydown={(event) => key(event, node, index)}
-        onclick={() => entry.kind !== 'symlink' && controller.select(entry.path)}
+        onclick={() => select(entry)}
       >
         <div class="tree-row" role="presentation" style:--level={level}>
           {#if directory}<button
@@ -118,7 +139,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 toggle(entry);
               }}>{controller.expanded.has(entry.path) ? '−' : '+'}</button
             >{:else}<span class="disclosure"></span>{/if}
-          <span class="tree-label">{entry.name}</span>{#if entry.kind === 'symlink'}
+          <span class="tree-label">{entry.name}</span>{#if destinationMode && !directory}
+            <span class="unsupported">Files cannot be destinations</span>
+          {:else if entry.kind === 'symlink'}
             <span id={`${entry.path}-unsupported`} class="unsupported">Unsupported link</span>
           {/if}
         </div>
