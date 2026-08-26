@@ -84,6 +84,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
   import type { SupervisedPlan } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
+  import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
   import { createSessionCache } from './features/sessions/session-cache.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
@@ -160,6 +161,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansWorkspaceId = $derived(
     (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) ||
       null,
+  );
+  let plansWorkspacePath = $derived(
+    sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
   function isWorkspaceOrgPreview(
     value: SupervisedPlan | WorkspaceOrgPreview,
@@ -787,6 +791,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       });
   }
 
+  function openLinkedOrgPlan(href: string): void {
+    const workspaceId = plansWorkspaceId;
+    const workspacePath = plansWorkspacePath;
+    const planName = workspacePath ? workspacePlanNameFromHref(href, workspacePath) : null;
+    if (!workspaceId || !planName) {
+      toastQueue.enqueue({
+        kind: 'error',
+        code: 'ORG_LINK_OUTSIDE_WORKSPACE',
+        message: 'This Org file is not inside the selected workspace and cannot be opened.',
+      });
+      return;
+    }
+
+    selectTab('plan');
+    void tick().then(() => {
+      if (plansWorkspaceId !== workspaceId || plansWorkspacePath !== workspacePath) return;
+      openWorkspacePlan(planName);
+    });
+  }
+
   function closePlanViewer(): void {
     passivePlan = null;
     passivePlanName = null;
@@ -1129,6 +1153,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onpermission={(interaction) => void resolvePermissions(interaction)}
               ondecision={(id, decision) => void resolveInteraction(id, decision)}
               onretry={retryInteraction}
+              onopenorg={openLinkedOrgPlan}
             />
             <Composer
               status={chatView?.status ?? shellStatus}

@@ -55,6 +55,70 @@ async function routeSessionHistory(page: Page, id: string): Promise<void> {
   );
 }
 
+test('opens a linked local Org file in the Plan tab', async ({ page }) => {
+  const selected = session('session-1', '/projects/one');
+  let openedPlanName: string | null = null;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [selected] }),
+    }),
+  );
+  await page.route(`**/api/sessions/${selected.id}/history`, (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        chatSnapshot({
+          items: [
+            {
+              id: 'answer-1',
+              kind: 'agent',
+              phase: 'final_answer',
+              text: 'Open [the roadmap](/projects/one/plans/roadmap.org:12).',
+            },
+          ],
+        }),
+      ),
+    }),
+  );
+  await page.route(`**/api/sessions/${selected.id}/plan`, (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ status: 204 });
+    openedPlanName = (route.request().postDataJSON() as { planName: string }).planName;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kind: 'org-source',
+        planName: openedPlanName,
+        title: 'Linked roadmap',
+        source: '#+TITLE: Linked roadmap\n\n* TODO Verify the link',
+      }),
+    });
+  });
+  await page.route('**/api/workspaces/workspace-1/plans', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
+    () => {},
+  );
+
+  await mockAuthenticatedStatus(page);
+  await page.goto('/');
+  const navigation = page.getByLabel('Primary');
+  await navigation.getByRole('button', { name: 'Chat' }).click();
+  await page.getByRole('link', { name: 'the roadmap' }).click();
+
+  await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByRole('heading', { name: 'Linked roadmap' })).toBeVisible();
+  expect(openedPlanName).toBe('plans/roadmap.org');
+});
+
 test('keeps the completed Plan tab reachable and overflow-free at 320px with 200% root font', async ({
   page,
 }) => {
