@@ -13,6 +13,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import FileTree from './FileTree.svelte';
   import { FileBrowserController } from './file-browser-controller.js';
   import {
+    initialiseUploads,
+    MAX_UPLOAD_BYTES,
+    nextUpload,
+    type UploadOutcome,
+  } from './upload-state.js';
+  import {
     canUseDestination,
     idleTransfer,
     pickDestination,
@@ -54,9 +60,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       path: string,
       key: string,
     ) => Promise<{ path: string; kind: string }>;
+    uploadFile: (
+      workspaceId: string,
+      input: {
+        directory: string;
+        filename: string;
+        conflict: 'reject' | 'replace' | 'keep-both';
+        file: File;
+      },
+      key: string,
+      signal?: AbortSignal,
+    ) => Promise<{ path: string; kind: string }>;
     onclose: () => void;
     onerror: (error: unknown) => void;
     onsuccess?: (message: string) => void;
+    onmutation?: () => void;
   };
 
   let {
@@ -65,9 +83,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     copyEntry,
     moveEntry,
     deleteEntry,
+    uploadFile,
     onclose,
     onerror,
     onsuccess = () => {},
+    onmutation = () => {},
   }: Props = $props();
   let dialog = $state<HTMLDialogElement | null>(null);
   let heading = $state<HTMLHeadingElement | null>(null);
@@ -79,6 +99,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let deleteConfirmation = $state(false);
   let deleting = $state(false);
   let deleteCancel = $state<HTMLButtonElement | null>(null);
+  let uploadInput = $state<HTMLInputElement | null>(null);
+  let uploadOutcomes = $state<UploadOutcome[]>([]);
+  let uploading = $state(false);
+  let uploadAbort = $state<AbortController | null>(null);
+  let uploadConflict = $state<{ index: number; replaceAllowed: boolean } | null>(null);
   let rootState = $derived.by(() => {
     if (revision < 0) return { entries: [], loading: false, error: false };
     return controller?.state('') ?? { entries: [], loading: true, error: false };
@@ -112,8 +137,89 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function close(): void {
     if (transfer.phase === 'submitting' || deleting) return;
+    uploadAbort?.abort();
     controller?.close();
     dialog?.close();
+  }
+  const selectedDirectory = $derived(
+    selectedEntry?.kind === 'directory' || !selectedPath ? selectedPath : '',
+  );
+  const uploadDestination = $derived(selectedDirectory || '');
+  async function uploadQueue(
+    conflict: 'reject' | 'replace' | 'keep-both' = 'reject',
+  ): Promise<void> {
+    if (uploading || !controller) return;
+    uploading = true;
+    try {
+      for (;;) {
+        const index = uploadConflict?.index ?? nextUpload(uploadOutcomes);
+        uploadConflict = null;
+        if (index < 0) break;
+        const outcome = uploadOutcomes[index];
+        if (!outcome || outcome.status === 'too-large') continue;
+        uploadOutcomes = uploadOutcomes.map((item, position) =>
+          position === index ? { ...item, status: 'uploading' } : item,
+        );
+        const abort = new AbortController();
+        uploadAbort = abort;
+        try {
+          const result = await uploadFile(
+            root.id,
+            {
+              directory: uploadDestination,
+              filename: outcome.file.name,
+              conflict,
+              file: outcome.file,
+            },
+            createIdempotencyKey(),
+            abort.signal,
+          );
+          uploadOutcomes = uploadOutcomes.map((item, position) =>
+            position === index ? { ...item, status: 'completed', path: result.path } : item,
+          );
+          await controller.refresh(uploadDestination);
+          controller.select(uploadDestination);
+          selectedPath = uploadDestination;
+          onmutation();
+          conflict = 'reject';
+        } catch (error) {
+          const relayError = error as RelayRequestError;
+          if (relayError.status === 409) {
+            uploadOutcomes = uploadOutcomes.map((item, position) =>
+              position === index ? { ...item, status: 'queued' } : item,
+            );
+            uploadConflict = { index, replaceAllowed: relayError.replaceAllowed === true };
+            break;
+          }
+          uploadOutcomes = uploadOutcomes.map((item, position) =>
+            position === index
+              ? { ...item, status: abort.signal.aborted ? 'cancelled' : 'failed' }
+              : item,
+          );
+          onerror(error);
+        } finally {
+          uploadAbort = null;
+        }
+      }
+    } finally {
+      uploading = false;
+      const completed = uploadOutcomes.filter((outcome) => outcome.status === 'completed').length;
+      if (completed) onsuccess(`Uploaded ${completed} file${completed === 1 ? '' : 's'}.`);
+    }
+  }
+  function pickUploads(files: FileList | null): void {
+    if (!files || files.length === 0) return;
+    uploadOutcomes = initialiseUploads(files);
+    void uploadQueue();
+  }
+  function cancelRemainingUploads(): void {
+    uploadAbort?.abort();
+    uploadOutcomes = uploadOutcomes.map((outcome) =>
+      outcome.status === 'queued' || outcome.status === 'uploading'
+        ? { ...outcome, status: 'cancelled' }
+        : outcome,
+    );
+    uploadConflict = null;
   }
 
   function handleCancel(event: Event): void {
@@ -136,6 +242,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       controller?.select(parent);
       selectedPath = parent;
       onsuccess('Deleted item.');
+      onmutation();
       deleteConfirmation = false;
     } catch (error) {
       onerror(error);
@@ -188,6 +295,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       }
       controller.select(result.path);
       onsuccess(`${next.kind === 'copy' ? 'Copied' : 'Moved'} ${result.path}.`);
+      onmutation();
       transfer = idleTransfer;
     } catch (error) {
       const relayError = error as RelayRequestError;
@@ -221,6 +329,54 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         >Refresh</button
       >
     </div>
+    <div class="upload-actions">
+      <input
+        bind:this={uploadInput}
+        class="visually-hidden"
+        type="file"
+        multiple
+        aria-label="Choose files to upload"
+        onchange={(event) => pickUploads(event.currentTarget.files)}
+      />
+      <p>
+        Upload destination: {selectedEntry?.kind === 'file'
+          ? 'Select a folder first'
+          : selectedPath || 'root folder'}
+      </p>
+      <button
+        type="button"
+        onclick={() => uploadInput?.click()}
+        disabled={selectedEntry?.kind === 'file' || uploading}>Upload files</button
+      >
+    </div>
+    {#if uploadOutcomes.length}
+      <section class="picker" aria-label="Upload queue" aria-live="polite">
+        <p>
+          {uploadOutcomes.filter((item) => item.status === 'queued').length} queued, {uploadOutcomes.filter(
+            (item) => item.status === 'completed',
+          ).length} completed
+        </p>
+        <ul>
+          {#each uploadOutcomes as outcome (outcome.file)}<li>
+              {outcome.file.name}: {outcome.path ?? outcome.status}{outcome.status === 'too-large'
+                ? ` (maximum ${MAX_UPLOAD_BYTES / 1024 / 1024} MiB)`
+                : ''}
+            </li>{/each}
+        </ul>
+        {#if uploadConflict}
+          <div class="browser-actions" aria-label="Upload conflict">
+            {#if uploadConflict.replaceAllowed}<button
+                type="button"
+                onclick={() => void uploadQueue('replace')}>Replace</button
+              >{/if}
+            <button type="button" onclick={() => void uploadQueue('keep-both')}>Keep both</button>
+            <button type="button" onclick={cancelRemainingUploads}>Cancel remaining</button>
+          </div>
+        {:else if uploading}<button type="button" onclick={cancelRemainingUploads}
+            >Cancel uploads</button
+          >{/if}
+      </section>
+    {/if}
     {#if controller && transfer.phase === 'idle' && selectedEntry && selectedEntry.kind !== 'symlink'}
       <div class="browser-actions" aria-label="Selected file actions">
         <button type="button" onclick={() => beginTransfer('copy')}>Copy</button>
@@ -323,6 +479,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     max-inline-size: 100%;
     max-block-size: 100dvh;
     box-sizing: border-box;
+    overflow-x: hidden;
     padding: 0;
     border: 1px solid var(--theme-border);
     border-radius: 0.75rem;
@@ -338,12 +495,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     max-block-size: calc(100dvh - 1rem);
     padding: 1rem;
     overflow: auto;
+    overflow-x: hidden;
+    min-inline-size: 0;
   }
   header {
     display: flex;
     gap: 1rem;
     justify-content: space-between;
     align-items: start;
+  }
+  header > div,
+  .picker {
+    min-inline-size: 0;
   }
   h2,
   p {
@@ -365,6 +528,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .browser-actions {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .upload-actions {
+    display: grid;
+    gap: 0.5rem;
+  }
+  .upload-actions p {
+    color: var(--theme-text-muted);
+  }
+  .visually-hidden {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
   .picker {
     display: grid;

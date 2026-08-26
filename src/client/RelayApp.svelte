@@ -112,6 +112,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let scratchpadOpen = $state(false);
   let fileBrowserRoot = $state<WorkspaceOption | null>(null);
   let fileBrowserTrigger = $state<HTMLButtonElement | null>(null);
+  let fileBrowserGitRefreshScheduled = false;
   let shellStatus = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
@@ -904,6 +905,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     fileBrowserTrigger?.focus({ preventScroll: true });
   }
 
+  function scheduleFileBrowserGitRefresh(): void {
+    if (fileBrowserGitRefreshScheduled) return;
+    fileBrowserGitRefreshScheduled = true;
+    queueMicrotask(() => {
+      fileBrowserGitRefreshScheduled = false;
+      if (gitWorkspaceId) void gitController.refresh();
+    });
+  }
+
   async function pullGit() {
     const workspaceId = gitWorkspaceId;
     if (!workspaceId || !findTreeNode(workspaceTree, workspaceId)?.isGitRepository) return;
@@ -1315,9 +1325,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           copyEntry={relay.copyWorkspaceEntry}
           moveEntry={relay.moveWorkspaceEntry}
           deleteEntry={relay.deleteWorkspaceEntry}
+          uploadFile={relay.uploadWorkspaceFile}
           onclose={() => void closeFileBrowser()}
           onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
           onsuccess={(message) => toastQueue.enqueue({ kind: 'success', message })}
+          onmutation={scheduleFileBrowserGitRefresh}
         />
       {/if}
 
