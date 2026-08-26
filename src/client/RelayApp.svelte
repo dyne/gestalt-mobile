@@ -104,11 +104,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AuthorizedDevicesView from './features/auth/AuthorizedDevicesView.svelte';
   import { createDeviceClient } from './features/auth/device-client.js';
   import Scratchpad from './features/scratchpad/Scratchpad.svelte';
+  import FileBrowser from './features/files/FileBrowser.svelte';
 
   let chatView = $state<ChatViewState | null>(null);
   let tab = $state<Tab>('sessions');
   let devicesOpen = $state(false);
   let scratchpadOpen = $state(false);
+  let fileBrowserRoot = $state<WorkspaceOption | null>(null);
+  let fileBrowserTrigger = $state<HTMLButtonElement | null>(null);
   let shellStatus = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
@@ -888,6 +891,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pushConfirmationOpen = false;
   }
 
+  function openFileBrowser(trigger: HTMLButtonElement): void {
+    const selected = gitWorkspaceId ? findTreeNode(workspaceTree, gitWorkspaceId) : null;
+    if (!selected) return;
+    fileBrowserRoot = selected;
+    fileBrowserTrigger = trigger;
+  }
+
+  async function closeFileBrowser(): Promise<void> {
+    fileBrowserRoot = null;
+    await tick();
+    fileBrowserTrigger?.focus({ preventScroll: true });
+  }
+
   async function pullGit() {
     const workspaceId = gitWorkspaceId;
     if (!workspaceId || !findTreeNode(workspaceTree, workspaceId)?.isGitRepository) return;
@@ -1224,6 +1240,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           oncancelpush={() => (pushConfirmationOpen = false)}
           onselect={selectGitWorkspace}
           onexpandedchange={(value) => (gitExpandedIds = value)}
+          onbrowsefiles={openFileBrowser}
           onclone={(address) => void cloneGitRepository(address)}
         />
       {:else}
@@ -1290,6 +1307,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onstart={() => void startSession()}
           />
         {/if}
+      {/if}
+      {#if fileBrowserRoot}
+        <FileBrowser
+          root={fileBrowserRoot}
+          listDirectory={relay.listWorkspaceDirectory}
+          onclose={() => void closeFileBrowser()}
+          onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
+        />
       {/if}
 
       <BottomNavigation

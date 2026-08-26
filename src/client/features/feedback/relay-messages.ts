@@ -28,6 +28,7 @@ const relayMessages = {
   GIT_CHECKOUT_FAILED: 'The branch could not be selected. Refresh Git status and try again.',
   GIT_PUSH_FAILED: 'The push failed. Refresh Git status and resolve remote divergence first.',
   GIT_CLONE_FAILED: 'Clone failed.',
+  WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
 } as const;
 
 export type RelayFeedbackCode = keyof typeof relayMessages;
