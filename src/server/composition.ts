@@ -236,6 +236,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const session = sessions.find(sessionId);
         if (!session || !runtime) return;
         const history = await runtime.readHistory(session);
+        // Forget may commit while the detached history reader is still in
+        // flight. Revalidate ownership before handing its result to the
+        // registry, whose publisher intentionally keeps the journal strict.
+        if (!sessions.find(sessionId)) return;
         const occurredAt = new Date().toISOString();
         activity.observe({
           sessionId,
@@ -244,11 +248,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ...(session.threadId ? { threadId: session.threadId } : {}),
           ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
         });
-        activity.childrenReconciled(
-          sessionId,
-          occurredAt,
-          await runtime.listDirectChildren(session),
-        );
+        const children = await runtime.listDirectChildren(session);
+        // The writer read is also asynchronous; it cannot publish after the
+        // durable owner has gone away either.
+        if (!sessions.find(sessionId)) return;
+        activity.childrenReconciled(sessionId, occurredAt, children);
       },
     },
   );
