@@ -163,13 +163,24 @@ export class AutopilotCoordinator {
   disable(sessionId: string): AutopilotSnapshot {
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    // Retain the current plan identity even when Autopilot has not previously
+    // been enabled.  That makes an explicit Off a durable, plan-scoped choice
+    // instead of a generic disabled default that a later supervision signal
+    // could not distinguish from never having been configured.
+    const currentPlan = this.deps.plan(sessionId);
     const cancelled = this.cancelScheduledControl(prior, now);
-    if (!prior.requestedEnabled && prior.state === 'disabled' && !cancelled)
+    if (
+      !prior.requestedEnabled &&
+      prior.state === 'disabled' &&
+      !cancelled &&
+      (!currentPlan || prior.planIdentity === currentPlan.identity)
+    )
       return this.snapshot(sessionId);
     const next: AutopilotSession = {
       ...prior,
       state: 'disabled',
       requestedEnabled: false,
+      ...(currentPlan ? { planIdentity: currentPlan.identity } : {}),
       generation: prior.generation + 1,
       nextEvaluationAt: null,
       ...(cancelled ? { lastControlId: null } : {}),
@@ -328,6 +339,49 @@ export class AutopilotCoordinator {
       return;
     }
     if (executionComplete(plan.plan)) this.evaluate(sessionId);
+  }
+  /**
+   * Records a validated, session-private supervision request.  It intentionally
+   * does not discover plans: composition must first bind the update to this
+   * relay session.  A manual Off is authoritative for the retained identity,
+   * while a new identity can receive its own explicit supervision request.
+   */
+  supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
+    const currentPlan = this.deps.plan(sessionId);
+    if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
+    if (executionComplete(currentPlan.plan)) return { code: 'AUTOPILOT_PLAN_COMPLETE' };
+    const now = this.deps.now();
+    const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    if (
+      prior.planIdentity === currentPlan.identity &&
+      !prior.requestedEnabled &&
+      prior.stopReason === 'manualDisabled'
+    )
+      return this.snapshot(sessionId);
+    if (prior.requestedEnabled && prior.planIdentity === currentPlan.identity)
+      return this.snapshot(sessionId);
+
+    const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
+    const cancelled = replacing ? this.cancelScheduledControl(prior, now) : undefined;
+    if (replacing) this.cancelTimer(sessionId);
+    const next: AutopilotSession = {
+      ...prior,
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: currentPlan.identity,
+      planFingerprint: fingerprint(currentPlan.plan),
+      generation: prior.generation + 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      ...(cancelled ? { lastControlId: null } : {}),
+      stopReason: null,
+      updatedAt: now,
+    };
+    this.persist(next, cancelled);
+    const session = this.deps.session(sessionId);
+    if (session?.threadId && ['ready', 'turnActive'].includes(session.state))
+      this.evaluate(sessionId);
+    return this.snapshot(sessionId);
   }
   /** Reacts only to fresh actor status; plan mutations are not scheduling signals. */
   activityChanged(sessionId: string): void {

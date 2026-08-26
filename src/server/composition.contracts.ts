@@ -711,6 +711,9 @@ describe('production composition', () => {
       const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const timestamp = new Date().toISOString();
       database
+        .prepare('DELETE FROM autopilot_sessions WHERE session_id = ?')
+        .run(fixture.sessionId);
+      database
         .prepare(
           "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 1, 0, ?, 'issued-without-turn', NULL, ?)",
         )
@@ -758,6 +761,9 @@ describe('production composition', () => {
         },
       });
       const acceptedDatabase = new DatabaseSync(join(accepted.dataDir, 'relay.sqlite'));
+      acceptedDatabase
+        .prepare('DELETE FROM autopilot_sessions WHERE session_id = ?')
+        .run(accepted.sessionId);
       acceptedDatabase
         .prepare(
           "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?, 'backoff', 1, 'fixture', 'fixture', 1, 0, ?, 'issued-with-turn', NULL, ?)",
@@ -950,6 +956,15 @@ describe('production composition', () => {
           // Forgetting cascades the terminal row with the session itself; the
           // absence is the durable proof that no queued control can be reopened.
           expect(row).toBeUndefined();
+        } else if (action === 'replace') {
+          await vi.waitFor(() => expect(staleTimer.cancelled).toBe(true));
+          await vi.waitFor(async () =>
+            expect(
+              (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+            ).toMatchObject({
+              autopilot: { enabled: true, state: expect.stringMatching(/monitoring|backoff/) },
+            }),
+          );
         } else {
           await vi.waitFor(async () =>
             expect(
@@ -958,17 +973,12 @@ describe('production composition', () => {
               autopilot: {
                 enabled: false,
                 state: 'disabled',
-                reason:
-                  action === 'replace'
-                    ? 'planReplaced'
-                    : action === 'close'
-                      ? 'planRemoved'
-                      : 'sessionEnded',
+                reason: action === 'close' ? 'planRemoved' : 'sessionEnded',
               },
             }),
           );
         }
-        expect(staleTimer.cancelled).toBe(true);
+        expect(staleTimer.cancelled, action).toBe(true);
         staleTimer.callback();
         await Promise.resolve();
         expect(fixture.handles.flatMap((candidate) => candidate.calls)).not.toContain('turn/start');
@@ -1064,6 +1074,16 @@ describe('production composition', () => {
           };
         },
       });
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          })
+        ).statusCode,
+      ).toBe(200);
+      timers.length = 0;
       const handle = fixture.handles.find((candidate) => candidate.notify)!;
       handle.notify!({
         method: 'thread/started',
@@ -1139,6 +1159,16 @@ describe('production composition', () => {
           };
         },
       });
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          })
+        ).statusCode,
+      ).toBe(200);
+      timers.length = 0;
       const handle = fixture.handles.find((candidate) => candidate.notify)!;
       handle.notify!({
         method: 'thread/started',

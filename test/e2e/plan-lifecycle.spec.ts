@@ -326,6 +326,45 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           .then((plan) => plan?.title),
       )
       .toBe('Supervised browser lifecycle');
+    await expect
+      .poll(async () =>
+        authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}`).then(async (response) => {
+          const body = (await response.json()) as {
+            autopilot?: { state?: string; enabled?: boolean };
+          };
+          return body.autopilot?.state;
+        }),
+      )
+      .toMatch(/^(monitoring|backoff)$/);
+    await expect
+      .poll(async () =>
+        authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}`).then(async (response) => {
+          const body = (await response.json()) as { autopilot?: { enabled?: boolean } };
+          return body.autopilot?.enabled;
+        }),
+      )
+      .toBe(true);
+
+    const disable = await authorizedFetch(
+      `${relayUrl}/api/sessions/${owningSession.id}/autopilot`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(disable.status).toBe(200);
+    await invokeHelper('signal', 'supervision-start');
+    await expect
+      .poll(async () =>
+        authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}`).then(async (response) => {
+          const body = (await response.json()) as {
+            autopilot?: { state?: string; enabled?: boolean };
+          };
+          return body.autopilot;
+        }),
+      )
+      .toMatchObject({ state: 'disabled', enabled: false });
     await expect(navigation.getByRole('button', { name: 'Sessions' })).toHaveAttribute(
       'aria-pressed',
       'true',
