@@ -897,6 +897,74 @@ describe('CodexSessionRuntime', () => {
     expect(closed).toBe(2);
   });
 
+  it('does not recover when an exit callback arrives during explicit relay shutdown', async () => {
+    const exits: Array<() => void> = [];
+    let launched = 0;
+    const exited = vi.fn();
+    const runtime = new CodexSessionRuntime(
+      () => {
+        const index = launched++;
+        return {
+          rpc: {
+            request: async (method) =>
+              method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+            onNotification: () => () => {},
+            onServerRequest: () => () => {},
+          },
+          close: () => {
+            if (index === 0) exits[1]?.();
+          },
+          onExit: (listener) => {
+            exits[index] = listener;
+            return () => {};
+          },
+        };
+      },
+      undefined,
+      undefined,
+      undefined,
+      exited,
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    await runtime.start(
+      {
+        id: 'session-2',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    runtime.stopAll();
+    expect(exited).not.toHaveBeenCalled();
+  });
+
   it('unsubscribes a thread before closing its app-server process', async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     let closed = 0;
