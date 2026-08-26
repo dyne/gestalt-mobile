@@ -74,7 +74,11 @@ export type RelayInteractionResponse = {
   resolvedAt: string;
   outcome: SafeInteractionOutcome;
 };
-export type RelayRequestError = Error & { code?: string; status?: number };
+export type RelayRequestError = Error & {
+  code?: string;
+  status?: number;
+  replaceAllowed?: boolean;
+};
 export type RecentSession = {
   id: string;
   cwd: string;
@@ -174,6 +178,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
       code?: unknown;
       detail?: unknown;
       title?: unknown;
+      replaceAllowed?: unknown;
     } | null;
     const safeCode =
       typeof body?.code === 'string' && /^[A-Z0-9_]+$/.test(body.code) ? body.code : undefined;
@@ -187,6 +192,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
             : `Relay request failed (${response.status}).`;
     return Object.assign(new Error(message), {
       ...(safeCode ? { code: safeCode } : {}),
+      ...(typeof body?.replaceAllowed === 'boolean' ? { replaceAllowed: body.replaceAllowed } : {}),
       status: response.status,
     });
   }
