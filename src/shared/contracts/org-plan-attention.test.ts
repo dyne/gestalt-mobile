@@ -85,6 +85,10 @@ describe('Org Plan attention contract', () => {
       action: 'resume',
       guidance: 'Continue now.',
     });
+    expect(response).toEqual({
+      success: true,
+      contentItems: [{ type: 'inputText', text: '{"action":"resume","guidance":"Continue now."}' }],
+    });
     expect(isOrgPlanAttentionToolResponse(response)).toBe(true);
     expect(parseOrgPlanAttentionResponse({ action: 'disableAutopilot' })).toEqual({
       action: 'disableAutopilot',

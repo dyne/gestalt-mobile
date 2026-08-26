@@ -117,7 +117,7 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
     attempts += 1;
     expect(route.request().postDataJSON()).toEqual({
       success: true,
-      contentItems: [{ type: 'input_text', text: '{"answers":{"execution_mode":"Solo"}}' }],
+      contentItems: [{ type: 'inputText', text: '{"answers":{"execution_mode":"Solo"}}' }],
     });
     await route.fulfill({
       status: attempts === 1 ? 409 : 202,
