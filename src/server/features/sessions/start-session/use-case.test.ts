@@ -50,7 +50,7 @@ describe('startSession', () => {
     expect(saved).toHaveLength(1);
   });
 
-  it('forwards direct Codex session settings to the runtime activation port', async () => {
+  it('captures direct Codex session settings in the durable activation snapshot', async () => {
     let received: unknown;
     const input = {
       workspaceId: 'w',
@@ -68,14 +68,13 @@ describe('startSession', () => {
       },
       profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
       ...skills,
-      activate: async (session, settings) => {
-        received = settings;
+      activate: async (session) => {
+        received = session.executionPolicy;
         return session;
       },
     });
 
     expect(received).toEqual({
-      model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     });
