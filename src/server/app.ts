@@ -55,6 +55,8 @@ import type {
 import type { CeremonyAttemptGate } from './features/auth/application/ceremony-attempts.js';
 import { registerAutopilotRoutes } from './features/autopilot/register-routes.js';
 import type { AutopilotCoordinator } from './features/autopilot/application/service.js';
+import { registerFileRoutes } from './features/files/register-routes.js';
+import type { WorkspaceFileSource } from './features/files/application/ports.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -152,6 +154,10 @@ export type AppDependencies = {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     plans: WorkspacePlanCatalogSource;
   };
+  workspaceFileRoutes?: {
+    workspaces: Pick<WorkspaceCatalog, 'resolve'>;
+    files: WorkspaceFileSource;
+  };
   planMeasurementRoutes?: {
     exists(id: string): boolean;
     authorize(id: string, authorization: string | undefined): boolean;
@@ -246,6 +252,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot, deps.sessionRoutes?.idempotency);
   if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
+  registerFileRoutes(app, deps);
   registerGitRoutes(app, deps);
   registerSkillRoutes(app, deps);
   registerProblemHandler(app, Boolean(deps.staticDir));

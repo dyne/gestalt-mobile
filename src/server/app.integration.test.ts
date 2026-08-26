@@ -9,6 +9,32 @@ import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 
 describe('relay application composition', () => {
+  it('registers the workspace file listing route through its explicit dependency', async () => {
+    const app = await buildApp({
+      health: {
+        read: async () => ({
+          status: 'ok',
+          version: 'test',
+          codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+        }),
+      },
+      logger: console,
+      workspaceFileRoutes: {
+        workspaces: { resolve: async () => ({ id: 'one', name: 'one', realPath: '/safe' }) },
+        files: {
+          list: async (_root, input) => ({
+            kind: 'available',
+            page: { directory: input.directory, entries: [] },
+          }),
+        },
+      },
+    });
+    expect((await app.inject('/api/workspaces/one/files')).json()).toEqual({
+      directory: '',
+      entries: [],
+    });
+    await app.close();
+  });
   it('applies the browser policy to API and problem responses', async () => {
     const app = await buildApp({
       health: {
