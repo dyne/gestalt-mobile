@@ -9,7 +9,9 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   realpath,
+  rename,
   stat,
   symlink,
   writeFile,
@@ -193,5 +195,95 @@ describe('FilesystemWorkspaceFiles', () => {
       }),
     ).toEqual({ kind: 'invalid-destination' });
     expect(await readFile(join(root, '.git', 'sentinel'), 'utf8')).toBe('protected');
+  });
+
+  it('does not overwrite a target created while a reject upload is being published', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    const files = new FilesystemWorkspaceFiles(
+      { lstat, readdir: (path, options) => readdir(path, options), realpath, stat },
+      { beforePublish: async () => writeFile(join(root, 'raced.txt'), 'raced') },
+    );
+
+    expect(
+      await files.upload(root, {
+        directory: '',
+        filename: 'raced.txt',
+        conflict: 'reject',
+        content: Buffer.from('upload'),
+      }),
+    ).toEqual({ kind: 'unreadable' });
+    expect(await readFile(join(root, 'raced.txt'), 'utf8')).toBe('raced');
+  });
+
+  it('does not follow a destination parent replaced by an escaping symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    const outside = await mkdtemp(join(tmpdir(), 'gestalt-files-outside-'));
+    await mkdir(join(root, 'destination'));
+    await writeFile(join(outside, 'sentinel'), 'outside');
+    const files = new FilesystemWorkspaceFiles(
+      { lstat, readdir: (path, options) => readdir(path, options), realpath, stat },
+      {
+        afterParentCheck: async () => {
+          await rename(join(root, 'destination'), join(root, 'original-destination'));
+          await symlink(outside, join(root, 'destination'));
+        },
+      },
+    );
+
+    expect(
+      await files.upload(root, {
+        directory: 'destination',
+        filename: 'escape.txt',
+        conflict: 'reject',
+        content: Buffer.from('escape'),
+      }),
+    ).toEqual({ kind: 'invalid-destination' });
+    expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('outside');
+    expect(await readdir(outside)).toEqual(['sentinel']);
+  });
+
+  it('moves the current source inode atomically instead of copying then deleting it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    await mkdir(join(root, 'destination'));
+    await writeFile(join(root, 'source.txt'), 'before');
+    const files = new FilesystemWorkspaceFiles(
+      { lstat, readdir: (path, options) => readdir(path, options), realpath, stat },
+      { beforePublish: async () => writeFile(join(root, 'source.txt'), 'latest') },
+    );
+
+    expect(
+      await files.move(root, {
+        source: 'source.txt',
+        destinationDirectory: 'destination',
+        conflict: 'reject',
+      }),
+    ).toMatchObject({ kind: 'available', path: 'destination/source.txt' });
+    expect(await readFile(join(root, 'destination', 'source.txt'), 'utf8')).toBe('latest');
+    await expect(lstat(join(root, 'source.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves the move source when a reject destination races into existence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-files-'));
+    await mkdir(join(root, 'destination'));
+    await writeFile(join(root, 'source.txt'), 'source');
+    const files = new FilesystemWorkspaceFiles(
+      { lstat, readdir: (path, options) => readdir(path, options), realpath, stat },
+      {
+        beforePublish: async () =>
+          writeFile(join(root, 'destination', 'source.txt'), 'raced destination'),
+      },
+    );
+
+    expect(
+      await files.move(root, {
+        source: 'source.txt',
+        destinationDirectory: 'destination',
+        conflict: 'reject',
+      }),
+    ).toEqual({ kind: 'unreadable' });
+    expect(await readFile(join(root, 'source.txt'), 'utf8')).toBe('source');
+    expect(await readFile(join(root, 'destination', 'source.txt'), 'utf8')).toBe(
+      'raced destination',
+    );
   });
 });

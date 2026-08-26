@@ -6,20 +6,19 @@
 
 import {
   copyFile,
-  link,
   lstat,
   mkdir,
+  open,
   readdir,
   realpath,
   rename,
   rm,
   stat,
-  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { constants, type Stats } from 'node:fs';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { WorkspaceFileSource } from '../../features/files/application/ports.js';
 import type {
@@ -42,12 +41,20 @@ type Filesystem = Readonly<{
   stat(path: string): Promise<Stats>;
 }>;
 type Cursor = Readonly<{ d: string; i: number; m: number; a: string; s: string }>;
+type MutationHooks = Readonly<{
+  afterParentCheck?: (operation: 'upload' | 'copy' | 'move' | 'delete') => Promise<void>;
+  beforePublish?: (operation: 'upload' | 'copy' | 'move') => Promise<void>;
+}>;
+type AnchoredDirectory = Readonly<{ path: string; close: () => Promise<void> }>;
 
 /** Lists exactly one directory; symlinks are represented but never followed. */
 export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
   private readonly cursors = new Map<string, Cursor>();
 
-  constructor(private readonly filesystem: Filesystem = { lstat, readdir, realpath, stat }) {}
+  constructor(
+    private readonly filesystem: Filesystem = { lstat, readdir, realpath, stat },
+    private readonly mutationHooks: MutationHooks = {},
+  ) {}
 
   async list(
     workspaceRoot: string,
@@ -136,24 +143,33 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     if (!validName(input.filename)) return { kind: 'invalid-destination' };
     const root = await this.canonicalDirectory(rootPath);
     if (!root) return { kind: 'unreadable' };
-    const parent = await this.safeDirectory(root, input.directory);
+    const parent = await anchoredDirectory(root, input.directory);
     if (!parent) return { kind: 'invalid-destination' };
-    const target = await this.targetName(parent, input.filename, input.conflict, 'file');
-    if (typeof target !== 'string') return target;
-    const temp = join(parent, `.${randomUUID()}.upload`);
     try {
+      await this.mutationHooks.afterParentCheck?.('upload');
+      if (!(await stableAnchor(root, input.directory, parent.path)))
+        return { kind: 'invalid-destination' };
+      const target = await this.targetName(parent.path, input.filename, input.conflict, 'file');
+      if (typeof target !== 'string') return target;
+      const temp = join(parent.path, `.${randomUUID()}.upload`);
       await writeFile(temp, input.content, { flag: 'wx' });
-      await this.publishFile(temp, target, input.conflict);
+      try {
+        await this.mutationHooks.beforePublish?.('upload');
+        await this.publishFile(temp, target, input.conflict);
+      } finally {
+        await rm(temp, { force: true }).catch(() => undefined);
+      }
       return {
         kind: 'available',
         source: '',
-        path: relative(root, target).split(sep).join('/'),
+        path: input.directory ? `${input.directory}/${basename(target)}` : basename(target),
         entryKind: 'file',
         conflict: input.conflict,
       };
     } catch {
-      await rm(temp, { force: true }).catch(() => undefined);
       return { kind: 'unreadable' };
+    } finally {
+      await parent.close();
     }
   }
 
@@ -163,21 +179,28 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     if (!validRelative(input.path)) return { kind: 'invalid-destination' };
     const root = await this.canonicalDirectory(rootPath);
     if (!root) return { kind: 'unreadable' };
-    const entry = await this.safeEntry(root, input.path);
-    if (!entry) return { kind: 'missing' };
-    const { path: target, metadata } = entry;
+    const parent = await anchoredDirectory(root, dirnameRelative(input.path));
+    if (!parent) return { kind: 'missing' };
     try {
+      await this.mutationHooks.afterParentCheck?.('delete');
+      if (!(await stableAnchor(root, dirnameRelative(input.path), parent.path)))
+        return { kind: 'missing' };
+      const target = join(parent.path, basename(input.path));
+      const metadata = await safeLstat(target);
+      if (!metadata || metadata.isSymbolicLink()) return { kind: 'missing' };
       await rm(target, { recursive: metadata.isDirectory(), force: false });
+      return {
+        kind: 'available',
+        source: input.path,
+        path: input.path,
+        entryKind: metadata.isDirectory() ? 'directory' : 'file',
+        conflict: 'reject',
+      };
     } catch {
       return { kind: 'unreadable' };
+    } finally {
+      await parent.close();
     }
-    return {
-      kind: 'available',
-      source: input.path,
-      path: input.path,
-      entryKind: metadata.isDirectory() ? 'directory' : 'file',
-      conflict: 'reject',
-    };
   }
 
   private async transfer(
@@ -193,50 +216,92 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     const root = await this.canonicalDirectory(rootPath);
     if (!root) return { kind: 'unreadable' };
     if (input.source === '.git' || input.source.startsWith('.git/')) return { kind: 'protected' };
-    const sourceEntry = await this.safeEntry(root, input.source);
-    if (!sourceEntry) return { kind: 'missing' };
-    const { path: source, metadata: sourceMetadata } = sourceEntry;
-    const parent = await this.safeDirectory(root, input.destinationDirectory);
-    if (!parent) return { kind: 'invalid-destination' };
-    if (dirname(source) === parent && moving) return { kind: 'same-parent' };
-    if (sourceMetadata.isDirectory() && (parent === source || parent.startsWith(`${source}${sep}`)))
+    const sourceParent = await anchoredDirectory(root, dirnameRelative(input.source));
+    if (!sourceParent) return { kind: 'missing' };
+    const parent = await anchoredDirectory(root, input.destinationDirectory);
+    if (!parent) {
+      await sourceParent.close();
+      return { kind: 'invalid-destination' };
+    }
+    const source = join(sourceParent.path, basename(input.source));
+    const sourceMetadata = await safeLstat(source);
+    if (!sourceMetadata || sourceMetadata.isSymbolicLink()) {
+      await Promise.all([sourceParent.close(), parent.close()]);
+      return { kind: 'missing' };
+    }
+    if (dirnameRelative(input.source) === input.destinationDirectory && moving) {
+      await Promise.all([sourceParent.close(), parent.close()]);
+      return { kind: 'same-parent' };
+    }
+    if (
+      sourceMetadata.isDirectory() &&
+      (input.destinationDirectory === input.source ||
+        input.destinationDirectory.startsWith(`${input.source}/`))
+    ) {
+      await Promise.all([sourceParent.close(), parent.close()]);
       return { kind: 'source-inside-destination' };
+    }
     const target = await this.targetName(
-      parent,
+      parent.path,
       basename(source),
       input.conflict,
       sourceMetadata.isFile() ? 'file' : 'directory',
     );
-    if (typeof target !== 'string') return target;
+    if (typeof target !== 'string') {
+      await Promise.all([sourceParent.close(), parent.close()]);
+      return target;
+    }
     try {
-      if (sourceMetadata.isFile()) {
-        const temp = join(parent, `.${randomUUID()}.copy`);
+      await this.mutationHooks.afterParentCheck?.(moving ? 'move' : 'copy');
+      if (
+        !(await stableAnchor(root, dirnameRelative(input.source), sourceParent.path)) ||
+        !(await stableAnchor(root, input.destinationDirectory, parent.path))
+      )
+        return { kind: 'invalid-destination' };
+      await this.mutationHooks.beforePublish?.(moving ? 'move' : 'copy');
+      if (moving) {
+        await this.publishMove(source, target, input.conflict, sourceMetadata.isDirectory());
+      } else if (sourceMetadata.isFile()) {
+        const temp = join(parent.path, `.${randomUUID()}.copy`);
         try {
-          await copyFile(source, temp, 0);
+          const sourceHandle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            await copyFile(procPath(sourceHandle.fd), temp, 0);
+          } finally {
+            await sourceHandle.close();
+          }
           await this.publishFile(temp, target, input.conflict);
         } finally {
           await rm(temp, { force: true }).catch(() => undefined);
         }
-        if (moving) await unlink(source);
       } else {
-        const temp = join(parent, `.${randomUUID()}.copy-directory`);
+        const temp = join(parent.path, `.${randomUUID()}.copy-directory`);
         try {
-          await copyTree(source, temp, true);
-          await this.publishDirectory(temp, target);
+          const sourceDirectory = await openDirectory(source);
+          if (!sourceDirectory) throw new Error('source changed');
+          try {
+            await copyTree(sourceDirectory.path, temp, true);
+          } finally {
+            await sourceDirectory.close();
+          }
+          await this.publishDirectory(temp, target, input.conflict);
         } finally {
           await rm(temp, { recursive: true, force: true }).catch(() => undefined);
         }
-        if (moving) await rm(source, { recursive: true, force: false });
       }
       return {
         kind: 'available',
         source: input.source,
-        path: relative(root, target).split(sep).join('/'),
+        path: input.destinationDirectory
+          ? `${input.destinationDirectory}/${basename(target)}`
+          : basename(target),
         entryKind: sourceMetadata.isDirectory() ? 'directory' : 'file',
         conflict: input.conflict,
       };
     } catch {
       return { kind: 'unreadable' };
+    } finally {
+      await Promise.all([sourceParent.close(), parent.close()]);
     }
   }
 
@@ -294,18 +359,43 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
   }
 
   private async publishFile(temp: string, target: string, conflict: string): Promise<void> {
-    if (conflict === 'keep-both') {
-      await link(temp, target);
-      await unlink(temp);
-      return;
+    const reservation = conflict === 'replace' ? null : await reserveFile(target);
+    try {
+      await rename(temp, target);
+    } catch (error) {
+      if (reservation) await removeReservation(target, reservation, false);
+      throw error;
     }
-    await rename(temp, target);
   }
 
-  private async publishDirectory(temp: string, target: string): Promise<void> {
-    const existing = await safeLstat(target);
-    if (existing) throw new Error('destination raced');
-    await rename(temp, target);
+  private async publishDirectory(temp: string, target: string, conflict: string): Promise<void> {
+    const reservation = conflict === 'replace' ? null : await reserveDirectory(target);
+    try {
+      await rename(temp, target);
+    } catch (error) {
+      if (reservation) await removeReservation(target, reservation, true);
+      throw error;
+    }
+  }
+
+  private async publishMove(
+    source: string,
+    target: string,
+    conflict: string,
+    directory: boolean,
+  ): Promise<void> {
+    const reservation =
+      conflict === 'replace'
+        ? null
+        : directory
+          ? await reserveDirectory(target)
+          : await reserveFile(target);
+    try {
+      await rename(source, target);
+    } catch (error) {
+      if (reservation) await removeReservation(target, reservation, directory);
+      throw error;
+    }
   }
 
   private rememberCursor(cursor: Cursor): string {
@@ -413,9 +503,81 @@ async function safeLstat(path: string): Promise<Stats | null> {
     return null;
   }
 }
+function dirnameRelative(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash < 0 ? '' : path.slice(0, slash);
+}
+function procPath(fd: number): string {
+  return `/proc/self/fd/${fd}`;
+}
+async function openDirectory(path: string): Promise<AnchoredDirectory | null> {
+  try {
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    return { path: procPath(handle.fd), close: () => handle.close() };
+  } catch {
+    return null;
+  }
+}
+async function anchoredDirectory(
+  root: string,
+  directory: string,
+): Promise<AnchoredDirectory | null> {
+  if (directory !== '' && !validRelative(directory)) return null;
+  let current = await openDirectory(root);
+  if (!current) return null;
+  for (const segment of directory === '' ? [] : directory.split('/')) {
+    const next = await openDirectory(join(current.path, segment));
+    await current.close();
+    if (!next) return null;
+    current = next;
+  }
+  return current;
+}
+async function reserveFile(path: string): Promise<Stats> {
+  const reservation = await open(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  try {
+    return await reservation.stat();
+  } finally {
+    await reservation.close();
+  }
+}
+async function reserveDirectory(path: string): Promise<Stats> {
+  await mkdir(path);
+  return lstat(path);
+}
+async function removeReservation(
+  path: string,
+  reservation: Stats,
+  directory: boolean,
+): Promise<void> {
+  const current = await safeLstat(path);
+  if (current?.dev === reservation.dev && current.ino === reservation.ino)
+    await rm(path, { recursive: directory, force: true }).catch(() => undefined);
+}
+async function stableAnchor(root: string, directory: string, anchor: string): Promise<boolean> {
+  try {
+    const current = await realpath(directory ? join(root, ...directory.split('/')) : root);
+    const anchored = await realpath(anchor);
+    return current === anchored && within(root, anchored);
+  } catch {
+    return false;
+  }
+}
 async function copyTree(source: string, target: string, directory: boolean): Promise<void> {
   if (!directory) {
-    await copyFile(source, target, 0);
+    const sourceHandle = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      await copyFile(procPath(sourceHandle.fd), target, 0);
+    } finally {
+      await sourceHandle.close();
+    }
     return;
   }
   await mkdir(target);
@@ -423,6 +585,16 @@ async function copyTree(source: string, target: string, directory: boolean): Pro
     const childSource = join(source, name);
     const metadata = await lstat(childSource);
     if (metadata.isSymbolicLink() || name === '.git') throw new Error('unsupported source');
-    await copyTree(childSource, join(target, name), metadata.isDirectory());
+    if (metadata.isDirectory()) {
+      const child = await openDirectory(childSource);
+      if (!child) throw new Error('source changed');
+      try {
+        await copyTree(child.path, join(target, name), true);
+      } finally {
+        await child.close();
+      }
+    } else {
+      await copyTree(childSource, join(target, name), false);
+    }
   }
 }
