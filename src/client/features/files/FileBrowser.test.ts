@@ -41,6 +41,7 @@ function renderBrowser(
     copyEntry?: ReturnType<typeof vi.fn>;
     moveEntry?: ReturnType<typeof vi.fn>;
     deleteEntry?: ReturnType<typeof vi.fn>;
+    uploadFile?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const onclose = vi.fn();
@@ -49,6 +50,7 @@ function renderBrowser(
   const copyEntry = transfers.copyEntry ?? vi.fn(async () => ({ path: '', kind: 'file' }));
   const moveEntry = transfers.moveEntry ?? vi.fn(async () => ({ path: '', kind: 'file' }));
   const deleteEntry = transfers.deleteEntry ?? vi.fn(async () => ({ path: '', kind: 'file' }));
+  const uploadFile = transfers.uploadFile ?? vi.fn(async () => ({ path: '', kind: 'file' }));
   const reader: DirectoryReader = (workspaceId, input, signal) =>
     listDirectory(workspaceId, input, signal);
   render(FileBrowser, {
@@ -77,11 +79,31 @@ function renderBrowser(
       path: string,
       key: string,
     ) => Promise<{ path: string; kind: string }>,
+    uploadFile: uploadFile as (
+      workspaceId: string,
+      input: {
+        directory: string;
+        filename: string;
+        conflict: 'reject' | 'replace' | 'keep-both';
+        file: File;
+      },
+      key: string,
+      signal?: AbortSignal,
+    ) => Promise<{ path: string; kind: string }>,
     onclose,
     onerror,
     onsuccess,
   });
-  return { listDirectory, copyEntry, moveEntry, deleteEntry, onclose, onerror, onsuccess };
+  return {
+    listDirectory,
+    copyEntry,
+    moveEntry,
+    deleteEntry,
+    uploadFile,
+    onclose,
+    onerror,
+    onsuccess,
+  };
 }
 
 describe('FileBrowser modal lifecycle', () => {
@@ -191,5 +213,26 @@ describe('FileBrowser modal lifecycle', () => {
     );
     await waitFor(() => expect(deleteEntry).toHaveBeenCalledOnce());
     expect(deleteEntry.mock.calls[0]?.slice(0, 2)).toEqual(['opaque-root', 'folder']);
+  });
+
+  it('uploads selected files sequentially to the displayed selected folder', async () => {
+    const listDirectory = vi.fn().mockResolvedValue({
+      directory: '',
+      entries: [{ name: 'folder', path: 'folder', kind: 'directory' as const }],
+    });
+    const uploadFile = vi.fn().mockImplementation(async (_id, input) => ({
+      path: `folder/${input.filename}`,
+      kind: 'file',
+    }));
+    renderBrowser(listDirectory, { uploadFile });
+    await screen.findByText('folder');
+    await fireEvent.click(screen.getByRole('treeitem', { name: /folder/ }));
+    const input = screen.getByLabelText('Choose files to upload');
+    await fireEvent.change(input, {
+      target: { files: [new File(['one'], 'one.txt'), new File(['two'], 'two.txt')] },
+    });
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+    expect(uploadFile.mock.calls.map((call) => call[1].directory)).toEqual(['folder', 'folder']);
+    expect(uploadFile.mock.calls.map((call) => call[1].conflict)).toEqual(['reject', 'reject']);
   });
 });
