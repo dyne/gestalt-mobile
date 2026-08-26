@@ -4,10 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AutopilotCoordinator } from './service.js';
 import { defaultAutopilotPolicy } from './policy.js';
 import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
+import { migrate } from '../../../platform/persistence/migrate.js';
+import { SqliteAutopilotStore } from '../../../platform/persistence/sqlite-autopilot-store.js';
 
 const now = '2026-08-20T12:00:00.000Z';
 const plan = {
@@ -145,6 +151,95 @@ describe('AutopilotCoordinator', () => {
         code: 'AUTOPILOT_PLAN_COMPLETE',
       });
       expect(fixture.state).toBeNull();
+    });
+
+    it('reopens a pending supervision intent once without overriding manual Off', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'gestalt-autopilot-supervision-'));
+      const path = join(directory, 'relay.sqlite');
+      let identity = 'p1';
+      let session = { state: 'starting', threadId: null as string | null, activeTurnId: null };
+      const activeTimers: Array<{ cancelled: boolean }> = [];
+      let starts = 0;
+      const coordinator = (database: DatabaseSync) =>
+        new AutopilotCoordinator({
+          store: new SqliteAutopilotStore(database),
+          now: () => now,
+          policy: defaultAutopilotPolicy,
+          plan: () => ({ plan, identity }),
+          session: () => session,
+          activity: () => ({
+            ...createAgentActivitySnapshot('s', now),
+            confidence: 'fresh',
+            root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+          }),
+          pendingInteraction: () => false,
+          reconcile: async () => ({ compatible: true }),
+          schedule: () => {
+            const timer = { cancelled: false };
+            activeTimers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+          nextControlId: (_sessionId, generation) => `control-${generation}`,
+          turnStarter: {
+            start: async () => {
+              starts += 1;
+            },
+          },
+          publish: () => {},
+        });
+      try {
+        const first = new DatabaseSync(path);
+        migrate(first);
+        first
+          .prepare(
+            "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','starting','active',0,1,'t','t')",
+          )
+          .run();
+        coordinator(first).supervisionStarted('s');
+        expect(new SqliteAutopilotStore(first).find('s')).toMatchObject({
+          requestedEnabled: true,
+          planIdentity: 'p1',
+        });
+        expect(activeTimers).toHaveLength(0);
+        expect(starts).toBe(0);
+        first.close();
+
+        session = { state: 'ready', threadId: 'thread-1', activeTurnId: null };
+        const reopened = new DatabaseSync(path);
+        migrate(reopened);
+        const resumed = coordinator(reopened);
+        resumed.restore('s');
+        resumed.restore('s');
+        const store = new SqliteAutopilotStore(reopened);
+        expect(store.controlIds('s')).toEqual(new Set(['control-1']));
+        expect(activeTimers.filter((timer) => !timer.cancelled)).toHaveLength(1);
+        expect(starts).toBe(0);
+
+        resumed.disable('s');
+        reopened.close();
+        const manualOff = new DatabaseSync(path);
+        migrate(manualOff);
+        coordinator(manualOff).restore('s');
+        expect(new SqliteAutopilotStore(manualOff).find('s')).toMatchObject({
+          requestedEnabled: false,
+          planIdentity: 'p1',
+          stopReason: 'manualDisabled',
+        });
+        expect(new SqliteAutopilotStore(manualOff).controlIds('s')).toEqual(new Set(['control-1']));
+
+        identity = 'p2';
+        coordinator(manualOff).supervisionStarted('s');
+        expect(new SqliteAutopilotStore(manualOff).find('s')).toMatchObject({
+          requestedEnabled: true,
+          planIdentity: 'p2',
+        });
+        expect(starts).toBe(0);
+        manualOff.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
     });
   });
   it('makes repeated enable idempotent for the same retained plan', () => {
