@@ -75,6 +75,7 @@ export type DirectChildThread = Readonly<{
 /** One private owner for every resource acquired for a live Codex child. */
 class SessionResource {
   private disposed = false;
+  private explicitShutdown = false;
   readonly pendingRequests = new Map<string, PendingRequest>();
   threadId: string | undefined;
   pendingThreadName: string | undefined;
@@ -102,6 +103,14 @@ class SessionResource {
     this.planStatusLease?.close();
     this.onDisposed();
     return true;
+  }
+
+  beginExplicitShutdown(): void {
+    this.explicitShutdown = true;
+  }
+
+  get exitedUnexpectedly(): boolean {
+    return !this.explicitShutdown;
   }
 
   get active(): boolean {
@@ -176,11 +185,16 @@ export class CodexSessionRuntime {
   }
 
   stop(sessionId: string): void {
-    this.sessions.get(sessionId)?.dispose();
+    const resource = this.sessions.get(sessionId);
+    resource?.beginExplicitShutdown();
+    resource?.dispose();
   }
 
   async release(sessionId: string): Promise<void> {
     const resource = this.sessions.get(sessionId);
+    // Mark intent before the await below: a process-exit callback can race the
+    // unsubscribe response, but it must not turn an explicit close into recovery.
+    resource?.beginExplicitShutdown();
     if (resource?.threadId) {
       try {
         await resource.process.rpc.request('thread/unsubscribe', { threadId: resource.threadId });
@@ -598,7 +612,7 @@ export class CodexSessionRuntime {
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =
         process.onExit?.(() => {
-          if (resource.dispose()) this.onProcessExit?.(session.id);
+          if (resource.dispose() && resource.exitedUnexpectedly) this.onProcessExit?.(session.id);
         }) ?? (() => {});
       resource.attach([exitUnsubscribe]);
       if (!resource.active) {

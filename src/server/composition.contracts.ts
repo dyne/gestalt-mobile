@@ -1751,6 +1751,92 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('forgets a session while activity reconciliation is pending without publishing late activity', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const writers: Array<{
+        releaseRead?: () => void;
+        notify?: (notification: { method: string; params: unknown }) => void;
+      }> = [];
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => unhandled.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+      onTestFinished(() => {
+        process.off('unhandledRejection', onUnhandled);
+      });
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        profiles: {
+          list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+        launchAppServer: () => {
+          const writer: (typeof writers)[number] = {};
+          return {
+            rpc: {
+              request: async (method: string, params: unknown) => {
+                if (method === 'thread/start') {
+                  writers.push(writer);
+                  return { thread: { id: `thread-${writers.length}` } };
+                }
+                if (method === 'thread/read')
+                  return await new Promise((resolve) => {
+                    writer.releaseRead = () => resolve({ thread: { turns: [] } });
+                  });
+                if (method === 'thread/list') return { data: [] };
+                if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
+                if (method === 'skills/list')
+                  return {
+                    data: [{ cwd: (params as { cwds: string[] }).cwds[0], skills: [], errors: [] }],
+                  };
+                return {};
+              },
+              onNotification: (listener) => {
+                writer.notify = listener;
+                return () => {};
+              },
+              onServerRequest: () => () => {},
+            },
+            close: () => {},
+            onExit: () => () => {},
+          };
+        },
+      });
+      const forgottenId = await createComposedSession(app);
+      await vi.waitFor(() => expect(writers[0]?.releaseRead).toBeTypeOf('function'));
+      expect(
+        (await app.inject({ method: 'DELETE', url: `/api/sessions/${forgottenId}` })).statusCode,
+      ).toBe(204);
+      writers[0]!.releaseRead!();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(unhandled).toEqual([]);
+      expect((await app.inject('/api/bootstrap')).statusCode).toBe(200);
+
+      const liveId = await createComposedSession(app);
+      await vi.waitFor(() => expect(writers[1]?.notify).toBeTypeOf('function'));
+      writers[1]!.notify!({
+        method: 'thread/started',
+        params: { thread: { id: 'thread-2', status: { type: 'active' } } },
+      });
+      await vi.waitFor(async () =>
+        expect((await app.inject(`/api/sessions/${liveId}`)).json()).toMatchObject({
+          agentActivity: { root: { state: 'working' } },
+        }),
+      );
+      await app.close();
+    });
+
     it('uses the relay root for detached history reads and Open never resumes', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
