@@ -940,6 +940,61 @@ describe('CodexSessionRuntime', () => {
     expect(closed).toBe(1);
   });
 
+  it('does not report an explicit release as an unexpected process exit', async () => {
+    let exit: (() => void) | undefined;
+    let releaseUnsubscribe: (() => void) | undefined;
+    const exited = vi.fn();
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) => {
+            if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+            if (method === 'thread/unsubscribe')
+              return await new Promise((resolve) => {
+                releaseUnsubscribe = () => resolve({});
+              });
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+        onExit: (listener) => {
+          exit = listener;
+          return () => {};
+        },
+      }),
+      undefined,
+      undefined,
+      undefined,
+      exited,
+    );
+    await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    const releasing = runtime.release('session-1');
+    await vi.waitFor(() => expect(releaseUnsubscribe).toBeTypeOf('function'));
+    exit?.();
+    releaseUnsubscribe?.();
+    await releasing;
+    expect(exited).not.toHaveBeenCalled();
+  });
+
   it('forwards app-server notifications with their relay session identity', async () => {
     let notify: ((value: { method: string; params: unknown }) => void) | undefined;
     const received: unknown[] = [];
