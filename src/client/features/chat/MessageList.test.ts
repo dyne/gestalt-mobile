@@ -6,8 +6,8 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import MessageList from './MessageList.svelte';
 
@@ -38,6 +38,27 @@ describe('MessageList', () => {
       autopilotAuditTruncated: true,
     });
     expect(screen.getByRole('status').textContent).toContain('Earlier Autopilot audit entries');
+  });
+
+  it('routes absolute local Org links through the Plan callback', async () => {
+    const onopenorg = vi.fn();
+    render(MessageList, {
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: 'Open [the plan](/projects/one/plans/roadmap.org:12).',
+          complete: true,
+        },
+      ],
+      activities: [],
+      onopenorg,
+    });
+
+    const link = screen.getByRole('link', { name: 'the plan' });
+    expect(link.getAttribute('target')).toBeNull();
+    await fireEvent.click(link);
+    expect(onopenorg).toHaveBeenCalledWith('/projects/one/plans/roadmap.org:12');
   });
 
   it('wraps commentary and activity only after the answer completes', () => {

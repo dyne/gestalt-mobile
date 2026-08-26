@@ -13,6 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import type { ProjectedInteraction } from './chat-projection.js';
+  import { isLocalOrgHref } from '../plans/org-plan-link.js';
 
   type Props = {
     messages: ChatMessage[];
@@ -26,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpermission?(interaction: ProjectedInteraction): void;
     ondecision?(id: string, decision: 'accept' | 'decline'): void;
     onretry?(interaction: ProjectedInteraction): void;
+    onopenorg?(href: string): void;
   };
   let {
     messages,
@@ -39,6 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpermission = () => {},
     ondecision = () => {},
     onretry = () => {},
+    onopenorg,
   }: Props = $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
@@ -114,12 +117,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function timeLabel(index: number, occurredAt: number | undefined): string | null {
     return formatElapsedAfter(groups[index - 1]?.occurredAt, occurredAt);
   }
+  function openOrg(event: MouseEvent, href: string): void {
+    if (!onopenorg || !isLocalOrgHref(href)) return;
+    event.preventDefault();
+    onopenorg(href);
+  }
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
   {#each parts as part, partIndex (partIndex)}
     {#if part.kind === 'link'}
-      <a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>
+      {#if onopenorg && isLocalOrgHref(part.href)}
+        <a href={part.href} onclick={(event) => openOrg(event, part.href)}>{part.text}</a>
+      {:else}
+        <a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>
+      {/if}
     {:else if part.kind === 'code'}
       <code>{part.text}</code>
     {:else}
