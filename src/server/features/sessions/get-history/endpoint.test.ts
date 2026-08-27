@@ -138,6 +138,65 @@ describe('GET /api/sessions/:id/history', () => {
     await app.close();
   });
 
+  it('restores safe activity missing from Codex history at the snapshot cut', async () => {
+    const app = fastify();
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      currentSequence: () => 9,
+      read: async () => ({ turns: [], activeTurnId: null }),
+      activityHistory: (id, throughSequence) => {
+        expect(id).toBe('s');
+        expect(throughSequence).toBe(9);
+        return [
+          {
+            sessionId: 's',
+            sequence: 8,
+            type: 'activity.updated',
+            occurredAt: '2026-08-20T00:00:00.000Z',
+            payload: {
+              id: 'command-1',
+              label: 'Command · completed',
+              detail: 'npm test',
+              turnId: 'turn-1',
+              environment: 'must not leak',
+            },
+          },
+          {
+            sessionId: 's',
+            sequence: 9,
+            type: 'session.updated',
+            occurredAt: '2026-08-20T00:00:01.000Z',
+            payload: { id: 'ignored' },
+          },
+          {
+            sessionId: 's',
+            sequence: 10,
+            type: 'activity.updated',
+            occurredAt: '2026-08-20T00:00:02.000Z',
+            payload: {
+              id: 'future-command',
+              label: 'Command · completed',
+              detail: 'must remain replayable',
+            },
+          },
+        ];
+      },
+    });
+
+    const response = await app.inject('/api/sessions/s/history');
+    expect(response.json().activities).toEqual([
+      {
+        id: 'command-1',
+        label: 'Command · completed',
+        detail: 'npm test',
+        turnId: 'turn-1',
+        occurredAt: Date.parse('2026-08-20T00:00:00.000Z'),
+      },
+    ]);
+    expect(response.body).not.toContain('must not leak');
+    await app.close();
+  });
+
   it('marks a deliberately bounded audit tail as truncated without reading a journal body', async () => {
     const app = fastify();
     registerGetHistory(app, {

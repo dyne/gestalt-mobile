@@ -96,6 +96,10 @@ export type AppDependencies = {
       activeTurnId: string | null;
     }>;
     currentSequence?(sessionId: string): number;
+    activityHistory?(
+      sessionId: string,
+      throughSequence: number,
+    ): readonly import('../shared/contracts/session-event.js').SessionEvent[];
     agentActivity?(sessionId: string): AgentActivitySnapshot;
     autopilotSnapshot?(
       sessionId: string,

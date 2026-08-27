@@ -786,6 +786,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         models,
         readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
         currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
+        activityHistory: (sessionId, throughSequence) =>
+          journal.since(sessionId, 0).filter((event) => event.sequence <= throughSequence),
         interruptTurn: runtime
           ? (session, turnId) => runtime.interruptTurn(session, turnId)
           : undefined,
