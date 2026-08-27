@@ -26,6 +26,7 @@ import {
 } from '../../features/auth/domain/identifiers.js';
 import { deviceNickname } from '../../features/auth/domain/device-nickname.js';
 import { CeremonyCapacityError } from '../../features/auth/domain/errors.js';
+import { AuthStatementCache, withImmediateTransaction } from './sqlite.js';
 
 const OWNER_ID = localOwnerId('local-owner');
 const SCHEMA_VERSION = 1;
@@ -43,6 +44,7 @@ export function authorizationDatabasePath(homeDirectory: string): string {
 export class SqliteAuthorizationStore implements AuthorizationRepository {
   readonly path: string;
   private readonly db: DatabaseSync;
+  private readonly statements: AuthStatementCache;
   private readonly relyingParty: RelyingPartyConfig;
 
   constructor(homeDirectory: string, relyingParty: RelyingPartyConfig) {
@@ -52,6 +54,7 @@ export class SqliteAuthorizationStore implements AuthorizationRepository {
     chmodSync(parent, 0o700);
     this.relyingParty = relyingParty;
     this.db = new DatabaseSync(this.path);
+    this.statements = new AuthStatementCache(this.db);
     try {
       // journal_mode can take an exclusive lock. Install the bounded busy handler first so
       // simultaneous first opens wait for the winner instead of failing during startup.
@@ -81,8 +84,7 @@ export class SqliteAuthorizationStore implements AuthorizationRepository {
   private initializeSchemaAttempt(): void {
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    withImmediateTransaction(this.db, () => {
       this.db
         .exec(`CREATE TABLE IF NOT EXISTS auth_settings (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL, rp_id TEXT NOT NULL, user_handle BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS auth_devices (id TEXT PRIMARY KEY, credential_id TEXT NOT NULL UNIQUE, public_key BLOB NOT NULL, counter INTEGER NOT NULL, transports_json TEXT NOT NULL, device_type TEXT NOT NULL, backed_up INTEGER NOT NULL CHECK(backed_up IN (0,1)), nickname TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, version INTEGER NOT NULL DEFAULT 0);
@@ -104,24 +106,17 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
         .get() as { rp_id: string } | undefined;
       if (settings && settings.rp_id !== this.relyingParty.rpId && this.deviceCount() > 0)
         throw new Error('WebAuthn RP ID hostname changed while credentials exist');
-      this.db.exec('COMMIT');
-    } catch (error) {
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {}
-      throw error;
-    }
+    });
   }
 
   initializeOwner(userHandle: Uint8Array): LocalOwner {
     if (userHandle.length === 0) throw new Error('Local owner handle must not be empty');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const current = this.db
+    return withImmediateTransaction(this.db, () => {
+      const current = this.statements
         .prepare('SELECT user_handle, rp_id FROM auth_settings WHERE singleton = 1')
         .get() as { user_handle: Uint8Array; rp_id: string } | undefined;
       if (!current)
-        this.db
+        this.statements
           .prepare(
             'INSERT INTO auth_settings (singleton, schema_version, rp_id, user_handle) VALUES (1, ?, ?, ?)',
           )
@@ -129,78 +124,57 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       else if (current.rp_id !== this.relyingParty.rpId && this.deviceCount() > 0)
         throw new Error('WebAuthn RP ID hostname changed while credentials exist');
       else if (current.rp_id !== this.relyingParty.rpId)
-        this.db
+        this.statements
           .prepare('UPDATE auth_settings SET rp_id = ? WHERE singleton = 1')
           .run(this.relyingParty.rpId);
-      this.db.exec('COMMIT');
       return { id: OWNER_ID, userHandle: new Uint8Array(current?.user_handle ?? userHandle) };
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   readOwner(): LocalOwner | null {
-    const row = this.db
+    const row = this.statements
       .prepare('SELECT user_handle FROM auth_settings WHERE singleton = 1')
       .get() as { user_handle: Uint8Array } | undefined;
     return row ? { id: OWNER_ID, userHandle: new Uint8Array(row.user_handle) } : null;
   }
   listAuthorizedDevices(): readonly AuthorizedDevice[] {
     return (
-      this.db.prepare('SELECT * FROM auth_devices ORDER BY created_at, id').all() as DeviceRow[]
+      this.statements
+        .prepare('SELECT * FROM auth_devices ORDER BY created_at, id')
+        .all() as DeviceRow[]
     ).map(toDevice);
   }
   claimFirstDevice(owner: LocalOwner, device: AuthorizedDevice): 'claimed' | 'alreadyClaimed' {
     if (owner.id !== OWNER_ID || !this.readOwner())
       throw new Error('Local owner is not initialized');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      if (this.deviceCount()) {
-        this.db.exec('COMMIT');
-        return 'alreadyClaimed';
-      }
+    return withImmediateTransaction(this.db, () => {
+      if (this.deviceCount()) return 'alreadyClaimed';
       this.insertDevice(device);
-      this.db.exec('COMMIT');
       return 'claimed';
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   authorizeDevice(
     device: AuthorizedDevice,
   ): 'authorized' | 'notAuthorized' | 'duplicateCredential' {
-    this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (!this.readOwner() || !this.deviceCount()) {
-        this.db.exec('COMMIT');
-        return 'notAuthorized';
-      }
-      try {
+      return withImmediateTransaction(this.db, () => {
+        if (!this.readOwner() || !this.deviceCount()) return 'notAuthorized';
         this.insertDevice(device);
-      } catch (error) {
-        if (String(error).includes('UNIQUE constraint failed: auth_devices.credential_id')) {
-          this.db.exec('ROLLBACK');
-          return 'duplicateCredential';
-        }
-        throw error;
-      }
-      this.db.exec('COMMIT');
-      return 'authorized';
+        return 'authorized';
+      });
     } catch (error) {
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {}
+      if (String(error).includes('UNIQUE constraint failed: auth_devices.credential_id'))
+        return 'duplicateCredential';
       throw error;
     }
   }
   findDeviceByCredentialId(id: AuthorizedDevice['credentialId']): AuthorizedDevice | null {
-    const row = this.db.prepare('SELECT * FROM auth_devices WHERE credential_id = ?').get(id) as
-      DeviceRow | undefined;
+    const row = this.statements
+      .prepare('SELECT * FROM auth_devices WHERE credential_id = ?')
+      .get(id) as DeviceRow | undefined;
     return row ? toDevice(row) : null;
   }
   findDevice(id: AuthorizedDevice['id']): AuthorizedDevice | null {
-    const row = this.db.prepare('SELECT * FROM auth_devices WHERE id = ?').get(id) as
+    const row = this.statements.prepare('SELECT * FROM auth_devices WHERE id = ?').get(id) as
       DeviceRow | undefined;
     return row ? toDevice(row) : null;
   }
@@ -209,24 +183,16 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     expectedVersion: number,
     nickname: AuthorizedDevice['nickname'],
   ): 'renamed' | 'stale' | 'notFound' {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = this.db
+    return withImmediateTransaction(this.db, () => {
+      const result = this.statements
         .prepare(
           'UPDATE auth_devices SET nickname = ?, version = version + 1 WHERE id = ? AND version = ?',
         )
         .run(nickname, id, expectedVersion);
-      if (result.changes) {
-        this.db.exec('COMMIT');
-        return 'renamed';
-      }
+      if (result.changes) return 'renamed';
       const outcome = this.findDevice(id) ? 'stale' : 'notFound';
-      this.db.exec('COMMIT');
       return outcome;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   advanceCounter(
     id: AuthorizedDevice['id'],
@@ -236,14 +202,14 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     usedAt: string,
   ): boolean {
     const zeroSynced =
-      this.db
+      this.statements
         .prepare(
           "UPDATE auth_devices SET last_used_at = ?, version = version + 1 WHERE id = ? AND counter = ? AND version = ? AND ? = 0 AND device_type = 'multiDevice'",
         )
         .run(usedAt, id, expected, expectedVersion, next).changes === 1;
     return (
       zeroSynced ||
-      this.db
+      this.statements
         .prepare(
           'UPDATE auth_devices SET counter = ?, last_used_at = ?, version = version + 1 WHERE id = ? AND counter = ? AND version = ? AND ? > counter',
         )
@@ -254,28 +220,17 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     id: AuthorizedDevice['id'],
     revokedAt: string,
   ): 'revoked' | 'finalDevice' | 'notFound' {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      if (!this.findDevice(id)) {
-        this.db.exec('COMMIT');
-        return 'notFound';
-      }
-      if (this.deviceCount() < 2) {
-        this.db.exec('COMMIT');
-        return 'finalDevice';
-      }
-      this.db
+    return withImmediateTransaction(this.db, () => {
+      if (!this.findDevice(id)) return 'notFound';
+      if (this.deviceCount() < 2) return 'finalDevice';
+      this.statements
         .prepare(
           'UPDATE auth_sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL',
         )
         .run(revokedAt, id);
-      this.db.prepare('DELETE FROM auth_devices WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
+      this.statements.prepare('DELETE FROM auth_devices WHERE id = ?').run(id);
       return 'revoked';
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   saveCeremony(
     token: PasskeyCeremony['id'],
@@ -287,17 +242,17 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     },
     now?: string,
   ): void {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    withImmediateTransaction(this.db, () => {
       // Admission and cleanup share one immediate transaction, so separate
       // processes cannot both observe the same remaining slot.
-      this.db.prepare('DELETE FROM auth_ceremonies WHERE consumed_at IS NOT NULL').run();
-      if (now) this.db.prepare('DELETE FROM auth_ceremonies WHERE expires_at <= ?').run(now);
-      const active = this.db
+      this.statements.prepare('DELETE FROM auth_ceremonies WHERE consumed_at IS NOT NULL').run();
+      if (now)
+        this.statements.prepare('DELETE FROM auth_ceremonies WHERE expires_at <= ?').run(now);
+      const active = this.statements
         .prepare('SELECT count(*) AS count FROM auth_ceremonies WHERE consumed_at IS NULL')
         .get() as { count: number };
       if (active.count >= 64) throw new CeremonyCapacityError('Ceremony capacity reached');
-      this.db
+      this.statements
         .prepare(
           'INSERT INTO auth_ceremonies (token_hash, purpose, challenge, expected_origin, rp_id, expires_at, ticket_hash) VALUES (?, ?, ?, ?, ?, ?, ?)',
         )
@@ -310,24 +265,18 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
           ceremony.expiresAt,
           ceremony.enrollmentTicket ? hash(ceremony.enrollmentTicket) : null,
         );
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   consumeCeremony(
     token: PasskeyCeremony['id'],
     now: string,
   ): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const row = this.db
+    return withImmediateTransaction(this.db, () => {
+      const row = this.statements
         .prepare(
           'UPDATE auth_ceremonies SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? RETURNING purpose, challenge, expected_origin, rp_id, expires_at',
         )
         .get(now, hash(token), now) as CeremonyRow | undefined;
-      this.db.exec('COMMIT');
       return row
         ? {
             id: passkeyCeremonyId(token),
@@ -338,16 +287,13 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
             expiresAt: row.expires_at,
           }
         : null;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   readCeremony(
     token: PasskeyCeremony['id'],
     now: string,
   ): (PasskeyCeremony & { challenge: Uint8Array; expectedOrigin: string; rpId: string }) | null {
-    const row = this.db
+    const row = this.statements
       .prepare(
         'SELECT purpose, challenge, expected_origin, rp_id, expires_at FROM auth_ceremonies WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?',
       )
@@ -364,7 +310,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       : null;
   }
   saveTicket(token: EnrollmentTicket['id'], ticket: Omit<EnrollmentTicket, 'id'>): void {
-    this.db
+    this.statements
       .prepare('INSERT INTO auth_tickets (token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)')
       .run(hash(token), ticket.expiresAt);
   }
@@ -373,28 +319,23 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     creatorSession: AuthorizationSession['id'],
     expiresAt: string,
   ): void {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    withImmediateTransaction(this.db, () => {
       const creator = hash(creatorSession);
-      this.db
+      this.statements
         .prepare('DELETE FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL')
         .run(creator);
-      this.db
+      this.statements
         .prepare(
           'INSERT INTO auth_tickets (token_hash, expires_at, consumed_at, creator_session_hash) VALUES (?, ?, NULL, ?)',
         )
         .run(hash(token), expiresAt, creator);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   enrollmentTicketStatus(
     creatorSession: AuthorizationSession['id'],
     now: string,
   ): 'none' | 'pending' | 'used' | 'expired' {
-    const row = this.db
+    const row = this.statements
       .prepare(
         'SELECT expires_at, consumed_at FROM auth_tickets WHERE creator_session_hash = ? ORDER BY rowid DESC LIMIT 1',
       )
@@ -404,26 +345,21 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     return row.expires_at > now ? 'pending' : 'expired';
   }
   cancelEnrollmentTicket(creatorSession: AuthorizationSession['id'], now: string): boolean {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = this.db
+    return withImmediateTransaction(this.db, () => {
+      const result = this.statements
         .prepare(
           'DELETE FROM auth_tickets WHERE rowid = (SELECT rowid FROM auth_tickets WHERE creator_session_hash = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY rowid DESC LIMIT 1)',
         )
         .run(hash(creatorSession), now);
-      this.db.exec('COMMIT');
       return result.changes === 1;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   consumeTicket(token: EnrollmentTicket['id'], now: string): boolean {
     return this.consume('auth_tickets', token, now);
   }
   ticketAvailable(token: EnrollmentTicket['id'], now: string): boolean {
     return Boolean(
-      this.db
+      this.statements
         .prepare(
           'SELECT 1 FROM auth_tickets t WHERE t.token_hash = ? AND t.consumed_at IS NULL AND t.expires_at > ? AND (t.creator_session_hash IS NULL OR EXISTS (SELECT 1 FROM auth_sessions s WHERE s.token_hash = t.creator_session_hash AND s.revoked_at IS NULL AND s.expires_at > ?))',
         )
@@ -443,53 +379,35 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     | 'ceremonyUnavailable' {
     if (input.session.deviceId !== input.device.id)
       throw new Error('AUTHORIZATION_SESSION_DEVICE_MISMATCH');
-    this.db.exec('BEGIN IMMEDIATE');
     try {
-      const ceremony = this.db
-        .prepare(
-          'SELECT ticket_hash FROM auth_ceremonies WHERE token_hash = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?',
-        )
-        .get(hash(input.ceremony), 'registration', input.now) as
-        { ticket_hash: string | null } | undefined;
-      if (!ceremony) {
-        this.db.exec('COMMIT');
-        return 'ceremonyUnavailable';
-      }
-      if (ceremony.ticket_hash) {
-        const result = this.db
+      return withImmediateTransaction(this.db, () => {
+        const ceremony = this.statements
           .prepare(
-            'UPDATE auth_tickets SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? AND (creator_session_hash IS NULL OR EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = auth_tickets.creator_session_hash AND revoked_at IS NULL AND expires_at > ?))',
+            'SELECT ticket_hash FROM auth_ceremonies WHERE token_hash = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?',
           )
-          .run(input.now, ceremony.ticket_hash, input.now, input.now);
-        if (result.changes !== 1) {
-          this.db.exec('COMMIT');
-          return 'ticketUnavailable';
-        }
-      } else if (this.deviceCount() !== 0) {
-        this.db.exec('COMMIT');
-        return 'bootstrapAlreadyClaimed';
-      }
-      try {
+          .get(hash(input.ceremony), 'registration', input.now) as
+          { ticket_hash: string | null } | undefined;
+        if (!ceremony) return 'ceremonyUnavailable';
+        if (ceremony.ticket_hash) {
+          const result = this.statements
+            .prepare(
+              'UPDATE auth_tickets SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? AND (creator_session_hash IS NULL OR EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = auth_tickets.creator_session_hash AND revoked_at IS NULL AND expires_at > ?))',
+            )
+            .run(input.now, ceremony.ticket_hash, input.now, input.now);
+          if (result.changes !== 1) return 'ticketUnavailable';
+        } else if (this.deviceCount() !== 0) return 'bootstrapAlreadyClaimed';
         this.insertDevice(input.device);
-      } catch (error) {
-        if (String(error).includes('UNIQUE constraint failed: auth_devices.credential_id')) {
-          this.db.exec('ROLLBACK');
-          return 'duplicateCredential';
-        }
-        throw error;
-      }
-      this.db
-        .prepare('INSERT INTO auth_sessions (token_hash, device_id, expires_at) VALUES (?, ?, ?)')
-        .run(hash(input.session.id), input.session.deviceId, input.session.expiresAt);
-      this.db
-        .prepare('UPDATE auth_ceremonies SET consumed_at = ? WHERE token_hash = ?')
-        .run(input.now, hash(input.ceremony));
-      this.db.exec('COMMIT');
-      return 'registered';
+        this.statements
+          .prepare('INSERT INTO auth_sessions (token_hash, device_id, expires_at) VALUES (?, ?, ?)')
+          .run(hash(input.session.id), input.session.deviceId, input.session.expiresAt);
+        this.statements
+          .prepare('UPDATE auth_ceremonies SET consumed_at = ? WHERE token_hash = ?')
+          .run(input.now, hash(input.ceremony));
+        return 'registered';
+      });
     } catch (error) {
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {}
+      if (String(error).includes('UNIQUE constraint failed: auth_devices.credential_id'))
+        return 'duplicateCredential';
       throw error;
     }
   }
@@ -502,17 +420,13 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
   }): boolean {
     if (input.session.deviceId !== input.device.id)
       throw new Error('AUTHORIZATION_SESSION_DEVICE_MISMATCH');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const ceremony = this.db
+    return withImmediateTransaction(this.db, () => {
+      const ceremony = this.statements
         .prepare(
           'SELECT 1 FROM auth_ceremonies WHERE token_hash = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?',
         )
         .get(hash(input.ceremony), 'authentication', input.now);
-      if (!ceremony) {
-        this.db.exec('COMMIT');
-        return false;
-      }
+      if (!ceremony) return false;
       const updated = this.advanceCounter(
         input.device.id,
         input.device.counter,
@@ -520,32 +434,23 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
         input.nextCounter,
         input.now,
       );
-      if (!updated) {
-        this.db.exec('COMMIT');
-        return false;
-      }
-      this.db
+      if (!updated) return false;
+      this.statements
         .prepare('INSERT INTO auth_sessions (token_hash, device_id, expires_at) VALUES (?, ?, ?)')
         .run(hash(input.session.id), input.session.deviceId, input.session.expiresAt);
-      this.db
+      this.statements
         .prepare('UPDATE auth_ceremonies SET consumed_at = ? WHERE token_hash = ?')
         .run(input.now, hash(input.ceremony));
-      this.db.exec('COMMIT');
       return true;
-    } catch (error) {
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {}
-      throw error;
-    }
+    });
   }
   saveSession(token: AuthorizationSession['id'], session: Omit<AuthorizationSession, 'id'>): void {
-    this.db
+    this.statements
       .prepare('INSERT INTO auth_sessions (token_hash, device_id, expires_at) VALUES (?, ?, ?)')
       .run(hash(token), session.deviceId, session.expiresAt);
   }
   sessionDevice(token: AuthorizationSession['id'], now: string): AuthorizedDevice['id'] | null {
-    const row = this.db
+    const row = this.statements
       .prepare(
         'SELECT device_id FROM auth_sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
       )
@@ -554,7 +459,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
   }
   revokeSession(token: AuthorizationSession['id'], now: string): boolean {
     return (
-      this.db
+      this.statements
         .prepare(
           'UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL',
         )
@@ -565,7 +470,7 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
     this.db.close();
   }
   private insertDevice(device: AuthorizedDevice): void {
-    this.db
+    this.statements
       .prepare(
         'INSERT INTO auth_devices (id, credential_id, public_key, counter, transports_json, device_type, backed_up, nickname, created_at, last_used_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
@@ -584,23 +489,20 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       );
   }
   private consume(table: 'auth_tickets', token: string, now: string): boolean {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    return withImmediateTransaction(this.db, () => {
       const changes = this.db
         .prepare(
           `UPDATE ${table} SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`,
         )
         .run(now, hash(token), now).changes;
-      this.db.exec('COMMIT');
       return changes === 1;
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
   private deviceCount(): number {
     return (
-      this.db.prepare('SELECT COUNT(*) AS count FROM auth_devices').get() as { count: number }
+      this.statements.prepare('SELECT COUNT(*) AS count FROM auth_devices').get() as {
+        count: number;
+      }
     ).count;
   }
 }
