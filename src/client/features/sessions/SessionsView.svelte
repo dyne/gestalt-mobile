@@ -185,6 +185,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
                   </span>
                 {/if}
+                {#if session.plan}
+                  <div class="session-plan-progress">
+                    <PlanProgress
+                      compact
+                      plan={session.plan}
+                      label={`Plan progress for ${session.plan.title}`}
+                    />
+                  </div>
+                {/if}
               </div>
               <AutopilotAttention
                 attention={autopilotAttention.get(session.id) ?? null}
@@ -201,15 +210,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 ondisable={() => onautopilottoggle(session.id, false)}
               />
             </div>
-            {#if session.plan}
-              <div class="session-plan-progress">
-                <PlanProgress
-                  compact
-                  plan={session.plan}
-                  label={`Plan progress for ${session.plan.title}`}
-                />
-              </div>
-            {/if}
           </li>
         {/each}
       </ul>
@@ -472,10 +472,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .session-plan-progress {
-    grid-column: 1 / -1;
     min-inline-size: 0;
-    padding-block-start: 0.5rem;
-    border-block-start: 1px solid var(--theme-border);
+    margin-block-start: 0.5rem;
   }
 
   .recent-session {

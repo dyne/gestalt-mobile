@@ -30,7 +30,7 @@ const activePlan = {
       level: 1,
       state: 'WIP',
       priority: 'A',
-      description: {},
+      description: { effort: 'Medium' },
       children: [
         {
           id: 'plan-child',
@@ -41,13 +41,22 @@ const activePlan = {
           description: {},
           children: [],
         },
+        {
+          id: 'plan-current-child',
+          title: 'Present the active milestone only',
+          level: 2,
+          state: 'WIP',
+          priority: 'A',
+          description: {},
+          children: [],
+        },
       ],
     },
   ],
-  totalSteps: 2,
+  totalSteps: 3,
   doneSteps: 1,
   allDone: false,
-  currentStepId: 'plan-parent',
+  currentStepId: 'plan-current-child',
 } as const;
 
 function autopilot(state: State, reason?: string, continuationPhase?: ContinuationPhase) {
@@ -140,7 +149,13 @@ async function install(
       : {}),
     autopilot: autopilot(state, reason, continuationPhase),
     pendingInteractions: hasAttention ? [attention] : [],
-    ...(includePlan ? { plan: activePlan, resumeCommand: 'codex resume thread-1' } : {}),
+    ...(includePlan
+      ? {
+          plan: activePlan,
+          lastOrgPlan: { title: activePlan.title, filename: 'compact-session-plan.org' },
+          resumeCommand: 'codex resume thread-1',
+        }
+      : {}),
   };
   await mockAuthenticatedStatus(page);
   await page.route('**/api/bootstrap', (route) =>
@@ -200,7 +215,7 @@ async function install(
   await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, (socket) => onsocket?.(socket));
 }
 
-test('Sessions keeps active plan progress at the card bottom with a vertical action rail', async ({
+test('Sessions keeps only active plan work below the Org title in the information column', async ({
   page,
 }) => {
   await install(page, 'monitoring', undefined, false, undefined, true, undefined, true);
@@ -249,15 +264,22 @@ test('Sessions keeps active plan progress at the card bottom with a vertical act
     name: 'Plan progress for Compact session plan',
   });
   await expect(progress).toHaveAttribute('value', '1');
-  await expect(card.getByLabel('L1: WIP')).toBeVisible();
-  await expect(card.getByLabel('L1.1: DONE')).toBeVisible();
-  const [cardBox, progressBox] = await Promise.all([
-    card.boundingBox(),
+  await expect(
+    card.getByLabel('L1: Ship the session progress summary, WIP, effort Medium'),
+  ).toBeVisible();
+  await expect(card.getByLabel('L1.2: Present the active milestone only, WIP')).toBeVisible();
+  await expect(card.getByText('Effort: Medium')).toBeVisible();
+  await expect(card.getByLabel('L1.1: DONE')).toHaveCount(0);
+  const [actionsBox, titleBox, progressBox] = await Promise.all([
+    actions.boundingBox(),
+    card.locator('.org-plan-title').boundingBox(),
     progress.locator('..').boundingBox(),
   ]);
-  expect(cardBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(titleBox).not.toBeNull();
   expect(progressBox).not.toBeNull();
-  expect(cardBox!.y + cardBox!.height - (progressBox!.y + progressBox!.height)).toBeLessThan(48);
+  expect(progressBox!.x).toBeGreaterThanOrEqual(actionsBox!.x + actionsBox!.width);
+  expect(progressBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
   await expectNoHorizontalOverflow(page);
 });
 
