@@ -43,7 +43,10 @@ import { GitFetchCoordinator } from './platform/git/git-fetch-coordinator.js';
 import { GitSummaryCache } from './platform/git/git-summary-cache.js';
 import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
-import { RelaySession } from './features/sessions/model/relay-session.js';
+import {
+  RelaySession,
+  type RelaySessionSnapshot,
+} from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
@@ -369,6 +372,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     profiles: options.profiles,
     launch: options.launchAppServer ?? launchCodexAppServer,
   });
+  const recoverExecutionPolicy = async (
+    session: RelaySessionSnapshot,
+  ): Promise<RelaySessionSnapshot> => {
+    if (session.executionPolicy || !session.threadId) return session;
+    const executionPolicy = await recentThreads.executionPolicy(session.threadId);
+    return executionPolicy
+      ? { ...session, executionPolicy, updatedAt: new Date().toISOString() }
+      : session;
+  };
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const gitSummaries = new GitSummaryCache(inspectGit);
@@ -734,9 +746,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           : undefined,
         ensureWriter: runtime
-          ? (session) => {
+          ? async (session) => {
               dismissPendingInteractions(session.id, new Date().toISOString());
-              return runtime.ensureWriter(session, new Date().toISOString());
+              return runtime.ensureWriter(
+                await recoverExecutionPolicy(session),
+                new Date().toISOString(),
+              );
             }
           : undefined,
         releaseWriter: runtime
@@ -774,7 +789,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           : undefined,
         restore: runtime
           ? async (session) => {
-              const restored = await runtime.restoreWithOutcome(session, new Date().toISOString());
+              const restored = await runtime.restoreWithOutcome(
+                await recoverExecutionPolicy(session),
+                new Date().toISOString(),
+              );
               // An exit can be reported while resume is resolving. Do not let the
               // route persist a stale ready snapshot over that recovered exit.
               if (!runtime.ownsWriter(session.id))
@@ -795,6 +813,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 list: () => sessions.list(),
                 save: saveSession,
                 read: (session) => runtime.readHistory(session),
+                executionPolicy: (candidate) => recentThreads.executionPolicy(candidate.id),
               })
           : undefined,
         release: (session) => {

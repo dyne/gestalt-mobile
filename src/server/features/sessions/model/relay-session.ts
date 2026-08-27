@@ -176,6 +176,7 @@ export class RelaySession {
     workspacePath: string;
     profile: string;
     threadId: string;
+    executionPolicy?: SessionExecutionPolicy;
     now: string;
   }): RelaySession {
     return new RelaySession({
@@ -183,6 +184,9 @@ export class RelaySession {
       workspaceId: workspaceId(input.workspaceId),
       workspacePath: workspacePath(input.workspacePath),
       profile: profileName(input.profile),
+      ...(input.executionPolicy === undefined
+        ? {}
+        : { executionPolicy: createSessionExecutionPolicy(input.executionPolicy) }),
       threadId: threadId(input.threadId),
       state: 'stopped',
       desiredState: 'stopped',

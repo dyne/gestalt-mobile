@@ -5,7 +5,11 @@
  */
 
 import type { RecentThread } from '../list-recent-threads/endpoint.js';
-import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
+import {
+  RelaySession,
+  type RelaySessionSnapshot,
+  type SessionExecutionPolicy,
+} from '../model/relay-session.js';
 
 export class RecentThreadHistoryUnavailable extends Error {
   constructor() {
@@ -22,6 +26,7 @@ export async function promoteRecentThread(
     list(): RelaySessionSnapshot[];
     save(session: RelaySessionSnapshot): void;
     read(session: RelaySessionSnapshot): Promise<unknown>;
+    executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
 ): Promise<RelaySessionSnapshot> {
   const key = `${thread.profile}:${thread.cwd}:${thread.id}`;
@@ -44,18 +49,27 @@ async function promote(
     list(): RelaySessionSnapshot[];
     save(session: RelaySessionSnapshot): void;
     read(session: RelaySessionSnapshot): Promise<unknown>;
+    executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
 ): Promise<RelaySessionSnapshot> {
   const existing = deps.list().find((session) => session.threadId === thread.id);
   if (existing) {
+    const executionPolicy = existing.executionPolicy
+      ? undefined
+      : await deps.executionPolicy?.(thread);
+    const recovered = executionPolicy
+      ? { ...existing, executionPolicy, updatedAt: deps.now() }
+      : existing;
     try {
-      await deps.read(existing);
+      await deps.read(recovered);
     } catch {
       throw new RecentThreadHistoryUnavailable();
     }
-    return existing;
+    if (recovered !== existing) deps.save(recovered);
+    return recovered;
   }
   const now = deps.now();
+  const executionPolicy = await deps.executionPolicy?.(thread);
   const imported =
     existing ??
     RelaySession.fromExistingThread({
@@ -64,6 +78,7 @@ async function promote(
       workspacePath: thread.cwd,
       profile: thread.profile,
       threadId: thread.id,
+      ...(executionPolicy === undefined ? {} : { executionPolicy }),
       now,
     }).snapshot;
   // Validate first: an unavailable thread must never leave an imported stub.
