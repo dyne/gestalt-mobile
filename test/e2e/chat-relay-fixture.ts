@@ -3,7 +3,7 @@
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { Page } from '@playwright/test';
+import type { BrowserContext, Page } from '@playwright/test';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 export type RelaySocket = { send(message: string): void; close(): void };
@@ -35,8 +35,11 @@ export type ProtocolCall = Readonly<{
   kind: 'history' | 'recentOpen' | 'resume' | 'turn';
   sessionId: string;
 }>;
+type RelayRouteHost =
+  Pick<Page, 'route' | 'routeWebSocket'> | Pick<BrowserContext, 'route' | 'routeWebSocket'>;
 export class ChatRelayFixture {
   readonly sockets = new Map<string, RelaySocket>();
+  readonly socketGroups = new Map<string, Set<RelaySocket>>();
   readonly histories = new Map<string, ReturnType<typeof chatSnapshot>>();
   readonly historyDeferred = new Map<string, Deferred<ReturnType<typeof chatSnapshot>>>();
   readonly turns = new Map<string, Deferred<DeferredCommandResponse>>();
@@ -47,7 +50,7 @@ export class ChatRelayFixture {
   readonly sessions: Array<Record<string, unknown>> = [];
   readonly recentSessions: Array<Record<string, unknown>> = [];
   readonly recentOpenSessions = new Map<string, Record<string, unknown>>();
-  constructor(readonly page: Page) {}
+  constructor(readonly page: RelayRouteHost) {}
   async install(sessions: Array<Record<string, unknown>>): Promise<void> {
     this.sessions.push(...sessions);
     await this.page.route('**/api/bootstrap', (route) =>
@@ -91,6 +94,9 @@ export class ChatRelayFixture {
     await this.page.routeWebSocket(/\/api\/sessions\/([^/]+)\/events/, (socket) => {
       const id = decodeURIComponent(socket.url().split('/').at(-2) ?? '');
       this.sockets.set(id, socket);
+      const group = this.socketGroups.get(id) ?? new Set<RelaySocket>();
+      group.add(socket);
+      this.socketGroups.set(id, group);
     });
     await this.page.route('**/api/sessions/*/turns', async (route) => {
       const id = decodeURIComponent(route.request().url().split('/').at(-2) ?? '');
@@ -156,12 +162,17 @@ export class ChatRelayFixture {
     payload: unknown,
     occurredAt?: string,
   ): void {
-    this.sockets.get(sessionId)?.send(
-      JSON.stringify({
-        type: 'relay.event',
-        event: { sequence, type, payload, ...(occurredAt ? { occurredAt } : {}) },
-      }),
-    );
+    const message = JSON.stringify({
+      type: 'relay.event',
+      event: { sequence, type, payload, ...(occurredAt ? { occurredAt } : {}) },
+    });
+    for (const socket of this.socketGroups.get(sessionId) ?? []) {
+      try {
+        socket.send(message);
+      } catch {
+        // A multi-page fixture can retain a route after its page has closed.
+      }
+    }
   }
   duplicate(sessionId: string, sequence: number, type: string, payload: unknown): void {
     this.event(sessionId, sequence, type, payload);
@@ -171,7 +182,7 @@ export class ChatRelayFixture {
     this.event(sessionId, sequence, type, payload);
   }
   close(sessionId: string): void {
-    this.sockets.get(sessionId)?.close();
+    for (const socket of this.socketGroups.get(sessionId) ?? []) socket.close();
   }
   deferHistory(sessionId: string): Deferred<ReturnType<typeof chatSnapshot>> {
     const value = deferred<ReturnType<typeof chatSnapshot>>();
