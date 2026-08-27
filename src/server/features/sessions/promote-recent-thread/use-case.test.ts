@@ -40,6 +40,40 @@ describe('promoteRecentThread', () => {
     expect(promoted.state).toBe('stopped');
   });
 
+  it('preserves the Codex execution policy when importing a recent thread', async () => {
+    const save = vi.fn();
+
+    const promoted = await promoteRecentThread(
+      {
+        id: 'thread-1',
+        cwd: '/work/project',
+        profile: 'work',
+        recencyAt: 100,
+      },
+      {
+        createId: () => 'session-1',
+        now: () => now,
+        list: () => [],
+        save,
+        read: async () => undefined,
+        executionPolicy: async () => ({
+          sandbox: 'danger-full-access',
+          approvalPolicy: 'never',
+        }),
+      },
+    );
+
+    expect(promoted.executionPolicy).toEqual({
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+    });
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionPolicy: { sandbox: 'danger-full-access', approvalPolicy: 'never' },
+      }),
+    );
+  });
+
   it('reuses a managed running session for the same Codex thread', async () => {
     const existing = {
       id: 'session-1',
@@ -61,6 +95,39 @@ describe('promoteRecentThread', () => {
 
     expect(promoted).toBe(existing);
     expect(read).toHaveBeenCalledWith(existing);
+  });
+
+  it('repairs a previously imported session before it is resumed', async () => {
+    const existing = {
+      id: 'session-1',
+      threadId: 'thread-1',
+      state: 'stopped',
+      updatedAt: 'before',
+    } as RelaySessionSnapshot;
+    const save = vi.fn();
+    const read = vi.fn(async () => undefined);
+
+    const promoted = await promoteRecentThread(
+      { id: 'thread-1', cwd: '/work/project', profile: 'work', recencyAt: 100 },
+      {
+        createId: () => 'unused',
+        now: () => now,
+        list: () => [existing],
+        save,
+        read,
+        executionPolicy: async () => ({
+          sandbox: 'danger-full-access',
+          approvalPolicy: 'never',
+        }),
+      },
+    );
+
+    expect(promoted).toMatchObject({
+      executionPolicy: { sandbox: 'danger-full-access', approvalPolicy: 'never' },
+      updatedAt: now,
+    });
+    expect(read).toHaveBeenCalledWith(promoted);
+    expect(save).toHaveBeenCalledWith(promoted);
   });
 
   it('does not persist an unreadable recent thread', async () => {

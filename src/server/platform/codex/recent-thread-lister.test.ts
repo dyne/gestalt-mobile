@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createRecentThreadLister } from './recent-thread-lister.js';
 
@@ -12,6 +12,10 @@ describe('recent Codex thread lister', () => {
   it('lists ready profiles, merges duplicate threads, and orders them by recency', async () => {
     const calls: Array<{ profile: string; cwd: string; method: string; params: unknown }> = [];
     const closeCalls: string[] = [];
+    const readExecutionPolicy = vi.fn(async () => ({
+      sandbox: 'danger-full-access' as const,
+      approvalPolicy: 'never' as const,
+    }));
     const lister = createRecentThreadLister({
       root: '/relay-root',
       profiles: {
@@ -30,7 +34,12 @@ describe('recent Codex thread lister', () => {
               data:
                 profile === 'default'
                   ? [
-                      { id: 'same', cwd: '/projects/shared', recencyAt: 10 },
+                      {
+                        id: 'same',
+                        cwd: '/projects/shared',
+                        path: '/rollouts/same.jsonl',
+                        recencyAt: 10,
+                      },
                       { id: 'old', cwd: '/projects/old', recencyAt: 5 },
                     ]
                   : [
@@ -45,11 +54,17 @@ describe('recent Codex thread lister', () => {
         },
         close: () => closeCalls.push(profile),
       }),
+      readExecutionPolicy,
     });
 
     await expect(lister.list()).resolves.toEqual([
       { id: 'new', cwd: '/projects/new', profile: 'work', recencyAt: 20 },
-      { id: 'same', cwd: '/projects/shared', profile: 'default', recencyAt: 10 },
+      {
+        id: 'same',
+        cwd: '/projects/shared',
+        profile: 'default',
+        recencyAt: 10,
+      },
       { id: 'old', cwd: '/projects/old', profile: 'default', recencyAt: 5 },
     ]);
     expect(calls.filter((call) => call.method === 'initialize')).toHaveLength(2);
@@ -67,5 +82,10 @@ describe('recent Codex thread lister', () => {
       expect.objectContaining({ profile: expect.any(String), cwd: '/relay-root' }),
     ]);
     expect(closeCalls.sort()).toEqual(['default', 'work']);
+    await expect(lister.executionPolicy('same')).resolves.toEqual({
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+    });
+    expect(readExecutionPolicy).toHaveBeenCalledWith('/rollouts/same.jsonl');
   });
 });
