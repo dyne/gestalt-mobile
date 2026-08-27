@@ -592,6 +592,51 @@ describe('CodexSessionRuntime', () => {
     expect(session).toMatchObject({ state: 'ready', threadId: 'thread-1', updatedAt: 'after' });
   });
 
+  it('preserves each durable workspace across new and resumed runtime launches', async () => {
+    const launches: Array<{ cwd: string }> = [];
+    let thread = 0;
+    const runtime = new CodexSessionRuntime((input) => {
+      launches.push({ cwd: input.cwd });
+      return {
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: `thread-${++thread}` } } : {},
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      };
+    });
+    const base = {
+      profile: 'default',
+      threadId: null,
+      state: 'starting' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    const first = await runtime.start(
+      { ...base, id: 'first', workspaceId: 'one', workspacePath: '/tmp/workspace one' },
+      'after',
+    );
+    await runtime.start(
+      { ...base, id: 'second', workspaceId: 'two', workspacePath: '/tmp/workspace two' },
+      'after',
+    );
+    runtime.stop(first.id);
+    await runtime.ensureWriter(first, 'later');
+
+    expect(launches).toEqual([
+      { cwd: '/tmp/workspace one' },
+      { cwd: '/tmp/workspace two' },
+      { cwd: '/tmp/workspace one' },
+    ]);
+  });
+
   it('writes each live-plan-derived thread name once and ignores metadata failures', async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const runtime = new CodexSessionRuntime(() => ({

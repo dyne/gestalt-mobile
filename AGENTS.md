@@ -14,6 +14,18 @@ Route every user-facing operation failure through the shared notification toast 
 
 The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Runtime startup reports incompatible Codex CLI versions.
 
+## Gestalt context-mode ownership
+
+`gestalt-agents` owns tool-routing instructions, plugin installation, and the
+workspace-local mutable-state contract. Codex owns native-tool availability and
+app-server activity events; the context-mode plugin owns its MCP methods and
+initializes `<workspace>/.gestalt/context-mode`. Mobile owns the durable
+session-to-workspace association, preserves that selection through lifecycle
+recovery, and relays the resulting activity for presentation. Its prepared
+runtime may be shared, but context-mode mutable state must never use Mobile
+state or a shared home-global base. Diagnose provider health through the
+context-mode health workflow; Mobile does not install or repair it.
+
 ## Completion rules
 
 Use Node.js 24 or newer. Before completion and before opening or updating a pull request, run `npm run format:check`, `npm run license:check`, `npm run check`, `npm test`, `npm run lint`, and `npm run build`. Run `npm run test:e2e` for browser-visible behavior or end-to-end relay flows. If `npm run format:check` fails, run `npm run format`, inspect the resulting scope, and rerun the formatting check before committing. If `npm run license:check` fails, run `npm run license:apply`, inspect the resulting scope, and rerun both formatting and license checks before committing.
