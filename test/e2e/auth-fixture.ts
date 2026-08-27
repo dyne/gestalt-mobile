@@ -3,11 +3,13 @@
  * Designed by Denis Roio <jaromil@dyne.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
-import type { Page } from '@playwright/test';
+import type { BrowserContext, Page } from '@playwright/test';
+
+type AuthRouteHost = Pick<Page, 'route'> | Pick<BrowserContext, 'route'>;
 
 /** Installs the current public auth-status contract before a legacy UI fixture navigates. */
-export async function mockAuthenticatedStatus(page: Page): Promise<void> {
-  await page.route('**/api/auth/status', (route) =>
+export async function mockAuthenticatedStatus(host: AuthRouteHost): Promise<void> {
+  await host.route('**/api/auth/status', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({

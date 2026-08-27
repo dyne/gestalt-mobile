@@ -17,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onlock = () => {},
     ondevices = () => {},
     onscratchpad = () => {},
+    ondetach,
   }: {
     theme: ThemeId;
     sessionPath?: string | null;
@@ -27,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
     onscratchpad?: () => void;
+    ondetach?: () => void;
   } = $props();
 </script>
 
@@ -49,6 +51,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <span class="weekly-quota" aria-label="Weekly quota remaining"
         >{weeklyQuotaRemaining}% left</span
       >
+    {/if}
+    {#if ondetach}
+      <button
+        class="detach-chat"
+        type="button"
+        aria-label="Open Chat in a separate window"
+        title="Open Chat in a separate window"
+        onclick={ondetach}
+      >
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M14 5h5v5M19 5l-8 8" />
+          <path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+        </svg>
+      </button>
     {/if}
     <button
       class="menu-trigger"
@@ -116,6 +132,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-inline-start: clamp(0.75rem, 3vw, 2rem);
     color: var(--theme-text-muted);
     font-family: var(--theme-font-code);
+  }
+
+  .detach-chat {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    inline-size: 44px;
+    min-block-size: 44px;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+  }
+
+  .detach-chat svg {
+    inline-size: 1.25rem;
+    block-size: 1.25rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.75;
   }
 
   @media (max-width: 34rem) {

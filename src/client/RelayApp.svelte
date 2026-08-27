@@ -41,6 +41,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import { createChatCache } from './features/chat/chat-cache.js';
+  import {
+    detachedChatUrl,
+    detachedChatWindowName,
+    readDetachedChatSession,
+  } from './features/chat/detached-chat.js';
   import { ChatController, type ChatViewState } from './features/chat/chat-controller.js';
   import { ChatFollowTail } from './features/chat/chat-follow-tail.js';
   import { ChatTailScheduler } from './features/chat/chat-tail-scheduler.js';
@@ -110,8 +115,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Scratchpad from './features/scratchpad/Scratchpad.svelte';
   import FileBrowser from './features/files/FileBrowser.svelte';
 
+  const detachedSessionId = readDetachedChatSession(location.search);
   let chatView = $state<ChatViewState | null>(null);
-  let tab = $state<Tab>('sessions');
+  let tab = $state<Tab>(detachedSessionId ? 'chat' : 'sessions');
   let devicesOpen = $state(false);
   let scratchpadOpen = $state(false);
   let fileBrowserRoot = $state<WorkspaceOption | null>(null);
@@ -173,10 +179,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansWorkspacePath = $derived(
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
+  let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
+  let selectedSessionPath = $derived(displayWorkspacePath(selectedSession?.workspacePath ?? ''));
   function isWorkspaceOrgPreview(
     value: SupervisedPlan | WorkspaceOrgPreview,
   ): value is WorkspaceOrgPreview {
     return 'kind' in value && value.kind === 'org-source';
+  }
+  function observedSessions(active: RelaySession[]): RelaySession[] {
+    return detachedSessionId ? active.filter((session) => session.id === sessionId) : active;
   }
   let visiblePlanState = $derived.by<PlanState | WorkspaceOrgPreview | null>(() => {
     if (passivePlan && isWorkspaceOrgPreview(passivePlan)) return passivePlan;
@@ -352,26 +363,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
       sessionModels = [...new Set([defaultSessionModel, ...(bootstrap.models ?? [])])];
-      await refreshSkillProfiles();
+      if (!detachedSessionId) await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
-      const remembered = await sessionCache.readSelectedSession();
-      sessionId = bootstrap.sessions.some((session) => session.id === remembered)
-        ? remembered
-        : (bootstrap.sessions[0]?.id ?? null);
+      const remembered = detachedSessionId ? null : await sessionCache.readSelectedSession();
+      sessionId = detachedSessionId
+        ? (bootstrap.sessions.find((session) => session.id === detachedSessionId)?.id ?? null)
+        : bootstrap.sessions.some((session) => session.id === remembered)
+          ? remembered
+          : (bootstrap.sessions[0]?.id ?? null);
       if (sessionId) message = await sessionCache.readDraft(sessionId);
       sessions = bootstrap.sessions;
-      activityController.bootstrap(
-        bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
-        sessionId,
-      );
-      autopilotController.bootstrap(
+      const active = observedSessions(
         bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
       );
-      void refreshRecentSessions();
+      activityController.bootstrap(active, sessionId);
+      autopilotController.bootstrap(active);
+      if (!detachedSessionId) void refreshRecentSessions();
       planController.select(sessionId);
       if (sessionId) {
         chatController.select(sessionId);
+      } else if (detachedSessionId) {
+        shellStatus = 'This session is no longer open in Gestalt Mobile.';
       }
     } catch (error) {
       shellStatus = reportRelayError(error, 'RELAY_UNAVAILABLE');
@@ -422,6 +435,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function setTheme(value: ThemeId): void {
     theme = selectTheme(value);
+  }
+
+  function detachChat(): void {
+    if (!sessionId) return;
+    const detachedWindow = window.open(
+      detachedChatUrl(location.href, sessionId),
+      detachedChatWindowName(sessionId),
+      'popup,width=760,height=900',
+    );
+    if (!detachedWindow) {
+      toastQueue.enqueue({
+        kind: 'error',
+        message: 'The Chat window was blocked. Allow pop-ups for this site and try again.',
+      });
+      return;
+    }
+    try {
+      detachedWindow.opener = null;
+    } catch {
+      // The named window may already have navigated away; focusing it is still safe.
+    }
+    detachedWindow.focus();
   }
 
   onDestroy(() => {
@@ -483,7 +518,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const next = await relay.listSessions(abort.signal);
       if (epoch !== sessionListEpoch || abort.signal.aborted) return;
       sessions = next;
-      const active = sessions.filter((session) => ['ready', 'turnActive'].includes(session.state));
+      const active = observedSessions(
+        sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
+      );
       // Activity owns getSession reconciliation. Bootstrap seeds the shared
       // projection only; a late list can never replace sequenced authority.
       activityController.bootstrap(active, sessionId);
@@ -661,6 +698,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function selectTab(next: Tab): void {
+    if (detachedSessionId) return;
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
     if (tab === 'chat' && next !== 'chat') {
@@ -1101,7 +1139,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <svelte:head>
-  <title>Gestalt Mobile</title>
+  <title
+    >{detachedSessionId && selectedSessionPath
+      ? `Chat · ${selectedSessionPath} · Gestalt Mobile`
+      : 'Gestalt Mobile'}</title
+  >
 </svelte:head>
 
 <svelte:window onfocus={queueVisibleExternalRefresh} />
@@ -1122,7 +1164,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpointerup={completeTabSwipe}
     onpointercancel={cancelTabSwipe}
   >
-    {#if !devicesOpen}<AppHeader
+    {#if !devicesOpen && !detachedSessionId}<AppHeader
         {theme}
         sessionPath={tab === 'chat'
           ? displayWorkspacePath(
@@ -1138,7 +1180,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ondevices={() => (devicesOpen = true)}
         onscratchpad={openScratchpad}
         onthemechange={setTheme}
+        ondetach={tab === 'chat' && sessionId ? detachChat : undefined}
       />{/if}
+    {#if detachedSessionId}
+      <header class="detached-chat-header">
+        <div class="detached-chat-context">
+          <span>Chat</span>
+          <strong title={selectedSessionPath || detachedSessionId}
+            >{selectedSessionPath || detachedSessionId}</strong
+          >
+        </div>
+        {#if selectedSession?.model}
+          <span class="detached-chat-model">{selectedSession.model}</span>
+        {/if}
+      </header>
+    {/if}
     <!-- At phone widths the viewport becomes part of the document flow, so a
          readable notification never covers the header or an active control. -->
     <ToastViewport queue={toastQueue} />
@@ -1238,7 +1294,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </div>
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
           {:else}
-            <p>Start a session from the Sessions tab to chat with Codex.</p>
+            <p>
+              {detachedSessionId
+                ? shellStatus
+                : 'Start a session from the Sessions tab to chat with Codex.'}
+            </p>
           {/if}
         </section>
       {:else if tab === 'plan'}
@@ -1352,12 +1412,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         />
       {/if}
 
-      <BottomNavigation
-        activeTab={tab}
-        {chatEnabled}
-        focusTab={navigationFocus}
-        onselect={selectTab}
-      />
+      {#if !detachedSessionId}
+        <BottomNavigation
+          activeTab={tab}
+          {chatEnabled}
+          focusTab={navigationFocus}
+          onselect={selectTab}
+        />
+      {/if}
     {/if}
   </main>
   {#if scratchpadOpen}<Scratchpad onclose={closeScratchpad} />{/if}
@@ -1366,6 +1428,69 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   .chat-view {
     margin-inline: calc(0.25rem - var(--page-inline-padding));
+  }
+
+  .detached-chat-header {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    box-sizing: border-box;
+    inline-size: 100vw;
+    margin: calc(-1rem - env(safe-area-inset-top)) calc(50% - 50vw) 1.5rem;
+    padding: calc(1rem + env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 0.75rem
+      max(1rem, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--theme-page) 88%, transparent);
+    border-block-end: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent);
+    box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--theme-shadow) 28%, transparent);
+    -webkit-backdrop-filter: blur(0.75rem) saturate(1.2);
+    backdrop-filter: blur(0.75rem) saturate(1.2);
+  }
+
+  .detached-chat-context {
+    display: flex;
+    align-items: baseline;
+    min-inline-size: 0;
+    gap: 0.75rem;
+  }
+
+  .detached-chat-context span {
+    flex: 0 0 auto;
+    font-family: var(--theme-font-display);
+    font-weight: 700;
+  }
+
+  .detached-chat-context strong {
+    min-inline-size: 0;
+    overflow: hidden;
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detached-chat-model {
+    flex: 0 0 auto;
+    color: var(--theme-text-muted);
+    font-family: var(--theme-font-code);
+    font-size: 0.75rem;
+  }
+
+  main:has(.detached-chat-header) {
+    padding-block-end: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  main:has(.detached-chat-header) .chat-tail {
+    scroll-margin-block-end: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  @media (max-width: 32rem) {
+    .detached-chat-model {
+      display: none;
+    }
   }
 
   .chat-tail {
