@@ -185,6 +185,29 @@ describe('agent activity registry', () => {
     expect(diagnostic).not.toHaveBeenCalled();
     expect(registry.snapshot('s', at).root.state).toBe('disconnected');
   });
+  it('does not resurrect a disposed session from an already-dispatched stale callback', async () => {
+    let callback: (() => void) | undefined;
+    const publish = vi.fn();
+    const reconcile = vi.fn(async () => undefined);
+    const registry = new AgentActivityRegistry(publish, {
+      now: () => at,
+      schedule: (scheduled) => {
+        callback = scheduled;
+        return () => undefined;
+      },
+      reconcile,
+    });
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });
+    publish.mockClear();
+
+    registry.dispose('s');
+    callback?.();
+    await Promise.resolve();
+
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(registry.snapshot('s', at).root.state).toBe('disconnected');
+  });
   it('qualifies missing collaboration child metadata without stopping root work', () => {
     const registry = new AgentActivityRegistry(() => {});
     registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });

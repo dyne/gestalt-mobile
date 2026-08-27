@@ -19,6 +19,7 @@ export class AgentActivityRegistry {
   readonly #timers = new Map<string, () => void>();
   readonly #generation = new Map<string, number>();
   readonly #inFlight = new Map<string, Promise<void>>();
+  readonly #disposed = new Set<string>();
   constructor(
     private readonly publish: (snapshot: AgentActivitySnapshot, occurredAt: string) => void,
     private readonly options: {
@@ -36,6 +37,7 @@ export class AgentActivityRegistry {
     return this.#snapshots.get(sessionId) ?? createAgentActivitySnapshot(sessionId, now);
   }
   observe(fact: AgentActivityFact): AgentActivitySnapshot {
+    if (this.#disposed.has(fact.sessionId)) return this.snapshot(fact.sessionId, fact.occurredAt);
     const current = this.snapshot(fact.sessionId, fact.occurredAt);
     const next = withActivityConfidence(
       projectAgentActivity(current, fact),
@@ -53,6 +55,7 @@ export class AgentActivityRegistry {
     return this.#qualify(sessionId, occurredAt, 'reconciling');
   }
   disconnected(sessionId: string, occurredAt: string): AgentActivitySnapshot {
+    if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
     this.suspend(sessionId);
     const current = this.snapshot(sessionId, occurredAt);
     const next = withActivityConfidence(
@@ -79,7 +82,7 @@ export class AgentActivityRegistry {
     return this.#qualify(sessionId, occurredAt, 'fresh');
   }
   refresh(sessionId: string): Promise<void> {
-    if (!this.options.reconcile) return Promise.resolve();
+    if (this.#disposed.has(sessionId) || !this.options.reconcile) return Promise.resolve();
     const existing = this.#inFlight.get(sessionId);
     if (existing) return existing;
     const generation = (this.#generation.get(sessionId) ?? 0) + 1;
@@ -102,6 +105,7 @@ export class AgentActivityRegistry {
       role?: string;
     }[],
   ): AgentActivitySnapshot {
+    if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
     let next = this.snapshot(sessionId, occurredAt);
     const seen = new Set(children.map((child) => child.id));
     for (const child of children)
@@ -139,6 +143,7 @@ export class AgentActivityRegistry {
     return next;
   }
   dispose(sessionId: string): void {
+    this.#disposed.add(sessionId);
     this.#snapshots.delete(sessionId);
     this.#timers.get(sessionId)?.();
     this.#timers.delete(sessionId);
@@ -194,6 +199,7 @@ export class AgentActivityRegistry {
     confidence: 'fresh' | 'reconciling' | 'stale',
     fact?: Pick<AgentActivityFact, 'kind'>,
   ): AgentActivitySnapshot {
+    if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
     const current = this.snapshot(sessionId, occurredAt);
     const next = fact
       ? withActivityConfidence(
