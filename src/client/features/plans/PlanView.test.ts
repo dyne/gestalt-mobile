@@ -99,9 +99,9 @@ describe('PlanView', () => {
     ).toEqual(['l1-parent', 'l2-current', 'l1-manual']);
     expect(detail(l1.id).open).toBe(true);
     expect(detail(l2.id).open).toBe(true);
-    expect(screen.getByText('L1')).toBeTruthy();
-    expect(screen.getByText('L1.1')).toBeTruthy();
-    expect(screen.getByText('L2')).toBeTruthy();
+    expect(screen.getByLabelText('L1: TODO')).toBeTruthy();
+    expect(screen.getByLabelText('L1.1: WIP')).toBeTruthy();
+    expect(screen.getByLabelText('L2: DONE')).toBeTruthy();
     expect(screen.getByText(/TODO.*Priority A.*UNREVIEWED/)).toBeTruthy();
     expect(screen.getByText(/WIP.*Priority B.*REVIEWED/)).toBeTruthy();
     expect(screen.getByText(/DONE.*Priority C/)).toBeTruthy();

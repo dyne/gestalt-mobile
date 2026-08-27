@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 let controllerOptions: { publish(view: unknown): void } | null = null;
@@ -131,7 +131,8 @@ describe('RelayApp chat controller composition', () => {
     await vi.waitFor(() =>
       expect(screen.getByRole('heading', { name: /Open sessions/i })).toBeTruthy(),
     );
-    await fireEvent.click(screen.getByText('/work/b').closest('button')!);
+    const sessionB = screen.getByText('/work/b').closest('li')!;
+    await fireEvent.click(within(sessionB).getByRole('button', { name: 'Open' }));
     await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
     expect(screen.queryByText('session A')).toBeNull();
     fakeController?.emit('a', chatView('a', 'late A'));

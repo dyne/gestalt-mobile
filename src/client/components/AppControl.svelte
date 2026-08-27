@@ -14,6 +14,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type?: 'button' | 'submit';
     disabled?: boolean;
     pressed?: boolean;
+    label?: string;
+    current?: 'page';
     describedby?: string;
     ariaDisabled?: boolean;
     state?: string;
@@ -21,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     compact?: boolean;
     full?: boolean;
     primary?: boolean;
+    accentPressed?: boolean;
     onclick?: (event: MouseEvent & { currentTarget: HTMLButtonElement }) => void;
   };
 
@@ -31,6 +34,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type = 'button',
     disabled = false,
     pressed,
+    label,
+    current,
     describedby,
     ariaDisabled,
     state,
@@ -38,12 +43,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     compact = false,
     full = false,
     primary = false,
+    accentPressed = false,
     onclick,
   }: Props = $props();
 </script>
 
 {#if element === 'summary'}
-  <summary {id} class={['app-control', className, { compact, full, primary }]} data-state={state}>
+  <summary
+    {id}
+    class={['app-control', className, { compact, full, primary, accentPressed }]}
+    data-state={state}
+  >
     {@render children()}
   </summary>
 {:else}
@@ -51,7 +61,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {id}
     {type}
     {disabled}
-    class={['app-control', className, { compact, full, primary }]}
+    class={['app-control', className, { compact, full, primary, accentPressed }]}
+    aria-label={label}
+    aria-current={current}
     aria-pressed={pressed}
     aria-describedby={describedby}
     aria-disabled={ariaDisabled}
@@ -116,6 +128,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     background: var(--theme-accent);
     border-color: var(--theme-accent);
     box-shadow: inset 0 0.15rem 0 var(--theme-accent-contrast);
+  }
+
+  .accentPressed[aria-pressed='true'] {
+    color: var(--theme-accent-contrast);
+    font-weight: 700;
+    background: var(--theme-accent);
+    border-color: var(--theme-accent);
   }
 
   @media (prefers-reduced-motion: reduce) {

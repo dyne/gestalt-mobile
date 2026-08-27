@@ -82,7 +82,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { copyText } from './features/sessions/clipboard.js';
   import { createIdempotencyKey } from './features/sessions/idempotency-key.js';
   import { createPlanController, type PlanState } from './features/plans/plan-controller.js';
-  import type { SupervisedPlan } from './features/plans/contracts.js';
+  import {
+    isRelayPlanUpdate,
+    isSupervisedPlan,
+    type SupervisedPlan,
+  } from './features/plans/contracts.js';
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
@@ -1080,6 +1084,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
     planController.applyEvent(selectedId, event);
+    if (event.type === 'plan.closed') {
+      sessions = sessions.map((item) =>
+        item.id === selectedId ? { ...item, plan: undefined } : item,
+      );
+      return;
+    }
+    const plan = isRelayPlanUpdate(event.payload)
+      ? event.payload.plan
+      : isSupervisedPlan(event.payload)
+        ? event.payload
+        : null;
+    if (plan)
+      sessions = sessions.map((item) => (item.id === selectedId ? { ...item, plan } : item));
   }
 </script>
 

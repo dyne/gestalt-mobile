@@ -264,7 +264,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   ).toHaveCount(1);
 
   await expect(page.getByLabel('Open sessions').getByRole('button', { name: 'Open' })).toHaveCount(
-    0,
+    1,
   );
   await page.getByRole('button', { name: 'Sessions' }).click();
   await page
@@ -347,7 +347,7 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   const openSessions = page.getByLabel('Open sessions');
   const savedSessions = page.getByLabel('Saved sessions');
   await expect(openSessions.getByRole('listitem')).toHaveCount(1);
-  await expect(openSessions.getByRole('button', { name: 'Open' })).toHaveCount(0);
+  await expect(openSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Close' })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Forget' })).toHaveCount(0);

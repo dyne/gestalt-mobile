@@ -10,6 +10,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { orgPlanPosition } from '../../../shared/org-plan-position.js';
   import type { PlanStep, SupervisedPlan } from './contracts.js';
   import type { PlanState } from './plan-controller.js';
+  import PlanProgress from './PlanProgress.svelte';
 
   type Props = { state: PlanState; onclose: () => void };
   type DescriptionKey = keyof PlanStep['description'];
@@ -132,10 +133,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       return value ? [[descriptionLabels[key], value] as const] : [];
     });
   }
-
-  function progressMax(value: SupervisedPlan): number {
-    return Math.max(value.totalSteps, 1);
-  }
 </script>
 
 <p class="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</p>
@@ -160,13 +157,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <header>
       <div>
         <h2 id="plan-title">{plan.title}</h2>
-        <p>{plan.doneSteps} / {plan.totalSteps} complete</p>
       </div>
       <button class="close" aria-label="Close plan and return to list" onclick={onclose}>×</button>
     </header>
-    <progress aria-label="Plan progress" value={plan.doneSteps} max={progressMax(plan)}>
-      {plan.doneSteps} of {plan.totalSteps} complete
-    </progress>
+    <PlanProgress {plan} />
     <p>
       Current: {currentStep
         ? `${currentPosition} ${currentStep.title} (${currentStep.state})`
@@ -277,9 +271,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   h2,
   p {
     margin-block: 0.4rem;
-  }
-  progress {
-    inline-size: 100%;
   }
   ol {
     padding-inline-start: 1.25rem;

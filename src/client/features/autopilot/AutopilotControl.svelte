@@ -12,12 +12,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     autopilot,
     controlId = 'autopilot-control',
     compact = false,
+    indicatorOnly = false,
     pending = false,
     ontoggle = () => {},
   }: {
     autopilot: AutopilotSnapshot | null;
     controlId?: string;
     compact?: boolean;
+    indicatorOnly?: boolean;
     pending?: boolean;
     ontoggle?: (enabled: boolean) => void;
   } = $props();
@@ -79,14 +81,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       compact
       full
       pressed={enabled}
+      accentPressed={indicatorOnly}
+      label={indicatorOnly ? `Autopilot: ${pending ? 'Updating' : status}` : undefined}
       describedby={`${controlId}-help`}
       ariaDisabled={pending}
       onclick={() => {
         if (!pending) ontoggle(!enabled);
       }}
     >
-      <span aria-hidden="true">{enabled ? '●' : '○'}</span>
-      Autopilot: {pending ? 'Updating…' : status}
+      {#if indicatorOnly}
+        Autopilot
+      {:else}
+        <span aria-hidden="true">{enabled ? '●' : '○'}</span>
+        Autopilot: {pending ? 'Updating…' : status}
+      {/if}
     </AppControl>
   {:else}
     <div class="control-row">

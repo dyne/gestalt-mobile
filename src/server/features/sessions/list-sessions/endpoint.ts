@@ -17,14 +17,19 @@ export function registerListSessions(
     autopilot?: (
       id: string,
     ) => import('../../autopilot/domain/autopilot-session.js').AutopilotSnapshot;
+    plan?: (id: string) => import('../../plans/domain/supervised-plan.js').SupervisedPlan | null;
   },
 ): void {
   app.get('/api/sessions', async () =>
-    deps.list().map((session) => ({
-      ...session,
-      ...(deps.activity ? { agentActivity: deps.activity(session.id) } : {}),
-      ...(deps.autopilot ? { autopilot: deps.autopilot(session.id) } : {}),
-      resumeCommand: session.threadId ? buildResumeCommand(session) : null,
-    })),
+    deps.list().map((session) => {
+      const plan = deps.plan?.(session.id) ?? null;
+      return {
+        ...session,
+        ...(deps.activity ? { agentActivity: deps.activity(session.id) } : {}),
+        ...(deps.autopilot ? { autopilot: deps.autopilot(session.id) } : {}),
+        ...(plan ? { plan } : {}),
+        resumeCommand: session.threadId ? buildResumeCommand(session) : null,
+      };
+    }),
   );
 }

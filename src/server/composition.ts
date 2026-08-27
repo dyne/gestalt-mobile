@@ -711,7 +711,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         profiles: options.profiles,
         models,
         sessions: {
-          list: () => sessions.list().map((session) => withPendingInteractions(session)!),
+          list: () =>
+            sessions.list().map((session) => {
+              const plan = supervisedPlans.find(session.id);
+              return {
+                ...withPendingInteractions(session)!,
+                ...(plan ? { plan } : {}),
+              };
+            }),
         },
         protocolCompatible: protocol.compatible,
       },
@@ -721,6 +728,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         save: saveSession,
         find: (id) => withPendingInteractions(sessions.find(id)),
         list: () => sessions.list().map((session) => withPendingInteractions(session)!),
+        plan: (id) => supervisedPlans.find(id),
         workspaces,
         profiles: options.profiles,
         skillProfiles,
