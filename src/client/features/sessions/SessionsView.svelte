@@ -179,6 +179,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <AgentActivityIndicators
                   compact
                   activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+                  rootModel={session.model ?? models?.[0]}
                 />
               </div>
               <AutopilotAttention

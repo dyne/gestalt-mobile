@@ -106,6 +106,10 @@ export function decodeAgentActivityFacts(
           : typeof item.status === 'string' && item.status.length <= 64
             ? item.status
             : undefined;
+      const model =
+        action === 'spawn_agent' && typeof item.model === 'string' && item.model.length <= 256
+          ? item.model
+          : undefined;
       return {
         sessionId,
         occurredAt,
@@ -116,6 +120,7 @@ export function decodeAgentActivityFacts(
           ? { childStatus: currentStatus ?? legacyStatus }
           : {}),
         ...(action ? { collaborationAction: action } : {}),
+        ...(model ? { childModel: model } : {}),
       };
     };
     return children.length > 0 ? children.map((child) => fact(child)) : [fact()];

@@ -125,6 +125,7 @@ describe('AgentActivityIndicators', () => {
     const now = Date.now();
     render(AgentActivityIndicators, {
       compact: true,
+      rootModel: 'gpt-5.6-sol',
       activity: {
         sessionId: 's',
         confidence: 'fresh',
@@ -139,6 +140,7 @@ describe('AgentActivityIndicators', () => {
             id: 'child-1',
             nickname: 'Worker',
             role: 'explorer',
+            model: 'gpt-5.6-luna',
             state: 'idle',
             observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
             lastActivityAt: new Date(now - 2 * 60 * 60_000).toISOString(),
@@ -153,6 +155,8 @@ describe('AgentActivityIndicators', () => {
     expect(screen.queryByText('Current')).toBeNull();
     expect(screen.getByText('Root agent')).toBeTruthy();
     expect(screen.getByText('Worker')).toBeTruthy();
+    expect(screen.getByText('supervisor · Model: gpt-5.6-sol')).toBeTruthy();
+    expect(screen.getByText('explorer · Model: gpt-5.6-luna')).toBeTruthy();
     expect(screen.getByText('idle since 2m')).toBeTruthy();
     expect(screen.getByText('idle since 2h')).toBeTruthy();
   });

@@ -14,6 +14,7 @@ export type AgentActivitySnapshot = Readonly<{
     id: string;
     nickname?: string;
     role?: string;
+    model?: string;
     state: AgentActivityState;
     reason?: string;
     observedAt: string;
@@ -65,7 +66,9 @@ export function isAgentActivitySnapshot(
         (typeof (child as Record<string, unknown>).nickname === 'undefined' ||
           validText((child as Record<string, unknown>).nickname)) &&
         (typeof (child as Record<string, unknown>).role === 'undefined' ||
-          validText((child as Record<string, unknown>).role)),
+          validText((child as Record<string, unknown>).role)) &&
+        (typeof (child as Record<string, unknown>).model === 'undefined' ||
+          validText((child as Record<string, unknown>).model)),
     ) &&
     validText(snapshot.aggregateSubagents, 32) &&
     states.has(snapshot.aggregateSubagents as AgentActivityState) &&

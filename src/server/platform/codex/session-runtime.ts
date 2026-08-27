@@ -69,6 +69,7 @@ export type DirectChildThread = Readonly<{
   qualified?: boolean;
   nickname?: string;
   role?: string;
+  model?: string;
 }>;
 
 /** One private owner for every resource acquired for a live Codex child. */
@@ -80,6 +81,7 @@ class SessionResource {
   pendingThreadName: string | undefined;
   writtenThreadName: string | undefined;
   readonly capabilities = new Map<string, boolean>();
+  readonly spawnedAgentModels = new Map<string, string>();
 
   constructor(
     readonly sessionId: string,
@@ -337,7 +339,7 @@ export class CodexSessionRuntime {
   }> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const owned = this.sessions.get(session.id);
-    if (owned) return this.decodeHistory(owned.process, session.threadId);
+    if (owned) return this.decodeHistory(owned.process, session.threadId, owned);
     const existing = this.historyReads.get(session.id);
     if (existing) return existing;
     const read = this.readDetachedHistory(session);
@@ -394,6 +396,9 @@ export class CodexSessionRuntime {
               ...(typeof value.agentRole === 'string' && value.agentRole.length <= 128
                 ? { role: value.agentRole }
                 : {}),
+              ...(owned.spawnedAgentModels.get(value.id)
+                ? { model: owned.spawnedAgentModels.get(value.id)! }
+                : {}),
             },
           ];
         }),
@@ -436,13 +441,18 @@ export class CodexSessionRuntime {
   private async decodeHistory(
     process: AppServer,
     threadId: string,
+    resource?: SessionResource,
   ): Promise<{
     turns: HistoryTurn[];
     activeTurnId: string | null;
   }> {
-    const result = decodeThreadRead(
-      await process.rpc.request('thread/read', { threadId, includeTurns: true }),
-    );
+    const response = await process.rpc.request('thread/read', { threadId, includeTurns: true });
+    if (resource) {
+      resource.spawnedAgentModels.clear();
+      for (const [childId, model] of decodeSpawnedAgentModels(response))
+        resource.spawnedAgentModels.set(childId, model);
+    }
+    const result = decodeThreadRead(response);
     const rawTurns = result;
     const activeTurn = rawTurns.find(
       (turn) => turn.status === 'inProgress' && typeof turn.id === 'string',
@@ -797,6 +807,35 @@ function decodeHistoryItem(value: unknown): Array<Record<string, unknown>> {
     return status ? [{ id, type, tool: boundedString(item.tool)!, status }] : [];
   }
   return [];
+}
+
+/** Recovers optional spawn metadata without exposing collaboration prompts to chat history. */
+function decodeSpawnedAgentModels(value: unknown): ReadonlyMap<string, string> {
+  const models = new Map<string, string>();
+  const turns = asRecord(asRecord(value)?.thread)?.turns;
+  if (!Array.isArray(turns) || turns.length > 10_000) return models;
+  for (const turn of turns) {
+    const items = asRecord(turn)?.items;
+    if (!Array.isArray(items) || items.length > 10_000) continue;
+    for (const candidate of items) {
+      const item = asRecord(candidate);
+      const model = boundedString(item?.model, 256);
+      if (
+        item?.type !== 'collabAgentToolCall' ||
+        (item.tool !== 'spawnAgent' && item.tool !== 'spawn_agent') ||
+        !model ||
+        !Array.isArray(item.receiverThreadIds) ||
+        item.receiverThreadIds.length > 64
+      )
+        continue;
+      for (const receiver of item.receiverThreadIds) {
+        const childId = boundedString(receiver, 256);
+        if (childId) models.set(childId, model);
+        if (models.size >= 64) return models;
+      }
+    }
+  }
+  return models;
 }
 
 function decodeUserMessageContent(value: unknown): Array<{ type: 'text'; text: string }> {

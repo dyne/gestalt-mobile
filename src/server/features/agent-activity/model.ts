@@ -34,6 +34,7 @@ export type SubagentActivity = Readonly<{
   threadId?: string;
   nickname?: string;
   role?: string;
+  model?: string;
   state: AgentActivityState;
   reason: AgentActivityReason;
   observedAt: string;
@@ -69,6 +70,7 @@ export type AgentActivityFact = Readonly<{
   childThreadId?: string;
   childNickname?: string;
   childRole?: string;
+  childModel?: string;
   childStatus?: string;
   collaborationAction?: string;
   attentionReason?: Extract<
@@ -178,6 +180,11 @@ export function projectAgentActivity(
             ? { nickname: before.nickname }
             : {}),
         ...(fact.childRole ? { role: fact.childRole } : before?.role ? { role: before.role } : {}),
+        ...(fact.childModel
+          ? { model: fact.childModel }
+          : before?.model
+            ? { model: before.model }
+            : {}),
         state: childState(fact.childStatus, fact.collaborationAction, before?.state),
         reason: childReason(fact.childStatus, fact.collaborationAction),
         observedAt: fact.occurredAt,

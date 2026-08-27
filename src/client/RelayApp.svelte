@@ -1215,6 +1215,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <AgentActivityIndicators
                 compact
                 activity={activitySnapshots.get(sessionId) ?? null}
+                rootModel={sessions.find((session) => session.id === sessionId)?.model ??
+                  defaultSessionModel}
               />
             </div>
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
