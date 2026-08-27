@@ -134,6 +134,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/if}
     {:else if part.kind === 'code'}
       <code>{part.text}</code>
+    {:else if part.kind === 'strong'}
+      <strong>{@render inline(part.parts)}</strong>
     {:else}
       {part.text}
     {/if}
@@ -181,6 +183,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </tbody>
         </table>
       </div>
+    {:else if block.kind === 'heading'}
+      {#if block.level === 1}
+        <h1>{@render inline(block.parts)}</h1>
+      {:else if block.level === 2}
+        <h2>{@render inline(block.parts)}</h2>
+      {:else if block.level === 3}
+        <h3>{@render inline(block.parts)}</h3>
+      {:else if block.level === 4}
+        <h4>{@render inline(block.parts)}</h4>
+      {:else if block.level === 5}
+        <h5>{@render inline(block.parts)}</h5>
+      {:else}
+        <h6>{@render inline(block.parts)}</h6>
+      {/if}
     {:else}
       <div>{@render inline(block.parts)}</div>
     {/if}
@@ -489,6 +505,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .entry-content {
     margin-block: 0.125rem 0;
     margin-inline: 0;
+  }
+
+  :is(h1, h2, h3, h4, h5, h6) {
+    margin-block: 0.85em 0.3em;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  :is(h1, h2, h3):first-child {
+    margin-block-start: 0.25em;
+  }
+
+  h1 {
+    font-size: 1.5em;
+  }
+
+  h2 {
+    font-size: 1.3em;
+  }
+
+  h3 {
+    font-size: 1.15em;
+  }
+
+  :is(h4, h5, h6) {
+    font-size: 1em;
   }
 
   pre,

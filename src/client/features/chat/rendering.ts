@@ -11,9 +11,11 @@ export function renderPlainText(text: string): string {
 export type CommentaryPart =
   | { kind: 'text'; text: string }
   | { kind: 'link'; text: string; href: string }
-  | { kind: 'code'; text: string };
+  | { kind: 'code'; text: string }
+  | { kind: 'strong'; parts: CommentaryPart[] };
 export type CommentaryBlock =
   | { kind: 'text'; parts: CommentaryPart[] }
+  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; parts: CommentaryPart[] }
   | { kind: 'code'; text: string }
   | { kind: 'table'; headers: CommentaryPart[][]; rows: CommentaryPart[][][] };
 
@@ -42,7 +44,16 @@ function textBlocks(text: string): CommentaryBlock[] {
     if (value) blocks.push({ kind: 'text', parts: linkParts(value) });
   };
 
-  for (let index = 0; index < lines.length - 1; index += 1) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const heading = headingLine(lines[index] ?? '');
+    if (heading) {
+      addText(index);
+      blocks.push({ kind: 'heading', level: heading.level, parts: linkParts(heading.text) });
+      textStart = index + 1;
+      continue;
+    }
+
+    if (index === lines.length - 1) continue;
     const headers = tableRow(lines[index] ?? '');
     const divider = tableRow(lines[index + 1] ?? '');
     if (!headers || !divider || headers.length !== divider.length || !divider.every(isTableDivider))
@@ -68,6 +79,15 @@ function textBlocks(text: string): CommentaryBlock[] {
   return blocks.length ? blocks : [{ kind: 'text', parts: linkParts(text) }];
 }
 
+function headingLine(line: string): { level: 1 | 2 | 3 | 4 | 5 | 6; text: string } | null {
+  const match = /^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(line);
+  if (!match) return null;
+  return {
+    level: match[1]!.length as 1 | 2 | 3 | 4 | 5 | 6,
+    text: match[2] ?? '',
+  };
+}
+
 function tableRow(line: string): string[] | null {
   const trimmed = line.trim();
   if (!trimmed.includes('|')) return null;
@@ -85,7 +105,8 @@ function isTableDivider(cell: string): boolean {
 
 function linkParts(text: string): CommentaryPart[] {
   const parts: CommentaryPart[] = [];
-  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|codex:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`/g;
+  const pattern =
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|codex:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`|\*\*([^*\n]+)\*\*/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const before = text.slice(cursor, match.index);
@@ -93,7 +114,9 @@ function linkParts(text: string): CommentaryPart[] {
     parts.push(
       match[3]
         ? { kind: 'code', text: match[3] }
-        : { kind: 'link', text: match[1] ?? '', href: match[2] ?? '' },
+        : match[4]
+          ? { kind: 'strong', parts: linkParts(match[4]) }
+          : { kind: 'link', text: match[1] ?? '', href: match[2] ?? '' },
     );
     cursor = (match.index ?? 0) + match[0].length;
   }

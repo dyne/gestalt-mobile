@@ -61,6 +61,24 @@ describe('MessageList', () => {
     expect(onopenorg).toHaveBeenCalledWith('/projects/one/plans/roadmap.org:12');
   });
 
+  it('renders Markdown headings and strong emphasis as semantic elements', () => {
+    render(MessageList, {
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: '### A **clear title**\nThis is **important**.',
+          complete: true,
+        },
+      ],
+      activities: [],
+    });
+
+    const heading = screen.getByRole('heading', { level: 3, name: 'A clear title' });
+    expect(heading.querySelector('strong')?.textContent).toBe('clear title');
+    expect(screen.getByText('important').tagName).toBe('STRONG');
+  });
+
   it('wraps commentary and activity only after the answer completes', () => {
     render(MessageList, {
       messages: [

@@ -89,6 +89,31 @@ describe('renderCommentary', () => {
     ]);
   });
 
+  it('recognizes Markdown headings and strong emphasis', () => {
+    expect(renderCommentary('Before\n### A **clear title**\nAfter **bold** text')).toEqual([
+      {
+        kind: 'text',
+        parts: [{ kind: 'text', text: 'Before' }],
+      },
+      {
+        kind: 'heading',
+        level: 3,
+        parts: [
+          { kind: 'text', text: 'A ' },
+          { kind: 'strong', parts: [{ kind: 'text', text: 'clear title' }] },
+        ],
+      },
+      {
+        kind: 'text',
+        parts: [
+          { kind: 'text', text: 'After ' },
+          { kind: 'strong', parts: [{ kind: 'text', text: 'bold' }] },
+          { kind: 'text', text: ' text' },
+        ],
+      },
+    ]);
+  });
+
   it('recognizes Markdown tables and preserves inline code in their cells', () => {
     expect(
       renderCommentary(
