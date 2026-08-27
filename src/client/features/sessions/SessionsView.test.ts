@@ -272,7 +272,7 @@ describe('SessionsView session base tree', () => {
                 level: 1,
                 state: 'WIP',
                 priority: 'A',
-                description: {},
+                description: { effort: 'Small' },
                 children: [
                   {
                     id: 'layout-progress',
@@ -283,13 +283,22 @@ describe('SessionsView session base tree', () => {
                     description: {},
                     children: [],
                   },
+                  {
+                    id: 'layout-current',
+                    title: 'Current child work',
+                    level: 2,
+                    state: 'WIP',
+                    priority: 'A',
+                    description: {},
+                    children: [],
+                  },
                 ],
               },
             ],
-            totalSteps: 2,
+            totalSteps: 3,
             doneSteps: 1,
             allDone: false,
-            currentStepId: 'layout',
+            currentStepId: 'layout-current',
           },
         },
       ],
@@ -299,11 +308,15 @@ describe('SessionsView session base tree', () => {
     expect(title.classList.contains('org-plan-title')).toBe(true);
     expect(filename.classList.contains('org-plan-filename')).toBe(true);
     expect(title.parentElement).toBe(filename.parentElement);
-    expect(
-      screen.getByRole('progressbar', { name: 'Plan progress for Show session context' }),
-    ).toBeTruthy();
-    expect(screen.getByLabelText('L1: WIP')).toBeTruthy();
-    expect(screen.getByLabelText('L1.1: DONE')).toBeTruthy();
+    const progress = screen.getByRole('progressbar', {
+      name: 'Plan progress for Show session context',
+    });
+    expect(progress.closest('.session-details')).toBeTruthy();
+    expect(screen.getByLabelText('L1: Layout, WIP, effort Small')).toBeTruthy();
+    expect(screen.getByLabelText('L1.2: Current child work, WIP')).toBeTruthy();
+    expect(screen.getByText('Effort: Small')).toBeTruthy();
+    expect(screen.queryByLabelText('L1.1: Progress, DONE')).toBeNull();
+    expect(screen.queryByText('Progress')).toBeNull();
   });
 
   it('shows available metadata for a recent session', () => {

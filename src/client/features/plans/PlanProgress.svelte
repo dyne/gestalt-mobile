@@ -12,6 +12,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     id: string;
     position: string;
     state: PlanStep['state'];
+    level: PlanStep['level'];
+    title: string;
+    effort?: string;
   }>;
 
   let {
@@ -30,14 +33,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         id: step.id,
         position: orgPlanPosition(l1Index + 1),
         state: step.state,
+        level: step.level,
+        title: step.title,
+        ...(step.description.effort ? { effort: step.description.effort } : {}),
       },
       ...step.children.map((child, l2Index) => ({
         id: child.id,
         position: orgPlanPosition(l1Index + 1, l2Index + 1),
         state: child.state,
+        level: child.level,
+        title: child.title,
       })),
     ]),
   );
+  let wipMarkers = $derived(markers.filter((marker) => marker.state === 'WIP'));
   let progressMax = $derived(Math.max(plan.totalSteps, 1));
 </script>
 
@@ -48,7 +57,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <progress aria-label={label} value={plan.doneSteps} max={progressMax}>
     {plan.doneSteps} of {plan.totalSteps} complete
   </progress>
-  {#if markers.length}
+  {#if compact && wipMarkers.length}
+    <ol class="wip-steps" aria-label="Work in progress plan steps">
+      {#each wipMarkers as marker (marker.id)}
+        <li
+          aria-current={marker.id === plan.currentStepId ? 'step' : undefined}
+          aria-label={`${marker.position}: ${marker.title}, WIP${marker.level === 1 && marker.effort ? `, effort ${marker.effort}` : ''}`}
+        >
+          <span class="wip-position" aria-hidden="true">{marker.position} · WIP</span>
+          <span class="wip-title">{marker.title}</span>
+          {#if marker.level === 1 && marker.effort}
+            <span class="wip-effort">Effort: {marker.effort}</span>
+          {/if}
+        </li>
+      {/each}
+    </ol>
+  {:else if !compact && markers.length}
     <ol class="step-markers" aria-label="Plan step progress">
       {#each markers as marker (marker.id)}
         <li
@@ -130,9 +154,44 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .compact progress {
     block-size: 0.375rem;
   }
-  .compact .step-markers li {
-    gap: 0.125rem;
-    padding: 0.125rem 0.25rem;
+
+  .wip-steps {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .wip-steps li {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: baseline;
+    gap: 0.125rem 0.4rem;
+    min-inline-size: 0;
     font-size: 0.625rem;
+  }
+
+  .wip-position {
+    grid-row: 1 / span 2;
+    align-self: start;
+    padding: 0.125rem 0.25rem;
+    border: 1px solid var(--theme-accent);
+    border-radius: 999px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .wip-title {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+    color: var(--theme-text);
+    font-weight: 700;
+  }
+
+  .wip-effort {
+    color: var(--theme-text-muted);
   }
 </style>
