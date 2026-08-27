@@ -143,6 +143,21 @@ describe('normalizeCodexNotification', () => {
     });
   });
 
+  it.each([
+    ['mcp__context_mode__ctx_execute', 'completed'],
+    ['mcp__gestalt_context_mode__ctx_search', 'failed'],
+  ])('keeps a provider-prefixed MCP tool identifier and status', (tool, status) => {
+    expect(
+      normalizeCodexNotification('s', 3, '2026-01-01T00:00:00.000Z', {
+        method: 'item/completed',
+        params: { item: { id: tool, type: 'mcpToolCall', tool, status } },
+      }),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: { id: tool, label: `Tool · ${status}`, detail: tool },
+    });
+  });
+
   it('maps structured reasoning summary parts from a completed item', () => {
     expect(
       normalizeCodexNotification('s', 3, '2026-01-01T00:00:00.000Z', {

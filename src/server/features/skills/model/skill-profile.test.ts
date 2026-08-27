@@ -132,6 +132,36 @@ describe('skill profile codec', () => {
     expect(applySkillSelectionSnapshot([current])).toEqual([{ ...current, enabled: true }]);
   });
 
+  it('keeps discovered context-mode advertised across absent, restrictive, and stale selections', () => {
+    const currentPath =
+      '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.2.0/skills/context-mode/SKILL.md';
+    const stalePath =
+      '/home/test/.codex/plugins/cache/dyne-gestalt-agents/gestalt/2.1.0/skills/context-mode/SKILL.md';
+    const contextMode = { name: 'gestalt:context-mode', path: currentPath, enabled: false };
+    const restrictive = createSkillSelection([{ ...contextMode, enabled: false }]);
+
+    expect(applySkillSelectionSnapshot([contextMode])).toEqual([{ ...contextMode, enabled: true }]);
+    expect(
+      compileSkillOverride({ discovered: [contextMode, alpha], explicit: restrictive })
+        .skillsConfig,
+    ).toEqual([
+      { path: currentPath, enabled: true },
+      { path: alpha.path, enabled: false },
+    ]);
+    expect(
+      compileSkillOverride({
+        discovered: [contextMode],
+        project: createSkillSelection([
+          { name: 'previous context mode', path: stalePath, enabled: false },
+        ]),
+      }),
+    ).toEqual({
+      source: 'project',
+      skillsConfig: [{ path: currentPath, enabled: true }],
+      warnings: [],
+    });
+  });
+
   it('prefers explicit selection, disables new paths, and warns for stale paths', () => {
     const result = compileSkillOverride({
       discovered: [
