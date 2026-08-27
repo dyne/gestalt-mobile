@@ -84,7 +84,7 @@ test('rapid session switch replaces A timeline with B timeline', async ({ page }
   await openSessions
     .getByRole('listitem')
     .filter({ hasText: '/B' })
-    .getByRole('button', { name: /\/B/ })
+    .getByRole('button', { name: 'Open' })
     .click();
   await expect(page.getByText('marker B')).toBeVisible();
   await expect(page.getByText('marker A')).toHaveCount(0);

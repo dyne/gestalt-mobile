@@ -83,7 +83,7 @@ function renderView(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionsView session base tree', () => {
-  it('renders activity beside, not inside, the session selection button', () => {
+  it('orders open-session actions in a vertical rail and keeps status controls accessible', () => {
     const activity = {
       sessionId: 'live',
       confidence: 'fresh' as const,
@@ -96,12 +96,48 @@ describe('SessionsView session base tree', () => {
       subagents: [],
     };
     const { container } = renderView({
-      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      sessions: [
+        {
+          id: 'live',
+          state: 'ready',
+          workspacePath: '/work',
+          resumeCommand: 'codex resume live',
+        },
+      ],
       activitySnapshots: new Map([['live', activity]]),
     });
     expect(screen.getByText('Agents (1)')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Autopilot: Unavailable' })).toBeTruthy();
-    expect(container.querySelector('.session-select details')).toBeNull();
+    const actions = Array.from(container.querySelector('.open-session .session-actions')!.children);
+    const control = (index: number, selector: string) =>
+      actions[index]?.matches(selector) ? actions[index] : actions[index]?.querySelector(selector);
+    expect(control(0, 'button')?.textContent?.trim()).toBe('Open');
+    expect(control(1, 'button')?.textContent?.trim()).toBe('Copy');
+    expect(control(2, 'button')?.getAttribute('aria-label')).toBe('Autopilot: Unavailable');
+    expect(control(3, 'summary')?.textContent?.trim()).toBe('Agents (1)');
+    expect(control(4, 'button')?.textContent?.trim()).toBe('Close');
+  });
+
+  it('uses accent-pressed state without a visible on/off glyph for session Autopilot', () => {
+    renderView({
+      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      autopilotSnapshots: new Map([
+        [
+          'live',
+          {
+            state: 'monitoring',
+            enabled: true,
+            retry: { position: 0, limit: 0 },
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      ]),
+    });
+
+    const autopilot = screen.getByRole('button', { name: 'Autopilot: Monitoring' });
+    expect(autopilot.textContent?.trim()).toBe('Autopilot');
+    expect(autopilot.getAttribute('aria-pressed')).toBe('true');
+    expect(autopilot.classList.contains('accentPressed')).toBe(true);
   });
   it('uses clear approval labels while emitting the Codex policy value', async () => {
     const onapprovalpolicychange = vi.fn();
@@ -219,7 +255,7 @@ describe('SessionsView session base tree', () => {
     expect(screen.queryByText('Skills profile: default')).toBeNull();
   });
 
-  it('shows an open session’s latest Org Plan title above its filename', () => {
+  it('shows an open session’s Org Plan identity and compact positioned progress', () => {
     renderView({
       sessions: [
         {
@@ -227,6 +263,34 @@ describe('SessionsView session base tree', () => {
           state: 'ready',
           workspacePath: '/planned',
           lastOrgPlan: { filename: 'session-summary.org', title: 'Show session context' },
+          plan: {
+            title: 'Show session context',
+            steps: [
+              {
+                id: 'layout',
+                title: 'Layout',
+                level: 1,
+                state: 'WIP',
+                priority: 'A',
+                description: {},
+                children: [
+                  {
+                    id: 'layout-progress',
+                    title: 'Progress',
+                    level: 2,
+                    state: 'DONE',
+                    priority: 'A',
+                    description: {},
+                    children: [],
+                  },
+                ],
+              },
+            ],
+            totalSteps: 2,
+            doneSteps: 1,
+            allDone: false,
+            currentStepId: 'layout',
+          },
         },
       ],
     });
@@ -235,6 +299,11 @@ describe('SessionsView session base tree', () => {
     expect(title.classList.contains('org-plan-title')).toBe(true);
     expect(filename.classList.contains('org-plan-filename')).toBe(true);
     expect(title.parentElement).toBe(filename.parentElement);
+    expect(
+      screen.getByRole('progressbar', { name: 'Plan progress for Show session context' }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText('L1: WIP')).toBeTruthy();
+    expect(screen.getByLabelText('L1.1: DONE')).toBeTruthy();
   });
 
   it('shows available metadata for a recent session', () => {
@@ -264,9 +333,10 @@ describe('SessionsView session base tree', () => {
         { id: 'open-b', state: 'turnActive', workspacePath: '/b' },
       ],
     });
-    expect(screen.getByRole('button', { name: /\/a/ }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('button', { name: /\/b/ }).getAttribute('aria-current')).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: /\/b/ }));
+    const openButtons = screen.getAllByRole('button', { name: 'Open' });
+    expect(openButtons[0]?.getAttribute('aria-current')).toBe('page');
+    expect(openButtons[1]?.getAttribute('aria-current')).toBeNull();
+    await fireEvent.click(openButtons[1]!);
     expect(onselectopen).toHaveBeenCalledWith('open-b');
   });
 

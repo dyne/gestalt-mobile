@@ -291,7 +291,7 @@ test('updates Plan from live events without selecting it, then isolates a sessio
     .getByLabel('Open sessions')
     .getByRole('listitem')
     .filter({ hasText: '/projects/two' })
-    .getByRole('button', { name: /\/projects\/two/ })
+    .getByRole('button', { name: 'Open' })
     .click();
   await expect(chat).toHaveAttribute('aria-pressed', 'true');
   await expect(navigation.getByRole('button', { name: 'Plan' })).toHaveCount(1);

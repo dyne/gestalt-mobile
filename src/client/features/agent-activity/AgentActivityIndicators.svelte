@@ -14,8 +14,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     activity,
     compact = false,
+    popupAlign = 'end',
     rootModel,
-  }: { activity: AgentActivitySnapshot | null; compact?: boolean; rootModel?: string } = $props();
+  }: {
+    activity: AgentActivitySnapshot | null;
+    compact?: boolean;
+    popupAlign?: 'start' | 'end';
+    rootModel?: string;
+  } = $props();
   const labels: Record<AgentActivityState, string> = {
     working: 'working',
     idle: 'idle',
@@ -116,7 +122,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 </script>
 
-<section class="agent-activity" class:compact aria-label="Agent activity">
+<section
+  class="agent-activity"
+  class:compact
+  class:align-start={popupAlign === 'start'}
+  aria-label="Agent activity"
+>
   {#if compact}
     <details class="agents">
       <AppControl element="summary" compact full state={compactState}
@@ -243,6 +254,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
     box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--theme-text) 18%, transparent);
+  }
+  .compact.align-start .agents ul {
+    inset-inline-start: 0;
+    inset-inline-end: auto;
   }
   .compact .agents li {
     display: grid;

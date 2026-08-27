@@ -21,6 +21,35 @@ const viewports = [
 ] as const;
 const secret = 'NEVER-RENDER-AUTOPILOT-PROMPT-OR-SECRET';
 
+const activePlan = {
+  title: 'Compact session plan',
+  steps: [
+    {
+      id: 'plan-parent',
+      title: 'Ship the session progress summary',
+      level: 1,
+      state: 'WIP',
+      priority: 'A',
+      description: {},
+      children: [
+        {
+          id: 'plan-child',
+          title: 'Verify the compact layout',
+          level: 2,
+          state: 'DONE',
+          priority: 'A',
+          description: {},
+          children: [],
+        },
+      ],
+    },
+  ],
+  totalSteps: 2,
+  doneSteps: 1,
+  allDone: false,
+  currentStepId: 'plan-parent',
+} as const;
+
 function autopilot(state: State, reason?: string, continuationPhase?: ContinuationPhase) {
   const isScheduledContinuation = state === 'backoff' && continuationPhase === 'scheduled';
   return {
@@ -73,6 +102,7 @@ async function install(
   onsocket?: (socket: { send(message: string): void }) => void,
   awaitingChild = false,
   continuationPhase?: ContinuationPhase,
+  includePlan = false,
 ) {
   const session = {
     id: 'session-1',
@@ -110,6 +140,7 @@ async function install(
       : {}),
     autopilot: autopilot(state, reason, continuationPhase),
     pendingInteractions: hasAttention ? [attention] : [],
+    ...(includePlan ? { plan: activePlan, resumeCommand: 'codex resume thread-1' } : {}),
   };
   await mockAuthenticatedStatus(page);
   await page.route('**/api/bootstrap', (route) =>
@@ -168,6 +199,67 @@ async function install(
   );
   await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, (socket) => onsocket?.(socket));
 }
+
+test('Sessions keeps active plan progress at the card bottom with a vertical action rail', async ({
+  page,
+}) => {
+  await install(page, 'monitoring', undefined, false, undefined, true, undefined, true);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+
+  const card = page.getByLabel('Open sessions').locator('li').first();
+  const actions = card.getByLabel('Session actions');
+  const actionControls = [
+    actions.getByRole('button', { name: 'Open' }),
+    actions.getByRole('button', { name: 'Copy' }),
+    actions.getByRole('button', { name: 'Autopilot: Monitoring' }),
+    actions.getByText('Agents (2)', { exact: true }),
+    actions.getByRole('button', { name: 'Close' }),
+  ];
+  await Promise.all(actionControls.map((control) => expect(control).toBeVisible()));
+  const actionBoxes = await Promise.all(
+    actionControls.map((control) =>
+      control.evaluate((element) => {
+        const { x, y } = element.getBoundingClientRect();
+        return { x, y };
+      }),
+    ),
+  );
+  expect(actionBoxes.every((box) => Math.abs(box.x - actionBoxes[0]!.x) <= 1)).toBe(true);
+  expect(actionBoxes.every((box, index) => index === 0 || box.y > actionBoxes[index - 1]!.y)).toBe(
+    true,
+  );
+
+  const autopilotControl = actions.getByRole('button', { name: 'Autopilot: Monitoring' });
+  await expect(autopilotControl).toHaveText('Autopilot');
+  await expect(autopilotControl).toHaveAttribute('aria-pressed', 'true');
+  expect(
+    await autopilotControl.evaluate((control) => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = 'var(--theme-accent)';
+      document.body.append(probe);
+      const accent = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return getComputedStyle(control).backgroundColor === accent;
+    }),
+  ).toBe(true);
+
+  const progress = card.getByRole('progressbar', {
+    name: 'Plan progress for Compact session plan',
+  });
+  await expect(progress).toHaveAttribute('value', '1');
+  await expect(card.getByLabel('L1: WIP')).toBeVisible();
+  await expect(card.getByLabel('L1.1: DONE')).toBeVisible();
+  const [cardBox, progressBox] = await Promise.all([
+    card.boundingBox(),
+    progress.locator('..').boundingBox(),
+  ]);
+  expect(cardBox).not.toBeNull();
+  expect(progressBox).not.toBeNull();
+  expect(cardBox!.y + cardBox!.height - (progressBox!.y + progressBox!.height)).toBeLessThan(48);
+  await expectNoHorizontalOverflow(page);
+});
 
 function captureBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -387,9 +479,11 @@ for (const item of cases) {
     }
     await expect(page.locator('body')).not.toContainText(secret);
     await page.getByRole('button', { name: 'Sessions' }).click();
-    await expect(
-      page.getByLabel('Open sessions').getByRole('region', { name: 'Autopilot' }),
-    ).toContainText(item.text);
+    const sessionAutopilot = page
+      .getByLabel('Open sessions')
+      .getByRole('button', { name: /^Autopilot:/ });
+    await expect(sessionAutopilot).toHaveText('Autopilot');
+    await expect(sessionAutopilot).toHaveAttribute('aria-pressed', isEnabled ? 'true' : 'false');
     if (item.name === 'root-awaiting-child') {
       const sessionActivity = page.getByLabel('Open sessions').getByLabel('Agent activity');
       await sessionActivity.getByText(/^Agents \(/).click();

@@ -100,6 +100,7 @@ export type AppDependencies = {
     autopilotSnapshot?(
       sessionId: string,
     ): import('./features/autopilot/domain/autopilot-session.js').AutopilotSnapshot;
+    plan?(sessionId: string): SupervisedPlan | null;
     autopilotControlTurns?(sessionId: string): ReadonlyMap<string, string>;
     autopilotAudit?(
       sessionId: string,

@@ -464,7 +464,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
           ).__planSeenDuringIsolation = true;
       }).observe(document.querySelector('nav')!, { childList: true, subtree: true });
     });
-    const sessionItems = page.getByLabel('Open sessions').getByRole('listitem');
+    const sessionItems = page.getByLabel('Open sessions').locator(':scope > li');
     await expect(sessionItems).toHaveCount(2);
     const listedSessions = (await authorizedFetch(`${relayUrl}/api/bootstrap`).then((response) =>
       response.json(),
@@ -479,7 +479,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     );
     expect(isolatedIndex).toBeGreaterThanOrEqual(0);
     expect(owningIndex).toBeGreaterThanOrEqual(0);
-    await sessionItems.nth(isolatedIndex).locator('button.session-select').click();
+    await sessionItems.nth(isolatedIndex).getByRole('button', { name: 'Open' }).click();
     await expect(planTab).toHaveCount(1);
     expect(
       await page.evaluate(
@@ -494,7 +494,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     expect(isolatedPlan.status).toBe(204);
 
     await navigation.getByRole('button', { name: 'Sessions' }).click();
-    await sessionItems.nth(owningIndex).locator('button.session-select').click();
+    await sessionItems.nth(owningIndex).getByRole('button', { name: 'Open' }).click();
     await expect(planTab).toBeVisible();
     await planTab.click();
     await page.getByRole('button', { name: 'Close plan and return to list' }).click();

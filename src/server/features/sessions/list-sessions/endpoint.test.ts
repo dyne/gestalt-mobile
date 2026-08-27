@@ -35,4 +35,42 @@ describe('GET /api/sessions', () => {
     ]);
     await app.close();
   });
+  it('includes each session retained plan without changing durable session state', async () => {
+    const app = fastify();
+    registerListSessions(app, {
+      list: () => [{ id: 'session-1', state: 'ready', threadId: null }] as never,
+      plan: () =>
+        ({
+          title: 'Ship the session list',
+          steps: [
+            {
+              id: 'layout',
+              title: 'Layout',
+              level: 1,
+              state: 'WIP',
+              priority: 'A',
+              description: {},
+              children: [],
+            },
+          ],
+          totalSteps: 1,
+          doneSteps: 0,
+          allDone: false,
+          currentStepId: 'layout',
+        }) as never,
+    });
+
+    expect((await app.inject({ method: 'GET', url: '/api/sessions' })).json()).toMatchObject([
+      {
+        id: 'session-1',
+        plan: {
+          title: 'Ship the session list',
+          totalSteps: 1,
+          doneSteps: 0,
+          currentStepId: 'layout',
+        },
+      },
+    ]);
+    await app.close();
+  });
 });

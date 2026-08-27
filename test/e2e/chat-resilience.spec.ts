@@ -554,7 +554,7 @@ test('late A history cannot replace selected B timeline', async ({ page }) => {
     .getByLabel('Open sessions')
     .getByRole('listitem')
     .filter({ hasText: '/B' })
-    .getByRole('button', { name: /\/B/ })
+    .getByRole('button', { name: 'Open' })
     .click();
   b.resolve(chatSnapshot({ items: [{ id: 'b', kind: 'user', text: 'marker B', turnId: 'b' }] }));
   await expect(page.getByText('marker B')).toBeVisible();

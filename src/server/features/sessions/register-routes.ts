@@ -70,6 +70,7 @@ export function registerSessionRoutes(
         list: sessions.list,
         activity: sessions.agentActivity,
         autopilot: sessions.autopilotSnapshot,
+        plan: sessions.plan,
       });
     if (sessions.readHistory)
       registerGetHistory(app, {

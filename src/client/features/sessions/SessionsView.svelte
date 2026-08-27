@@ -24,6 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { OrgPlanAttention } from '../autopilot/contracts.js';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
   import AutopilotSafetyStop from '../autopilot/AutopilotSafetyStop.svelte';
+  import PlanProgress from '../plans/PlanProgress.svelte';
 
   type Props = {
     sessions: RelaySession[];
@@ -131,19 +132,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             class:current-session={session.id === selectedSessionId}
             class="managed-session open-session"
           >
-            <div class="session-actions">
+            <div class="session-actions" aria-label="Session actions">
+              <AppControl
+                compact
+                full
+                current={session.id === selectedSessionId ? 'page' : undefined}
+                onclick={() => onselectopen(session.id)}>Open</AppControl
+              >
               {#if session.resumeCommand}
-                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
+                <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
+                  >Copy</AppControl
+                >
               {/if}
-              <AppControl onclick={() => onclose(session.id)}>Close</AppControl>
+              <AutopilotControl
+                compact
+                indicatorOnly
+                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                controlId={`session-autopilot-${session.id}`}
+                pending={autopilotPending.has(session.id)}
+                ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+              />
+              <AgentActivityIndicators
+                compact
+                activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+                popupAlign="start"
+                rootModel={session.model ?? models?.[0]}
+              />
+              <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
             </div>
             <div class="session-details">
-              <button
-                class="session-select"
-                type="button"
-                aria-current={session.id === selectedSessionId ? 'page' : undefined}
-                onclick={() => onselectopen(session.id)}
-              >
+              <div class="session-summary">
                 {#if details.updatedAt !== null}
                   <time datetime={new Date(details.updatedAt).toISOString()}>
                     {formatRelativeTime(details.updatedAt)}
@@ -167,20 +185,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
                   </span>
                 {/if}
-              </button>
-              <div class="session-monitor-controls" aria-label="Session controls">
-                <AutopilotControl
-                  compact
-                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                  controlId={`session-autopilot-${session.id}`}
-                  pending={autopilotPending.has(session.id)}
-                  ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
-                />
-                <AgentActivityIndicators
-                  compact
-                  activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
-                  rootModel={session.model ?? models?.[0]}
-                />
               </div>
               <AutopilotAttention
                 attention={autopilotAttention.get(session.id) ?? null}
@@ -197,6 +201,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 ondisable={() => onautopilottoggle(session.id, false)}
               />
             </div>
+            {#if session.plan}
+              <div class="session-plan-progress">
+                <PlanProgress
+                  compact
+                  plan={session.plan}
+                  label={`Plan progress for ${session.plan.title}`}
+                />
+              </div>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -209,15 +222,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <li class="managed-session">
           <div class="session-actions">
             <AppControl
+              compact
+              full
               disabled={openingSessionId === session.id}
               onclick={() => onopen(session.id)}
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
             {#if session.resumeCommand}
-              <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
+              <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
+                >Copy</AppControl
+              >
             {/if}
-            <AppControl onclick={() => onforget(session.id)}>Forget</AppControl>
+            <AppControl compact full onclick={() => onforget(session.id)}>Forget</AppControl>
           </div>
           <div class="session-details">
             {#if details.updatedAt !== null}
@@ -394,21 +411,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     outline: 2px solid var(--theme-accent);
     outline-offset: 2px;
   }
-  .session-select {
-    display: block;
-    inline-size: 100%;
-    color: inherit;
-    font: inherit;
-    text-align: inherit;
-    background: transparent;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-  }
-
   .managed-session {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: minmax(0, min(6rem, 32%)) minmax(0, 1fr);
     gap: 0.75rem;
     align-items: start;
     inline-size: 100%;
@@ -419,7 +424,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .open-session {
-    border-inline-start: 0.3rem solid var(--theme-accent);
+    border-color: var(--theme-accent);
     background: var(--theme-control-hover);
   }
 
@@ -457,28 +462,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .session-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 0.5rem;
-  }
-
-  .session-monitor-controls {
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: flex-start;
-    gap: 0.35rem;
-    min-inline-size: 0;
-    margin-block-start: 0.625rem;
-  }
-
-  .session-monitor-controls > :global(*) {
-    flex: 1 1 0;
     min-inline-size: 0;
   }
 
-  @media (max-width: 30rem) {
-    .managed-session {
-      grid-template-columns: minmax(0, 1fr);
-    }
+  .session-actions > :global(*) {
+    inline-size: 100%;
+  }
+
+  .session-plan-progress {
+    grid-column: 1 / -1;
+    min-inline-size: 0;
+    padding-block-start: 0.5rem;
+    border-block-start: 1px solid var(--theme-border);
   }
 
   .recent-session {

@@ -63,6 +63,7 @@ export type RelaySession = {
     skills: Array<{ name: string; path: string; enabled: boolean }>;
   };
   lastOrgPlan?: { filename: string; title: string };
+  plan?: SupervisedPlan;
   agentActivity?: AgentActivitySnapshot;
   autopilot?: AutopilotSnapshot;
 };
