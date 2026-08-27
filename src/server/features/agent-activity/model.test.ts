@@ -69,6 +69,22 @@ describe('agent activity projector', () => {
       subagents: [{ id: 'c', state: 'working' }],
     });
   });
+  it('retains the spawned child model across later status updates', () => {
+    const spawned = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('collaboration', {
+        childId: 'c',
+        childModel: 'gpt-5.6-luna',
+        childStatus: 'working',
+        collaborationAction: 'spawn_agent',
+      }),
+    );
+    const completed = projectAgentActivity(
+      spawned,
+      fact('collaboration', { childId: 'c', childStatus: 'completed' }),
+    );
+    expect(completed.subagents).toMatchObject([{ id: 'c', model: 'gpt-5.6-luna' }]);
+  });
   it('is duplicate and session isolated', () => {
     const first = projectAgentActivity(createAgentActivitySnapshot('s', at), fact('turnStarted'));
     expect(projectAgentActivity(first, fact('turnStarted'))).toBe(first);

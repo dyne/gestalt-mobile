@@ -103,6 +103,7 @@ export class AgentActivityRegistry {
       qualified?: boolean;
       nickname?: string;
       role?: string;
+      model?: string;
     }[],
   ): AgentActivitySnapshot {
     if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
@@ -118,6 +119,7 @@ export class AgentActivityRegistry {
         ...(child.status ? { childStatus: child.status } : {}),
         ...(child.nickname ? { childNickname: child.nickname } : {}),
         ...(child.role ? { childRole: child.role } : {}),
+        ...(child.model ? { childModel: child.model } : {}),
       });
     for (const child of next.subagents)
       if (!seen.has(child.id))

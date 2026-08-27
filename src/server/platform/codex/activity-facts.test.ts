@@ -160,6 +160,24 @@ describe('agent activity app-server characterization', () => {
       }),
     ]);
   });
+  it('captures the requested model from a current spawn event', () => {
+    expect(
+      decodeAgentActivityFact('s', at, {
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'collabAgentToolCall',
+            tool: 'spawnAgent',
+            model: 'gpt-5.6-luna',
+            status: 'completed',
+            senderThreadId: 'root',
+            receiverThreadIds: ['child'],
+            agentsStates: { child: { status: 'running', message: null } },
+          },
+        },
+      }),
+    ).toMatchObject({ childId: 'child', childModel: 'gpt-5.6-luna' });
+  });
   it('maps current camel-case collaboration tools to stable internal actions', () => {
     for (const [tool, collaborationAction] of [
       ['spawnAgent', 'spawn_agent'],

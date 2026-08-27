@@ -17,12 +17,30 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
-  it('lists direct children across bounded pages and rejects cursor loops', async () => {
+  it('lists direct children across bounded pages with models recovered from history', async () => {
     let page = 0;
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {
         request: async (method) => {
           if (method === 'thread/resume' || method === 'initialize') return {};
+          if (method === 'thread/read')
+            return {
+              thread: {
+                turns: [
+                  {
+                    items: [
+                      {
+                        id: 'spawn-1',
+                        type: 'collabAgentToolCall',
+                        tool: 'spawnAgent',
+                        model: 'gpt-5.6-luna',
+                        receiverThreadIds: ['child-1'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            };
           if (method === 'thread/list') {
             page += 1;
             return page === 1
@@ -62,8 +80,9 @@ describe('CodexSessionRuntime', () => {
       updatedAt: 'before',
     };
     await runtime.restore(session, 'after');
+    await runtime.readHistory(session);
     await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
-      { id: 'child-1', nickname: 'one', role: 'worker' },
+      { id: 'child-1', nickname: 'one', role: 'worker', model: 'gpt-5.6-luna' },
       { id: 'child-2' },
     ]);
   });

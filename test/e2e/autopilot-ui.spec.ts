@@ -81,6 +81,7 @@ async function install(
     workspaceId: 'w',
     workspacePath: '/workspace',
     profile: 'default',
+    model: 'gpt-5.6-sol',
     activeTurnId: null,
     ...(awaitingChild
       ? {
@@ -95,6 +96,8 @@ async function install(
               {
                 id: 'child-1',
                 nickname: 'Builder',
+                role: 'explorer',
+                model: 'gpt-5.6-luna',
                 state: 'working',
                 observedAt: '2026-08-20T00:00:00.000Z',
                 lastActivityAt: '2026-08-20T00:00:00.000Z',
@@ -351,6 +354,12 @@ for (const item of cases) {
       await agents.click();
       await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
       await expect(page.getByLabel('Agent activity')).toContainText('waiting for child');
+      await expect(page.getByLabel('Agent activity')).toContainText(
+        'supervisor · Model: gpt-5.6-sol',
+      );
+      await expect(page.getByLabel('Agent activity')).toContainText(
+        'explorer · Model: gpt-5.6-luna',
+      );
     }
     const isEnabled = item.state === 'monitoring' || item.state === 'backoff';
     const control = page.getByRole('button', { name: /^Autopilot:/ });
@@ -381,6 +390,12 @@ for (const item of cases) {
     await expect(
       page.getByLabel('Open sessions').getByRole('region', { name: 'Autopilot' }),
     ).toContainText(item.text);
+    if (item.name === 'root-awaiting-child') {
+      const sessionActivity = page.getByLabel('Open sessions').getByLabel('Agent activity');
+      await sessionActivity.getByText(/^Agents \(/).click();
+      await expect(sessionActivity).toContainText('supervisor · Model: gpt-5.6-sol');
+      await expect(sessionActivity).toContainText('explorer · Model: gpt-5.6-luna');
+    }
     await expectNoHorizontalOverflow(page);
     expect(errors).toEqual([]);
   });

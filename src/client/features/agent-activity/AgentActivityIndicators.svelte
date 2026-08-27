@@ -11,8 +11,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { AgentActivitySnapshot, AgentActivityState } from './contracts.js';
   import { activityAnnouncement } from './announcement-policy.js';
   import { compactElapsedTime } from './relative-activity-time.js';
-  let { activity, compact = false }: { activity: AgentActivitySnapshot | null; compact?: boolean } =
-    $props();
+  let {
+    activity,
+    compact = false,
+    rootModel,
+  }: { activity: AgentActivitySnapshot | null; compact?: boolean; rootModel?: string } = $props();
   const labels: Record<AgentActivityState, string> = {
     working: 'working',
     idle: 'idle',
@@ -25,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     key: string;
     name: string;
     role?: string;
+    model?: string;
     state: AgentActivityState;
     lastActivityAt: string;
   }>;
@@ -57,6 +61,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         key: 'root',
         name: 'Root agent',
         role: 'supervisor',
+        ...(rootModel ? { model: rootModel } : {}),
         state: activity.root.state,
         lastActivityAt: activity.root.lastActivityAt,
       },
@@ -64,6 +69,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         key: `child:${child.id}`,
         name: orgPlanAgentDisplayName(child.nickname ?? child.id),
         ...(child.role ? { role: child.role } : {}),
+        ...(child.model ? { model: child.model } : {}),
         state: child.state,
         lastActivityAt: child.lastActivityAt,
       })),
@@ -120,7 +126,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {#if activity}
           {#each orderedAgents as agent (agent.key)}
             <li>
-              <span><strong>{agent.name}</strong>{agent.role ? ` · ${agent.role}` : ''}</span>
+              <strong>{agent.name}</strong>
+              <span class="agent-metadata"
+                >{[agent.role, agent.model ? `Model: ${agent.model}` : 'Model unavailable']
+                  .filter(Boolean)
+                  .join(' · ')}</span
+              >
               <time datetime={agent.lastActivityAt}
                 >{compactStatus(agent.state, agent.lastActivityAt)}</time
               >
@@ -128,7 +139,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/each}
         {:else}
           <li>
-            <span><strong>Root agent</strong> · supervisor</span>
+            <strong>Root agent</strong>
+            <span class="agent-metadata"
+              >{['supervisor', rootModel ? `Model: ${rootModel}` : 'Model unavailable'].join(
+                ' · ',
+              )}</span
+            >
             <span class="unavailable" role="status">activity unavailable</span>
           </li>
         {/if}
@@ -149,7 +165,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <li>
               <strong>{orgPlanAgentDisplayName(child.nickname ?? child.id)}</strong>{child.role
                 ? ` · ${child.role}`
-                : ''} —
+                : ''}{child.model ? ` · Model: ${child.model}` : ''} —
               {labels[child.state]} <small>{child.lastActivityAt}</small>
             </li>
           {/each}
@@ -236,6 +252,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-block-end: 1px solid var(--theme-border);
   }
   .compact .agents time {
+    color: var(--theme-text-muted);
+    font-size: 0.78rem;
+  }
+  .compact .agents .agent-metadata {
     color: var(--theme-text-muted);
     font-size: 0.78rem;
   }
