@@ -486,6 +486,33 @@ describe('chat projection', () => {
       { id: 'activity-1', label: 'Tool', detail: 'Finished', turnId: 'turn-1' },
     ]);
   });
+  it('does not let an equal-sequence snapshot erase streamed activity missing upstream', () => {
+    const activity = applyProjectionEvent(createChatProjection('s'), {
+      sequence: 1,
+      type: 'activity.updated',
+      payload: {
+        id: 'activity-1',
+        label: 'Command · completed',
+        detail: 'npm test',
+        turnId: 'turn-1',
+      },
+    });
+
+    const retained = acceptSnapshot(beginSnapshot(activity), {
+      ...snapshot(1),
+      activeTurnId: null,
+      items: [],
+    });
+
+    expect(retained.activities).toEqual([
+      {
+        id: 'activity-1',
+        label: 'Command · completed',
+        detail: 'npm test',
+        turnId: 'turn-1',
+      },
+    ]);
+  });
   it('does not promote duplicate identical optimistic prompts by ambiguous text', () => {
     const projection = queuePrompt(
       queuePrompt(createChatProjection('s'), 'one', 'same'),

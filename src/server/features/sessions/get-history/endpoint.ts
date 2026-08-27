@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import type {
   AutopilotAuditRecord,
   ChatSnapshot,
+  SafeActivitySnapshot,
   SafeInteractionSnapshot,
 } from '../../../../shared/contracts/chat-snapshot.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
@@ -32,6 +33,7 @@ export function registerGetHistory(
     }>;
     currentSequence(sessionId: string): number;
     interactions?(sessionId: string): SafeInteractionSnapshot[];
+    activityHistory?(sessionId: string, throughSequence: number): readonly SessionEvent[];
     autopilotControlTurns?(sessionId: string): ReadonlyMap<string, string>;
     /** Bounded, redacted audit source; this endpoint never materializes a journal. */
     autopilotAudit?(
@@ -70,6 +72,10 @@ export function registerGetHistory(
     }
     const controls = deps.autopilotControlTurns?.(session.id) ?? new Map<string, string>();
     const items: ChatItem[] = toChatItems(history.turns, controls);
+    const activities = toActivityHistory(
+      deps.activityHistory?.(session.id, baseSequence) ?? [],
+      baseSequence,
+    );
     const auditSource = deps.autopilotAudit?.(session.id, 100) ?? [];
     const boundedAudit = isBoundedAudit(auditSource) ? auditSource : null;
     const auditEvents: readonly SessionEvent[] = boundedAudit
@@ -81,6 +87,7 @@ export function registerGetHistory(
       turns: toChatTurns(history.turns, controls),
       activeTurnId: history.activeTurnId,
       interactions: deps.interactions?.(session.id) ?? [],
+      ...(activities.length ? { activities } : {}),
       ...(autopilotAudit.length ? { autopilotAudit } : {}),
       ...(boundedAudit?.truncated ? { autopilotAuditTruncated: true } : {}),
       baseSequence,
@@ -89,6 +96,38 @@ export function registerGetHistory(
     };
     return reply.send(snapshot);
   });
+}
+
+function toActivityHistory(
+  events: readonly SessionEvent[],
+  throughSequence: number,
+): SafeActivitySnapshot[] {
+  const activities = new Map<string, SafeActivitySnapshot>();
+  for (const event of events) {
+    if (
+      event.sequence > throughSequence ||
+      event.type !== 'activity.updated' ||
+      !event.payload ||
+      typeof event.payload !== 'object'
+    )
+      continue;
+    const payload = event.payload as Record<string, unknown>;
+    if (
+      typeof payload.id !== 'string' ||
+      typeof payload.label !== 'string' ||
+      typeof payload.detail !== 'string'
+    )
+      continue;
+    const occurredAt = Date.parse(event.occurredAt);
+    activities.set(payload.id, {
+      id: payload.id,
+      label: payload.label,
+      detail: payload.detail,
+      ...(typeof payload.turnId === 'string' ? { turnId: payload.turnId } : {}),
+      ...(Number.isFinite(occurredAt) ? { occurredAt } : {}),
+    });
+  }
+  return [...activities.values()];
 }
 
 function isBoundedAudit(

@@ -46,6 +46,35 @@ it('rejects malformed autopilot audit arrays and accepts a failed attention sett
     }),
   ).toBeNull();
 });
+it('accepts only safe activity snapshots', () => {
+  const base = {
+    items: [],
+    turns: [],
+    activeTurnId: null,
+    interactions: [],
+    baseSequence: 1,
+  };
+  expect(
+    decodeChatSnapshot({
+      ...base,
+      activities: [
+        {
+          id: 'command-1',
+          label: 'Command · completed',
+          detail: 'npm test',
+          turnId: 'turn-1',
+          occurredAt: 1,
+        },
+      ],
+    }),
+  ).not.toBeNull();
+  expect(
+    decodeChatSnapshot({
+      ...base,
+      activities: [{ id: 'command-1', label: 'Command', detail: 'npm test', occurredAt: 'wrong' }],
+    }),
+  ).toBeNull();
+});
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -864,6 +893,80 @@ describe('ChatController', () => {
     (document as unknown as { visibilityState: string }).visibilityState = 'visible';
     handlers.focus?.[0]?.();
     expect(history).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+  it('keeps streamed activity when a foreground refresh omits it', async () => {
+    const handlers: Record<string, (() => void)[]> = {};
+    const document = {
+      visibilityState: 'visible',
+      addEventListener: (name: string, fn: () => void) => (handlers[name] ??= []).push(fn),
+      removeEventListener: vi.fn(),
+    } as unknown as Document;
+    const window = {
+      addEventListener: (name: string, fn: () => void) => (handlers[name] ??= []).push(fn),
+      removeEventListener: vi.fn(),
+    } as unknown as Window;
+    const history = vi
+      .fn()
+      .mockResolvedValueOnce({
+        baseSequence: 0,
+        items: [],
+        turns: [],
+        interactions: [],
+        activeTurnId: 'turn-1',
+      })
+      .mockResolvedValue({
+        baseSequence: 1,
+        items: [],
+        turns: [],
+        interactions: [],
+        activeTurnId: null,
+      });
+    const socket = new Socket();
+    const controller = new ChatController({
+      document,
+      window,
+      location: { protocol: 'http:', host: 'x' } as Location,
+      relay: {
+        getHistory: history,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => socket as unknown as WebSocket,
+    });
+    controller.select('s');
+    await vi.waitFor(() => expect(history).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+    await Promise.resolve();
+    socket.emit({
+      type: 'relay.event',
+      event: {
+        sequence: 1,
+        type: 'activity.updated',
+        payload: {
+          id: 'activity-1',
+          label: 'Command · completed',
+          detail: 'npm test',
+          turnId: 'turn-1',
+        },
+      },
+    });
+    expect(controller.view.activities).toHaveLength(1);
+
+    handlers.focus?.[0]?.();
+    await vi.waitFor(() => expect(history).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(controller.view.snapshotting).toBe(false));
+
+    expect(controller.view.activities).toEqual([
+      {
+        id: 'activity-1',
+        label: 'Command · completed',
+        detail: 'npm test',
+        turnId: 'turn-1',
+      },
+    ]);
     controller.dispose();
   });
   it('silently retries a transient initial history race and accepts the recovered snapshot', async () => {

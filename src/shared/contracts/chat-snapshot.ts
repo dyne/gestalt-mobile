@@ -25,6 +25,14 @@ export type AutopilotAuditRecord = {
   occurredAt: number;
   controlId?: string;
 };
+/** Safe display-only activity restored independently of upstream Codex history. */
+export type SafeActivitySnapshot = {
+  id: string;
+  label: string;
+  detail: string;
+  turnId?: string;
+  occurredAt?: number;
+};
 export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed' | 'failed';
 export type SafeInteractionSnapshot =
   | {
@@ -49,6 +57,7 @@ export type ChatSnapshot = {
   turns: ChatTurn[];
   activeTurnId: string | null;
   interactions: SafeInteractionSnapshot[];
+  activities?: SafeActivitySnapshot[];
   autopilotAudit?: AutopilotAuditRecord[];
   /** The bounded audit tail omitted older records; the visible list is not exhaustive. */
   autopilotAuditTruncated?: boolean;

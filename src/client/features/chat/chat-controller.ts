@@ -111,6 +111,14 @@ const isAutopilotAuditRecord = (value: unknown): boolean =>
   typeof value.occurredAt === 'number' &&
   Number.isFinite(value.occurredAt) &&
   (value.controlId === undefined || typeof value.controlId === 'string');
+const isSafeActivitySnapshot = (value: unknown): boolean =>
+  object(value) &&
+  typeof value.id === 'string' &&
+  typeof value.label === 'string' &&
+  typeof value.detail === 'string' &&
+  (value.turnId === undefined || typeof value.turnId === 'string') &&
+  (value.occurredAt === undefined ||
+    (typeof value.occurredAt === 'number' && Number.isFinite(value.occurredAt)));
 export const decodeChatSnapshot = (value: unknown): ChatSnapshot | null => {
   if (
     !object(value) ||
@@ -123,6 +131,8 @@ export const decodeChatSnapshot = (value: unknown): ChatSnapshot | null => {
     !value.items.every(isChatItem) ||
     !value.turns.every(isChatTurn) ||
     !value.interactions.every(isSafeInteractionSnapshot) ||
+    (value.activities !== undefined &&
+      (!Array.isArray(value.activities) || !value.activities.every(isSafeActivitySnapshot))) ||
     (value.autopilotAudit !== undefined &&
       (!Array.isArray(value.autopilotAudit) ||
         !value.autopilotAudit.every(isAutopilotAuditRecord))) ||

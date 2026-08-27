@@ -477,11 +477,18 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
       };
     }),
   );
-  const activities = unique(
-    snapshot.items.flatMap((item) => {
-      const activity = toActivity(item);
-      return activity ? [{ ...activity, key: `activity:${activity.id}` }] : [];
-    }) as Array<HistoryActivity & { key: string }>,
+  const canonicalActivities = unique(
+    snapshot.items
+      .flatMap((item) => {
+        const activity = toActivity(item);
+        return activity ? [{ ...activity, key: `activity:${activity.id}` }] : [];
+      })
+      .concat(
+        (snapshot.activities ?? []).map((activity) => ({
+          ...activity,
+          key: `activity:${activity.id}`,
+        })),
+      ) as Array<HistoryActivity & { key: string }>,
   ).map((item) => ({
     id: item.id,
     label: item.label,
@@ -489,6 +496,7 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
     ...(item.turnId ? { turnId: item.turnId } : {}),
     ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
   }));
+  const activities = canonicalActivities.reduce(upsertActivity, [...current.activities]);
   const turnTimes = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
   const items = snapshot.items.map((item) => {
     if (typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)) return item;

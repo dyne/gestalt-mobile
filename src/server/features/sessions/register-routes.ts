@@ -78,6 +78,7 @@ export function registerSessionRoutes(
         read: sessions.readHistory,
         currentSequence: sessions.currentSequence ?? (() => 0),
         interactions: deps.interactions?.snapshot,
+        activityHistory: sessions.activityHistory,
         autopilotControlTurns: sessions.autopilotControlTurns,
         autopilotAudit: sessions.autopilotAudit,
       });

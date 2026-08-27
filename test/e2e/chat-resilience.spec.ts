@@ -388,6 +388,84 @@ test('converges a live item through an overlapping snapshot, reconnect, and refr
   expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(844);
 });
 
+test('retains activity through foreground refresh and restores its completed disclosure', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'session-1',
+      state: 'turnActive',
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: 'turn-1',
+      pendingInteractions: [],
+    },
+  ]);
+  const prompt = { id: 'prompt-1', kind: 'user', text: 'run the checks', turnId: 'turn-1' };
+  const commentary = {
+    id: 'commentary-1',
+    kind: 'agent',
+    text: 'Checking the project.',
+    phase: 'commentary',
+    turnId: 'turn-1',
+  };
+  const answer = {
+    id: 'answer-1',
+    kind: 'agent',
+    text: 'All checks passed.',
+    phase: 'final_answer',
+    turnId: 'turn-1',
+  };
+  const activity = {
+    id: 'command-1',
+    label: 'Command · completed',
+    detail: 'npm test',
+    turnId: 'turn-1',
+  };
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({ activeTurnId: 'turn-1', items: [prompt, commentary] }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect.poll(() => fixture.sockets.has('session-1')).toBe(true);
+  fixture.event('session-1', 1, 'activity.updated', activity);
+  await expect(page.getByLabel('Current activity')).toContainText('npm test');
+
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({ baseSequence: 1, items: [prompt, commentary, answer] }),
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByText('All checks passed.')).toBeVisible();
+  const history = page.getByText('All checks passed.').locator('xpath=ancestor::section');
+  await expect(history.getByRole('button', { name: 'commentary' })).toBeVisible();
+  const activityDisclosure = history.locator('details.chat-activity');
+  await expect(activityDisclosure).toBeVisible();
+  await expect(activityDisclosure).not.toHaveAttribute('open', '');
+  await activityDisclosure.locator('summary').click();
+  await expect(activityDisclosure).toContainText('npm test');
+
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({
+      baseSequence: 1,
+      items: [prompt, commentary, answer],
+      activities: [activity],
+    }),
+  );
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat' }).click();
+  const restored = page.getByText('All checks passed.').locator('xpath=ancestor::section');
+  await expect(restored.locator('details.chat-activity')).toBeVisible();
+});
+
 test('retains an optimistic prompt while turn HTTP is deferred', async ({ page }) => {
   await mockAuthenticatedStatus(page);
   const fixture = new ChatRelayFixture(page);
