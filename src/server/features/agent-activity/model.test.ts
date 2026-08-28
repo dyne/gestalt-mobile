@@ -85,6 +85,25 @@ describe('agent activity projector', () => {
     );
     expect(completed.subagents).toMatchObject([{ id: 'c', model: 'gpt-5.6-luna' }]);
   });
+  it('adds a model when reconciliation discovered the child before spawn metadata', () => {
+    const discovered = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('collaboration', {
+        childId: 'c',
+        childStatus: 'working',
+      }),
+    );
+    const enriched = projectAgentActivity(
+      discovered,
+      fact('collaboration', {
+        childId: 'c',
+        childModel: 'gpt-5.6-luna',
+        childStatus: 'working',
+      }),
+    );
+    expect(enriched).not.toBe(discovered);
+    expect(enriched.subagents).toMatchObject([{ id: 'c', model: 'gpt-5.6-luna' }]);
+  });
   it('is duplicate and session isolated', () => {
     const first = projectAgentActivity(createAgentActivitySnapshot('s', at), fact('turnStarted'));
     expect(projectAgentActivity(first, fact('turnStarted'))).toBe(first);
