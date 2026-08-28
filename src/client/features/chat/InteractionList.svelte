@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { readCommandApproval } from './command-approval.js';
   import { readFileChangeApproval } from './file-change-approval.js';
   import QuizForm from './QuizForm.svelte';
+  import type { SubmittedQuizAnswer } from './quiz-submission.js';
   import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
   type Interaction = {
     requestId: string;
@@ -21,6 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     interactions: Interaction[];
     answers: Record<string, string>;
+    submittedAnswers?: Record<string, readonly SubmittedQuizAnswer[]>;
     onanswer(requestId: string, id: string, value: string): void;
     onquiz(interaction: Interaction): void;
     onpermission(interaction: Interaction): void;
@@ -30,6 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     interactions,
     answers,
+    submittedAnswers = {},
     onanswer,
     onquiz,
     onpermission,
@@ -168,6 +171,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <button type="button" onclick={() => onretry(interaction)}>Retry</button>
       {/if}
     {/if}
+    {#if submittedAnswers[interaction.requestId]?.length}
+      <section class="submitted-answers" aria-label="Submitted answers" aria-live="polite">
+        <p><strong>Submitted answers</strong></p>
+        <ol>
+          {#each submittedAnswers[interaction.requestId] as answer (answer.id)}
+            <li>
+              <span class="submitted-question"
+                ><strong>{answer.header}</strong> — {answer.question}</span
+              >
+              <span class="submitted-answer">{answer.answer}</span>
+            </li>
+          {/each}
+        </ol>
+        <p class="submitted-note">Recorded in this chat view before delivery.</p>
+      </section>
+    {/if}
   </article>
 {/each}
 
@@ -178,6 +197,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     background: var(--theme-surface-subtle);
     border-inline-start: 0.25rem solid var(--theme-info);
     border-radius: 0.375rem;
+  }
+  .submitted-answers {
+    display: grid;
+    gap: 0.5rem;
+    margin-block-start: 0.75rem;
+    padding-block-start: 0.75rem;
+    border-block-start: 1px solid var(--theme-border);
+  }
+  .submitted-answers p,
+  .submitted-answers ol {
+    margin: 0;
+  }
+  .submitted-answers ol {
+    display: grid;
+    gap: 0.625rem;
+    padding-inline-start: 1.25rem;
+  }
+  .submitted-answers li,
+  .submitted-question,
+  .submitted-answer {
+    overflow-wrap: anywhere;
+  }
+  .submitted-question,
+  .submitted-answer {
+    display: block;
+  }
+  .submitted-answer {
+    margin-block-start: 0.125rem;
+    white-space: pre-wrap;
+  }
+  .submitted-note {
+    color: var(--theme-text-muted);
+    font-size: 0.85rem;
   }
   .interaction-kind,
   .interaction-submitting,

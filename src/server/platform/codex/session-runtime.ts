@@ -557,10 +557,17 @@ export class CodexSessionRuntime {
     const requestId = String(request.id);
     if (resource.pendingRequests.has(requestId))
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_DUPLICATE'));
-    if (!this.onServerRequest?.(resource.sessionId, request))
-      return Promise.reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     return new Promise((resolve, reject) => {
       resource.pendingRequests.set(requestId, { resolve, reject });
+      let accepted = false;
+      try {
+        accepted = this.onServerRequest?.(resource.sessionId, request) === true;
+      } catch {
+        // Publication failures are protocol failures, not permission to retain
+        // an unreachable app-server request.
+      }
+      if (!accepted && resource.pendingRequests.delete(requestId))
+        reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     });
   }
 

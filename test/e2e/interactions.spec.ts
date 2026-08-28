@@ -91,6 +91,7 @@ test('shows file targets and separately tappable approval controls at a compact 
 });
 
 test('retries a failed quiz once and suppresses a duplicate accepted request', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await openChat(page, [
     {
       requestId: 'quiz-1',
@@ -128,11 +129,17 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
 
   await page.getByRole('radio', { name: /Solo/ }).click();
   await page.getByRole('button', { name: 'Send answers' }).click();
+  const submitted = page.getByRole('region', { name: 'Submitted answers' });
+  await expect(submitted).toContainText('Execution mode');
+  await expect(submitted).toContainText('How should this plan run?');
+  await expect(submitted).toContainText('Solo');
+  await expect(submitted).toContainText('Recorded in this chat view before delivery.');
   const retry = page.getByRole('button', { name: 'Retry' });
   await expect(retry).toBeVisible();
 
   await retry.click();
   await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Answers sent');
+  await expect(submitted).toContainText('Solo');
   await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
   expect(attempts).toBe(2);
 });

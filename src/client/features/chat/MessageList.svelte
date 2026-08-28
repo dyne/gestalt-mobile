@@ -13,6 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { formatElapsedAfter, formatMessageTime } from './message-time.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import type { ProjectedInteraction } from './chat-projection.js';
+  import type { SubmittedQuizAnswer } from './quiz-submission.js';
   import { isLocalOrgHref } from '../plans/org-plan-link.js';
 
   type Props = {
@@ -22,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     autopilotAuditTruncated?: boolean;
     interactions?: ProjectedInteraction[];
     answers?: Record<string, string>;
+    submittedAnswers?: Record<string, readonly SubmittedQuizAnswer[]>;
     onanswer?(requestId: string, id: string, value: string): void;
     onquiz?(interaction: ProjectedInteraction): void;
     onpermission?(interaction: ProjectedInteraction): void;
@@ -36,6 +38,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     autopilotAuditTruncated = false,
     interactions = [],
     answers = {},
+    submittedAnswers = {},
     onanswer = () => {},
     onquiz = () => {},
     onpermission = () => {},
@@ -259,6 +262,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <InteractionList
           interactions={turnInteractions(group)}
           {answers}
+          {submittedAnswers}
           {onanswer}
           {onquiz}
           {onpermission}
@@ -358,6 +362,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <InteractionList
         interactions={unassignedInteractions}
         {answers}
+        {submittedAnswers}
         {onanswer}
         {onquiz}
         {onpermission}
