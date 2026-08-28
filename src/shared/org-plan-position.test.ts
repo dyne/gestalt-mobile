@@ -16,6 +16,8 @@ describe('Org Plan positions', () => {
   it('presents tool-safe dedicated subagent names as canonical positions', () => {
     expect(orgPlanAgentDisplayName('l2')).toBe('L2');
     expect(orgPlanAgentDisplayName('l2_5')).toBe('L2.5');
+    expect(orgPlanAgentDisplayName('l2_5_g3')).toBe('L2.5');
+    expect(orgPlanAgentDisplayName('/root/l4_g2')).toBe('L4');
     expect(orgPlanAgentDisplayName('researcher')).toBe('researcher');
     expect(orgPlanAgentDisplayName('l0_2')).toBe('l0_2');
   });

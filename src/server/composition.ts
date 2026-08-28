@@ -69,6 +69,7 @@ import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-st
 import { AutopilotCoordinator } from './features/autopilot/application/service.js';
 import {
   AUTOPILOT_CONTINUATION_PROMPT,
+  AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
   defaultAutopilotPolicy,
 } from './features/autopilot/application/policy.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
@@ -252,10 +253,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
         });
         const children = await runtime.listDirectChildren(session);
+        const childProcesses = new Map<
+          string,
+          Awaited<ReturnType<CodexSessionRuntime['inspectChildProcesses']>>
+        >();
+        await mapWithConcurrency([...children], 4, async (child) => {
+          childProcesses.set(child.id, await runtime!.inspectChildProcesses(session, child));
+        });
         // The writer read is also asynchronous; it cannot publish after the
         // durable owner has gone away either.
         if (!sessions.find(sessionId)) return;
-        activity.childrenReconciled(sessionId, occurredAt, children);
+        activity.childrenReconciled(
+          sessionId,
+          occurredAt,
+          children.map((child) => ({
+            ...child,
+            processes: childProcesses.get(child.id) ?? [],
+          })),
+        );
       },
     },
   );
@@ -274,6 +289,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ? options.autopilotActivity(sessionId)
         : activity.snapshot(sessionId, new Date().toISOString()),
     pendingInteraction: (sessionId) => interactions.list(sessionId).length > 0,
+    attention: (sessionId) => {
+      const interaction = interactions
+        .list(sessionId)
+        .find((candidate) => candidate.kind === 'orgPlanAttention');
+      const attention = interaction ? parseOrgPlanAttention(interaction.payload) : null;
+      return attention
+        ? { reason: attention.reason, resumeCondition: attention.resumeCondition }
+        : null;
+    },
     reconcile: async (sessionId) => {
       if (options.autopilotReconcile) return options.autopilotReconcile(sessionId);
       await activity.refresh(sessionId);
@@ -290,7 +314,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     nextControlId: (sessionId, generation) =>
       `autopilot-${generation}-${createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex').slice(0, 16)}`,
     turnStarter: {
-      start: async (sessionId, controlId, generation) => {
+      start: async (sessionId, controlId, generation, launchIdentity) => {
         const current = () => {
           const state = autopilotStore.find(sessionId);
           return Boolean(
@@ -311,9 +335,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         if (!current() || writer.session.activeTurnId || interactions.list(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
+        const continuationPrompt = launchIdentity
+          ? `${AUTOPILOT_CONTINUATION_PROMPT} Launch task_name ${launchIdentity.taskName} for canonical ${launchIdentity.canonicalPosition}; retain the canonical label in status and review output.`
+          : AUTOPILOT_CONTINUATION_PROMPT;
         const started = await runtime.startTurn(
           writer.session,
-          AUTOPILOT_CONTINUATION_PROMPT,
+          continuationPrompt,
           controlId,
           new Date().toISOString(),
         );
@@ -331,6 +358,51 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           ...(started.threadId ? { threadId: started.threadId } : {}),
           ...(started.activeTurnId ? { turnId: started.activeTurnId } : {}),
         });
+      },
+    },
+    executorController: {
+      resume: async (sessionId, threadId, generation, trigger) => {
+        const session = sessions.find(sessionId);
+        if (!session || !runtime || interactions.list(sessionId).length)
+          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+        const writer = await runtime.ensureWriter(session, new Date().toISOString());
+        if (interactions.list(sessionId).length) throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+        const context =
+          trigger.kind === 'processExited'
+            ? ` Process result ${trigger.resultArtifact} exited and is ready in this executor history.`
+            : trigger.kind === 'processResourceLimit'
+              ? ` Process ${trigger.processId} exceeded its explicit resource budget and was terminated; diagnose before retrying.`
+              : '';
+        const clientId = `autopilot-executor-${generation}-${createHash('sha256')
+          .update(`${sessionId}:${threadId}:${generation}:${randomUUID()}`)
+          .digest('hex')
+          .slice(0, 16)}`;
+        const turnId = await runtime.startExecutorTurn(
+          writer.session,
+          threadId,
+          `${AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT}${context}`,
+          clientId,
+        );
+        activity.observe({
+          sessionId,
+          occurredAt: new Date().toISOString(),
+          kind: 'turnStarted',
+          threadId,
+          turnId,
+        });
+      },
+      refresh: (sessionId) => activity.refresh(sessionId),
+      transferProcess: (sessionId, threadId, processId) => {
+        activity.transferProcessOwnership(sessionId, threadId, processId, new Date().toISOString());
+      },
+      consumeProcess: (sessionId, threadId, processId) => {
+        runtime?.consumeChildProcessResult(sessionId, threadId, processId);
+      },
+      terminateProcess: async (sessionId, threadId, processId) => {
+        const session = sessions.find(sessionId);
+        return session && runtime
+          ? runtime.terminateChildProcess(session, threadId, processId)
+          : false;
       },
     },
     publish: (sessionId, type, payload, occurredAt, outboxId) => {

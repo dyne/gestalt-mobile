@@ -111,6 +111,50 @@ describe('agent activity registry', () => {
       subagents: [{ id: 'child', state: 'disconnected' }],
     });
   });
+  it('projects canonical executor identity and owned process metadata without command output', () => {
+    const registry = new AgentActivityRegistry(() => {});
+    const next = registry.childrenReconciled('s', at, [
+      {
+        id: 'child',
+        status: 'idle',
+        taskPath: '/root/l4_g2',
+        processes: [
+          {
+            processId: 'process-1',
+            itemId: 'item-1',
+            ownerThreadId: 'child',
+            ownerTaskPath: '/root/l4_g2',
+            ownership: 'executor',
+            state: 'running',
+            observedAt: at,
+            elapsedMs: 5_000,
+            cpuPercent: 99,
+            rssBytes: 1_024,
+            osPid: 42,
+          },
+        ],
+      },
+    ]);
+    expect(next.subagents).toMatchObject([
+      {
+        id: 'child',
+        state: 'idle',
+        outcome: 'partial',
+        taskPath: '/root/l4_g2',
+        canonicalTaskName: 'l4',
+        canonicalPosition: 'L4',
+        continuationGeneration: 2,
+        ownedProcesses: [
+          {
+            processId: 'process-1',
+            ownerThreadId: 'child',
+            rssBytes: 1_024,
+          },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(next)).not.toContain('command');
+  });
   it('coalesces concurrent manual refreshes per session', async () => {
     let release: (() => void) | undefined;
     let calls = 0;

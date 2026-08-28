@@ -51,6 +51,11 @@ describe('CodexSessionRuntime', () => {
                       status: { type: 'active' },
                       agentNickname: 'one',
                       agentRole: 'worker',
+                      source: {
+                        subagent: {
+                          thread_spawn: { agent_path: '/root/l4_g2' },
+                        },
+                      },
                     },
                   ],
                   nextCursor: 'two',
@@ -82,9 +87,128 @@ describe('CodexSessionRuntime', () => {
     await runtime.restore(session, 'after');
     await runtime.readHistory(session);
     await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
-      { id: 'child-1', nickname: 'one', role: 'worker', model: 'gpt-5.6-luna' },
+      {
+        id: 'child-1',
+        nickname: 'one',
+        role: 'worker',
+        model: 'gpt-5.6-luna',
+        taskPath: '/root/l4_g2',
+      },
       { id: 'child-2' },
     ]);
+  });
+  it('owns, observes, consumes, and exactly terminates a child background process', async () => {
+    let active = true;
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          calls.push({ method, params });
+          if (method === 'thread/resume' || method === 'initialize') return {};
+          if (method === 'thread/backgroundTerminals/list')
+            return active
+              ? {
+                  data: [
+                    {
+                      itemId: 'item-1',
+                      processId: 'process-1',
+                      command: 'opaque',
+                      cwd: '/workspace',
+                      osPid: 4242,
+                      cpuPercent: 100,
+                      rssKb: 13 * 1024 * 1024,
+                    },
+                  ],
+                  nextCursor: null,
+                }
+              : { data: [], nextCursor: null };
+          if (method === 'thread/read')
+            return {
+              thread: {
+                turns: [
+                  {
+                    items: [
+                      {
+                        id: 'item-1',
+                        type: 'commandExecution',
+                        processId: 'process-1',
+                        status: 'completed',
+                        exitCode: 0,
+                        aggregatedOutput: 'must not enter lifecycle state',
+                      },
+                    ],
+                  },
+                ],
+              },
+            };
+          if (method === 'thread/backgroundTerminals/terminate') return { terminated: true };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'processes',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+
+    const observed = await runtime.inspectChildProcesses(session, {
+      id: 'child-1',
+      taskPath: '/root/l4',
+    });
+    expect(observed).toMatchObject([
+      {
+        processId: 'process-1',
+        itemId: 'item-1',
+        ownerThreadId: 'child-1',
+        ownerTaskPath: '/root/l4',
+        state: 'running',
+        osPid: 4242,
+        cpuPercent: 100,
+        rssBytes: 13 * 1024 * 1024 * 1024,
+      },
+    ]);
+
+    active = false;
+    const exited = await runtime.inspectChildProcesses(session, {
+      id: 'child-1',
+      taskPath: '/root/l4',
+    });
+    expect(exited).toMatchObject([
+      {
+        processId: 'process-1',
+        state: 'exited-awaiting-result',
+        exitStatus: 0,
+        resultArtifact: 'child-1:item-1',
+      },
+    ]);
+    expect(JSON.stringify(exited)).not.toContain('must not enter lifecycle state');
+
+    runtime.consumeChildProcessResult('processes', 'child-1', 'process-1');
+    await expect(
+      runtime.inspectChildProcesses(session, { id: 'child-1', taskPath: '/root/l4' }),
+    ).resolves.toEqual([]);
+    await expect(runtime.terminateChildProcess(session, 'child-1', 'process-1')).resolves.toBe(
+      true,
+    );
+    expect(calls.at(-1)).toEqual({
+      method: 'thread/backgroundTerminals/terminate',
+      params: { threadId: 'child-1', processId: 'process-1' },
+    });
   });
   it('fails closed on a looping child cursor', async () => {
     const runtime = new CodexSessionRuntime(() => ({

@@ -53,6 +53,7 @@ function fakeAppServer(calls: string[]) {
 type LiveServerHandle = {
   calls: string[];
   requests: Array<{ method: string; params: unknown }>;
+  respond?: (method: string, params: unknown) => unknown | Promise<unknown>;
   notify?: (notification: { method: string; params: unknown }) => void;
   request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
 };
@@ -66,6 +67,8 @@ function liveAppServer(handles: LiveServerHandle[]) {
         request: async (method: string, params: unknown) => {
           handle.calls.push(method);
           handle.requests.push({ method, params });
+          const overridden = await handle.respond?.(method, params);
+          if (overridden !== undefined) return overridden;
           if (method === 'thread/start') return { thread: { id: `thread-${handles.length}` } };
           if (method === 'turn/start') return { turn: { id: `turn-${handle.calls.length}` } };
           if (method === 'thread/read') return { thread: { turns: [] } };
@@ -425,7 +428,7 @@ describe('production composition', () => {
           .payload,
       ).toMatchObject({ enabled: true });
       // This is production composition, not a coordinator fake: the scheduler reaches the
-      // real runtime adapter and can pass only the fixed policy-owned prompt and opaque ID.
+      // real runtime adapter and can pass only policy-owned lifecycle context and an opaque ID.
       await vi.waitFor(
         () => expect(handles.at(-1)?.calls.filter((call) => call === 'turn/start')).toHaveLength(1),
         { timeout: 2_500 },
@@ -436,7 +439,7 @@ describe('production composition', () => {
         input: [
           {
             type: 'text',
-            text: AUTOPILOT_CONTINUATION_PROMPT,
+            text: `${AUTOPILOT_CONTINUATION_PROMPT} Launch task_name l1 for canonical L1; retain the canonical label in status and review output.`,
             text_elements: [],
           },
         ],
@@ -700,7 +703,7 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
-    it('production restart unexplained issued requires attention while issued persisted activeTurn records one started audit without replay', async () => {
+    it('production restart keeps unexplained issued state supervised while persisted activeTurn records one started audit without replay', async () => {
       let coordinator:
         import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
       const fixture = await createProductionAutopilotFixture({
@@ -729,12 +732,12 @@ describe('production composition', () => {
         expect(
           (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
         ).toMatchObject({
-          autopilot: { enabled: false, state: 'attentionRequired', reason: 'reconcileFailed' },
+          autopilot: { enabled: true, state: 'monitoring', reason: 'reconcileFailed' },
         }),
       );
       expect(fixture.handles.flatMap((handle) => handle.calls)).not.toContain('turn/start');
-      // This coordinator safety stop has no tool request id. Recovery is the
-      // ordinary durable Autopilot toggle, not the attention resolver route.
+      // Re-enabling is idempotent because runtime ambiguity remains under
+      // condition-based supervision rather than becoming synthetic attention.
       expect(
         (
           await fixture.app.inject({
@@ -1066,6 +1069,37 @@ describe('production composition', () => {
     it('production child-idle transition wakes an idle supervised autopilot', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
+        autopilotActivity: (sessionId) => {
+          const observedAt = new Date().toISOString();
+          return {
+            sessionId,
+            rootThreadId: 'thread-1',
+            root: {
+              state: 'idle',
+              reason: 'turnCompleted',
+              observedAt,
+              lastActivityAt: observedAt,
+            },
+            subagents: [
+              {
+                id: 'child-1',
+                threadId: 'child-1',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                outcome: 'partial',
+                ownedProcesses: [],
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+            ],
+            aggregateSubagents: 'idle',
+            confidence: 'fresh',
+          };
+        },
         autopilotSchedule: (callback) => {
           const timer = { callback, cancelled: false, fired: false };
           timers.push(timer);
@@ -1084,28 +1118,6 @@ describe('production composition', () => {
         ).statusCode,
       ).toBe(200);
       timers.length = 0;
-      const handle = fixture.handles.find((candidate) => candidate.notify)!;
-      handle.notify!({
-        method: 'thread/started',
-        params: { thread: { id: 'thread-1', status: { type: 'active' } } },
-      });
-      handle.notify!({
-        method: 'item/started',
-        params: {
-          item: {
-            type: 'collabToolCall',
-            tool: 'spawn_agent',
-            status: 'inProgress',
-            senderThreadId: 'thread-1',
-            receiverThreadId: 'child-1',
-            agentStatus: 'working',
-          },
-        },
-      });
-      handle.notify!({
-        method: 'thread/status/changed',
-        params: { threadId: 'thread-1', status: { type: 'idle' } },
-      });
       expect(
         (
           await fixture.app.inject({
@@ -1115,36 +1127,22 @@ describe('production composition', () => {
           })
         ).statusCode,
       ).toBe(200);
-      expect(timers).toHaveLength(0);
-
-      handle.notify!({
-        method: 'item/completed',
-        params: {
-          item: {
-            type: 'collabToolCall',
-            tool: 'wait',
-            status: 'completed',
-            senderThreadId: 'thread-1',
-            receiverThreadId: 'child-1',
-            agentStatus: 'idle',
-          },
-        },
-      });
-
       expect(timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(1);
-      for (let index = 0; index < 2; index += 1) {
-        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
-        expect(timer).toBeDefined();
-        timer!.fired = true;
-        timer!.callback();
-      }
+      const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
+      timer.fired = true;
+      timer.callback();
       await vi.waitFor(() =>
         expect(
-          fixture.handles
-            .flatMap((candidate) => candidate.calls)
-            .filter((call) => call === 'turn/start'),
+          fixture.handles.flatMap((candidate) =>
+            candidate.requests.filter((call) => call.method === 'turn/start'),
+          ),
         ).toHaveLength(1),
       );
+      expect(
+        fixture.handles.flatMap((candidate) =>
+          candidate.requests.filter((call) => call.method === 'turn/start'),
+        )[0]?.params,
+      ).toMatchObject({ threadId: 'child-1' });
       await fixture.app.close();
     });
 
@@ -1216,8 +1214,10 @@ describe('production composition', () => {
       expect(quietTimer).toBeDefined();
       quietTimer!.fired = true;
       quietTimer!.callback();
+      await vi.waitFor(() =>
+        expect(timers.find((timer) => !timer.cancelled && !timer.fired)).toBeDefined(),
+      );
       const continuationTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
-      expect(continuationTimer).toBeDefined();
       continuationTimer!.fired = true;
       continuationTimer!.callback();
       await vi.waitFor(() =>
@@ -1230,11 +1230,9 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
-    it('production incompatible exhausted reconcile becomes typed attention with no later reads or timers', async () => {
+    it('production incompatible reconcile remains supervised and schedules reinspection', async () => {
       let reconciliations = 0;
       const timers: Array<() => void> = [];
-      let coordinator:
-        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
       const fixture = await createProductionAutopilotFixture({
         autopilotActivity: () => null,
         autopilotReconcile: async () => {
@@ -1244,9 +1242,6 @@ describe('production composition', () => {
         autopilotSchedule: (callback) => {
           timers.push(callback);
           return () => undefined;
-        },
-        onAutopilotCoordinator: (value) => {
-          coordinator = value;
         },
       });
       expect(
@@ -1262,15 +1257,15 @@ describe('production composition', () => {
         expect(
           (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
         ).toMatchObject({
-          autopilot: { state: 'attentionRequired', enabled: false, reason: 'reconcileFailed' },
+          autopilot: { state: 'monitoring', enabled: true, reason: 'reconcileFailed' },
         }),
       );
       const stableReconciliations = reconciliations;
       const stableTimers = timers.length;
-      coordinator!.evaluate(fixture.sessionId);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      expect(reconciliations).toBe(stableReconciliations);
-      expect(timers).toHaveLength(stableTimers);
+      expect(stableTimers).toBeGreaterThan(0);
+      await timers.at(-1)?.();
+      await vi.waitFor(() => expect(reconciliations).toBeGreaterThan(stableReconciliations));
+      expect(timers.length).toBeGreaterThanOrEqual(stableTimers);
       await fixture.app.close();
     });
 

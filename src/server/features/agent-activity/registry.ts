@@ -11,6 +11,7 @@ import {
   withActivityConfidence,
   type AgentActivityFact,
   type AgentActivitySnapshot,
+  type AgentOwnedProcess,
 } from './model.js';
 
 /** Session-local read model. Scheduling and reconciliation are injected ports. */
@@ -104,6 +105,8 @@ export class AgentActivityRegistry {
       nickname?: string;
       role?: string;
       model?: string;
+      taskPath?: string;
+      processes?: readonly AgentOwnedProcess[];
     }[],
   ): AgentActivitySnapshot {
     if (this.#disposed.has(sessionId)) return this.snapshot(sessionId, occurredAt);
@@ -120,6 +123,8 @@ export class AgentActivityRegistry {
         ...(child.nickname ? { childNickname: child.nickname } : {}),
         ...(child.role ? { childRole: child.role } : {}),
         ...(child.model ? { childModel: child.model } : {}),
+        ...(child.taskPath ? { childTaskPath: child.taskPath } : {}),
+        ...(child.processes ? { childOwnedProcesses: child.processes } : {}),
       });
     for (const child of next.subagents)
       if (!seen.has(child.id))
@@ -138,6 +143,37 @@ export class AgentActivityRegistry {
       children.some((child) => child.qualified === false) ? 'stale' : 'fresh',
     );
     const current = this.snapshot(sessionId, occurredAt);
+    if (next !== current) {
+      this.#snapshots.set(sessionId, next);
+      this.publish(next, occurredAt);
+    }
+    return next;
+  }
+  transferProcessOwnership(
+    sessionId: string,
+    childThreadId: string,
+    processId: string,
+    occurredAt: string,
+  ): AgentActivitySnapshot {
+    const current = this.snapshot(sessionId, occurredAt);
+    const child = current.subagents.find((candidate) => candidate.id === childThreadId);
+    if (!child?.ownedProcesses?.some((process) => process.processId === processId)) return current;
+    const next = withActivityConfidence(
+      projectAgentActivity(current, {
+        sessionId,
+        occurredAt,
+        kind: 'collaboration',
+        childId: child.id,
+        childThreadId: child.threadId,
+        childTaskPath: child.taskPath,
+        childOwnedProcesses: child.ownedProcesses.map((process) =>
+          process.processId === processId
+            ? { ...process, ownership: 'supervisor', state: 'detached-active' }
+            : process,
+        ),
+      }),
+      'fresh',
+    );
     if (next !== current) {
       this.#snapshots.set(sessionId, next);
       this.publish(next, occurredAt);

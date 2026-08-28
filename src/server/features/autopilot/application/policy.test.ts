@@ -12,6 +12,7 @@ import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import { disabledAutopilot } from '../domain/autopilot-session.js';
 import {
   AUTOPILOT_CONTINUATION_PROMPT,
+  AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
   AUTOPILOT_PROMPT_VERSION,
   decideAutopilot,
   defaultAutopilotPolicy,
@@ -54,7 +55,7 @@ describe('autopilot policy', () => {
     expect(executionComplete(plan())).toBe(false);
     expect(executionComplete(plan('REVIEWED'))).toBe(true);
   });
-  it('does not schedule when sensors are stale or human attention is pending', () => {
+  it('does not schedule when sensors are stale or an ordinary interaction is pending', () => {
     const state = {
       ...disabledAutopilot('s', now),
       state: 'monitoring' as const,
@@ -87,15 +88,16 @@ describe('autopilot policy', () => {
         now,
         policy: defaultAutopilotPolicy,
       }),
-    ).toEqual({ kind: 'requestAttention', reason: 'attentionRequired' });
+    ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v2');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v3');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('task_name l<a> or l<a>_<b>');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
+    expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
   type ActivityChange = Partial<
     Pick<AgentActivitySnapshot, 'confidence' | 'aggregateSubagents'>
@@ -122,9 +124,9 @@ describe('autopilot policy', () => {
     ],
     ['awaiting child', { aggregateSubagents: 'awaitingAgent' }, false, 'observe'],
     ['working child', { aggregateSubagents: 'working' }, false, 'observe'],
-    ['root awaiting human', { root: { state: 'awaitingHuman' } }, false, 'requestAttention'],
-    ['child awaiting human', { aggregateSubagents: 'awaitingHuman' }, false, 'requestAttention'],
-    ['pending interaction', {}, true, 'requestAttention'],
+    ['root awaiting human', { root: { state: 'awaitingHuman' } }, false, 'observe'],
+    ['child awaiting human', { aggregateSubagents: 'awaitingHuman' }, false, 'observe'],
+    ['pending interaction', {}, true, 'observe'],
     ['typed attention', {}, false, 'requestAttention'],
     ['stale sensor', { confidence: 'stale' }, false, 'reconcile'],
     ['healthy idle', {}, false, 'scheduleContinuation'],
@@ -180,7 +182,7 @@ describe('autopilot policy', () => {
       ).toEqual(result);
     },
   );
-  it('names terminal, manual-disable, and bounded-exhaustion decisions', () => {
+  it('names terminal and manual-disable decisions while partial loops remain scheduled', () => {
     const base = createAgentActivitySnapshot('s', now);
     const active: AgentActivitySnapshot = {
       ...base,
@@ -229,7 +231,7 @@ describe('autopilot policy', () => {
         now,
         policy: defaultAutopilotPolicy,
       }),
-    ).toEqual({ kind: 'requestAttention', reason: 'noPlanProgress' });
+    ).toEqual({ kind: 'scheduleContinuation', at: '2026-08-20T12:00:08.000Z' });
     expect(
       decideAutopilot({
         state: enabled,
@@ -240,7 +242,7 @@ describe('autopilot policy', () => {
         now,
         policy: defaultAutopilotPolicy,
       }),
-    ).toEqual({ kind: 'requestAttention', reason: 'actionRateExceeded' });
+    ).toEqual({ kind: 'scheduleContinuation', at: '2026-08-20T12:00:01.000Z' });
     expect(
       decideAutopilot({
         state: enabled,

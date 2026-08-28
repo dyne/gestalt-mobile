@@ -153,6 +153,14 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.state).toBeNull();
     });
 
+    it('allows the root final after the authoritative final review passes', () => {
+      const fixture = subject();
+      fixture.coordinator.supervisionStarted('s');
+      fixture.plan = { ...plan, executionComplete: true, allDone: true, doneSteps: 1 };
+
+      expect(fixture.coordinator.turnCompleted('s')).toBe(true);
+    });
+
     it('reopens a pending supervision intent once without overriding manual Off', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'gestalt-autopilot-supervision-'));
       const path = join(directory, 'relay.sqlite');
@@ -674,9 +682,13 @@ describe('AutopilotCoordinator', () => {
     });
     coordinator.restore('s');
     expect(starts).toBe(0);
-    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'reconcileFailed' });
+    expect(state).toMatchObject({
+      state: 'monitoring',
+      requestedEnabled: true,
+      stopReason: 'reconcileFailed',
+    });
   });
-  it('turns a typed unavailable starter failure into durable attention without retrying', async () => {
+  it('keeps a typed unavailable starter failure under condition-based inspection', async () => {
     let state: AutopilotSession | null = null;
     let fire: (() => void) | undefined;
     const controls = new Map<string, import('./ports.js').AutopilotControl>();
@@ -720,7 +732,11 @@ describe('AutopilotCoordinator', () => {
     });
     coordinator.enable('s');
     await fire?.();
-    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'startUnavailable' });
+    expect(state).toMatchObject({
+      state: 'monitoring',
+      requestedEnabled: true,
+      stopReason: 'startUnavailable',
+    });
     expect(controls.get('s:c')).toMatchObject({
       status: 'failed',
       failureCode: 'START_UNAVAILABLE',
@@ -729,7 +745,7 @@ describe('AutopilotCoordinator', () => {
       payload: { controlId: 'c', code: 'START_UNAVAILABLE' },
     });
   });
-  it('classifies a missing runtime writer as immediate human attention rather than retrying', async () => {
+  it('does not manufacture human attention from a missing runtime writer', async () => {
     let state: AutopilotSession | null = null;
     let fire: (() => void) | undefined;
     const controls = new Map<string, import('./ports.js').AutopilotControl>();
@@ -772,54 +788,72 @@ describe('AutopilotCoordinator', () => {
     });
     coordinator.enable('s');
     await fire?.();
-    expect(state).toMatchObject({ state: 'attentionRequired', stopReason: 'startUnavailable' });
+    expect(state).toMatchObject({
+      state: 'monitoring',
+      requestedEnabled: true,
+      stopReason: 'startUnavailable',
+    });
     expect(controls.get('s:writer-control')).toMatchObject({
       status: 'failed',
       failureCode: 'START_UNAVAILABLE',
     });
   });
-  it('does not recurse when compatible reconciliation leaves activity stale', async () => {
-    let state: AutopilotSession | null = null;
-    let reconciliations = 0;
-    let schedules = 0;
-    const coordinator = new AutopilotCoordinator({
-      store: {
-        find: () => state,
-        save: (next) => {
-          state = next;
+  it.each(['confidence', 'timestamp'] as const)(
+    'does not recurse when compatible reconciliation leaves %s stale',
+    async (staleBy) => {
+      let state: AutopilotSession | null = null;
+      let reconciliations = 0;
+      let schedules = 0;
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
         },
-        remove: () => {},
-        findControl: () => null,
-        saveControl: () => {},
-        controlIds: () => new Set(),
-      },
-      now: () => now,
-      policy: defaultAutopilotPolicy,
-      plan: () => ({ plan, identity: 'p' }),
-      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
-      activity: () => null,
-      pendingInteraction: () => false,
-      reconcile: async () => {
-        reconciliations += 1;
-        return { compatible: true };
-      },
-      schedule: () => {
-        schedules += 1;
-        return () => {};
-      },
-      nextControlId: () => 'unused',
-      turnStarter: { start: async () => {} },
-      publish: () => {},
-    });
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity: 'p' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () =>
+          staleBy === 'confidence'
+            ? null
+            : {
+                ...createAgentActivitySnapshot('s', now),
+                confidence: 'fresh',
+                root: {
+                  ...createAgentActivitySnapshot('s', now).root,
+                  state: 'idle',
+                  lastActivityAt: '2026-08-20T11:00:00.000Z',
+                },
+              },
+        pendingInteraction: () => false,
+        reconcile: async () => {
+          reconciliations += 1;
+          return { compatible: true };
+        },
+        schedule: () => {
+          schedules += 1;
+          return () => {};
+        },
+        nextControlId: () => 'unused',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
 
-    coordinator.enable('s');
-    await Promise.resolve();
-    await Promise.resolve();
+      coordinator.enable('s');
+      await Promise.resolve();
+      await Promise.resolve();
 
-    expect(reconciliations).toBe(1);
-    expect(schedules).toBe(0);
-    expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
-  });
+      expect(reconciliations).toBe(1);
+      expect(schedules).toBe(0);
+      expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
+    },
+  );
   it('durably invalidates a pending control when a manual turn wins the race', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
@@ -1055,7 +1089,7 @@ describe('AutopilotCoordinator', () => {
       expect(timers).toHaveLength(eligible ? 1 : 0);
     },
   );
-  it('stops once when fresh actor status requires human attention without a stored interaction', () => {
+  it('does not stop from an unstructured awaiting-human projection', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
       state: 'monitoring',
@@ -1106,14 +1140,72 @@ describe('AutopilotCoordinator', () => {
     coordinator.activityChanged('s');
 
     expect(state).toMatchObject({
+      state: 'monitoring',
+      requestedEnabled: true,
+      stopReason: null,
+      generation: 1,
+    });
+    expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(0);
+  });
+  it('allows yielding only for a validated decision-table attention record', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'awaitingHuman' },
+      }),
+      pendingInteraction: () => true,
+      attention: () => ({
+        reason: 'permissionRequired',
+        resumeCondition: 'permissionGranted',
+      }),
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'unused',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+
+    coordinator.activityChanged('s');
+
+    expect(state).toMatchObject({
       state: 'attentionRequired',
       requestedEnabled: false,
-      stopReason: 'attentionRequired',
-      generation: 2,
+      blocking: {
+        reason: 'permissionRequired',
+        resumeCondition: 'permissionGranted',
+      },
     });
-    expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(1);
+    expect(coordinator.turnCompleted('s')).toBe(true);
   });
-  it('stops a settled oscillating session at the durable automatic-action limit', () => {
+  it('paces a settled oscillating session without manufacturing a human blocker', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
       state: 'monitoring',
@@ -1168,9 +1260,274 @@ describe('AutopilotCoordinator', () => {
 
     expect(since).toBe('2026-08-20T11:50:00.000Z');
     expect(state).toMatchObject({
-      state: 'attentionRequired',
-      requestedEnabled: false,
-      stopReason: 'actionRateExceeded',
+      state: 'backoff',
+      requestedEnabled: true,
+      stopReason: null,
+    });
+  });
+  describe('mechanical executor continuation', () => {
+    function subject(
+      processes: NonNullable<
+        ReturnType<typeof createAgentActivitySnapshot>['subagents'][number]['ownedProcesses']
+      > = [],
+      outcome: 'partial' | 'cancelled' | 'failed' = 'partial',
+      childState: 'TODO' | 'WIP' | 'DONE' = 'WIP',
+    ) {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        updatedAt: now,
+      };
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const resume = vi.fn(async () => undefined);
+      const refresh = vi.fn(async () => undefined);
+      const transferProcess = vi.fn();
+      const consumeProcess = vi.fn();
+      const terminateProcess = vi.fn(async () => true);
+      const rootStart = vi.fn(async () => undefined);
+      const controls = new Map<string, import('./ports.js').AutopilotControl>();
+      const activity = {
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh' as const,
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+        aggregateSubagents: 'idle' as const,
+        subagents: [
+          {
+            id: 'thread-l1',
+            threadId: 'thread-l1',
+            taskPath: '/root/l1',
+            canonicalTaskName: 'l1',
+            canonicalPosition: 'L1',
+            continuationGeneration: 1,
+            outcome,
+            ownedProcesses: processes,
+            state: 'idle' as const,
+            reason: 'turnCompleted' as const,
+            observedAt: now,
+            lastActivityAt: now,
+          },
+        ],
+      };
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: (sessionId, controlId) => controls.get(`${sessionId}:${controlId}`) ?? null,
+          saveControl: (control) =>
+            controls.set(`${control.sessionId}:${control.controlId}`, control),
+          controlIds: () => new Set(controls.keys()),
+        },
+        now: () => now,
+        policy: {
+          ...defaultAutopilotPolicy,
+          quiescenceMs: 0,
+          executorContinuationBaseMs: 0,
+          executorContinuationMaxMs: 0,
+          processPollMs: 0,
+          processMaxElapsedMs: 60_000,
+          processMaxRssBytes: 12 * 1024 * 1024 * 1024,
+        },
+        plan: () => ({
+          plan: {
+            ...plan,
+            steps: [
+              {
+                ...plan.steps[0]!,
+                children: [
+                  {
+                    id: 'l1-1',
+                    title: 'child',
+                    level: 2 as const,
+                    state: childState,
+                    priority: 'A' as const,
+                    description: {},
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+          identity: 'p',
+        }),
+        session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+        activity: () => activity,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        nextControlId: () => 'root-control',
+        turnStarter: { start: rootStart },
+        executorController: {
+          resume,
+          refresh,
+          transferProcess,
+          consumeProcess,
+          terminateProcess,
+        },
+        publish: () => {},
+      });
+      const runNext = async () => {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await vi.waitFor(() =>
+          expect(timers.filter((candidate) => candidate.fired).length).toBeGreaterThan(0),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      };
+      return {
+        coordinator,
+        runNext,
+        resume,
+        refresh,
+        transferProcess,
+        consumeProcess,
+        terminateProcess,
+        rootStart,
+        get state() {
+          return state;
+        },
+      };
+    }
+
+    it.each(['rootFinalAttempt', 'checkpoint', 'waitTimeout', 'userStatusAnswered'] as const)(
+      'resumes the same executor after %s while L1 remains WIP',
+      async (event) => {
+        const fixture = subject();
+        if (event === 'rootFinalAttempt')
+          expect(fixture.coordinator.turnCompleted('s')).toBe(false);
+        else fixture.coordinator.activitySettled('s', event);
+        await fixture.runNext();
+        await fixture.runNext();
+        expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+        expect(fixture.rootStart).not.toHaveBeenCalled();
+        expect(fixture.state).toMatchObject({ requestedEnabled: true, state: 'monitoring' });
+      },
+    );
+
+    it('continues after an L2 checkpoint reaches DONE while its L1 remains WIP', async () => {
+      const fixture = subject([], 'partial', 'DONE');
+      fixture.coordinator.activitySettled('s', 'checkpoint');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(fixture.state).toMatchObject({
+        requestedEnabled: true,
+        executor: { l1State: 'WIP' },
+      });
+    });
+
+    it('transfers and conditionally monitors an active detached process', async () => {
+      const fixture = subject([
+        {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'executor',
+          state: 'running',
+          observedAt: now,
+          elapsedMs: 1_000,
+          cpuPercent: 100,
+          rssBytes: 1_024,
+        },
+      ]);
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.transferProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-1');
+      expect(fixture.resume).not.toHaveBeenCalled();
+      await fixture.runNext();
+      expect(fixture.refresh).toHaveBeenCalledWith('s');
+    });
+
+    it('consumes an exited artifact and then resumes the owning executor', async () => {
+      const fixture = subject([
+        {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'exited-awaiting-result',
+          observedAt: now,
+          elapsedMs: 2_000,
+          cpuPercent: 0,
+          rssBytes: 0,
+          exitStatus: 0,
+          resultArtifact: 'thread-l1:item-1',
+        },
+      ]);
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.consumeProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-1');
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, {
+        kind: 'processExited',
+        processId: 'process-1',
+        resultArtifact: 'thread-l1:item-1',
+      });
+    });
+
+    it('terminates only an over-budget process and resumes systematic diagnosis', async () => {
+      const fixture = subject([
+        {
+          processId: 'process-large',
+          itemId: 'item-large',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'detached-active',
+          observedAt: now,
+          elapsedMs: 60_001,
+          cpuPercent: 100,
+          rssBytes: 13 * 1024 * 1024 * 1024,
+        },
+      ]);
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.terminateProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-large');
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, {
+        kind: 'processResourceLimit',
+        processId: 'process-large',
+      });
+    });
+
+    it('launches a fresh physical generation for a failed historical canonical executor', async () => {
+      const fixture = subject([], 'failed');
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.rootStart).toHaveBeenCalledWith(
+        's',
+        'root-control',
+        1,
+        expect.objectContaining({
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          generation: 2,
+          taskName: 'l1_g2',
+        }),
+      );
+      expect(fixture.resume).not.toHaveBeenCalled();
     });
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {

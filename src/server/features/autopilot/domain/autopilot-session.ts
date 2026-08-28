@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { ExecutorLifecycle, StructuredBlock } from './supervised-lifecycle.js';
+
 export type AutopilotState =
   'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed';
 
@@ -33,6 +35,8 @@ export type AutopilotSession = Readonly<{
   nextEvaluationAt: string | null;
   lastControlId: string | null;
   stopReason: AutopilotStopReason | null;
+  executor?: ExecutorLifecycle;
+  blocking?: StructuredBlock;
   updatedAt: string;
 }>;
 
@@ -45,6 +49,8 @@ export type AutopilotSnapshot = Readonly<{
   lastAutomaticAction?: Readonly<{ controlId: string; summary: string }>;
   nextEvaluationAt?: string;
   updatedAt: string;
+  executor?: ExecutorLifecycle;
+  blocking?: StructuredBlock;
 }>;
 
 export function disabledAutopilot(sessionId: string, now: string): AutopilotSession {
@@ -81,6 +87,8 @@ export function autopilotSnapshot(state: AutopilotSession, retryLimit: number): 
         }
       : {}),
     ...(state.nextEvaluationAt ? { nextEvaluationAt: state.nextEvaluationAt } : {}),
+    ...(state.executor ? { executor: state.executor } : {}),
+    ...(state.blocking ? { blocking: state.blocking } : {}),
     updatedAt: state.updatedAt,
   };
 }
