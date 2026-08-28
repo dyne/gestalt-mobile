@@ -303,6 +303,7 @@ function semantic(snapshot: AgentActivitySnapshot): unknown {
       threadId: child.threadId,
       nickname: child.nickname,
       role: child.role,
+      model: child.model,
       state: child.state,
       reason: child.reason,
     })),
