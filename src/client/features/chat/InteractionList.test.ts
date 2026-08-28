@@ -152,4 +152,62 @@ describe('InteractionList', () => {
     });
     expect(screen.getByText('No longer awaiting a response')).toBeTruthy();
   });
+
+  it('keeps every submitted quiz answer visible through delivery and resolution', async () => {
+    const submittedAnswers = {
+      quiz: [
+        {
+          id: 'mode',
+          header: 'Mode',
+          question: 'Which execution mode?',
+          answer: 'Supervised multi-agent',
+        },
+        {
+          id: 'review',
+          header: 'Review',
+          question: 'Who should review?',
+          answer: 'Supervisor',
+        },
+      ],
+    };
+    const view = render(InteractionList, {
+      interactions: [
+        {
+          requestId: 'quiz',
+          kind: 'quiz',
+          payload: {},
+          state: 'submitting',
+        },
+      ],
+      answers: {},
+      submittedAnswers,
+      onanswer: () => {},
+      onquiz: () => {},
+      onpermission: () => {},
+      ondecision: () => {},
+    });
+
+    const transcript = screen.getByRole('region', { name: 'Submitted answers' });
+    expect(transcript.textContent).toContain('Mode — Which execution mode?');
+    expect(transcript.textContent).toContain('Supervised multi-agent');
+    expect(transcript.textContent).toContain('Review — Who should review?');
+    expect(transcript.textContent).toContain('Supervisor');
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+
+    await view.rerender({
+      interactions: [
+        {
+          requestId: 'quiz',
+          kind: 'quiz',
+          payload: null,
+          state: 'resolved',
+          attemptedOutcome: 'answered',
+        },
+      ],
+      submittedAnswers,
+    });
+    expect(screen.getByRole('region', { name: 'Submitted answers' })).toBe(transcript);
+    expect(screen.getByText('Supervised multi-agent')).toBeTruthy();
+    expect(screen.getByText('Answers sent')).toBeTruthy();
+  });
 });

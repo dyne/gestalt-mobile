@@ -1405,6 +1405,9 @@ test('answers a relay user-input request', async ({ page }) => {
   await openChat(page);
   await page.getByRole('radio', { name: /Safe/ }).check();
   await page.getByRole('button', { name: 'Send answers' }).click();
+  const submitted = page.getByRole('region', { name: 'Submitted answers' });
+  await expect(submitted).toContainText('Mode — Choose a mode');
+  await expect(submitted).toContainText('Safe');
   await expect.poll(() => response).toEqual({ answers: { 'question-1': { answers: ['Safe'] } } });
 });
 

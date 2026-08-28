@@ -69,6 +69,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     readUserInputQuestions,
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
+  import type { SubmittedQuizAnswer } from './features/chat/quiz-submission.js';
   import {
     mapNativeUserInputToQuiz,
     parseQuiz,
@@ -220,6 +221,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
   let userInputAnswers = $state<Record<string, string>>({});
+  let submittedQuizAnswers = $state.raw<Record<string, readonly SubmittedQuizAnswer[]>>({});
   let chatTail = $state<HTMLElement | null>(null);
   let presentationSignal = '';
   const followTail = new ChatFollowTail({
@@ -1048,6 +1050,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       id: question.id,
       answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
     }));
+    submittedQuizAnswers = {
+      ...submittedQuizAnswers,
+      [interaction.requestId]: quiz.questions.map((question, index) => ({
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        answer: answers[index]?.answer ?? '',
+      })),
+    };
     const response =
       interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
     try {
@@ -1247,6 +1258,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               autopilotAuditTruncated={chatView?.autopilotAuditTruncated ?? false}
               interactions={chatView ? [...chatView.interactions] : []}
               answers={userInputAnswers}
+              submittedAnswers={submittedQuizAnswers}
               onanswer={setUserInputAnswer}
               onquiz={(interaction) => void resolveUserInput(interaction)}
               onpermission={(interaction) => void resolvePermissions(interaction)}
