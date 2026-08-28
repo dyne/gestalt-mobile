@@ -5,6 +5,7 @@
  */
 
 import type { AutopilotSession } from '../domain/autopilot-session.js';
+import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
 
 export type AutopilotControlStatus = 'scheduled' | 'issued' | 'started' | 'failed' | 'cancelled';
 
@@ -32,7 +33,31 @@ export type AutopilotControl = Readonly<{
 /** The sole outbound capability allowed to begin an automatic turn. */
 export interface AutopilotTurnStarter {
   /** Generation fences a start that races a manual send, disable, or lifecycle cancellation. */
-  start(sessionId: string, controlId: string, generation: number): Promise<void>;
+  start(
+    sessionId: string,
+    controlId: string,
+    generation: number,
+    launchIdentity?: ExecutorIdentity,
+  ): Promise<void>;
+}
+
+export type ExecutorContinuationTrigger =
+  | Readonly<{ kind: 'partial' }>
+  | Readonly<{ kind: 'processExited'; processId: string; resultArtifact: string }>
+  | Readonly<{ kind: 'processResourceLimit'; processId: string }>;
+
+/** Narrow app-server capabilities used only after the structured lifecycle guard allows them. */
+export interface SupervisedExecutorController {
+  resume(
+    sessionId: string,
+    threadId: string,
+    generation: number,
+    trigger: ExecutorContinuationTrigger,
+  ): Promise<void>;
+  refresh(sessionId: string): Promise<void>;
+  transferProcess(sessionId: string, threadId: string, processId: string): void;
+  consumeProcess(sessionId: string, threadId: string, processId: string): void;
+  terminateProcess(sessionId: string, threadId: string, processId: string): Promise<boolean>;
 }
 
 export interface AutopilotStore {

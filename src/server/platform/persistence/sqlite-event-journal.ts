@@ -11,6 +11,11 @@ import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 export const autopilotAuditEventTypes = [
   'autopilot.turn-started',
   'autopilot.turn-failed',
+  'autopilot.final-rejected',
+  'autopilot.executor-resumed',
+  'autopilot.process-monitoring',
+  'autopilot.process-result-consumed',
+  'autopilot.process-terminated',
   'autopilot.updated',
   'org-plan.attention-required',
   'org-plan.attention-resolved',

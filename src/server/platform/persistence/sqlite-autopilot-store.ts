@@ -13,6 +13,7 @@ import type {
   AutopilotStore,
 } from '../../features/autopilot/application/ports.js';
 import type { AutopilotSession } from '../../features/autopilot/domain/autopilot-session.js';
+import { parsePersistedSupervisedLifecycle } from '../../features/autopilot/domain/supervised-lifecycle.js';
 
 export class SqliteAutopilotStore implements AutopilotStore {
   constructor(private readonly db: DatabaseSync) {}
@@ -21,6 +22,7 @@ export class SqliteAutopilotStore implements AutopilotStore {
       .prepare('SELECT * FROM autopilot_sessions WHERE session_id = ?')
       .get(sessionId) as Record<string, unknown> | undefined;
     if (!row) return null;
+    const lifecycle = parseLifecycle(row.lifecycle_json);
     if (
       !['disabled', 'monitoring', 'backoff', 'attentionRequired', 'completed'].includes(
         String(row.state),
@@ -44,7 +46,8 @@ export class SqliteAutopilotStore implements AutopilotStore {
       Number(row.generation) < 0 ||
       !Number.isSafeInteger(Number(row.no_progress_count)) ||
       Number(row.no_progress_count) < 0 ||
-      ![0, 1].includes(Number(row.requested_enabled))
+      ![0, 1].includes(Number(row.requested_enabled)) ||
+      lifecycle === null
     )
       return null;
     return {
@@ -58,13 +61,14 @@ export class SqliteAutopilotStore implements AutopilotStore {
       nextEvaluationAt: row.next_evaluation_at === null ? null : String(row.next_evaluation_at),
       lastControlId: row.last_control_id === null ? null : String(row.last_control_id),
       stopReason: row.stop_reason as AutopilotSession['stopReason'],
+      ...lifecycle,
       updatedAt: String(row.updated_at),
     };
   }
   save(state: AutopilotSession): void {
     this.db
       .prepare(
-        'INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET state=excluded.state,requested_enabled=excluded.requested_enabled,plan_identity=excluded.plan_identity,plan_fingerprint=excluded.plan_fingerprint,generation=excluded.generation,no_progress_count=excluded.no_progress_count,next_evaluation_at=excluded.next_evaluation_at,last_control_id=excluded.last_control_id,stop_reason=excluded.stop_reason,updated_at=excluded.updated_at',
+        'INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,lifecycle_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET state=excluded.state,requested_enabled=excluded.requested_enabled,plan_identity=excluded.plan_identity,plan_fingerprint=excluded.plan_fingerprint,generation=excluded.generation,no_progress_count=excluded.no_progress_count,next_evaluation_at=excluded.next_evaluation_at,last_control_id=excluded.last_control_id,stop_reason=excluded.stop_reason,lifecycle_json=excluded.lifecycle_json,updated_at=excluded.updated_at',
       )
       .run(
         state.sessionId,
@@ -77,6 +81,9 @@ export class SqliteAutopilotStore implements AutopilotStore {
         state.nextEvaluationAt,
         state.lastControlId,
         state.stopReason,
+        state.executor || state.blocking
+          ? JSON.stringify({ executor: state.executor, blocking: state.blocking })
+          : null,
         state.updatedAt,
       );
   }
@@ -225,5 +232,15 @@ export class SqliteAutopilotStore implements AutopilotStore {
   }
   remove(sessionId: string): void {
     this.db.prepare('DELETE FROM autopilot_sessions WHERE session_id = ?').run(sessionId);
+  }
+}
+
+function parseLifecycle(value: unknown): Pick<AutopilotSession, 'executor' | 'blocking'> | null {
+  if (value === null || value === undefined) return {};
+  if (typeof value !== 'string' || value.length > 256_000) return null;
+  try {
+    return parsePersistedSupervisedLifecycle(JSON.parse(value)) ?? null;
+  } catch {
+    return null;
   }
 }

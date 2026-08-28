@@ -13,6 +13,16 @@ import {
   type AutopilotSnapshot,
 } from '../domain/autopilot-session.js';
 import {
+  classifyExecutorOutcome,
+  decideSupervisedLifecycle,
+  executorIdentity,
+  type ExecutorLifecycle,
+  type OwnedExecutorProcess,
+  type StructuredBlock,
+  type SupervisedLifecycleEvent,
+  validStructuredBlock,
+} from '../domain/supervised-lifecycle.js';
+import {
   classifyAgentActivity,
   decideAutopilot,
   executionComplete,
@@ -23,6 +33,7 @@ import type {
   AutopilotControl,
   AutopilotStore,
   AutopilotTurnStarter,
+  SupervisedExecutorController,
 } from './ports.js';
 
 export type AutopilotDependencies = Readonly<{
@@ -35,9 +46,11 @@ export type AutopilotDependencies = Readonly<{
   ): Readonly<{ state: string; threadId: string | null; activeTurnId: string | null }> | null;
   activity(sessionId: string): AgentActivitySnapshot | null;
   pendingInteraction(sessionId: string): boolean;
+  attention?(sessionId: string): StructuredBlock | null;
   schedule(callback: () => void, delayMs: number): () => void;
   nextControlId(sessionId: string, generation: number): string;
   turnStarter: AutopilotTurnStarter;
+  executorController?: SupervisedExecutorController;
   reconcile(sessionId: string): Promise<{ compatible: boolean }>;
   publish(
     sessionId: string,
@@ -52,6 +65,7 @@ export type AutopilotDependencies = Readonly<{
 export class AutopilotCoordinator {
   private readonly timers = new Map<string, () => void>();
   private readonly completionTimers = new Map<string, () => void>();
+  private readonly executorTimers = new Map<string, () => void>();
   private readonly publishedSnapshots = new Map<string, string>();
   /** Serializes asynchronous watchdog and timer work per relay session. */
   private readonly operations = new Map<string, Promise<void>>();
@@ -110,13 +124,14 @@ export class AutopilotCoordinator {
       }
       this.persist({
         ...state,
-        state: 'attentionRequired',
-        requestedEnabled: false,
+        state: 'monitoring',
+        requestedEnabled: true,
         generation: state.generation + 1,
         nextEvaluationAt: null,
         stopReason: 'reconcileFailed',
         updatedAt: this.deps.now(),
       });
+      this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
       return;
     }
     if (state.state === 'backoff' && state.nextEvaluationAt) {
@@ -154,6 +169,8 @@ export class AutopilotCoordinator {
       consecutiveNoProgress: 0,
       nextEvaluationAt: null,
       stopReason: null,
+      executor: undefined,
+      blocking: undefined,
       updatedAt: now,
     };
     this.persist(next);
@@ -185,6 +202,7 @@ export class AutopilotCoordinator {
       nextEvaluationAt: null,
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: 'manualDisabled',
+      blocking: undefined,
       updatedAt: now,
     };
     this.persist(next, cancelled);
@@ -205,6 +223,7 @@ export class AutopilotCoordinator {
         nextEvaluationAt: null,
         ...(cancelled ? { lastControlId: null } : {}),
         stopReason: reason,
+        blocking: undefined,
         updatedAt: now,
       },
       cancelled,
@@ -228,6 +247,21 @@ export class AutopilotCoordinator {
         break;
       case 'scheduleContinuation':
         if (session?.activeTurnId || this.deps.pendingInteraction(sessionId)) break;
+        if (
+          this.deps.executorController &&
+          this.deps.plan(sessionId)?.plan &&
+          this.currentExecutor(
+            sessionId,
+            this.deps.plan(sessionId)!.plan,
+            prior.consecutiveNoProgress,
+            prior.executor,
+          )
+        ) {
+          this.enqueue(sessionId, async () => {
+            await this.enforceSupervisedLifecycle(sessionId, 'stateChanged');
+          });
+          break;
+        }
         const existingControl = prior.lastControlId
           ? this.deps.store.findControl(sessionId, prior.lastControlId)
           : null;
@@ -271,7 +305,9 @@ export class AutopilotCoordinator {
         next = prior;
         this.arm(sessionId, prior.generation, decision.at);
         break;
-      case 'requestAttention':
+      case 'requestAttention': {
+        const blocking = this.deps.attention?.(sessionId) ?? undefined;
+        if (!validStructuredBlock(blocking)) break;
         next = {
           ...prior,
           state: 'attentionRequired',
@@ -279,9 +315,11 @@ export class AutopilotCoordinator {
           generation: prior.generation + 1,
           nextEvaluationAt: null,
           stopReason: decision.reason,
+          blocking,
           updatedAt: now,
         };
         break;
+      }
       case 'complete':
         next = {
           ...prior,
@@ -290,6 +328,7 @@ export class AutopilotCoordinator {
           generation: prior.generation + 1,
           nextEvaluationAt: null,
           stopReason: 'planComplete',
+          blocking: undefined,
           updatedAt: now,
         };
         break;
@@ -301,6 +340,7 @@ export class AutopilotCoordinator {
           generation: prior.generation + 1,
           nextEvaluationAt: null,
           stopReason: decision.reason,
+          blocking: undefined,
           updatedAt: now,
         };
         break;
@@ -322,8 +362,37 @@ export class AutopilotCoordinator {
     }
     return this.snapshot(sessionId);
   }
-  turnCompleted(sessionId: string): void {
-    this.activitySettled(sessionId);
+  /** Returns whether an incomplete supervised plan may be treated as terminal by the relay. */
+  turnCompleted(sessionId: string): boolean {
+    const state = this.deps.store.find(sessionId);
+    const plan = this.deps.plan(sessionId)?.plan;
+    const explicitlyStopped =
+      state?.stopReason === 'manualDisabled' ||
+      state?.stopReason === 'planRemoved' ||
+      state?.stopReason === 'planReplaced' ||
+      state?.stopReason === 'sessionEnded';
+    const finalAllowed =
+      !state ||
+      !plan ||
+      explicitlyStopped ||
+      executionComplete(plan) ||
+      validStructuredBlock(state.blocking);
+    if (!finalAllowed) {
+      const occurredAt = this.deps.now();
+      this.commit({
+        events: [
+          {
+            sessionId,
+            type: 'autopilot.final-rejected',
+            payload: { reason: 'incompletePlan' },
+            occurredAt,
+          },
+        ],
+      });
+      this.flushOutbox(sessionId);
+    }
+    this.activitySettled(sessionId, 'rootFinalAttempt');
+    return finalAllowed;
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
@@ -375,6 +444,8 @@ export class AutopilotCoordinator {
       nextEvaluationAt: null,
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: null,
+      executor: undefined,
+      blocking: undefined,
       updatedAt: now,
     };
     this.persist(next, cancelled);
@@ -420,9 +491,9 @@ export class AutopilotCoordinator {
         );
       return;
     }
-    if (disposition === 'settled') this.activitySettled(sessionId);
+    if (disposition === 'settled') this.activitySettled(sessionId, 'stateChanged');
   }
-  activitySettled(sessionId: string): void {
+  activitySettled(sessionId: string, event: SupervisedLifecycleEvent = 'stateChanged'): void {
     const prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled || prior.state !== 'monitoring') return;
     this.completionTimers.get(sessionId)?.();
@@ -432,7 +503,9 @@ export class AutopilotCoordinator {
         this.completionTimers.delete(sessionId);
         const current = this.deps.store.find(sessionId);
         if (!current?.requestedEnabled || current.state !== 'monitoring') return;
-        this.evaluate(sessionId);
+        this.enqueue(sessionId, async () => {
+          if (!(await this.enforceSupervisedLifecycle(sessionId, event))) this.evaluate(sessionId);
+        });
       }, this.deps.policy.quiescenceMs),
     );
   }
@@ -534,11 +607,43 @@ export class AutopilotCoordinator {
       this.evaluate(sessionId);
       return;
     }
+    const retained = this.deps.plan(sessionId);
+    if (
+      this.deps.executorController &&
+      retained &&
+      this.currentExecutor(
+        sessionId,
+        retained.plan,
+        current.consecutiveNoProgress,
+        current.executor,
+      )
+    ) {
+      const now = this.deps.now();
+      const cancelled = this.cancelScheduledControl(current, now);
+      this.persist(
+        {
+          ...current,
+          state: 'monitoring',
+          generation: current.generation + 1,
+          nextEvaluationAt: null,
+          lastControlId: null,
+          updatedAt: now,
+        },
+        cancelled,
+      );
+      await this.enforceSupervisedLifecycle(sessionId, 'stateChanged');
+      return;
+    }
     const id = current.lastControlId;
     if (!id) return;
     if (!this.recordControlIssued(sessionId, id)) return;
     try {
-      await this.deps.turnStarter.start(sessionId, id, generation);
+      await this.deps.turnStarter.start(
+        sessionId,
+        id,
+        generation,
+        this.freshExecutorIdentity(sessionId),
+      );
       this.updateControl(
         sessionId,
         id,
@@ -565,21 +670,20 @@ export class AutopilotCoordinator {
       }
       const failureCode = startFailureCode(error);
       this.updateControl(sessionId, id, 'failed', failureCode, null, 'autopilot.turn-failed');
-      // Availability, permission, and dependency failures cannot be repaired
-      // by another identical synthetic turn.  They remain a durable, explicit
-      // human stop; unknown transport failures still consume the retry budget.
+      // A transport/runtime failure is not a decision-table blocker. Keep the
+      // supervised lifecycle active and re-inspect explicit runtime state.
       if (failureCode === 'START_UNAVAILABLE') {
         const latest = this.deps.store.find(sessionId);
         if (latest?.requestedEnabled)
           this.persist({
             ...latest,
-            state: 'attentionRequired',
-            requestedEnabled: false,
+            state: 'monitoring',
             generation: latest.generation + 1,
             nextEvaluationAt: null,
             stopReason: 'startUnavailable',
             updatedAt: this.deps.now(),
           });
+        this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
         return;
       }
       this.evaluate(sessionId);
@@ -590,6 +694,308 @@ export class AutopilotCoordinator {
     this.timers.delete(sessionId);
     this.completionTimers.get(sessionId)?.();
     this.completionTimers.delete(sessionId);
+    this.executorTimers.get(sessionId)?.();
+    this.executorTimers.delete(sessionId);
+  }
+
+  private async enforceSupervisedLifecycle(
+    sessionId: string,
+    event: SupervisedLifecycleEvent,
+  ): Promise<boolean> {
+    const controller = this.deps.executorController;
+    const retained = this.deps.plan(sessionId);
+    const state = this.deps.store.find(sessionId);
+    if (
+      !controller ||
+      !retained ||
+      !state?.requestedEnabled ||
+      this.deps.pendingInteraction(sessionId)
+    )
+      return false;
+    const executor = this.currentExecutor(
+      sessionId,
+      retained.plan,
+      state.consecutiveNoProgress,
+      state.executor,
+    );
+    if (executor) this.persistExecutor(sessionId, executor);
+    const decision = decideSupervisedLifecycle({
+      plan: retained.plan,
+      event,
+      ...(executor ? { executor } : {}),
+      now: this.deps.now(),
+      policy: {
+        continuationBaseDelayMs: this.deps.policy.executorContinuationBaseMs,
+        continuationMaxDelayMs: this.deps.policy.executorContinuationMaxMs,
+        processPollMs: this.deps.policy.processPollMs,
+        processMaxElapsedMs: this.deps.policy.processMaxElapsedMs,
+        processMaxRssBytes: this.deps.policy.processMaxRssBytes,
+      },
+    });
+    switch (decision.action.kind) {
+      case 'allowFinal':
+      case 'invokeAttention':
+      case 'continueSupervisor':
+      case 'reinspect':
+        return false;
+      case 'resumeExecutor':
+        this.armExecutorContinuation(
+          sessionId,
+          decision.action.delayMs,
+          decision.action.threadId,
+          decision.action.generation,
+          { kind: 'partial' },
+        );
+        return true;
+      case 'monitorProcess': {
+        const processId = decision.action.process.processId;
+        controller.transferProcess(sessionId, decision.action.process.ownerThreadId, processId);
+        if (executor)
+          this.persistExecutor(sessionId, {
+            ...executor,
+            ownedProcesses: executor.ownedProcesses.map((process) =>
+              process.processId === processId
+                ? { ...process, ownership: 'supervisor', state: 'detached-active' }
+                : process,
+            ),
+          });
+        this.audit(sessionId, 'autopilot.process-monitoring', {
+          threadId: decision.action.process.ownerThreadId,
+          processId,
+        });
+        this.armExecutorRefresh(sessionId, decision.action.pollAfterMs);
+        return true;
+      }
+      case 'consumeProcessResult': {
+        const processId = decision.action.processId;
+        controller.consumeProcess(sessionId, decision.action.threadId, processId);
+        if (executor)
+          this.persistExecutor(sessionId, {
+            ...executor,
+            ownedProcesses: executor.ownedProcesses.map((process) =>
+              process.processId === processId ? { ...process, state: 'result-consumed' } : process,
+            ),
+          });
+        this.audit(sessionId, 'autopilot.process-result-consumed', {
+          threadId: decision.action.threadId,
+          processId,
+          resultArtifact: decision.action.resultArtifact,
+        });
+        if (executor)
+          this.armExecutorContinuation(
+            sessionId,
+            this.deps.policy.executorContinuationBaseMs,
+            executor.threadId,
+            executor.continuationGeneration + 1,
+            {
+              kind: 'processExited',
+              processId,
+              resultArtifact: decision.action.resultArtifact,
+            },
+          );
+        return true;
+      }
+      case 'terminateProcess': {
+        const processId = decision.action.processId;
+        const terminated = await controller.terminateProcess(
+          sessionId,
+          decision.action.threadId,
+          processId,
+        );
+        if (terminated)
+          this.audit(sessionId, 'autopilot.process-terminated', {
+            threadId: decision.action.threadId,
+            processId,
+            reason: 'resourceBudget',
+          });
+        if (terminated && executor)
+          this.persistExecutor(sessionId, {
+            ...executor,
+            ownedProcesses: executor.ownedProcesses.map((process) =>
+              process.processId === processId
+                ? { ...process, state: 'terminated-for-budget' }
+                : process,
+            ),
+          });
+        if (terminated && executor)
+          this.armExecutorContinuation(
+            sessionId,
+            this.deps.policy.executorContinuationBaseMs,
+            executor.threadId,
+            executor.continuationGeneration + 1,
+            { kind: 'processResourceLimit', processId },
+          );
+        else this.armExecutorRefresh(sessionId, this.deps.policy.processPollMs);
+        return true;
+      }
+    }
+  }
+
+  private currentExecutor(
+    sessionId: string,
+    plan: SupervisedPlan,
+    continuationCount: number,
+    persisted?: ExecutorLifecycle,
+  ): ExecutorLifecycle | undefined {
+    const stepIndex = plan.steps.findIndex(
+      (step) => step.id === plan.currentStepId || step.state === 'WIP',
+    );
+    const index =
+      stepIndex >= 0 ? stepIndex : plan.steps.findIndex((step) => step.state !== 'DONE');
+    if (index < 0) return undefined;
+    const step = plan.steps[index]!;
+    const canonicalPosition = `L${index + 1}`;
+    const child = this.deps
+      .activity(sessionId)
+      ?.subagents.filter((candidate) => candidate.canonicalPosition === canonicalPosition)
+      .sort(
+        (left, right) =>
+          (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1) ||
+          Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt),
+      )[0];
+    if (
+      !child?.taskPath ||
+      !child.canonicalTaskName ||
+      child.state === 'disconnected' ||
+      child.outcome === 'cancelled' ||
+      child.outcome === 'failed'
+    ) {
+      if (
+        persisted?.canonicalPosition !== canonicalPosition ||
+        persisted.outcome === 'cancelled' ||
+        persisted.outcome === 'failed'
+      )
+        return undefined;
+      return {
+        ...persisted,
+        l1State: step.state,
+        continuationCount: persisted.continuationCount,
+        ownedProcesses: refreshPersistedProcesses(persisted.ownedProcesses, [], this.deps.now()),
+      };
+    }
+    const activeL2 = step.children.find((candidate) => candidate.state === 'WIP');
+    const outcome = classifyExecutorOutcome({
+      objectiveComplete: step.state === 'DONE',
+      reportedOutcome: child.outcome,
+    });
+    return {
+      canonicalPosition,
+      canonicalTaskName: child.canonicalTaskName,
+      taskPath: child.taskPath,
+      threadId: child.threadId ?? child.id,
+      l1State: step.state,
+      ...(activeL2 ? { l2State: activeL2.state } : {}),
+      lastActivityAt: child.lastActivityAt,
+      ownedProcesses: refreshPersistedProcesses(
+        persisted?.canonicalPosition === canonicalPosition ? persisted.ownedProcesses : [],
+        child.ownedProcesses ?? [],
+        this.deps.now(),
+      ),
+      outcome: outcome.outcome,
+      ...(outcome.blocking ? { blocking: outcome.blocking } : {}),
+      continuationGeneration: Math.max(
+        child.continuationGeneration ?? 1,
+        persisted?.canonicalPosition === canonicalPosition ? persisted.continuationGeneration : 1,
+      ),
+      continuationCount:
+        persisted?.canonicalPosition === canonicalPosition
+          ? persisted.continuationCount
+          : continuationCount,
+    };
+  }
+
+  private persistExecutor(sessionId: string, executor: ExecutorLifecycle): void {
+    const current = this.deps.store.find(sessionId);
+    if (!current || JSON.stringify(current.executor) === JSON.stringify(executor)) return;
+    this.persist({ ...current, executor, updatedAt: this.deps.now() });
+  }
+
+  private freshExecutorIdentity(sessionId: string) {
+    const plan = this.deps.plan(sessionId)?.plan;
+    if (!plan) return undefined;
+    const stepIndex = plan.steps.findIndex(
+      (step) => step.id === plan.currentStepId || step.state === 'WIP',
+    );
+    const index =
+      stepIndex >= 0 ? stepIndex : plan.steps.findIndex((step) => step.state !== 'DONE');
+    if (index < 0) return undefined;
+    const canonicalTaskName = `l${index + 1}`;
+    const generations =
+      this.deps
+        .activity(sessionId)
+        ?.subagents.filter((child) => child.canonicalTaskName === canonicalTaskName)
+        .map((child) => child.continuationGeneration ?? 1) ?? [];
+    return executorIdentity(canonicalTaskName, Math.max(0, ...generations) + 1);
+  }
+
+  private armExecutorRefresh(sessionId: string, delayMs: number): void {
+    if (this.executorTimers.has(sessionId)) return;
+    this.executorTimers.set(
+      sessionId,
+      this.deps.schedule(() => {
+        this.executorTimers.delete(sessionId);
+        this.enqueue(sessionId, async () => {
+          await this.deps.executorController?.refresh(sessionId);
+          if (!(await this.enforceSupervisedLifecycle(sessionId, 'processObserved')))
+            this.evaluate(sessionId);
+        });
+      }, delayMs),
+    );
+  }
+
+  private armExecutorContinuation(
+    sessionId: string,
+    delayMs: number,
+    threadId: string,
+    generation: number,
+    trigger: Parameters<NonNullable<AutopilotDependencies['executorController']>['resume']>[3],
+  ): void {
+    if (this.executorTimers.has(sessionId)) return;
+    this.executorTimers.set(
+      sessionId,
+      this.deps.schedule(() => {
+        this.executorTimers.delete(sessionId);
+        this.enqueue(sessionId, async () => {
+          const current = this.deps.store.find(sessionId);
+          if (!current?.requestedEnabled || this.deps.pendingInteraction(sessionId)) return;
+          try {
+            await this.deps.executorController?.resume(sessionId, threadId, generation, trigger);
+            this.audit(sessionId, 'autopilot.executor-resumed', {
+              threadId,
+              generation,
+              trigger: trigger.kind,
+            });
+            const latest = this.deps.store.find(sessionId);
+            if (latest?.requestedEnabled)
+              this.persist({
+                ...latest,
+                state: 'monitoring',
+                consecutiveNoProgress: latest.consecutiveNoProgress + 1,
+                ...(latest.executor
+                  ? {
+                      executor: {
+                        ...latest.executor,
+                        outcome: 'partial',
+                        continuationGeneration: generation,
+                        continuationCount: latest.executor.continuationCount + 1,
+                        lastActivityAt: this.deps.now(),
+                      },
+                    }
+                  : {}),
+                nextEvaluationAt: null,
+                updatedAt: this.deps.now(),
+              });
+          } catch {
+            this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+          }
+        });
+      }, delayMs),
+    );
+  }
+  private audit(sessionId: string, type: string, payload: unknown): void {
+    const occurredAt = this.deps.now();
+    this.commit({ events: [{ sessionId, type, payload, occurredAt }] });
+    this.flushOutbox(sessionId);
   }
   private cancelScheduledControl(
     state: AutopilotSession,
@@ -712,7 +1118,7 @@ export class AutopilotCoordinator {
       plan: plan?.plan ?? null,
       activity: this.deps.activity(sessionId),
       hasPendingInteraction: this.deps.pendingInteraction(sessionId),
-      hasActiveAttention: state.state === 'attentionRequired',
+      hasActiveAttention: validStructuredBlock(this.deps.attention?.(sessionId) ?? state.blocking),
       lastTurnOutcome: this.lastTurnOutcome(sessionId, state.lastControlId),
       automaticActionCount:
         this.deps.store.automaticActionsSince?.(
@@ -733,19 +1139,25 @@ export class AutopilotCoordinator {
       // Do not feed a still-stale projection straight back into reconciliation:
       // that would create an unbounded microtask loop with no timer or event to
       // yield to. A later activity/watchdog event will evaluate it again.
-      if (this.deps.activity(sessionId)?.confidence === 'fresh') this.evaluate(sessionId);
+      const activity = this.deps.activity(sessionId);
+      if (
+        activity?.confidence === 'fresh' &&
+        Date.parse(this.deps.now()) - Date.parse(activity.root.lastActivityAt) <=
+          this.deps.policy.staleAfterMs
+      )
+        this.evaluate(sessionId);
     } catch {
       const current = this.deps.store.find(sessionId);
       if (!current || current.generation !== generation) return;
       this.persist({
         ...current,
-        state: 'attentionRequired',
-        requestedEnabled: false,
+        state: 'monitoring',
         generation: current.generation + 1,
         nextEvaluationAt: null,
         stopReason: 'reconcileFailed',
         updatedAt: this.deps.now(),
       });
+      this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
     }
   }
   private enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
@@ -782,4 +1194,28 @@ function fingerprint(plan: SupervisedPlan): string {
       step.children.map((child) => [child.id, child.state]),
     ]),
   );
+}
+
+function refreshPersistedProcesses(
+  persisted: readonly OwnedExecutorProcess[],
+  observed: readonly OwnedExecutorProcess[],
+  now: string,
+): readonly OwnedExecutorProcess[] {
+  if (!observed.length) return persisted;
+  const priorById = new Map(persisted.map((process) => [process.processId, process]));
+  return observed.map((process) => {
+    const prior = priorById.get(process.processId);
+    if (!prior) return process;
+    const observedAt = prior.observedAt;
+    return {
+      ...process,
+      observedAt,
+      elapsedMs: Math.max(process.elapsedMs, Date.parse(now) - Date.parse(observedAt)),
+      ownership: prior.ownership === 'supervisor' ? 'supervisor' : process.ownership,
+      state:
+        prior.ownership === 'supervisor' && process.state === 'running'
+          ? 'detached-active'
+          : process.state,
+    };
+  });
 }

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { parseOrgPlanAgentIdentity } from '../../../shared/org-plan-position.js';
+
 export type AgentActivityState =
   'working' | 'idle' | 'awaitingAgent' | 'awaitingHuman' | 'blocked' | 'disconnected';
 export type AgentActivityConfidence = 'fresh' | 'stale' | 'reconciling';
@@ -35,10 +37,36 @@ export type SubagentActivity = Readonly<{
   nickname?: string;
   role?: string;
   model?: string;
+  taskPath?: string;
+  canonicalTaskName?: string;
+  canonicalPosition?: string;
+  continuationGeneration?: number;
+  outcome?: 'partial' | 'cancelled' | 'failed';
+  ownedProcesses?: readonly AgentOwnedProcess[];
   state: AgentActivityState;
   reason: AgentActivityReason;
   observedAt: string;
   lastActivityAt: string;
+}>;
+export type AgentOwnedProcess = Readonly<{
+  processId: string;
+  itemId: string;
+  ownerThreadId: string;
+  ownerTaskPath: string;
+  ownership: 'executor' | 'supervisor';
+  state:
+    | 'running'
+    | 'detached-active'
+    | 'exited-awaiting-result'
+    | 'result-consumed'
+    | 'terminated-for-budget';
+  observedAt: string;
+  elapsedMs: number;
+  cpuPercent: number | null;
+  rssBytes: number | null;
+  osPid?: number;
+  exitStatus?: number;
+  resultArtifact?: string;
 }>;
 export type AgentActivitySnapshot = Readonly<{
   sessionId: string;
@@ -71,6 +99,8 @@ export type AgentActivityFact = Readonly<{
   childNickname?: string;
   childRole?: string;
   childModel?: string;
+  childTaskPath?: string;
+  childOwnedProcesses?: readonly AgentOwnedProcess[];
   childStatus?: string;
   collaborationAction?: string;
   attentionReason?: Extract<
@@ -167,6 +197,9 @@ export function projectAgentActivity(
     if (!fact.childId) root.reason = 'missingCollaborationMetadata';
     else {
       const before = children.get(fact.childId);
+      const taskPath = fact.childTaskPath ?? before?.taskPath;
+      const identity = taskPath ? parseOrgPlanAgentIdentity(taskPath) : null;
+      const outcome = childOutcome(fact.childStatus, fact.collaborationAction, before?.outcome);
       const child: SubagentActivity = Object.freeze({
         id: fact.childId,
         ...(fact.childThreadId
@@ -184,6 +217,20 @@ export function projectAgentActivity(
           ? { model: fact.childModel }
           : before?.model
             ? { model: before.model }
+            : {}),
+        ...(taskPath ? { taskPath } : {}),
+        ...(identity
+          ? {
+              canonicalTaskName: identity.canonicalTaskName,
+              canonicalPosition: identity.canonicalPosition,
+              continuationGeneration: identity.generation,
+            }
+          : {}),
+        ...(outcome ? { outcome } : {}),
+        ...(fact.childOwnedProcesses
+          ? { ownedProcesses: Object.freeze([...fact.childOwnedProcesses]) }
+          : before?.ownedProcesses
+            ? { ownedProcesses: before.ownedProcesses }
             : {}),
         state: childState(fact.childStatus, fact.collaborationAction, before?.state),
         reason: childReason(fact.childStatus, fact.collaborationAction),
@@ -238,6 +285,18 @@ function applyStatus(
     Object.assign(root, { state: 'idle', reason: 'turnCompleted' });
   else if (status === 'active' || status === 'working')
     Object.assign(root, { state: 'working', reason: 'turnActive' });
+}
+function childOutcome(
+  status?: string,
+  action?: string,
+  previous?: SubagentActivity['outcome'],
+): SubagentActivity['outcome'] | undefined {
+  if (status === 'error' || status === 'failed' || status === 'systemError' || status === 'errored')
+    return 'failed';
+  if (status === 'interrupted' || status === 'shutdown' || action === 'close_agent')
+    return 'cancelled';
+  if (status === 'completed' || status === 'idle') return 'partial';
+  return previous;
 }
 function childState(
   status?: string,

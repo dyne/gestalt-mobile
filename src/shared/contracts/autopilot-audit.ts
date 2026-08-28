@@ -7,6 +7,14 @@
 /** Maps durable events to the intentionally small user-visible Autopilot timeline. */
 export function autopilotAuditLabel(type: string, payload: unknown): string | null {
   if (type === 'autopilot.turn-started') return 'Continued execution automatically';
+  if (type === 'autopilot.final-rejected') return 'Kept incomplete supervised work active';
+  if (type === 'autopilot.executor-resumed') return 'Resumed the assigned executor';
+  if (type === 'autopilot.process-monitoring') return 'Monitoring executor background work';
+  if (type === 'autopilot.process-result-consumed') return 'Consumed background work result';
+  if (type === 'autopilot.process-terminated')
+    return property(payload, 'reason') === 'resourceBudget'
+      ? 'Stopped background work at its resource limit'
+      : 'Stopped executor background work';
   if (type === 'autopilot.turn-failed') {
     const code = property(payload, 'code');
     return code === 'START_UNAVAILABLE'

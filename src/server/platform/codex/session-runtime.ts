@@ -70,6 +70,28 @@ export type DirectChildThread = Readonly<{
   nickname?: string;
   role?: string;
   model?: string;
+  taskPath?: string;
+}>;
+
+export type OwnedChildProcess = Readonly<{
+  processId: string;
+  itemId: string;
+  ownerThreadId: string;
+  ownerTaskPath: string;
+  ownership: 'executor' | 'supervisor';
+  state:
+    | 'running'
+    | 'detached-active'
+    | 'exited-awaiting-result'
+    | 'result-consumed'
+    | 'terminated-for-budget';
+  observedAt: string;
+  elapsedMs: number;
+  cpuPercent: number | null;
+  rssBytes: number | null;
+  osPid?: number;
+  exitStatus?: number;
+  resultArtifact?: string;
 }>;
 
 /** One private owner for every resource acquired for a live Codex child. */
@@ -82,6 +104,7 @@ class SessionResource {
   writtenThreadName: string | undefined;
   readonly capabilities = new Map<string, boolean>();
   readonly spawnedAgentModels = new Map<string, string>();
+  readonly ownedChildProcesses = new Map<string, OwnedChildProcess>();
 
   constructor(
     readonly sessionId: string,
@@ -258,6 +281,24 @@ export class CodexSessionRuntime {
     return RelaySession.rehydrate(session).startTurn(result, now).snapshot;
   }
 
+  async startExecutorTurn(
+    session: RelaySessionSnapshot,
+    childThreadId: string,
+    text: string,
+    clientUserMessageId: string,
+  ): Promise<string> {
+    const resource = this.sessions.get(session.id);
+    if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    return decodeTurnStart(
+      await resource.process.rpc.request('turn/start', {
+        threadId: childThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        clientUserMessageId,
+        ...(session.model ? { model: session.model } : {}),
+      }),
+    );
+  }
+
   /** The sole authoritative in-process ownership probe.  It never launches a child. */
   ownsWriter(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.active === true;
@@ -399,6 +440,9 @@ export class CodexSessionRuntime {
               ...(owned.spawnedAgentModels.get(value.id)
                 ? { model: owned.spawnedAgentModels.get(value.id)! }
                 : {}),
+              ...(decodeAgentTaskPath(value.source)
+                ? { taskPath: decodeAgentTaskPath(value.source)! }
+                : {}),
             },
           ];
         }),
@@ -415,6 +459,154 @@ export class CodexSessionRuntime {
     }
     if (cursor) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
     return children;
+  }
+
+  /** Reads only bounded process metadata; command text and output never enter lifecycle state. */
+  async inspectChildProcesses(
+    session: RelaySessionSnapshot,
+    child: Pick<DirectChildThread, 'id' | 'taskPath'>,
+  ): Promise<readonly OwnedChildProcess[]> {
+    const owned = this.sessions.get(session.id);
+    if (!owned) return [];
+    const active = await this.listChildBackgroundTerminals(owned, child);
+    const activeIds = new Set(active.map((process) => process.processId));
+    for (const process of active)
+      owned.ownedChildProcesses.set(childProcessKey(child.id, process.processId), process);
+
+    const prior = [...owned.ownedChildProcesses.values()].filter(
+      (process) => process.ownerThreadId === child.id && !activeIds.has(process.processId),
+    );
+    if (
+      prior.some((process) => process.state === 'running' || process.state === 'detached-active')
+    ) {
+      const results = await this.readChildProcessResults(owned, child.id);
+      for (const process of prior) {
+        if (process.state !== 'running' && process.state !== 'detached-active') continue;
+        const result = results.get(process.itemId);
+        owned.ownedChildProcesses.set(childProcessKey(child.id, process.processId), {
+          ...process,
+          state: 'exited-awaiting-result',
+          cpuPercent: 0,
+          rssBytes: 0,
+          ...(result?.exitStatus === undefined ? {} : { exitStatus: result.exitStatus }),
+          resultArtifact: `${child.id}:${process.itemId}`,
+        });
+      }
+    }
+    return [...owned.ownedChildProcesses.values()].filter(
+      (process) =>
+        process.ownerThreadId === child.id &&
+        process.state !== 'result-consumed' &&
+        process.state !== 'terminated-for-budget',
+    );
+  }
+
+  consumeChildProcessResult(sessionId: string, childThreadId: string, processId: string): void {
+    this.sessions
+      .get(sessionId)
+      ?.ownedChildProcesses.delete(childProcessKey(childThreadId, processId));
+  }
+
+  async terminateChildProcess(
+    session: RelaySessionSnapshot,
+    childThreadId: string,
+    processId: string,
+  ): Promise<boolean> {
+    const owned = this.sessions.get(session.id);
+    if (!owned) return false;
+    const result = await owned.process.rpc.request('thread/backgroundTerminals/terminate', {
+      threadId: childThreadId,
+      processId,
+    });
+    const terminated = asRecord(result)?.terminated === true;
+    if (terminated) {
+      const key = childProcessKey(childThreadId, processId);
+      const process = owned.ownedChildProcesses.get(key);
+      if (process)
+        owned.ownedChildProcesses.set(key, { ...process, state: 'terminated-for-budget' });
+    }
+    return terminated;
+  }
+
+  private async listChildBackgroundTerminals(
+    owned: SessionResource,
+    child: Pick<DirectChildThread, 'id' | 'taskPath'>,
+  ): Promise<readonly OwnedChildProcess[]> {
+    const processes: OwnedChildProcess[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 4 && processes.length < 64; page += 1) {
+      const result = await owned.process.rpc.request('thread/backgroundTerminals/list', {
+        threadId: child.id,
+        limit: 64,
+        ...(cursor ? { cursor } : {}),
+      });
+      const response = asRecord(result);
+      const data = Array.isArray(response?.data) ? response.data : [];
+      for (const candidate of data) {
+        const value = asRecord(candidate);
+        const itemId = boundedString(value?.itemId, 256);
+        const processId = boundedString(value?.processId, 256);
+        if (!itemId || !processId || processes.length >= 64) continue;
+        const key = childProcessKey(child.id, processId);
+        const before = owned.ownedChildProcesses.get(key);
+        const observedAt = before?.observedAt ?? new Date().toISOString();
+        const rssKb = boundedNonNegativeNumber(value?.rssKb);
+        processes.push({
+          processId,
+          itemId,
+          ownerThreadId: child.id,
+          ownerTaskPath: child.taskPath ?? child.id,
+          ownership: before?.ownership ?? 'executor',
+          state: before?.state === 'detached-active' ? 'detached-active' : 'running',
+          observedAt,
+          elapsedMs: Math.max(0, Date.now() - Date.parse(observedAt)),
+          cpuPercent: boundedNonNegativeNumber(value?.cpuPercent),
+          rssBytes: rssKb === null ? null : Math.min(Number.MAX_SAFE_INTEGER, rssKb * 1024),
+          ...(boundedNonNegativeInteger(value?.osPid) === null
+            ? {}
+            : { osPid: boundedNonNegativeInteger(value?.osPid)! }),
+        });
+      }
+      const next = boundedString(response?.nextCursor, 256);
+      if (!next) return processes;
+      if (cursors.has(next) || processes.length >= 64)
+        throw new Error('CODEX_BACKGROUND_TERMINAL_LIST_UNSUPPORTED');
+      cursors.add(next);
+      cursor = next;
+    }
+    if (cursor) throw new Error('CODEX_BACKGROUND_TERMINAL_LIST_UNSUPPORTED');
+    return processes;
+  }
+
+  private async readChildProcessResults(
+    owned: SessionResource,
+    childThreadId: string,
+  ): Promise<ReadonlyMap<string, Readonly<{ exitStatus?: number }>>> {
+    const result = await owned.process.rpc.request('thread/read', {
+      threadId: childThreadId,
+      includeTurns: true,
+    });
+    const decoded = new Map<string, Readonly<{ exitStatus?: number }>>();
+    const turns = asRecord(asRecord(result)?.thread)?.turns;
+    if (!Array.isArray(turns) || turns.length > 10_000) return decoded;
+    for (const turn of turns) {
+      const items = asRecord(turn)?.items;
+      if (!Array.isArray(items) || items.length > 10_000) continue;
+      for (const candidate of items) {
+        const item = asRecord(candidate);
+        const itemId = boundedString(item?.id, 256);
+        if (
+          item?.type !== 'commandExecution' ||
+          !itemId ||
+          !['completed', 'failed', 'declined'].includes(String(item.status))
+        )
+          continue;
+        const exitStatus = boundedInteger(item.exitCode);
+        decoded.set(itemId, exitStatus === null ? {} : { exitStatus });
+      }
+    }
+    return decoded;
   }
 
   private async readDetachedHistory(session: RelaySessionSnapshot): Promise<{
@@ -731,6 +923,31 @@ function threadTokenUsage(value: unknown): ThreadTokenBreakdown | undefined {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function decodeAgentTaskPath(value: unknown): string | undefined {
+  const subagent = asRecord(asRecord(value)?.subagent);
+  const spawn = asRecord(subagent?.thread_spawn);
+  const path = boundedString(spawn?.agent_path, 256);
+  return path?.startsWith('/') && !path.includes('..') ? path : undefined;
+}
+
+function childProcessKey(childThreadId: string, processId: string): string {
+  return `${childThreadId}:${processId}`;
+}
+
+function boundedNonNegativeNumber(value: unknown): number | null {
+  const number = typeof value === 'bigint' ? Number(value) : value;
+  return typeof number === 'number' && Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function boundedInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
+}
+
+function boundedNonNegativeInteger(value: unknown): number | null {
+  const number = boundedInteger(value);
+  return number !== null && number >= 0 ? number : null;
 }
 
 function decodeThreadStart(value: unknown): string {

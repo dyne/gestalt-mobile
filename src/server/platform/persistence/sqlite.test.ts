@@ -240,7 +240,7 @@ describe('SQLite relay persistence', () => {
     const indexes = database.prepare('PRAGMA index_list(session_events)').all() as Array<{
       name: string;
     }>;
-    expect(indexes.map((index) => index.name)).toContain('session_events_autopilot_audit_tail_v2');
+    expect(indexes.map((index) => index.name)).toContain('session_events_autopilot_audit_tail_v3');
     database.close();
   });
 
