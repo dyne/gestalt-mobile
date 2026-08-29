@@ -132,6 +132,51 @@ describe('CodexSessionRuntime', () => {
     expect(resumed).toEqual(['root', 'child-1']);
   });
 
+  it('recovers the resolved model for an active inherited-model child', async () => {
+    const resumed: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'initialize') return {};
+          if (method === 'thread/resume') {
+            const threadId = (params as { threadId: string }).threadId;
+            resumed.push(threadId);
+            return threadId === 'child-1' ? { model: 'gpt-5.6-terra' } : {};
+          }
+          if (method === 'thread/list')
+            return {
+              data: [{ id: 'child-1', status: { type: 'active' }, agentRole: 'worker' }],
+            };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'active-child-model',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+
+    await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
+      { id: 'child-1', status: 'active', model: 'gpt-5.6-terra' },
+    ]);
+    expect(resumed).toEqual(['root', 'child-1']);
+  });
+
   it('lists direct children across bounded pages with models recovered from history', async () => {
     let page = 0;
     const runtime = new CodexSessionRuntime(() => ({
