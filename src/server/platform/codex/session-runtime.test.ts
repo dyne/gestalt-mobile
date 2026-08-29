@@ -17,6 +17,121 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('keeps the resolved child model published by thread settings across history refreshes', async () => {
+    let publishNotification:
+      ((notification: { method: string; params: unknown }) => void) | undefined;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/resume' || method === 'initialize') return {};
+          if (method === 'thread/read')
+            return {
+              thread: {
+                turns: [
+                  {
+                    items: [
+                      {
+                        id: 'spawn-1',
+                        type: 'collabAgentToolCall',
+                        tool: 'spawnAgent',
+                        model: null,
+                        receiverThreadIds: ['child-1'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            };
+          if (method === 'thread/list')
+            return {
+              data: [{ id: 'child-1', status: { type: 'active' }, agentRole: 'worker' }],
+            };
+          return {};
+        },
+        onNotification: (listener) => {
+          publishNotification = listener;
+          return () => {};
+        },
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'resolved-child-model',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    publishNotification?.({
+      method: 'thread/settings/updated',
+      params: {
+        threadId: 'child-1',
+        threadSettings: { model: 'gpt-5.6-terra' },
+      },
+    });
+
+    await runtime.readHistory(session);
+
+    await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
+      { id: 'child-1', model: 'gpt-5.6-terra' },
+    ]);
+  });
+
+  it('recovers the resolved model when a historical direct child is not loaded', async () => {
+    const resumed: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'initialize') return {};
+          if (method === 'thread/resume') {
+            const threadId = (params as { threadId: string }).threadId;
+            resumed.push(threadId);
+            return threadId === 'child-1' ? { model: 'gpt-5.6-terra' } : {};
+          }
+          if (method === 'thread/list')
+            return {
+              data: [{ id: 'child-1', status: { type: 'notLoaded' }, agentRole: 'worker' }],
+            };
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'historical-child-model',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+
+    await expect(runtime.listDirectChildren(session)).resolves.toMatchObject([
+      { id: 'child-1', model: 'gpt-5.6-terra' },
+    ]);
+    expect(resumed).toEqual(['root', 'child-1']);
+  });
+
   it('lists direct children across bounded pages with models recovered from history', async () => {
     let page = 0;
     const runtime = new CodexSessionRuntime(() => ({
