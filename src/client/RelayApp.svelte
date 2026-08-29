@@ -1107,6 +1107,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return feedback.message;
   }
 
+  function reportCodeCopy(copied: boolean): void {
+    toastQueue.enqueue(
+      copied
+        ? { kind: 'success', message: 'Code copied.' }
+        : {
+            kind: 'error',
+            message: 'Code could not be copied. Select it and copy it manually.',
+          },
+    );
+  }
+
   function isAbortError(error: unknown): boolean {
     return error instanceof DOMException
       ? error.name === 'AbortError'
@@ -1265,6 +1276,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ondecision={(id, decision) => void resolveInteraction(id, decision)}
               onretry={retryInteraction}
               onopenorg={openLinkedOrgPlan}
+              oncopyresult={reportCodeCopy}
             />
             <Composer
               status={chatView?.status ?? shellStatus}
