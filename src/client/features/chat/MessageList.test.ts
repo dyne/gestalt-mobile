@@ -79,6 +79,57 @@ describe('MessageList', () => {
     expect(screen.getByText('important').tagName).toBe('STRONG');
   });
 
+  it('copies a fenced code block with an accessible one-click control', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const oncopyresult = vi.fn();
+    render(MessageList, {
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: '```ts\nconst value = 1;\n```',
+          complete: true,
+        },
+      ],
+      activities: [],
+      clipboard: { writeText },
+      oncopyresult,
+    });
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Copy code block: const value = 1;' }),
+    );
+
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('const value = 1;\n'));
+    expect(oncopyresult).toHaveBeenCalledWith(true);
+    expect(screen.getByText('const value = 1;').closest('pre')).not.toBeNull();
+  });
+
+  it('reports a fenced-code clipboard failure to the shared feedback boundary', async () => {
+    const oncopyresult = vi.fn();
+    render(MessageList, {
+      messages: [
+        {
+          id: 'answer',
+          role: 'assistant',
+          text: '```\nnpm test\n```',
+          complete: true,
+        },
+      ],
+      activities: [],
+      clipboard: {
+        writeText: async () => {
+          throw new Error('denied');
+        },
+      },
+      oncopyresult,
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy code block: npm test' }));
+
+    await vi.waitFor(() => expect(oncopyresult).toHaveBeenCalledWith(false));
+  });
+
   it('wraps commentary and activity only after the answer completes', () => {
     render(MessageList, {
       messages: [

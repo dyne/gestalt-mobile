@@ -1073,6 +1073,16 @@ test('keeps Sessions and Git selections independent through a successful clone r
 });
 
 test('hydrates canonical history for a persisted session', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as Window & { copiedCode?: string }).copiedCode = text;
+        },
+      },
+    });
+  });
   const session = {
     id: 'session-1',
     state: 'ready',
@@ -1111,7 +1121,7 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
             kind: 'agent',
             phase: 'final_answer',
             occurredAt: Date.parse('2026-07-15T10:00:00.000Z'),
-            text: 'No changes are needed.\n\nInstallation | What it receives\n|---|---|\n| `npx skills add` | Only `my-skill/` |',
+            text: 'No changes are needed.\n\n```ts\nconst ready = true;\n```\n\nInstallation | What it receives\n|---|---|\n| `npx skills add` | Only `my-skill/` |',
           },
           { id: 'command-1', kind: 'command', command: 'git status', status: 'completed' },
         ],
@@ -1130,6 +1140,13 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   await expect(page.getByRole('table')).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Installation' })).toBeVisible();
   await expect(page.getByText('npx skills add')).toBeVisible();
+  await page.getByRole('button', { name: 'Copy code block: const ready = true;' }).click();
+  await expect(page.getByText('Code copied.')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as Window & { copiedCode?: string }).copiedCode ?? null),
+    )
+    .toBe('const ready = true;\n');
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
   const messageList = page.getByRole('list', { name: 'Chat messages' });
   const promptTurn = messageList.locator('.prompt-turn');

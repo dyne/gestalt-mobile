@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
   import { isLocalOrgHref } from '../plans/org-plan-link.js';
+  import { copyText } from '../sessions/clipboard.js';
 
   type Props = {
     messages: ChatMessage[];
@@ -24,12 +25,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     interactions?: ProjectedInteraction[];
     answers?: Record<string, string>;
     submittedAnswers?: Record<string, readonly SubmittedQuizAnswer[]>;
+    clipboard?: Pick<Clipboard, 'writeText'>;
     onanswer?(requestId: string, id: string, value: string): void;
     onquiz?(interaction: ProjectedInteraction): void;
     onpermission?(interaction: ProjectedInteraction): void;
     ondecision?(id: string, decision: 'accept' | 'decline'): void;
     onretry?(interaction: ProjectedInteraction): void;
     onopenorg?(href: string): void;
+    oncopyresult?(copied: boolean): void;
   };
   let {
     messages,
@@ -39,12 +42,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     interactions = [],
     answers = {},
     submittedAnswers = {},
+    clipboard = globalThis.navigator?.clipboard,
     onanswer = () => {},
     onquiz = () => {},
     onpermission = () => {},
     ondecision = () => {},
     onretry = () => {},
     onopenorg,
+    oncopyresult = () => {},
   }: Props = $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
@@ -125,6 +130,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     event.preventDefault();
     onopenorg(href);
   }
+  function codeCopyLabel(text: string): string {
+    const preview = text.trim().split('\n')[0]?.trim() || 'empty block';
+    return `Copy code block: ${preview.slice(0, 48)}`;
+  }
+  async function copyCode(text: string): Promise<void> {
+    oncopyresult(await copyText(text, clipboard));
+  }
 </script>
 
 {#snippet inline(parts: CommentaryPart[])}
@@ -164,7 +176,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {#snippet content(text: string)}
   {#each renderCommentary(text) as block, blockIndex (blockIndex)}
     {#if block.kind === 'code'}
-      <pre><code>{block.text}</code></pre>
+      <div class="code-block">
+        <button
+          class="code-copy"
+          type="button"
+          aria-label={codeCopyLabel(block.text)}
+          title="Copy code"
+          onclick={() => void copyCode(block.text)}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <rect x="9" y="9" width="10" height="10" rx="2" />
+            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
+          </svg>
+        </button>
+        <pre><code>{block.text}</code></pre>
+      </div>
     {:else if block.kind === 'table'}
       <div class="table-scroll">
         <table>
@@ -544,12 +570,56 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   pre {
+    margin: 0;
     padding: 0.625rem;
+    padding-inline-end: 3rem;
     white-space: pre;
     overflow-x: auto;
     background: var(--theme-code);
     border: 1px solid var(--theme-border);
     border-radius: var(--theme-radius);
+  }
+
+  .code-block {
+    position: relative;
+    margin-block: 0.75rem;
+  }
+
+  .code-copy {
+    position: absolute;
+    inset-block-start: 0.375rem;
+    inset-inline-end: 0.375rem;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    inline-size: 2rem;
+    min-block-size: 2rem;
+    padding: 0;
+    color: var(--theme-text-muted);
+    background: var(--theme-surface-subtle);
+    border: 1px solid var(--theme-border);
+    border-radius: 0.375rem;
+  }
+
+  .code-copy:hover {
+    color: var(--theme-text);
+    background: var(--theme-control-hover);
+  }
+
+  .code-copy:focus-visible {
+    color: var(--theme-text);
+    outline: 2px solid var(--theme-focus);
+    outline-offset: 2px;
+  }
+
+  .code-copy svg {
+    inline-size: 1rem;
+    block-size: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   :not(pre) > code {
@@ -585,5 +655,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   th {
     font-weight: 600;
     background: var(--theme-surface-subtle);
+  }
+
+  @media (pointer: coarse) {
+    pre {
+      padding-inline-end: 3.75rem;
+    }
+
+    .code-copy {
+      inline-size: 2.75rem;
+      min-block-size: 2.75rem;
+    }
   }
 </style>
