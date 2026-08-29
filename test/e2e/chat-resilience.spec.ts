@@ -83,7 +83,9 @@ async function expectTimeline(page: Page, labels: string[]): Promise<void> {
   labels.forEach((label, index) => expect(actual[index]).toContain(label));
 }
 
-test('queues or replaces an active turn from the composer action control', async ({ page }) => {
+test('queues an active turn with Ctrl+Enter or replaces it from the action control', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockAuthenticatedStatus(page);
   const fixture = new ChatRelayFixture(page);
@@ -135,8 +137,7 @@ test('queues or replaces an active turn from the composer action control', async
   await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
   await prompt.fill('focus on tests');
   await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Choose prompt action' }).click();
-  await page.getByRole('button', { name: 'Queue message' }).click();
+  await prompt.press('Control+Enter');
   await expect.poll(() => queued.length).toBe(1);
   expect(queued[0]?.body).toEqual({ text: 'focus on tests' });
   expect(queued[0]?.idempotencyKey).toBeTruthy();

@@ -85,10 +85,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function keydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter' && event.ctrlKey && !event.isComposing && sendEnabled) {
-      event.preventDefault();
-      onsend();
-      return;
+    if (event.key === 'Enter' && event.ctrlKey && !event.isComposing) {
+      if (activeTurnId && !starting && hasPrompt) {
+        event.preventDefault();
+        chooseActiveAction('queue');
+        return;
+      }
+      if (sendEnabled) {
+        event.preventDefault();
+        onsend();
+        return;
+      }
     }
     if (commandMenuOpen) {
       if (event.key === 'ArrowDown') {

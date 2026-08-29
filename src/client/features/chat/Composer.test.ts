@@ -146,8 +146,9 @@ describe('Composer', () => {
     expect(onsend).toHaveBeenCalledTimes(2);
   });
 
-  it('does not send Ctrl+Enter while unavailable or composing text', async () => {
+  it('queues Ctrl+Enter during an active turn and ignores it while unavailable or composing', async () => {
     const onsend = vi.fn();
+    const onqueue = vi.fn();
     const { rerender } = render(Composer, {
       status: 'Ready.',
       message: 'first line',
@@ -155,22 +156,40 @@ describe('Composer', () => {
       starting: false,
       onchange: () => {},
       onsend,
+      onqueue,
       oninterrupt: () => {},
     });
     const prompt = screen.getByRole('textbox', { name: 'Prompt' });
 
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
+    expect(onqueue).not.toHaveBeenCalled();
     await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
+    expect(onqueue).toHaveBeenCalledOnce();
     expect(onsend).not.toHaveBeenCalled();
     rerender({
       status: 'Ready.',
       message: 'first line',
-      activeTurnId: null,
+      activeTurnId: 'turn-1',
+      starting: true,
+      onchange: () => {},
+      onsend,
+      onqueue,
+      oninterrupt: () => {},
+    });
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
+    expect(onqueue).toHaveBeenCalledOnce();
+    rerender({
+      status: 'Ready.',
+      message: 'first line',
+      activeTurnId: 'turn-1',
       starting: false,
       onchange: () => {},
       onsend,
+      onqueue,
       oninterrupt: () => {},
     });
     await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true, isComposing: true });
+    expect(onqueue).toHaveBeenCalledOnce();
     expect(onsend).not.toHaveBeenCalled();
   });
 
