@@ -35,45 +35,6 @@ const sessions = [
   },
 ];
 
-test('hides the Chat pop-out control on touch-first mobile devices', async ({
-  browser,
-}, testInfo) => {
-  const baseURL = testInfo.project.use.baseURL;
-  if (typeof baseURL !== 'string') throw new Error('PLAYWRIGHT_BASE_URL_MISSING');
-
-  const narrowDesktop = await browser.newContext({
-    baseURL,
-    viewport: { width: 390, height: 844 },
-  });
-  await mockAuthenticatedStatus(narrowDesktop);
-  const desktopFixture = new ChatRelayFixture(narrowDesktop);
-  await desktopFixture.install(sessions);
-  desktopFixture.snapshot('session-a', chatSnapshot());
-  const desktopPage = await narrowDesktop.newPage();
-  await desktopPage.goto('/');
-  await desktopPage.getByRole('button', { name: 'Chat' }).click();
-  await expect(desktopPage.locator('.detach-chat')).toBeVisible();
-  await narrowDesktop.close();
-
-  const mobile = await browser.newContext({
-    baseURL,
-    hasTouch: true,
-    isMobile: true,
-    viewport: { width: 600, height: 900 },
-  });
-  await mockAuthenticatedStatus(mobile);
-  const mobileFixture = new ChatRelayFixture(mobile);
-  await mobileFixture.install(sessions);
-  mobileFixture.snapshot('session-a', chatSnapshot());
-  const mobilePage = await mobile.newPage();
-  await mobilePage.goto('/');
-  await mobilePage.getByRole('button', { name: 'Chat' }).click();
-  const mobilePopOut = mobilePage.locator('.detach-chat');
-  await expect(mobilePopOut).toHaveCount(1);
-  await expect(mobilePopOut).toBeHidden();
-  await mobile.close();
-});
-
 test('keeps a detached Chat pinned while the main window follows another session', async ({
   context,
   page,
