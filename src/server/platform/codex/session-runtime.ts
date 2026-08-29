@@ -468,11 +468,13 @@ export class CodexSessionRuntime {
   ): Promise<readonly DirectChildThread[]> {
     for (const child of children) {
       if (
-        child.status !== 'notLoaded' ||
         resource.spawnedAgentModels.has(child.id) ||
         resource.attemptedAgentModelRecovery.has(child.id)
       )
         continue;
+      // thread/list omits the model for loaded and unloaded subagents alike.
+      // A spawn item can also contain null when an agent role selects or
+      // inherits the model, so thread/resume is the bounded authoritative read.
       resource.attemptedAgentModelRecovery.add(child.id);
       try {
         const response = await resource.process.rpc.request('thread/resume', {
