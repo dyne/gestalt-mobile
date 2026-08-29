@@ -104,6 +104,7 @@ class SessionResource {
   writtenThreadName: string | undefined;
   readonly capabilities = new Map<string, boolean>();
   readonly spawnedAgentModels = new Map<string, string>();
+  readonly attemptedAgentModelRecovery = new Set<string>();
   readonly ownedChildProcesses = new Map<string, OwnedChildProcess>();
 
   constructor(
@@ -451,14 +452,42 @@ export class CodexSessionRuntime {
         typeof response?.nextCursor === 'string' && response.nextCursor.length <= 256
           ? response.nextCursor
           : undefined;
-      if (!next) return children;
+      if (!next) return this.withResolvedChildModels(owned, children);
       if (cursors.has(next) || children.length >= 64)
         throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
       cursors.add(next);
       cursor = next;
     }
     if (cursor) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
-    return children;
+    return this.withResolvedChildModels(owned, children);
+  }
+
+  private async withResolvedChildModels(
+    resource: SessionResource,
+    children: readonly DirectChildThread[],
+  ): Promise<readonly DirectChildThread[]> {
+    for (const child of children) {
+      if (
+        child.status !== 'notLoaded' ||
+        resource.spawnedAgentModels.has(child.id) ||
+        resource.attemptedAgentModelRecovery.has(child.id)
+      )
+        continue;
+      resource.attemptedAgentModelRecovery.add(child.id);
+      try {
+        const response = await resource.process.rpc.request('thread/resume', {
+          threadId: child.id,
+        });
+        const model = boundedString(asRecord(response)?.model, 256);
+        if (model) resource.spawnedAgentModels.set(child.id, model);
+      } catch {
+        // A live settings notification can still provide the model later.
+      }
+    }
+    return children.map((child) => {
+      const model = child.model ?? resource.spawnedAgentModels.get(child.id);
+      return model && model !== child.model ? { ...child, model } : child;
+    });
   }
 
   /** Reads only bounded process metadata; command text and output never enter lifecycle state. */
@@ -640,7 +669,6 @@ export class CodexSessionRuntime {
   }> {
     const response = await process.rpc.request('thread/read', { threadId, includeTurns: true });
     if (resource) {
-      resource.spawnedAgentModels.clear();
       for (const [childId, model] of decodeSpawnedAgentModels(response))
         resource.spawnedAgentModels.set(childId, model);
     }
@@ -824,6 +852,13 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        const childModel = decodeThreadSettingsModel(notification);
+        if (
+          childModel &&
+          (resource.spawnedAgentModels.has(childModel.threadId) ||
+            resource.spawnedAgentModels.size < 256)
+        )
+          resource.spawnedAgentModels.set(childModel.threadId, childModel.model);
         const resolvedRequestId = resolvedServerRequestId(notification);
         if (resolvedRequestId) {
           const pending = resource.pendingRequests.get(resolvedRequestId);
@@ -930,6 +965,17 @@ function decodeAgentTaskPath(value: unknown): string | undefined {
   const spawn = asRecord(subagent?.thread_spawn);
   const path = boundedString(spawn?.agent_path, 256);
   return path?.startsWith('/') && !path.includes('..') ? path : undefined;
+}
+
+/** Captures the resolved model that Codex applies after spawning a child thread. */
+function decodeThreadSettingsModel(
+  notification: Readonly<{ method: string; params: unknown }>,
+): { threadId: string; model: string } | undefined {
+  if (notification.method !== 'thread/settings/updated') return undefined;
+  const params = asRecord(notification.params);
+  const threadId = boundedString(params?.threadId, 256);
+  const model = boundedString(asRecord(params?.threadSettings)?.model, 256);
+  return threadId && model ? { threadId, model } : undefined;
 }
 
 function childProcessKey(childThreadId: string, processId: string): string {
