@@ -35,6 +35,36 @@ const sessions = [
   },
 ];
 
+test('keeps the Chat pop-out available on touch-first mobile devices', async ({
+  browser,
+}, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  if (typeof baseURL !== 'string') throw new Error('PLAYWRIGHT_BASE_URL_MISSING');
+
+  const mobile = await browser.newContext({
+    baseURL,
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  await mockAuthenticatedStatus(mobile);
+  const fixture = new ChatRelayFixture(mobile);
+  await fixture.install(sessions);
+  fixture.snapshot('session-a', chatSnapshot());
+  const page = await mobile.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+
+  const popOut = page.getByRole('button', { name: 'Open Chat in a separate window' });
+  await expect(popOut).toBeVisible();
+  const detachedPromise = mobile.waitForEvent('page');
+  await popOut.click();
+  const detached = await detachedPromise;
+  await expect(detached).toHaveURL(/\?chat-session=session-a$/);
+
+  await mobile.close();
+});
+
 test('keeps a detached Chat pinned while the main window follows another session', async ({
   context,
   page,
