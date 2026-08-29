@@ -156,6 +156,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     stroke-width: 1.75;
   }
 
+  @media (hover: none) and (pointer: coarse) {
+    .detach-chat {
+      display: none;
+    }
+  }
+
   @media (max-width: 34rem) {
     .session-path {
       font-size: max(0.625rem, 12px);
