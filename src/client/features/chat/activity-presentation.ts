@@ -12,6 +12,26 @@ export type ActivityPresentation = {
   content: string;
 };
 
+export type CommandActivitySummary = {
+  successful: number;
+  failed: number;
+};
+
+export function summarizeCommandActivities(
+  activities: readonly HistoryActivity[],
+): CommandActivitySummary {
+  return activities.reduce<CommandActivitySummary>(
+    (summary, activity) => {
+      const presentation = presentActivity(activity);
+      if (presentation?.kind !== 'Command') return summary;
+      if (presentation.status === 'completed') summary.successful += 1;
+      if (presentation.status === 'failed') summary.failed += 1;
+      return summary;
+    },
+    { successful: 0, failed: 0 },
+  );
+}
+
 export function presentActivity(activity: HistoryActivity): ActivityPresentation | null {
   if (isContextModeTool(activity)) return null;
 
