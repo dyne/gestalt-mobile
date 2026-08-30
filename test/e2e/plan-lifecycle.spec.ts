@@ -442,12 +442,14 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');
 
     await invokeHelper('set', 'deliver-lifecycle', 'DONE');
-    await expect(page.getByText('1 / 3 complete')).not.toBeVisible();
-    await expect(page.getByText('3 / 3 complete')).toBeVisible();
+    await expect(page.getByText('1 / 3 work items done')).not.toBeVisible();
+    await expect(page.getByText('3 / 3 work items done')).toBeVisible();
+    await expect(page.getByText('Awaiting L1 review', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Close plan and return to list' })).toBeVisible();
     await expect(page.getByText('DONE · Priority A · UNREVIEWED').first()).toBeVisible();
     await invokeHelper('review', 'deliver-lifecycle', 'REVIEWED');
     await expect(page.getByText('DONE · Priority A · REVIEWED')).toBeVisible();
+    await expect(page.getByText('Terminal review', { exact: true })).toBeVisible();
 
     await navigation.getByRole('button', { name: 'Sessions' }).click();
     await page.evaluate(() => {

@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { orgPlanPosition } from '../../../shared/org-plan-position.js';
   import type { PlanStep, SupervisedPlan } from './contracts.js';
+  import { presentPlan } from './plan-presentation.js';
 
   type Marker = Readonly<{
     id: string;
@@ -47,25 +48,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ]),
   );
   let wipMarkers = $derived(markers.filter((marker) => marker.state === 'WIP'));
-  let reviewedL1s = $derived(plan.steps.filter((step) => step.reviewStatus === 'REVIEWED').length);
-  let totalL1s = $derived(plan.steps.length);
-  let awaitingReview = $derived(
-    plan.steps.find((step) => step.state === 'DONE' && step.reviewStatus === 'UNREVIEWED'),
-  );
+  let presentation = $derived(presentPlan(plan));
   let progressMax = $derived(Math.max(plan.totalSteps, 1));
 </script>
 
 <div class={['plan-progress', { compact }]}>
   <div class="progress-heading">
-    <span>{plan.doneSteps} / {plan.totalSteps} complete</span>
-    <span>· {reviewedL1s} / {totalL1s} reviewed</span>
+    <span>{plan.doneSteps} / {plan.totalSteps} work items done</span>
+    <span>· {presentation.reviewedL1s} / {presentation.totalL1s} reviewed</span>
   </div>
   <progress aria-label={label} value={plan.doneSteps} max={progressMax}>
-    {plan.doneSteps} of {plan.totalSteps} complete
+    {plan.doneSteps} of {plan.totalSteps} work items done
   </progress>
-  {#if awaitingReview}
-    <span class="review-status">Awaiting L{plan.steps.indexOf(awaitingReview) + 1} review</span>
-  {/if}
+  <span class="review-status" data-phase={presentation.phase}>{presentation.label}</span>
   {#if compact && wipMarkers.length}
     <ol class="wip-steps" aria-label="Work in progress plan steps">
       {#each wipMarkers as marker (marker.id)}
