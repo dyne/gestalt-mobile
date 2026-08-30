@@ -507,6 +507,7 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
     label: item.label,
     detail: item.detail,
     ...(item.turnId ? { turnId: item.turnId } : {}),
+    ...(item.actorTurnId ? { actorTurnId: item.actorTurnId } : {}),
     ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
     ...(item.changes ? { changes: item.changes } : {}),
   }));
@@ -846,6 +847,7 @@ export function applyProjectionEvent(
           : next.activeTurnId
             ? { turnId: next.activeTurnId }
             : {}),
+        ...(typeof payload.actorTurnId === 'string' ? { actorTurnId: payload.actorTurnId } : {}),
       }),
     };
   } else if (event.type === 'session.updated' && typeof payload?.activeTurnId !== 'undefined') {

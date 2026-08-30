@@ -737,6 +737,31 @@ describe('chat projection', () => {
     });
     expect(two.activities).toEqual([{ id: 'a', label: 'second', detail: 'y' }]);
   });
+  it('retains bounded physical child identity while displaying its work under the root turn', () => {
+    const projected = applyProjectionEvent(
+      promotePrompt(createChatProjection('s'), 'op', 'root-turn'),
+      {
+        sequence: 1,
+        type: 'activity.updated',
+        payload: {
+          id: 'child-command',
+          label: 'Command · completed',
+          detail: 'npm test',
+          turnId: 'root-turn',
+          actorTurnId: 'child-turn',
+        },
+      },
+    );
+    expect(projected.activities).toEqual([
+      {
+        id: 'child-command',
+        label: 'Command · completed',
+        detail: 'npm test',
+        turnId: 'root-turn',
+        actorTurnId: 'child-turn',
+      },
+    ]);
+  });
   it('keeps separate agent items live and promotes their phases without waiting for history', () => {
     const working = promotePrompt(
       queuePrompt(createChatProjection('s'), 'op', 'prompt'),

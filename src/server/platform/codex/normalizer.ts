@@ -7,6 +7,7 @@
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { countDiffLines, type FileChangeSummary } from '../../../shared/contracts/file-change.js';
 import { relative } from 'node:path';
+import type { NotificationOrigin } from './session-runtime.js';
 
 export function normalizeCodexNotification(
   sessionId: string,
@@ -15,10 +16,12 @@ export function normalizeCodexNotification(
   notification: { method?: string; params?: unknown },
   workspacePath?: string,
   activeTurnId?: string | null,
+  origin: NotificationOrigin = { kind: 'root' },
 ): SessionEvent | null {
   const decoded = decodeNotification(notification);
   if (!decoded) return null;
-  if (decoded.method === 'item/agentMessage/delta')
+  if (decoded.method === 'item/agentMessage/delta') {
+    if (origin.kind !== 'root') return null;
     return {
       sessionId,
       sequence,
@@ -27,12 +30,11 @@ export function normalizeCodexNotification(
       payload: {
         text: decoded.params.delta,
         ...(decoded.params.itemId ? { itemId: decoded.params.itemId } : {}),
-        ...((decoded.params.turnId ?? activeTurnId)
-          ? { turnId: decoded.params.turnId ?? activeTurnId }
-          : {}),
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
       },
     };
-  if (decoded.method === 'turn/completed')
+  }
+  if (decoded.method === 'turn/completed' && origin.kind === 'root')
     return {
       sessionId,
       sequence,
@@ -51,13 +53,17 @@ export function normalizeCodexNotification(
       workspacePath,
       activeTurnId,
       decoded.params.turnId,
+      origin,
     );
     return activity
       ? { sessionId, sequence, occurredAt, type: 'activity.updated', payload: activity }
       : null;
   }
   if (decoded.method === 'item/started' || decoded.method === 'item/completed') {
-    const message = safeAgentMessage(decoded.params.item, activeTurnId, decoded.params.turnId);
+    const message =
+      origin.kind === 'root'
+        ? safeAgentMessage(decoded.params.item, activeTurnId, decoded.params.turnId)
+        : null;
     if (message)
       return {
         sessionId,
@@ -71,6 +77,7 @@ export function normalizeCodexNotification(
       workspacePath,
       activeTurnId,
       decoded.params.turnId,
+      origin,
     );
     if (activity)
       return { sessionId, sequence, occurredAt, type: 'activity.updated', payload: activity };
@@ -166,23 +173,28 @@ function safeActivity(
   workspacePath?: string,
   activeTurnId?: string | null,
   notificationTurnId?: string,
+  origin: NotificationOrigin = { kind: 'root' },
 ): {
   id: string;
   label: string;
   detail: string;
   turnId?: string;
+  actorTurnId?: string;
   changes?: FileChangeSummary[];
 } | null {
   if (!item || typeof item !== 'object') return null;
   const value = item as Record<string, unknown>;
   if (typeof value.id !== 'string' || typeof value.type !== 'string') return null;
-  const owner = notificationTurnId
-    ? { turnId: notificationTurnId }
-    : safeId(value.turnId)
-      ? { turnId: value.turnId as string }
-      : activeTurnId
-        ? { turnId: activeTurnId }
-        : {};
+  const owner =
+    origin.kind === 'child' && activeTurnId
+      ? { turnId: activeTurnId, actorTurnId: origin.physicalTurnId }
+      : notificationTurnId && origin.kind === 'root'
+        ? { turnId: notificationTurnId }
+        : safeId(value.turnId)
+          ? { turnId: value.turnId as string }
+          : activeTurnId && origin.kind === 'root'
+            ? { turnId: activeTurnId }
+            : {};
   const status = typeof value.status === 'string' ? ` · ${value.status}` : '';
   if (value.type === 'commandExecution' && typeof value.command === 'string')
     return { id: value.id, label: `Command${status}`, detail: value.command, ...owner };
