@@ -23,6 +23,7 @@ import {
 } from '../../features/sessions/restore-session/use-case.js';
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
+import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
@@ -170,6 +171,7 @@ export class CodexSessionRuntime {
     private readonly onServerRequest?: (
       sessionId: string,
       request: { id: number; method: string; params: unknown },
+      origin: NotificationOrigin,
     ) => boolean,
     private readonly onProcessExit?: (sessionId: string) => void,
     private readonly resolveSkills?: (
@@ -725,7 +727,11 @@ export class CodexSessionRuntime {
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
             : {}),
           ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
-          dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
+          dynamicTools: [
+            gestaltQuizDynamicTool,
+            gestaltOrgPlanAttentionDynamicTool,
+            gestaltOrgPlanCheckpointDynamicTool,
+          ],
         });
         result = {
           session: RelaySession.rehydrate(session).restore(now).supportsAttentionTool(now).snapshot,
@@ -794,7 +800,12 @@ export class CodexSessionRuntime {
       resource.pendingRequests.set(requestId, { resolve, reject });
       let accepted = false;
       try {
-        accepted = this.onServerRequest?.(resource.sessionId, request) === true;
+        accepted =
+          this.onServerRequest?.(
+            resource.sessionId,
+            request,
+            this.resolveNotificationOrigin(resource, request),
+          ) === true;
       } catch {
         // Publication failures are protocol failures, not permission to retain
         // an unreachable app-server request.
@@ -814,7 +825,11 @@ export class CodexSessionRuntime {
     return {
       cwd: session.workspacePath,
       approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
-      dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
+      dynamicTools: [
+        gestaltQuizDynamicTool,
+        gestaltOrgPlanAttentionDynamicTool,
+        gestaltOrgPlanCheckpointDynamicTool,
+      ],
       ...(session.model ? { model: session.model } : {}),
       ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
     };

@@ -81,8 +81,12 @@ export class SqliteAutopilotStore implements AutopilotStore {
         state.nextEvaluationAt,
         state.lastControlId,
         state.stopReason,
-        state.executor || state.blocking
-          ? JSON.stringify({ executor: state.executor, blocking: state.blocking })
+        state.executor || state.blocking || state.checkpoints
+          ? JSON.stringify({
+              executor: state.executor,
+              blocking: state.blocking,
+              checkpoints: state.checkpoints,
+            })
           : null,
         state.updatedAt,
       );

@@ -124,7 +124,17 @@ export function decideAutopilot(input: {
     };
   if (!state.requestedEnabled) return { kind: 'disable', reason: 'manualDisabled' };
   if (!plan) return { kind: 'disable', reason: 'planRequired' };
-  if (executionComplete(plan)) return { kind: 'complete' };
+  if (executionComplete(plan)) {
+    // Checkpoint-aware sessions deliberately reserve a later root turn for
+    // terminal whole-branch review.  The Org projection remains authoritative:
+    // this only controls whether a completed L1 may end the current report turn.
+    if (state.checkpoints?.protocolVersion === 1 && !state.checkpoints.terminalReviewAccepted)
+      return {
+        kind: 'scheduleContinuation',
+        at: new Date(Date.parse(now) + policy.backoffMs(state.consecutiveNoProgress)).toISOString(),
+      };
+    return { kind: 'complete' };
+  }
   // Quiz, approval, and other held requests are ordinary session work. Only a
   // validated Org attention record may turn an incomplete plan into a human stop.
   if (hasPendingInteraction) return { kind: 'observe' };

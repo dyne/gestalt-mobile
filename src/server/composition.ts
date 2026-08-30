@@ -51,6 +51,11 @@ import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
 import {
+  parseOrgPlanCheckpoint,
+  toOrgPlanCheckpointToolResponse,
+} from '../shared/contracts/org-plan-checkpoint.js';
+import { validOrgPlanCheckpoint } from './features/org-plan-checkpoint/application/validate.js';
+import {
   isValidInteractionResponse,
   isValidQuizInteractionResponse,
 } from './features/sessions/interaction/response-validator.js';
@@ -609,10 +614,50 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               journal.append(sessionId, 'session.updated', completedSession, occurredAt),
             );
         },
-        (sessionId, request) => {
+        (sessionId, request, origin) => {
           const rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!rawInteraction || !session) return false;
+          if (rawInteraction.kind === 'orgPlanCheckpoint') {
+            const checkpoint = parseOrgPlanCheckpoint(rawInteraction.payload);
+            const retained = supervisedPlans.find(sessionId);
+            const identity = supervisedPlans.identity(sessionId);
+            const rootOwned =
+              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
+            if (
+              !checkpoint ||
+              !retained ||
+              !identity ||
+              checkpoint.planIdentity !== identity ||
+              !rootOwned
+            )
+              return false;
+            const valid = validOrgPlanCheckpoint({
+              checkpoint,
+              plan: retained,
+              planIdentity: identity,
+              rootOwned,
+              hasActiveL1Writer: (position) =>
+                hasActiveL1Writer(activity.snapshot(sessionId, new Date().toISOString()), position),
+            });
+            if (!valid) return false;
+            if (
+              !autopilot.checkpointAccepted(
+                sessionId,
+                checkpoint,
+                session.activeTurnId,
+                new Date().toISOString(),
+              )
+            )
+              return false;
+            return (
+              runtime?.resolveServerRequest(
+                sessionId,
+                rawInteraction.requestId,
+                toOrgPlanCheckpointToolResponse(),
+              ) === true
+            );
+          }
           const interaction = {
             ...rawInteraction,
             turnId: session.activeTurnId,
@@ -1219,4 +1264,15 @@ function resolveStateDatabasePath(root: string, stateHome: string): string {
   if (existsSync(currentPath)) return currentPath;
   const legacyPath = legacyRelayStatePath(root, stateHome);
   return existsSync(legacyPath) ? legacyPath : currentPath;
+}
+
+function hasActiveL1Writer(
+  snapshot: Readonly<{ subagents: readonly { canonicalPosition?: string; state: string }[] }>,
+  position: string,
+): boolean {
+  return snapshot.subagents.some(
+    (child) =>
+      child.canonicalPosition === position &&
+      ['working', 'awaitingAgent', 'awaitingHuman'].includes(child.state),
+  );
 }

@@ -37,6 +37,14 @@ export type AutopilotSession = Readonly<{
   stopReason: AutopilotStopReason | null;
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
+  checkpoints?: Readonly<{
+    protocolVersion: 1;
+    planIdentity: string;
+    reportedL1Ids: readonly string[];
+    acceptedKeys: readonly string[];
+    pendingTurnId: string | null;
+    terminalReviewAccepted: boolean;
+  }>;
   updatedAt: string;
 }>;
 

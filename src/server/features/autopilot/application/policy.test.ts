@@ -55,6 +55,41 @@ describe('autopilot policy', () => {
     expect(executionComplete(plan())).toBe(false);
     expect(executionComplete(plan('REVIEWED'))).toBe(true);
   });
+  it('reserves a terminal-review continuation after a checkpointed final L1', () => {
+    const state = {
+      ...disabledAutopilot('s', now),
+      state: 'monitoring' as const,
+      requestedEnabled: true,
+      checkpoints: {
+        protocolVersion: 1 as const,
+        planIdentity: 'plan',
+        reportedL1Ids: ['l1'],
+        acceptedKeys: ['accepted'],
+        pendingTurnId: null,
+        terminalReviewAccepted: false,
+      },
+    };
+    expect(
+      decideAutopilot({
+        state,
+        plan: plan('REVIEWED'),
+        activity: createAgentActivitySnapshot('s', now),
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toMatchObject({ kind: 'scheduleContinuation' });
+    expect(
+      decideAutopilot({
+        state: { ...state, checkpoints: { ...state.checkpoints, terminalReviewAccepted: true } },
+        plan: plan('REVIEWED'),
+        activity: createAgentActivitySnapshot('s', now),
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'complete' });
+  });
   it('does not schedule when sensors are stale or an ordinary interaction is pending', () => {
     const state = {
       ...disabledAutopilot('s', now),

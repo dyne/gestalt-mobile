@@ -77,6 +77,14 @@ export type ExecutorLifecycle = Readonly<{
 export type PersistedSupervisedLifecycle = Readonly<{
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
+  checkpoints?: Readonly<{
+    protocolVersion: 1;
+    planIdentity: string;
+    reportedL1Ids: readonly string[];
+    acceptedKeys: readonly string[];
+    pendingTurnId: string | null;
+    terminalReviewAccepted: boolean;
+  }>;
 }>;
 
 export type ExecutorIdentity = Readonly<{
@@ -154,7 +162,11 @@ export function parsePersistedSupervisedLifecycle(
   const blocking = blockingValue ? parseStructuredBlock(blockingValue) : undefined;
   if (blockingValue && !blocking) return undefined;
   const executorValue = record(root.executor);
-  if (!executorValue) return blocking ? { blocking } : {};
+  const checkpointsValue = record(root.checkpoints);
+  const checkpoints = checkpointsValue ? parseCheckpoints(checkpointsValue) : undefined;
+  if (checkpointsValue && !checkpoints) return undefined;
+  if (!executorValue)
+    return { ...(blocking ? { blocking } : {}), ...(checkpoints ? { checkpoints } : {}) };
   const processesValue = executorValue.ownedProcesses;
   if (!Array.isArray(processesValue) || processesValue.length > 64) return undefined;
   const ownedProcesses = processesValue.flatMap((candidate) => {
@@ -260,6 +272,43 @@ export function parsePersistedSupervisedLifecycle(
       continuationCount,
     },
     ...(blocking ? { blocking } : {}),
+    ...(checkpoints ? { checkpoints } : {}),
+  };
+}
+
+function parseCheckpoints(
+  value: Record<string, unknown>,
+): PersistedSupervisedLifecycle['checkpoints'] | undefined {
+  const planIdentity = boundedText(value.planIdentity);
+  if (value.protocolVersion !== 1 || !planIdentity) return undefined;
+  if (!Array.isArray(value.reportedL1Ids) || value.reportedL1Ids.length > 128) return undefined;
+  const reportedL1Ids = value.reportedL1Ids
+    .map((id) => boundedText(id))
+    .filter(Boolean) as string[];
+  if (
+    reportedL1Ids.length !== value.reportedL1Ids.length ||
+    new Set(reportedL1Ids).size !== reportedL1Ids.length
+  )
+    return undefined;
+  if (!Array.isArray(value.acceptedKeys) || value.acceptedKeys.length > 128) return undefined;
+  const acceptedKeys = value.acceptedKeys
+    .map((key) => boundedText(key))
+    .filter(Boolean) as string[];
+  if (
+    acceptedKeys.length !== value.acceptedKeys.length ||
+    new Set(acceptedKeys).size !== acceptedKeys.length
+  )
+    return undefined;
+  const pendingTurnId = value.pendingTurnId === null ? null : boundedText(value.pendingTurnId);
+  if (pendingTurnId === undefined) return undefined;
+  if (typeof value.terminalReviewAccepted !== 'boolean') return undefined;
+  return {
+    protocolVersion: 1,
+    planIdentity,
+    reportedL1Ids,
+    acceptedKeys,
+    pendingTurnId,
+    terminalReviewAccepted: value.terminalReviewAccepted,
   };
 }
 

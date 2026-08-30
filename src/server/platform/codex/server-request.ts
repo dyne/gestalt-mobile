@@ -10,6 +10,10 @@ import {
   GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
   parseOrgPlanAttention,
 } from '../../../shared/contracts/org-plan-attention.js';
+import {
+  GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
+  parseOrgPlanCheckpoint,
+} from '../../../shared/contracts/org-plan-checkpoint.js';
 
 export function toPendingInteraction(input: {
   id: number;
@@ -26,6 +30,12 @@ export function toPendingInteraction(input: {
       const attention = parseOrgPlanAttention(input.params.arguments);
       return attention
         ? { requestId: String(input.id), kind: 'orgPlanAttention', payload: attention }
+        : null;
+    }
+    if (input.params.tool === GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME) {
+      const checkpoint = parseOrgPlanCheckpoint(input.params.arguments);
+      return checkpoint
+        ? { requestId: String(input.id), kind: 'orgPlanCheckpoint', payload: checkpoint }
         : null;
     }
     return null;
