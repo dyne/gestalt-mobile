@@ -15,7 +15,7 @@ import {
 export function isValidInteractionResponse(kind: RelayInteractionKind, value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (kind === 'userInput') return isValidUserInputResponse(value);
-  if (kind === 'quiz' || kind === 'orgPlanAttention') return false;
+  if (kind === 'quiz' || kind === 'orgPlanAttention' || kind === 'orgPlanCheckpoint') return false;
   if (kind === 'permissionsApproval')
     return isRecord(value.permissions) && (value.scope === 'turn' || value.scope === 'session');
   return isValidApprovalDecision(kind, value.decision);

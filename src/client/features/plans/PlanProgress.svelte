@@ -47,16 +47,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ]),
   );
   let wipMarkers = $derived(markers.filter((marker) => marker.state === 'WIP'));
+  let reviewedL1s = $derived(plan.steps.filter((step) => step.reviewStatus === 'REVIEWED').length);
+  let totalL1s = $derived(plan.steps.length);
+  let awaitingReview = $derived(
+    plan.steps.find((step) => step.state === 'DONE' && step.reviewStatus === 'UNREVIEWED'),
+  );
   let progressMax = $derived(Math.max(plan.totalSteps, 1));
 </script>
 
 <div class={['plan-progress', { compact }]}>
   <div class="progress-heading">
     <span>{plan.doneSteps} / {plan.totalSteps} complete</span>
+    <span>· {reviewedL1s} / {totalL1s} reviewed</span>
   </div>
   <progress aria-label={label} value={plan.doneSteps} max={progressMax}>
     {plan.doneSteps} of {plan.totalSteps} complete
   </progress>
+  {#if awaitingReview}
+    <span class="review-status">Awaiting L{plan.steps.indexOf(awaitingReview) + 1} review</span>
+  {/if}
   {#if compact && wipMarkers.length}
     <ol class="wip-steps" aria-label="Work in progress plan steps">
       {#each wipMarkers as marker (marker.id)}

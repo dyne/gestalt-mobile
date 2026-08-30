@@ -42,7 +42,8 @@ export type PendingInteraction = {
     | 'permissionsApproval'
     | 'userInput'
     | 'quiz'
-    | 'orgPlanAttention';
+    | 'orgPlanAttention'
+    | 'orgPlanCheckpoint';
   payload: unknown;
   turnId?: string | null;
   requestedAt?: string;

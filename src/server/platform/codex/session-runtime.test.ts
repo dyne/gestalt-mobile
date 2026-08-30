@@ -13,6 +13,7 @@ import {
   toQuizToolResponse,
 } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
+import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
@@ -1205,7 +1206,11 @@ describe('CodexSessionRuntime', () => {
       model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
-      dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
+      dynamicTools: [
+        gestaltQuizDynamicTool,
+        gestaltOrgPlanAttentionDynamicTool,
+        gestaltOrgPlanCheckpointDynamicTool,
+      ],
     });
   });
 
@@ -1603,7 +1608,11 @@ describe('CodexSessionRuntime', () => {
         approvalPolicy: 'untrusted',
         model: 'gpt-5.4',
         sandbox: 'workspace-write',
-        dynamicTools: [gestaltQuizDynamicTool, gestaltOrgPlanAttentionDynamicTool],
+        dynamicTools: [
+          gestaltQuizDynamicTool,
+          gestaltOrgPlanAttentionDynamicTool,
+          gestaltOrgPlanCheckpointDynamicTool,
+        ],
       });
     },
   );
@@ -1926,6 +1935,71 @@ describe('CodexSessionRuntime', () => {
     expect(runtime.attentionWriterState('session-1', '7')).toBe('cleared');
     expect(runtime.resolveServerRequest('session-1', '7', response)).toBe(false);
     await expect(result).resolves.toEqual(response);
+  });
+
+  it('supplies server-request actor provenance without defaulting an unknown child to root', async () => {
+    let requestListener:
+      ((value: { id: number; method: string; params: unknown }) => Promise<unknown>) | undefined;
+    const origins: unknown[] = [];
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method) =>
+            method === 'thread/start' ? { thread: { id: 'root-thread' } } : {},
+          onNotification: (listener) => {
+            listener({
+              method: 'turn/started',
+              params: { threadId: 'child-thread', turn: { id: 'child-turn' } },
+            });
+            return () => {};
+          },
+          onServerRequest: (listener) => {
+            requestListener = listener;
+            return () => {};
+          },
+        },
+        close: () => {},
+      }),
+      undefined,
+      undefined,
+      (_sessionId, _request, origin) => {
+        origins.push(origin);
+        return false;
+      },
+    );
+    await runtime.start(
+      {
+        id: 'session',
+        workspaceId: 'workspace',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'after',
+    );
+    await expect(
+      requestListener?.({
+        id: 1,
+        method: 'item/tool/call',
+        params: { threadId: 'child-thread', turnId: 'child-turn', tool: 'ignored', arguments: {} },
+      }),
+    ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+    expect(origins).toEqual([
+      expect.objectContaining({
+        kind: 'unknown',
+        physicalThreadId: 'child-thread',
+        physicalTurnId: 'child-turn',
+      }),
+    ]);
+    runtime.stopAll();
   });
 
   it('registers a quiz response resolver before publishing the interaction', async () => {
