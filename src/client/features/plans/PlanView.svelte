@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { PlanStep, SupervisedPlan } from './contracts.js';
   import type { PlanState } from './plan-controller.js';
   import PlanProgress from './PlanProgress.svelte';
+  import { presentPlan } from './plan-presentation.js';
 
   type Props = { state: PlanState; onclose: () => void };
   type DescriptionKey = keyof PlanStep['description'];
@@ -39,6 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let currentStep = $derived(plan ? findStep(plan.steps, plan.currentStepId) : undefined);
   let currentPosition = $derived(plan ? findPosition(plan.steps, plan.currentStepId) : undefined);
+  let presentation = $derived(plan ? presentPlan(plan) : undefined);
   let automaticOpenIds = $derived(
     plan ? currentPath(plan.steps, plan.currentStepId) : new Set<string>(),
   );
@@ -49,8 +51,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (viewState.kind === 'closing') return 'Closing completed plan.';
     if (!plan) return '';
     if (!currentStep)
-      return `${plan.doneSteps} of ${plan.totalSteps} plan steps complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
-    return `Current step: ${currentPosition} ${currentStep.title}, ${currentStep.state}. ${plan.doneSteps} of ${plan.totalSteps} complete.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
+      return `${presentation?.label ?? 'Plan progress'}. ${plan.doneSteps} of ${plan.totalSteps} work items done.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
+    return `${presentation?.label ?? `Current step: ${currentPosition} ${currentStep.title}`}. ${plan.doneSteps} of ${plan.totalSteps} work items done.${viewState.kind === 'error' ? ` ${viewState.error}` : ''}`;
   });
 
   $effect(() => {
@@ -162,7 +164,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </header>
     <PlanProgress {plan} />
     <p>
-      Current: {currentStep
+      {presentation?.label}. Current: {currentStep
         ? `${currentPosition} ${currentStep.title} (${currentStep.state})`
         : 'No current step'}
     </p>

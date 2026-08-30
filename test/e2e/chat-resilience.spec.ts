@@ -450,7 +450,7 @@ test('retains activity through foreground refresh and restores its completed dis
   await expect(page.getByText('All checks passed.')).toBeVisible();
   const history = page.getByText('All checks passed.').locator('xpath=ancestor::section');
   await expect(history.getByRole('button', { name: 'commentary' })).toBeVisible();
-  const activityDisclosure = history.locator('details.chat-activity');
+  const activityDisclosure = history.locator('details.work-details');
   await expect(activityDisclosure).toBeVisible();
   await expect(activityDisclosure).not.toHaveAttribute('open', '');
   await activityDisclosure.locator('summary').click();
@@ -470,7 +470,7 @@ test('retains activity through foreground refresh and restores its completed dis
   await page.reload();
   await page.getByRole('button', { name: 'Chat' }).click();
   const restored = page.getByText('All checks passed.').locator('xpath=ancestor::section');
-  await expect(restored.locator('details.chat-activity')).toBeVisible();
+  await expect(restored.locator('details.work-details')).toBeVisible();
 });
 
 test('summarizes repeated file changes with counts and latest touch time on mobile', async ({
@@ -530,6 +530,7 @@ test('summarizes repeated file changes with counts and latest touch time on mobi
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
+  await page.getByText(/Work details · 2 activities/).click();
   const files = page.getByRole('region', { name: 'Files changed' });
   await expect(files.getByRole('listitem')).toHaveCount(2);
   await expect(files).toContainText('+6');

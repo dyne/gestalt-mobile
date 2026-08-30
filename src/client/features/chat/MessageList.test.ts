@@ -156,11 +156,11 @@ describe('MessageList', () => {
 
     const answer = screen.getByText('Done.').closest('.answer-turn');
     expect(answer?.querySelector('.commentary-toggle')).not.toBeNull();
-    expect(answer?.querySelector('.chat-activity')).not.toBeNull();
+    expect(answer?.querySelector('.work-details')).not.toBeNull();
     expect(answer?.textContent).toContain('Successful commands');
     expect(answer?.textContent).toContain('1');
     expect(screen.queryByText('git status')).toBeNull();
-    expect(answer?.querySelector('.chat-activity')?.getAttribute('open')).toBeNull();
+    expect(answer?.querySelector('.work-details')?.getAttribute('open')).toBeNull();
   });
 
   it('shows commentary and activity directly in the main timeline while working', () => {
@@ -192,7 +192,7 @@ describe('MessageList', () => {
     expect(progress?.querySelector('details')).toBeNull();
   });
 
-  it('keeps changed files visible outside collapsed activity history', () => {
+  it('keeps changed files inside the answer-owned work-details disclosure', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-30T12:00:05.000Z'));
     render(MessageList, {
@@ -229,6 +229,9 @@ describe('MessageList', () => {
       ],
     });
 
+    const disclosure = screen.getByText(/Work details · 2 activities/).closest('details');
+    expect(disclosure?.open).toBe(false);
+    await fireEvent.click(screen.getByText(/Work details · 2 activities/));
     const files = screen.getByRole('region', { name: 'Files changed' });
     expect(files.textContent).toContain('src/app.ts');
     expect(files.textContent).toContain('src/app.test.ts');
