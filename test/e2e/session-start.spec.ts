@@ -1170,7 +1170,9 @@ test('hydrates canonical history for a persisted session', async ({ page }) => {
   ).toEqual(['STRONG', 'TIME']);
   await expect(messageList.getByText('I am inspecting the branch.')).toBeVisible();
   await expect(messageList.getByText('The branch is clean.')).toBeVisible();
-  await expect(messageList.locator('.live-activity')).toContainText('Command · completed');
+  await expect(messageList.locator('.live-activity')).toContainText('Successful commands');
+  await expect(messageList.locator('.live-activity')).toContainText('1');
+  await expect(messageList).not.toContainText('git status');
   await expect(messageList.locator('details')).toHaveCount(0);
 });
 
@@ -1505,6 +1507,7 @@ test('projects a canonical activity from the Chat snapshot', async ({ page }) =>
           items: [
             { id: 'commentary-1', kind: 'agent', phase: 'commentary', text: 'Inspecting.' },
             { id: 'item-1', kind: 'command', command: 'git status', status: 'completed' },
+            { id: 'item-2', kind: 'command', command: 'npm test', status: 'failed' },
             {
               id: 'change-1',
               kind: 'fileChange',
@@ -1520,8 +1523,12 @@ test('projects a canonical activity from the Chat snapshot', async ({ page }) =>
   await page.goto('/');
   await openChat(page);
   const activity = page.locator('.live-activity');
-  await expect(activity.getByText('Command · completed')).toBeVisible();
-  await expect(page.getByText('git status')).toBeVisible();
+  await expect(activity.getByText('Successful commands')).toBeVisible();
+  await expect(activity.locator('[data-command-outcome="successful"] dd')).toHaveText('1');
+  await expect(activity.getByText('Failed commands')).toBeVisible();
+  await expect(activity.locator('[data-command-outcome="failed"] dd')).toHaveText('1');
+  await expect(page.getByText('git status')).toHaveCount(0);
+  await expect(page.getByText('npm test')).toHaveCount(0);
   const files = page.getByRole('region', { name: 'Files changed' });
   await expect(files).toContainText('src/app.ts');
   await expect(files).toContainText('src/app.test.ts');

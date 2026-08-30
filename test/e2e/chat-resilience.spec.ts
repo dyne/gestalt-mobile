@@ -437,7 +437,10 @@ test('retains activity through foreground refresh and restores its completed dis
   await page.getByRole('button', { name: 'Chat' }).click();
   await expect.poll(() => fixture.sockets.has('session-1')).toBe(true);
   fixture.event('session-1', 1, 'activity.updated', activity);
-  await expect(page.getByLabel('Current activity')).toContainText('npm test');
+  await expect(page.getByLabel('Current activity')).toContainText('Successful commands');
+  await expect(page.getByLabel('Current activity')).toContainText('Failed commands');
+  await expect(page.getByLabel('Current activity')).toContainText('1');
+  await expect(page.getByLabel('Current activity')).not.toContainText('npm test');
 
   fixture.snapshot(
     'session-1',
@@ -451,7 +454,10 @@ test('retains activity through foreground refresh and restores its completed dis
   await expect(activityDisclosure).toBeVisible();
   await expect(activityDisclosure).not.toHaveAttribute('open', '');
   await activityDisclosure.locator('summary').click();
-  await expect(activityDisclosure).toContainText('npm test');
+  await expect(activityDisclosure).toContainText('Successful commands');
+  await expect(activityDisclosure).toContainText('Failed commands');
+  await expect(activityDisclosure).toContainText('1');
+  await expect(activityDisclosure).not.toContainText('npm test');
 
   fixture.snapshot(
     'session-1',

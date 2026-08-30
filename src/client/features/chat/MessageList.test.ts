@@ -157,7 +157,9 @@ describe('MessageList', () => {
     const answer = screen.getByText('Done.').closest('.answer-turn');
     expect(answer?.querySelector('.commentary-toggle')).not.toBeNull();
     expect(answer?.querySelector('.chat-activity')).not.toBeNull();
-    expect(screen.getByText('git status').textContent).toBe('git status');
+    expect(answer?.textContent).toContain('Successful commands');
+    expect(answer?.textContent).toContain('1');
+    expect(screen.queryByText('git status')).toBeNull();
     expect(answer?.querySelector('.chat-activity')?.getAttribute('open')).toBeNull();
   });
 
@@ -267,7 +269,9 @@ describe('MessageList', () => {
 
     const prompt = screen.getByText('Change the app').closest('.prompt-turn');
     expect(prompt?.querySelector('.chat-activity')).not.toBeNull();
-    expect(prompt?.textContent).toContain('npm test');
+    expect(prompt?.textContent).toContain('Successful commands');
+    expect(prompt?.textContent).toContain('1');
+    expect(prompt?.textContent).not.toContain('npm test');
     expect(prompt?.textContent).toContain('src/app.ts');
     expect(screen.getAllByRole('region', { name: 'Files changed' })).toHaveLength(1);
   });

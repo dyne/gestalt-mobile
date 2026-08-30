@@ -6,13 +6,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import type { HistoryActivity } from './activity-summary.js';
-  import { presentActivity } from './activity-presentation.js';
+  import { presentActivity, summarizeCommandActivities } from './activity-presentation.js';
   let {
     activities,
     variant = 'summary',
   }: { activities: HistoryActivity[]; variant?: 'live' | 'summary' } = $props();
 
-  let visibleActivities = $derived(
+  let presentedActivities = $derived(
     activities.flatMap((activity) => {
       const presentation = presentActivity(activity);
       return presentation && presentation.kind.toLowerCase().replaceAll(' ', '') !== 'filechange'
@@ -20,44 +20,57 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : [];
     }),
   );
+  let hasCommands = $derived(presentedActivities.some((activity) => activity.kind === 'Command'));
+  let commandSummary = $derived(summarizeCommandActivities(activities));
+  let visibleActivities = $derived(
+    presentedActivities.filter((activity) => activity.kind !== 'Command'),
+  );
 </script>
 
-{#if visibleActivities.length}
+{#snippet commandCounts()}
+  <dl class="command-counts">
+    <div data-command-outcome="successful">
+      <dt>Successful commands</dt>
+      <dd>{commandSummary.successful}</dd>
+    </div>
+    <div data-command-outcome="failed">
+      <dt>Failed commands</dt>
+      <dd>{commandSummary.failed}</dd>
+    </div>
+  </dl>
+{/snippet}
+
+{#snippet activityRows()}
+  {#if visibleActivities.length}
+    <ul class="activity-list">
+      {#each visibleActivities as activity (activity.id)}
+        <li
+          class="activity-row"
+          data-activity-kind={activity.kind.toLowerCase().replaceAll(' ', '-')}
+          data-activity-status={activity.status}
+        >
+          <small class="activity-type"
+            >{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small
+          >
+          <span class="activity-content">{activity.content}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
+
+{#if hasCommands || visibleActivities.length}
   {#if variant === 'summary'}
     <details class="chat-activity">
-      <summary>activity <span aria-hidden="true">· {visibleActivities.length}</span></summary>
-      <ul class="activity-list">
-        {#each visibleActivities as activity (activity.id)}
-          <li
-            class="activity-row"
-            data-activity-kind={activity.kind.toLowerCase().replaceAll(' ', '-')}
-            data-activity-status={activity.status}
-          >
-            <small class="activity-type"
-              >{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small
-            >
-            <span class="activity-content">{activity.content}</span>
-          </li>
-        {/each}
-      </ul>
+      <summary>activity</summary>
+      {#if hasCommands}{@render commandCounts()}{/if}
+      {@render activityRows()}
     </details>
   {:else}
     <section class="live-activity" aria-label="Current activity">
       <strong>activity</strong>
-      <ul class="activity-list">
-        {#each visibleActivities as activity (activity.id)}
-          <li
-            class="activity-row"
-            data-activity-kind={activity.kind.toLowerCase().replaceAll(' ', '-')}
-            data-activity-status={activity.status}
-          >
-            <small class="activity-type"
-              >{activity.kind}{activity.status ? ` · ${activity.status}` : ''}</small
-            >
-            <span class="activity-content">{activity.content}</span>
-          </li>
-        {/each}
-      </ul>
+      {#if hasCommands}{@render commandCounts()}{/if}
+      {@render activityRows()}
     </section>
   {/if}
 {/if}
@@ -91,6 +104,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-inline: 0;
     padding: 0;
     list-style: none;
+  }
+
+  .command-counts {
+    display: grid;
+    gap: var(--activity-gap);
+    margin-block: 0.25rem 0;
+  }
+
+  .command-counts div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    max-inline-size: 20rem;
+  }
+
+  .command-counts dt,
+  .command-counts dd {
+    margin: 0;
+  }
+
+  .command-counts dd {
+    min-inline-size: 2ch;
+    font-family: var(--theme-font-code);
+    font-variant-numeric: tabular-nums;
+    text-align: end;
+  }
+
+  .command-counts [data-command-outcome='successful'] dd {
+    color: var(--theme-success);
+  }
+
+  .command-counts [data-command-outcome='failed'] dd {
+    color: var(--theme-error);
   }
 
   .activity-row {
