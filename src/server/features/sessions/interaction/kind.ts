@@ -10,7 +10,8 @@ export type RelayInteractionKind =
   | 'permissionsApproval'
   | 'userInput'
   | 'quiz'
-  | 'orgPlanAttention';
+  | 'orgPlanAttention'
+  | 'orgPlanCheckpoint';
 export function isInteractionKind(value: string): value is RelayInteractionKind {
   return [
     'commandApproval',
@@ -19,5 +20,6 @@ export function isInteractionKind(value: string): value is RelayInteractionKind 
     'userInput',
     'quiz',
     'orgPlanAttention',
+    'orgPlanCheckpoint',
   ].includes(value);
 }

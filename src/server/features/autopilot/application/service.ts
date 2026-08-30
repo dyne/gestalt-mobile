@@ -5,7 +5,9 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
 import {
   autopilotSnapshot,
   disabledAutopilot,
@@ -371,12 +373,38 @@ export class AutopilotCoordinator {
       state?.stopReason === 'planRemoved' ||
       state?.stopReason === 'planReplaced' ||
       state?.stopReason === 'sessionEnded';
+    const checkpointBoundary = Boolean(
+      state?.checkpoints?.pendingTurnId &&
+      state.checkpoints.planIdentity === this.deps.plan(sessionId)?.identity,
+    );
     const finalAllowed =
       !state ||
       !plan ||
       explicitlyStopped ||
-      executionComplete(plan) ||
+      checkpointBoundary ||
+      (!state.checkpoints && executionComplete(plan)) ||
       validStructuredBlock(state.blocking);
+    if (checkpointBoundary && state?.checkpoints) {
+      const occurredAt = this.deps.now();
+      this.persist(
+        {
+          ...state,
+          checkpoints: { ...state.checkpoints, pendingTurnId: null },
+          updatedAt: occurredAt,
+        },
+        undefined,
+        [
+          {
+            sessionId,
+            type: state.checkpoints.terminalReviewAccepted
+              ? 'org-plan.terminal-review-reported'
+              : 'org-plan.milestone-reported',
+            payload: { turnId: state.checkpoints.pendingTurnId },
+            occurredAt,
+          },
+        ],
+      );
+    }
     if (!finalAllowed) {
       const occurredAt = this.deps.now();
       this.commit({
@@ -393,6 +421,51 @@ export class AutopilotCoordinator {
     }
     this.activitySettled(sessionId, 'rootFinalAttempt');
     return finalAllowed;
+  }
+  /** Records an already validated root-only checkpoint; it never changes Org state. */
+  checkpointAccepted(
+    sessionId: string,
+    checkpoint: OrgPlanCheckpoint,
+    turnId: string | null,
+    occurredAt: string,
+  ): boolean {
+    const prior = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    if (!prior || !retained || !turnId || checkpoint.planIdentity !== retained.identity)
+      return false;
+    const previous = prior.checkpoints;
+    if (previous && previous.planIdentity !== retained.identity) return false;
+    const reported = previous?.reportedL1Ids ?? [];
+    const key = createHash('sha256').update(JSON.stringify(checkpoint)).digest('hex');
+    const acceptedKeys = previous?.acceptedKeys ?? [];
+    if (acceptedKeys.includes(key)) return true;
+    if (checkpoint.kind === 'l1Accepted' && reported.includes(checkpoint.l1Id)) return false;
+    if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
+      return false;
+    const checkpoints = {
+      protocolVersion: 1 as const,
+      planIdentity: retained.identity,
+      reportedL1Ids: checkpoint.kind === 'l1Accepted' ? [...reported, checkpoint.l1Id] : reported,
+      acceptedKeys: [...acceptedKeys, key],
+      pendingTurnId: turnId,
+      terminalReviewAccepted:
+        checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
+    };
+    this.persist({ ...prior, checkpoints, updatedAt: occurredAt }, undefined, [
+      {
+        sessionId,
+        type:
+          checkpoint.kind === 'l1Accepted'
+            ? 'org-plan.milestone-checkpointed'
+            : 'org-plan.terminal-review-checkpointed',
+        payload:
+          checkpoint.kind === 'l1Accepted'
+            ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
+            : { turnId },
+        occurredAt,
+      },
+    ]);
+    return true;
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
