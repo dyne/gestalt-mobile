@@ -2243,7 +2243,12 @@ describe('CodexSessionRuntime', () => {
                         id: 'files',
                         type: 'fileChange',
                         status: 'completed',
-                        changes: [{ path: 'C:\\repo\\file.ts' }],
+                        changes: [
+                          {
+                            path: 'C:\\repo\\file.ts',
+                            diff: '--- a/file.ts\n+++ b/file.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more',
+                          },
+                        ],
                       },
                       {
                         id: 'mcp',
@@ -2307,7 +2312,7 @@ describe('CodexSessionRuntime', () => {
               id: 'files',
               type: 'fileChange',
               status: 'completed',
-              changes: [{ path: 'C:\\repo\\file.ts' }],
+              changes: [{ path: 'C:\\repo\\file.ts', additions: 2, deletions: 1 }],
             },
             { id: 'mcp', type: 'mcpToolCall', tool: 'filesystem.read_file', status: 'completed' },
             { id: 'dynamic', type: 'dynamicToolCall', tool: 'lookup_ticket', status: 'failed' },

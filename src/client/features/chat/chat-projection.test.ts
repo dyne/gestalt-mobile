@@ -347,17 +347,24 @@ describe('chat projection', () => {
       sequence: 3,
       type: 'activity.updated',
       occurredAt: '2026-08-12T10:00:03.000Z',
-      payload: { id: 'activity-2', label: 'Tool', detail: 'check', turnId: 'turn' },
+      payload: {
+        id: 'activity-2',
+        label: 'File change',
+        detail: 'src/app.ts',
+        turnId: 'turn',
+        changes: [{ path: 'src/app.ts', additions: 4, deletions: 1 }],
+      },
     });
     expect(timed.interactions[0]?.occurredAt).toBe(Date.parse('2026-08-12T10:00:01.000Z'));
     expect(timed.activities).toEqual([
       { id: 'activity', label: 'Command', detail: 'npm test', turnId: 'turn' },
       {
         id: 'activity-2',
-        label: 'Tool',
-        detail: 'check',
+        label: 'File change',
+        detail: 'src/app.ts',
         turnId: 'turn',
         occurredAt: Date.parse('2026-08-12T10:00:03.000Z'),
+        changes: [{ path: 'src/app.ts', additions: 4, deletions: 1 }],
       },
     ]);
   });

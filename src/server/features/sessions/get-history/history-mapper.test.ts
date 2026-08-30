@@ -84,7 +84,10 @@ describe('toChatItems', () => {
               id: 'f',
               type: 'fileChange',
               status: 'completed',
-              changes: [{ path: 'src/app.ts' }, { path: 'src/app.test.ts' }],
+              changes: [
+                { path: 'src/app.ts', additions: 5, deletions: 2 },
+                { path: 'src/app.test.ts', additions: 8, deletions: 0 },
+              ],
             },
             {
               id: 'm',
@@ -140,6 +143,10 @@ describe('toChatItems', () => {
         id: 'f',
         kind: 'fileChange',
         paths: ['src/app.ts', 'src/app.test.ts'],
+        changes: [
+          { path: 'src/app.ts', additions: 5, deletions: 2 },
+          { path: 'src/app.test.ts', additions: 8, deletions: 0 },
+        ],
         status: 'completed',
         turnId: 'history-turn-0',
         occurredAt: 1_784_102_400_000,

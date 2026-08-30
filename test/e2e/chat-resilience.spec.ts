@@ -467,6 +467,72 @@ test('retains activity through foreground refresh and restores its completed dis
   await expect(restored.locator('details.chat-activity')).toBeVisible();
 });
 
+test('summarizes repeated file changes with counts and latest touch time on mobile', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'session-1',
+      state: 'ready',
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: null,
+      pendingInteractions: [],
+    },
+  ]);
+  const now = Date.now();
+  fixture.snapshot(
+    'session-1',
+    chatSnapshot({
+      items: [
+        {
+          id: 'answer-1',
+          kind: 'agent',
+          text: 'Implemented.',
+          phase: 'final_answer',
+          turnId: 'turn-1',
+        },
+      ],
+      activities: [
+        {
+          id: 'change-1',
+          label: 'File change · completed',
+          detail: 'src/client/a-very-long-feature-name.ts\nsrc/client/test.ts',
+          turnId: 'turn-1',
+          occurredAt: now - 4_000,
+          changes: [
+            { path: 'src/client/a-very-long-feature-name.ts', additions: 4, deletions: 1 },
+            { path: 'src/client/test.ts', additions: 8, deletions: 0 },
+          ],
+        },
+        {
+          id: 'change-2',
+          label: 'File change · completed',
+          detail: 'src/client/a-very-long-feature-name.ts',
+          turnId: 'turn-1',
+          occurredAt: now - 1_000,
+          changes: [{ path: 'src/client/a-very-long-feature-name.ts', additions: 2, deletions: 3 }],
+        },
+      ],
+    }),
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  const files = page.getByRole('region', { name: 'Files changed' });
+  await expect(files.getByRole('listitem')).toHaveCount(2);
+  await expect(files).toContainText('+6');
+  await expect(files).toContainText('-4');
+  await expect(files).toContainText(/\d+s ago/);
+  await expect(files.getByText('src/client/a-very-long-feature-name.ts')).toHaveCount(1);
+  expect(await files.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
 test('retains an optimistic prompt while turn HTTP is deferred', async ({ page }) => {
   await mockAuthenticatedStatus(page);
   const fixture = new ChatRelayFixture(page);

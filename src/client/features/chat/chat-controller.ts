@@ -73,6 +73,13 @@ const noCache: ChatCache = { read: async () => null, write: async () => {} };
 const historyRetryDelays = [250, 750, 1_500] as const;
 const object = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object';
+const isFileChangeSummary = (value: unknown): boolean =>
+  object(value) &&
+  typeof value.path === 'string' &&
+  Number.isInteger(value.additions) &&
+  (value.additions as number) >= 0 &&
+  Number.isInteger(value.deletions) &&
+  (value.deletions as number) >= 0;
 export const isChatItem = (value: unknown): value is ChatSnapshot['items'][number] =>
   object(value) && typeof value.id === 'string' && typeof value.kind === 'string';
 export const isChatTurn = (value: unknown): value is ChatSnapshot['turns'][number] =>
@@ -116,6 +123,8 @@ const isSafeActivitySnapshot = (value: unknown): boolean =>
   typeof value.id === 'string' &&
   typeof value.label === 'string' &&
   typeof value.detail === 'string' &&
+  (value.changes === undefined ||
+    (Array.isArray(value.changes) && value.changes.every(isFileChangeSummary))) &&
   (value.turnId === undefined || typeof value.turnId === 'string') &&
   (value.occurredAt === undefined ||
     (typeof value.occurredAt === 'number' && Number.isFinite(value.occurredAt)));

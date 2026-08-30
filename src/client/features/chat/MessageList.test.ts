@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import MessageList from './MessageList.svelte';
 
 describe('MessageList', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it('presents automatic continuation history as an audit entry, not a prompt bubble', () => {
     render(MessageList, {
@@ -188,6 +191,8 @@ describe('MessageList', () => {
   });
 
   it('keeps changed files visible outside collapsed activity history', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T12:00:05.000Z'));
     render(MessageList, {
       messages: [
         {
@@ -205,6 +210,19 @@ describe('MessageList', () => {
           label: 'File change · completed',
           detail: 'src/app.ts\nsrc/app.test.ts',
           turnId: 'turn-1',
+          occurredAt: Date.parse('2026-08-30T12:00:01.000Z'),
+          changes: [
+            { path: 'src/app.ts', additions: 3, deletions: 1 },
+            { path: 'src/app.test.ts', additions: 8, deletions: 0 },
+          ],
+        },
+        {
+          id: 'change-again',
+          label: 'File change · completed',
+          detail: 'src/app.ts',
+          turnId: 'turn-1',
+          occurredAt: Date.parse('2026-08-30T12:00:04.000Z'),
+          changes: [{ path: 'src/app.ts', additions: 2, deletions: 2 }],
         },
       ],
     });
@@ -212,6 +230,10 @@ describe('MessageList', () => {
     const files = screen.getByRole('region', { name: 'Files changed' });
     expect(files.textContent).toContain('src/app.ts');
     expect(files.textContent).toContain('src/app.test.ts');
+    expect(files.querySelectorAll('li')).toHaveLength(2);
+    expect(files.textContent).toContain('+5');
+    expect(files.textContent).toContain('-3');
+    expect(files.textContent).toContain('1s ago');
     expect(screen.queryByText('activity')).toBeNull();
   });
 

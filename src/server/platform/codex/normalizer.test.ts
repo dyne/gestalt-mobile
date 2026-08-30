@@ -205,7 +205,12 @@ describe('normalizeCodexNotification', () => {
               id: 'change-1',
               type: 'fileChange',
               status: 'completed',
-              changes: [{ path: '/workspace/src/app.ts' }],
+              changes: [
+                {
+                  path: '/workspace/src/app.ts',
+                  diff: '--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more',
+                },
+              ],
             },
           },
         },
@@ -217,6 +222,34 @@ describe('normalizeCodexNotification', () => {
         id: 'change-1',
         label: 'File change · completed',
         detail: 'src/app.ts',
+        changes: [{ path: 'src/app.ts', additions: 2, deletions: 1 }],
+      },
+    });
+  });
+
+  it('refreshes an in-progress file activity from a patch update notification', () => {
+    expect(
+      normalizeCodexNotification(
+        's',
+        6,
+        '2026-01-01T00:00:01.000Z',
+        {
+          method: 'item/fileChange/patchUpdated',
+          params: {
+            itemId: 'change-1',
+            turnId: 'turn-1',
+            changes: [{ path: '/workspace/src/app.ts', diff: '@@ -1 +1 @@\n-old\n+new' }],
+          },
+        },
+        '/workspace',
+      ),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: {
+        id: 'change-1',
+        turnId: 'turn-1',
+        label: 'File change · in_progress',
+        changes: [{ path: 'src/app.ts', additions: 1, deletions: 1 }],
       },
     });
   });

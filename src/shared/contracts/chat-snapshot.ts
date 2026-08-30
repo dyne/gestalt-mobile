@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { FileChangeSummary } from './file-change.js';
+
 export type ChatItem = {
   id: string;
   kind: string;
@@ -32,6 +34,7 @@ export type SafeActivitySnapshot = {
   detail: string;
   turnId?: string;
   occurredAt?: number;
+  changes?: FileChangeSummary[];
 };
 export type SafeInteractionOutcome = 'approved' | 'denied' | 'answered' | 'dismissed' | 'failed';
 export type SafeInteractionSnapshot =

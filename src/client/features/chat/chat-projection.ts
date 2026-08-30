@@ -404,6 +404,19 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
               typeof activity.id === 'string' &&
               typeof activity.label === 'string' &&
               typeof activity.detail === 'string' &&
+              (activity.changes === undefined ||
+                (Array.isArray(activity.changes) &&
+                  activity.changes.every((change: unknown) => {
+                    if (!change || typeof change !== 'object') return false;
+                    const value = change as Record<string, unknown>;
+                    return (
+                      typeof value.path === 'string' &&
+                      Number.isInteger(value.additions) &&
+                      (value.additions as number) >= 0 &&
+                      Number.isInteger(value.deletions) &&
+                      (value.deletions as number) >= 0
+                    );
+                  }))) &&
               (activity.turnId === undefined || typeof activity.turnId === 'string'),
             ),
           )
@@ -495,6 +508,7 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
     detail: item.detail,
     ...(item.turnId ? { turnId: item.turnId } : {}),
     ...(item.occurredAt !== undefined ? { occurredAt: item.occurredAt } : {}),
+    ...(item.changes ? { changes: item.changes } : {}),
   }));
   const activities = canonicalActivities.reduce(upsertActivity, [...current.activities]);
   const turnTimes = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
@@ -817,7 +831,8 @@ export function applyProjectionEvent(
     typeof payload?.id === 'string' &&
     typeof payload.label === 'string' &&
     typeof payload.detail === 'string'
-  )
+  ) {
+    const changes = safeFileChanges(payload.changes);
     next = {
       ...next,
       activities: upsertActivity(next.activities, {
@@ -825,6 +840,7 @@ export function applyProjectionEvent(
         label: payload.label,
         detail: payload.detail,
         ...(occurredAt !== undefined ? { occurredAt } : {}),
+        ...(changes.length ? { changes } : {}),
         ...(typeof payload.turnId === 'string'
           ? { turnId: payload.turnId }
           : next.activeTurnId
@@ -832,7 +848,7 @@ export function applyProjectionEvent(
             : {}),
       }),
     };
-  else if (event.type === 'session.updated' && typeof payload?.activeTurnId !== 'undefined') {
+  } else if (event.type === 'session.updated' && typeof payload?.activeTurnId !== 'undefined') {
     const id = typeof payload.activeTurnId === 'string' ? payload.activeTurnId : null;
     next = { ...next, activeTurnId: id, lifecycle: id ? 'working' : lifecycle(id, next.lifecycle) };
   }
@@ -840,6 +856,27 @@ export function applyProjectionEvent(
   if (audit && !next.messages.some((message) => message.id === audit.id))
     next = { ...next, messages: canonicalAutopilotAudit([...next.messages, audit]) };
   return next;
+}
+
+function safeFileChanges(value: unknown): NonNullable<HistoryActivity['changes']> {
+  if (!Array.isArray(value) || value.length > 1_000) return [];
+  return value.flatMap((change) => {
+    if (!change || typeof change !== 'object') return [];
+    const item = change as Record<string, unknown>;
+    return typeof item.path === 'string' &&
+      Number.isInteger(item.additions) &&
+      (item.additions as number) >= 0 &&
+      Number.isInteger(item.deletions) &&
+      (item.deletions as number) >= 0
+      ? [
+          {
+            path: item.path,
+            additions: item.additions as number,
+            deletions: item.deletions as number,
+          },
+        ]
+      : [];
+  });
 }
 export function replayBuffered(current: ChatProjection): ChatProjection {
   let buffer = new Map(current.buffered);
