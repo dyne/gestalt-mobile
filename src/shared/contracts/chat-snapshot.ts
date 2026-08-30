@@ -33,6 +33,8 @@ export type SafeActivitySnapshot = {
   label: string;
   detail: string;
   turnId?: string;
+  /** Physical child turn retained only as bounded diagnostic identity. */
+  actorTurnId?: string;
   occurredAt?: number;
   changes?: FileChangeSummary[];
 };

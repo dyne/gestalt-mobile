@@ -11,6 +11,7 @@ export type HistoryActivity = {
   label: string;
   detail: string;
   turnId?: string;
+  actorTurnId?: string;
   occurredAt?: number;
   changes?: FileChangeSummary[];
 };
@@ -40,6 +41,7 @@ export function toActivity(item: Record<string, unknown>): HistoryActivity | nul
   if (typeof item.id !== 'string') return null;
   const owner = {
     ...(typeof item.turnId === 'string' ? { turnId: item.turnId } : {}),
+    ...(typeof item.actorTurnId === 'string' ? { actorTurnId: item.actorTurnId } : {}),
     ...(typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt)
       ? { occurredAt: item.occurredAt }
       : {}),

@@ -126,6 +126,7 @@ function toActivityHistory(
       label: payload.label,
       detail: payload.detail,
       ...(typeof payload.turnId === 'string' ? { turnId: payload.turnId } : {}),
+      ...(typeof payload.actorTurnId === 'string' ? { actorTurnId: payload.actorTurnId } : {}),
       ...(Number.isFinite(occurredAt) ? { occurredAt } : {}),
       ...(changes.length ? { changes } : {}),
     });

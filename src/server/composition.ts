@@ -548,7 +548,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     ? new CodexSessionRuntime(
         options.launchAppServer ?? launchCodexAppServer,
         undefined,
-        (sessionId, notification) => {
+        (sessionId, notification, origin) => {
           const occurredAt = new Date().toISOString();
           for (const activityFact of decodeAgentActivityFacts(sessionId, occurredAt, notification))
             activity.observe(activityFact);
@@ -563,6 +563,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           }
           const currentSession = sessions.find(sessionId);
+          const completionTurnId =
+            notification.method === 'turn/completed' &&
+            notification.params &&
+            typeof notification.params === 'object' &&
+            typeof (notification.params as { turn?: { id?: unknown } }).turn?.id === 'string'
+              ? (notification.params as { turn: { id: string } }).turn.id
+              : undefined;
+          // A completion with no thread identity is only root-owned when it exactly
+          // matches the durable active root turn; unknown child turns never fall back.
+          const resolvedOrigin =
+            origin.kind === 'unknown' && completionTurnId === currentSession?.activeTurnId
+              ? { ...origin, kind: 'root' as const }
+              : origin;
           const normalized = normalizeCodexNotification(
             sessionId,
             0,
@@ -570,6 +583,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             notification,
             currentSession?.workspacePath,
             currentSession?.activeTurnId,
+            resolvedOrigin,
           );
           if (!normalized) return;
           let completedSession:

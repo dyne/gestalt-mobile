@@ -74,6 +74,13 @@ export type DirectChildThread = Readonly<{
   taskPath?: string;
 }>;
 
+/** Bounded provenance supplied before shared notifications lose thread context. */
+export type NotificationOrigin = Readonly<{
+  kind: 'root' | 'child' | 'unknown';
+  physicalTurnId?: string;
+  physicalThreadId?: string;
+}>;
+
 export type OwnedChildProcess = Readonly<{
   processId: string;
   itemId: string;
@@ -107,6 +114,8 @@ class SessionResource {
   readonly spawnedAgentModels = new Map<string, string>();
   readonly attemptedAgentModelRecovery = new Set<string>();
   readonly ownedChildProcesses = new Map<string, OwnedChildProcess>();
+  readonly turnThreads = new Map<string, string>();
+  readonly childThreads = new Set<string>();
 
   constructor(
     readonly sessionId: string,
@@ -156,6 +165,7 @@ export class CodexSessionRuntime {
     private readonly onNotification?: (
       sessionId: string,
       notification: { method: string; params: unknown },
+      origin: NotificationOrigin,
     ) => void,
     private readonly onServerRequest?: (
       sessionId: string,
@@ -871,7 +881,11 @@ export class CodexSessionRuntime {
           // The notification callback reconciles the durable interaction record.
           pending?.reject(new Error('CODEX_SERVER_REQUEST_CLEARED'));
         }
-        this.onNotification?.(session.id, notification);
+        this.onNotification?.(
+          session.id,
+          notification,
+          this.resolveNotificationOrigin(resource, notification),
+        );
       });
       const requestUnsubscribe = process.rpc.onServerRequest((request) =>
         this.holdServerRequest(resource, request),
@@ -888,6 +902,53 @@ export class CodexSessionRuntime {
       lease?.close();
       throw error;
     }
+  }
+
+  private resolveNotificationOrigin(
+    resource: SessionResource,
+    notification: { method: string; params: unknown },
+  ): NotificationOrigin {
+    const params = asRecord(notification.params);
+    if (!params) return { kind: 'unknown' };
+    const item = asRecord(params.item);
+    if (item?.type === 'collabAgentToolCall' || item?.type === 'collabToolCall') {
+      for (const value of [item.receiverThreadId, item.newThreadId])
+        if (boundedString(value, 256) && resource.childThreads.size < 64)
+          resource.childThreads.add(boundedString(value, 256)!);
+      if (Array.isArray(item.receiverThreadIds))
+        for (const value of item.receiverThreadIds)
+          if (boundedString(value, 256) && resource.childThreads.size < 64)
+            resource.childThreads.add(boundedString(value, 256)!);
+      const states = asRecord(item.agentsStates);
+      if (states)
+        for (const childId of Object.keys(states))
+          if (boundedString(childId, 256) && resource.childThreads.size < 64)
+            resource.childThreads.add(childId);
+    }
+    const turn = asRecord(params.turn);
+    const turnId =
+      boundedString(params.turnId, 256) ??
+      boundedString(turn?.id, 256) ??
+      boundedString(item?.turnId, 256);
+    if (notification.method === 'turn/started' && turnId && boundedString(params.threadId, 256)) {
+      if (resource.turnThreads.has(turnId) || resource.turnThreads.size < 256)
+        resource.turnThreads.set(turnId, boundedString(params.threadId, 256)!);
+    }
+    const resolvedThreadId =
+      boundedString(params.threadId, 256) ??
+      (turnId ? resource.turnThreads.get(turnId) : undefined);
+    const origin: NotificationOrigin = {
+      kind:
+        resolvedThreadId && resolvedThreadId === resource.threadId
+          ? 'root'
+          : resolvedThreadId && resource.childThreads.has(resolvedThreadId)
+            ? 'child'
+            : 'unknown',
+      ...(turnId ? { physicalTurnId: turnId } : {}),
+      ...(resolvedThreadId ? { physicalThreadId: resolvedThreadId } : {}),
+    };
+    if (notification.method === 'turn/completed' && turnId) resource.turnThreads.delete(turnId);
+    return origin;
   }
 }
 
