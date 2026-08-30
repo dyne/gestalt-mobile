@@ -253,4 +253,73 @@ describe('normalizeCodexNotification', () => {
       },
     });
   });
+
+  it('never projects child or unknown agent text, but assigns known child work to the root turn', () => {
+    const child = {
+      kind: 'child' as const,
+      physicalThreadId: 'child-thread',
+      physicalTurnId: 'child-turn',
+    };
+    expect(
+      normalizeCodexNotification(
+        's',
+        7,
+        '2026-01-01T00:00:02.000Z',
+        {
+          method: 'item/completed',
+          params: {
+            turnId: 'child-turn',
+            item: {
+              id: 'child-final',
+              type: 'agentMessage',
+              text: 'private executor final',
+              phase: 'final_answer',
+            },
+          },
+        },
+        '/workspace',
+        'root-turn',
+        child,
+      ),
+    ).toBeNull();
+    expect(
+      normalizeCodexNotification(
+        's',
+        8,
+        '2026-01-01T00:00:02.000Z',
+        {
+          method: 'item/completed',
+          params: {
+            turnId: 'child-turn',
+            item: {
+              id: 'child-command',
+              type: 'commandExecution',
+              command: 'npm test',
+              status: 'completed',
+            },
+          },
+        },
+        '/workspace',
+        'root-turn',
+        child,
+      ),
+    ).toMatchObject({
+      type: 'activity.updated',
+      payload: { turnId: 'root-turn', actorTurnId: 'child-turn' },
+    });
+    expect(
+      normalizeCodexNotification(
+        's',
+        9,
+        '2026-01-01T00:00:02.000Z',
+        {
+          method: 'item/agentMessage/delta',
+          params: { turnId: 'unknown-turn', delta: 'must not leak' },
+        },
+        '/workspace',
+        'root-turn',
+        { kind: 'unknown' },
+      ),
+    ).toBeNull();
+  });
 });

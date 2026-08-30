@@ -2585,10 +2585,11 @@ describe('CodexSessionRuntime', () => {
       expect.objectContaining({ message: 'CODEX_SERVER_REQUEST_CLEARED' }),
     );
     expect(runtime.resolveServerRequest('session-1', '3', {})).toBe(false);
-    expect(notified).toHaveBeenCalledWith('session-1', {
-      method: 'serverRequest/resolved',
-      params: { threadId: 'thread-1', requestId: 3 },
-    });
+    expect(notified).toHaveBeenCalledWith(
+      'session-1',
+      { method: 'serverRequest/resolved', params: { threadId: 'thread-1', requestId: 3 } },
+      expect.objectContaining({ kind: 'root', physicalThreadId: 'thread-1' }),
+    );
   });
 
   it('removes listeners and leases exactly once when exit races release', async () => {
