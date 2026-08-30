@@ -210,13 +210,15 @@ describe('PlanView', () => {
   it('announces meaningful current step changes once without replacing the same announcement', async () => {
     const { rerender } = render(PlanView, { state: ready(), onclose: vi.fn() });
     const live = document.querySelector('[aria-live="polite"]')!;
-    expect(live.textContent).toContain('L1 Parent step, TODO');
+    expect(live.textContent).toContain('Implementing L1 Parent step');
     const before = live.textContent;
     rerender({ state: ready(), onclose: vi.fn() });
     expect(live.textContent).toBe(before);
 
     rerender({ state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
-    await vi.waitFor(() => expect(live.textContent).toContain('L1.1 Nested current ✓, WIP'));
+    await vi.waitFor(() =>
+      expect(live.textContent).toContain('Implementing L1.1 Nested current ✓'),
+    );
     expect(document.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
   });
 

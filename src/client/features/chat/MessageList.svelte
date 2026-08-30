@@ -7,6 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount } from 'svelte';
   import ActivityList from './ActivityList.svelte';
+  import WorkDetails from './WorkDetails.svelte';
   import InteractionList from './InteractionList.svelte';
   import type { HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
@@ -352,7 +353,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   commentary
                 </button>
               {/if}
-              <ActivityList activities={regularActivities(ownedActivities)} />
             </div>
           {/if}
           {#if !isLive(group) && group.commentary && expandedCommentary[group.id]}
@@ -360,7 +360,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {@render content(group.commentary)}
             </div>
           {/if}
-          {@render changedFiles(ownedActivities)}
+          <WorkDetails activities={ownedActivities} {now} />
           <div class="entry-content">{@render content(group.answer)}</div>
         </section>
       {:else if group.commentary !== null}
