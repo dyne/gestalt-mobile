@@ -114,7 +114,20 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
     },
   ]);
   let attempts = 0;
+  const deliveries: string[] = [];
+  await page.route('**/api/sessions/session-1/turns/turn-1/queue', async (route) => {
+    deliveries.push('prompt');
+    expect(route.request().postDataJSON()).toEqual({
+      text: 'Submitted quiz answers:\n- Execution mode — How should this plan run?\n  Solo',
+    });
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ accepted: true, activeTurnId: 'turn-1' }),
+    });
+  });
   await page.route('**/api/sessions/session-1/interactions/quiz-1', async (route) => {
+    deliveries.push('interaction');
     attempts += 1;
     expect(route.request().postDataJSON()).toEqual({
       success: true,
@@ -142,6 +155,7 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
   await expect(submitted).toContainText('Solo');
   await expect(page.getByRole('button', { name: 'Send answers' })).toHaveCount(0);
   expect(attempts).toBe(2);
+  expect(deliveries).toEqual(['prompt', 'interaction', 'interaction']);
 });
 
 test('marks an interaction already cleared upstream as no longer pending', async ({ page }) => {

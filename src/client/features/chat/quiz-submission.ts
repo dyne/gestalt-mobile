@@ -10,3 +10,13 @@ export type SubmittedQuizAnswer = Readonly<{
   question: string;
   answer: string;
 }>;
+
+export function formatQuizAnswerPrompt(answers: readonly SubmittedQuizAnswer[]): string {
+  return [
+    'Submitted quiz answers:',
+    ...answers.map(
+      (answer) =>
+        `- ${answer.header} — ${answer.question}\n  ${answer.answer.trim().replaceAll('\n', '\n  ')}`,
+    ),
+  ].join('\n');
+}
