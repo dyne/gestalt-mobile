@@ -69,7 +69,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     readUserInputQuestions,
     toUserInputResponse,
   } from './features/chat/user-input-request.js';
-  import type { SubmittedQuizAnswer } from './features/chat/quiz-submission.js';
+  import {
+    formatQuizAnswerPrompt,
+    type SubmittedQuizAnswer,
+  } from './features/chat/quiz-submission.js';
   import {
     mapNativeUserInputToQuiz,
     parseQuiz,
@@ -1050,18 +1053,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       id: question.id,
       answer: userInputAnswers[`${interaction.requestId}:${question.id}`] ?? '',
     }));
+    const submitted = quiz.questions.map((question, index) => ({
+      id: question.id,
+      header: question.header,
+      question: question.question,
+      answer: answers[index]?.answer ?? '',
+    }));
     submittedQuizAnswers = {
       ...submittedQuizAnswers,
-      [interaction.requestId]: quiz.questions.map((question, index) => ({
-        id: question.id,
-        header: question.header,
-        question: question.question,
-        answer: answers[index]?.answer ?? '',
-      })),
+      [interaction.requestId]: submitted,
     };
     const response =
       interaction.kind === 'quiz' ? toQuizToolResponse(answers) : toUserInputResponse(answers);
     try {
+      const promptOperationId = `quiz-answer:${interaction.requestId}`;
+      const prompt = chatView?.prompts.find(
+        (candidate) => candidate.operationId === promptOperationId,
+      );
+      if (!prompt || prompt.state === 'failed')
+        await chatController.queue(formatQuizAnswerPrompt(submitted), promptOperationId);
       await chatController.respond(interaction.requestId, response);
     } catch {
       shellStatus = 'Could not send quiz answers. Please try again.';
