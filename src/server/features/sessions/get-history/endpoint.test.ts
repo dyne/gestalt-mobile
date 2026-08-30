@@ -154,10 +154,11 @@ describe('GET /api/sessions/:id/history', () => {
             type: 'activity.updated',
             occurredAt: '2026-08-20T00:00:00.000Z',
             payload: {
-              id: 'command-1',
-              label: 'Command · completed',
-              detail: 'npm test',
+              id: 'change-1',
+              label: 'File change · completed',
+              detail: 'src/app.ts',
               turnId: 'turn-1',
+              changes: [{ path: 'src/app.ts', additions: 7, deletions: 2 }],
               environment: 'must not leak',
             },
           },
@@ -186,11 +187,12 @@ describe('GET /api/sessions/:id/history', () => {
     const response = await app.inject('/api/sessions/s/history');
     expect(response.json().activities).toEqual([
       {
-        id: 'command-1',
-        label: 'Command · completed',
-        detail: 'npm test',
+        id: 'change-1',
+        label: 'File change · completed',
+        detail: 'src/app.ts',
         turnId: 'turn-1',
         occurredAt: Date.parse('2026-08-20T00:00:00.000Z'),
+        changes: [{ path: 'src/app.ts', additions: 7, deletions: 2 }],
       },
     ]);
     expect(response.body).not.toContain('must not leak');

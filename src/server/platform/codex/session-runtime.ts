@@ -23,6 +23,7 @@ import {
 } from '../../features/sessions/restore-session/use-case.js';
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
+import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
 import {
@@ -1129,10 +1130,16 @@ function decodeReasoningSummary(value: unknown): string[] {
   });
 }
 
-function decodeFileChanges(value: unknown): Array<{ path: string }> {
+function decodeFileChanges(
+  value: unknown,
+): Array<{ path: string; additions?: number; deletions?: number }> {
   if (!Array.isArray(value) || value.length > 1_000) return [];
   return value.flatMap((change) => {
-    const path = boundedString(asRecord(change)?.path);
-    return path ? [{ path }] : [];
+    const candidate = asRecord(change);
+    const path = boundedString(candidate?.path);
+    const diff = boundedString(candidate?.diff);
+    if (!path) return [];
+    if (!diff) return [{ path }];
+    return [{ path, ...countDiffLines(diff) }];
   });
 }

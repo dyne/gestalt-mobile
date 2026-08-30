@@ -13,6 +13,7 @@ import type {
 } from '../../../../shared/contracts/chat-snapshot.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
 import { autopilotAuditLabel } from '../../../../shared/contracts/autopilot-audit.js';
+import type { FileChangeSummary } from '../../../../shared/contracts/file-change.js';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { toChatItems, toChatTurns, type ChatItem, type HistoryTurn } from './history-mapper.js';
@@ -119,15 +120,39 @@ function toActivityHistory(
     )
       continue;
     const occurredAt = Date.parse(event.occurredAt);
+    const changes = safeFileChanges(payload.changes);
     activities.set(payload.id, {
       id: payload.id,
       label: payload.label,
       detail: payload.detail,
       ...(typeof payload.turnId === 'string' ? { turnId: payload.turnId } : {}),
       ...(Number.isFinite(occurredAt) ? { occurredAt } : {}),
+      ...(changes.length ? { changes } : {}),
     });
   }
   return [...activities.values()];
+}
+
+function safeFileChanges(value: unknown): FileChangeSummary[] {
+  if (!Array.isArray(value) || value.length > 1_000) return [];
+  return value.flatMap((change) => {
+    if (!change || typeof change !== 'object') return [];
+    const item = change as Record<string, unknown>;
+    return typeof item.path === 'string' &&
+      item.path.length <= 4_096 &&
+      Number.isInteger(item.additions) &&
+      (item.additions as number) >= 0 &&
+      Number.isInteger(item.deletions) &&
+      (item.deletions as number) >= 0
+      ? [
+          {
+            path: item.path,
+            additions: item.additions as number,
+            deletions: item.deletions as number,
+          },
+        ]
+      : [];
+  });
 }
 
 function isBoundedAudit(

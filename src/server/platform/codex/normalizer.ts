@@ -5,6 +5,7 @@
  */
 
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
+import { countDiffLines, type FileChangeSummary } from '../../../shared/contracts/file-change.js';
 import { relative } from 'node:path';
 
 export function normalizeCodexNotification(
@@ -39,6 +40,22 @@ export function normalizeCodexNotification(
       type: 'turnCompleted',
       payload: decoded.params,
     };
+  if (decoded.method === 'item/fileChange/patchUpdated') {
+    const activity = safeActivity(
+      {
+        id: decoded.params.itemId,
+        type: 'fileChange',
+        status: 'in_progress',
+        changes: decoded.params.changes,
+      },
+      workspacePath,
+      activeTurnId,
+      decoded.params.turnId,
+    );
+    return activity
+      ? { sessionId, sequence, occurredAt, type: 'activity.updated', payload: activity }
+      : null;
+  }
   if (decoded.method === 'item/started' || decoded.method === 'item/completed') {
     const message = safeAgentMessage(decoded.params.item, activeTurnId, decoded.params.turnId);
     if (message)
@@ -73,6 +90,10 @@ type DecodedNotification =
   | {
       method: 'item/started' | 'item/completed';
       params: { item: unknown; turnId?: string };
+    }
+  | {
+      method: 'item/fileChange/patchUpdated';
+      params: { itemId: string; turnId: string; changes: unknown[] };
     };
 
 /** Strictly decode only consumed notification shapes; unknown/future methods stay isolated. */
@@ -112,6 +133,19 @@ export function decodeNotification(input: {
       },
     };
   }
+  if (input.method === 'item/fileChange/patchUpdated') {
+    const params = record(input.params);
+    return params &&
+      safeId(params.itemId) &&
+      safeId(params.turnId) &&
+      Array.isArray(params.changes) &&
+      params.changes.length <= 1_000
+      ? {
+          method: input.method,
+          params: { itemId: params.itemId, turnId: params.turnId, changes: params.changes },
+        }
+      : null;
+  }
   if (input.method === 'item/started' || input.method === 'item/completed') {
     const params = record(input.params);
     return params && 'item' in params
@@ -132,7 +166,13 @@ function safeActivity(
   workspacePath?: string,
   activeTurnId?: string | null,
   notificationTurnId?: string,
-): { id: string; label: string; detail: string; turnId?: string } | null {
+): {
+  id: string;
+  label: string;
+  detail: string;
+  turnId?: string;
+  changes?: FileChangeSummary[];
+} | null {
   if (!item || typeof item !== 'object') return null;
   const value = item as Record<string, unknown>;
   if (typeof value.id !== 'string' || typeof value.type !== 'string') return null;
@@ -152,7 +192,14 @@ function safeActivity(
     const detail = reasoningSummary(value.summary).join('\n');
     return detail ? { id: value.id, label: 'Reasoning summary', detail, ...owner } : null;
   }
-  if (value.type === 'fileChange' && Array.isArray(value.changes))
+  if (value.type === 'fileChange' && Array.isArray(value.changes)) {
+    const changes = value.changes.flatMap((change) => {
+      const candidate = record(change);
+      if (!candidate || typeof candidate.path !== 'string') return [];
+      const path = relativePath(candidate.path, workspacePath);
+      const counts = typeof candidate.diff === 'string' ? countDiffLines(candidate.diff) : null;
+      return counts ? [{ path, ...counts }] : [];
+    });
     return {
       id: value.id,
       label: `File change${status}`,
@@ -166,8 +213,10 @@ function safeActivity(
         )
         .filter(Boolean)
         .join('\n'),
+      ...(changes.length ? { changes } : {}),
       ...owner,
     };
+  }
   if (
     (value.type === 'mcpToolCall' || value.type === 'dynamicToolCall') &&
     typeof value.tool === 'string'

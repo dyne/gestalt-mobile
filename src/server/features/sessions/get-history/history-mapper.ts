@@ -5,6 +5,7 @@
  */
 
 type TurnOwned = { turnId?: string; occurredAt?: number };
+type FileChange = { path: string; additions: number; deletions: number };
 
 export type ChatItem =
   | ({ id: string; kind: 'autopilot'; controlId: string; occurredAt?: number } & TurnOwned)
@@ -31,7 +32,13 @@ export type ChatItem =
       status: string;
       exitCode?: number;
     } & TurnOwned)
-  | ({ id: string; kind: 'fileChange'; paths: string[]; status: string } & TurnOwned)
+  | ({
+      id: string;
+      kind: 'fileChange';
+      paths: string[];
+      changes?: FileChange[];
+      status: string;
+    } & TurnOwned)
   | ({ id: string; kind: 'tool'; name: string; status: string } & TurnOwned);
 
 export type HistoryTurn = {
@@ -181,12 +188,31 @@ function toChatItem(
         const paths = item.changes.flatMap((change) =>
           isRecord(change) && typeof change.path === 'string' ? [change.path] : [],
         );
+        const changes = item.changes.flatMap<FileChange>((change) => {
+          if (
+            !isRecord(change) ||
+            typeof change.path !== 'string' ||
+            !Number.isInteger(change.additions) ||
+            (change.additions as number) < 0 ||
+            !Number.isInteger(change.deletions) ||
+            (change.deletions as number) < 0
+          )
+            return [];
+          return [
+            {
+              path: change.path,
+              additions: change.additions as number,
+              deletions: change.deletions as number,
+            },
+          ];
+        });
         return paths.length
           ? [
               {
                 id,
                 kind: 'fileChange',
                 paths,
+                ...(changes.length === paths.length ? { changes } : {}),
                 status: item.status,
                 ...owner,
                 ...(timestamp !== undefined ? { occurredAt: timestamp } : {}),

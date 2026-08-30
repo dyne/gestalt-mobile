@@ -5,12 +5,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import ActivityList from './ActivityList.svelte';
   import InteractionList from './InteractionList.svelte';
   import type { HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
   import { groupMessages } from './message-groups.js';
-  import { formatElapsedAfter, formatMessageTime } from './message-time.js';
+  import { formatElapsedAfter, formatMessageTime, formatRelativeAge } from './message-time.js';
+  import { summarizeChangedFiles } from './file-change-summary.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
@@ -53,6 +55,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }: Props = $props();
   let groups = $derived(groupMessages(messages));
   let expandedCommentary = $state<Record<string, boolean>>({});
+  let now = $state(Date.now());
+  onMount(() => {
+    const timer = globalThis.setInterval(() => (now = Date.now()), 1_000);
+    return () => globalThis.clearInterval(timer);
+  });
   let promptGroups = $derived(groups.filter((group) => group.kind === 'user'));
   let assistantGroups = $derived(groups.filter((group) => group.kind === 'assistant'));
   let latestAssistantId = $derived(assistantGroups.at(-1)?.id);
@@ -103,13 +110,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       (activity) => !activity.label.toLowerCase().replaceAll(' ', '').startsWith('filechange'),
     );
   }
-  function fileChanges(items: HistoryActivity[]): Array<{ id: string; paths: string[] }> {
-    return items.flatMap((activity) =>
-      activity.label.toLowerCase().replaceAll(' ', '').startsWith('filechange')
-        ? [{ id: activity.id, paths: activity.detail.split('\n').filter(Boolean) }]
-        : [],
-    );
-  }
   function isLive(group: (typeof groups)[number]): boolean {
     return Boolean(
       group.kind === 'assistant' &&
@@ -158,15 +158,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#snippet changedFiles(items: HistoryActivity[])}
-  {@const changes = fileChanges(items)}
+  {@const changes = summarizeChangedFiles(items)}
   {#if changes.length}
     <section class="file-changes" aria-label="Files changed">
       <strong>files changed</strong>
       <ul>
-        {#each changes as change (change.id)}
-          {#each change.paths as path (`${change.id}:${path}`)}
-            <li><code>{path}</code></li>
-          {/each}
+        {#each changes as change (change.path)}
+          <li>
+            <code class="file-path">{change.path}</code>
+            <span class="file-counts" aria-label="Line changes">
+              <span class="additions">+{change.additions ?? '?'}</span>
+              <span class="deletions">-{change.deletions ?? '?'}</span>
+            </span>
+            {#if change.touchedAt !== undefined}
+              <time datetime={new Date(change.touchedAt).toISOString()}>
+                {formatRelativeAge(change.touchedAt, now)}
+              </time>
+            {:else}
+              <span class="touch-unknown">time unknown</span>
+            {/if}
+          </li>
         {/each}
       </ul>
     </section>
@@ -527,6 +538,53 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.15rem;
     margin: 0.25rem 0 0;
     padding-inline-start: 1.25rem;
+  }
+
+  .file-changes li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: baseline;
+    gap: 0.4rem 0.75rem;
+  }
+
+  .file-path {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .file-counts {
+    display: inline-flex;
+    gap: 0.35rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .additions {
+    color: var(--theme-success);
+  }
+
+  .deletions {
+    color: var(--theme-error);
+  }
+
+  .file-changes time,
+  .touch-unknown {
+    color: var(--theme-text-muted);
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 32rem) {
+    .file-changes li {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .file-changes time,
+    .touch-unknown {
+      grid-column: 2;
+    }
   }
 
   .commentary-content {
