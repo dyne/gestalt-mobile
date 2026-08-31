@@ -38,6 +38,7 @@ import {
   semanticProgressKey,
   startSupervisionProtocol,
   type ObservableWake,
+  type ObservableWakeCondition,
   type ProbeReport,
 } from '../domain/supervision-protocol.js';
 import type {
@@ -229,6 +230,16 @@ export class AutopilotCoordinator {
     this.persist({ ...state, supervision: nextProtocol, updatedAt: this.deps.now() });
     this.evaluate(sessionId);
     return true;
+  }
+  /** Wakes a parked lease only when this semantic event was explicitly requested. */
+  semanticEvent(sessionId: string, condition: ObservableWakeCondition): boolean {
+    const lease = this.deps.store.find(sessionId)?.supervision?.waitLease;
+    if (!lease || !lease.wakeConditions.includes(condition)) return false;
+    return this.observableWake(sessionId, {
+      leaseId: lease.id,
+      condition,
+      progressKey: this.progressKey(sessionId),
+    });
   }
   enable(sessionId: string): AutopilotSnapshot | { code: string } {
     const session = this.deps.session(sessionId);
@@ -571,6 +582,7 @@ export class AutopilotCoordinator {
         occurredAt,
       },
     ]);
+    this.semanticEvent(sessionId, 'checkpointChanged');
     return true;
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
@@ -586,6 +598,11 @@ export class AutopilotCoordinator {
       this.cancel(sessionId, 'planReplaced');
       return;
     }
+    if (
+      this.semanticEvent(sessionId, 'planChanged') ||
+      this.semanticEvent(sessionId, 'reviewChanged')
+    )
+      return;
     if (executionComplete(plan.plan)) {
       const eventKey = `plan:${fingerprint(plan.plan)}`;
       if (this.planEventKeys.get(sessionId) === eventKey) return;
@@ -660,6 +677,7 @@ export class AutopilotCoordinator {
     });
     if (this.activityEventKeys.get(sessionId) === eventKey) return;
     this.activityEventKeys.set(sessionId, eventKey);
+    if (this.semanticEvent(sessionId, 'agentActivityChanged')) return;
     const disposition = classifyAgentActivity(activity);
     if (disposition === 'attention') {
       this.evaluate(sessionId);
@@ -838,16 +856,25 @@ export class AutopilotCoordinator {
       current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
       this.progressKey(sessionId),
     );
-    if (protocol.outcome === 'probeRequired' || protocol.outcome === 'safetyPaused') {
+    if (protocol.outcome === 'probeRequired') {
+      this.persist({ ...current, supervision: protocol, updatedAt: this.deps.now() }, undefined, [
+        {
+          sessionId,
+          type: 'autopilot.probe-required',
+          payload: { progressKey: protocol.progressKey },
+          occurredAt: this.deps.now(),
+        },
+      ]);
+    }
+    if (protocol.outcome === 'safetyPaused') {
       const now = this.deps.now();
       const cancelled = this.cancelScheduledControl(current, now);
       this.persist(
         {
           ...current,
-          state: protocol.outcome === 'safetyPaused' ? 'safetyPaused' : 'monitoring',
-          ...(protocol.outcome === 'safetyPaused'
-            ? { requestedEnabled: false, stopReason: 'safetyPaused' as const }
-            : {}),
+          state: 'safetyPaused',
+          requestedEnabled: false,
+          stopReason: 'safetyPaused',
           ...(cancelled ? { generation: current.generation + 1, lastControlId: null } : {}),
           nextEvaluationAt: null,
           supervision: protocol,
@@ -857,10 +884,7 @@ export class AutopilotCoordinator {
         [
           {
             sessionId,
-            type:
-              protocol.outcome === 'probeRequired'
-                ? 'autopilot.probe-required'
-                : 'autopilot.safety-paused',
+            type: 'autopilot.safety-paused',
             payload: { progressKey: protocol.progressKey },
             occurredAt: now,
           },
@@ -952,7 +976,8 @@ export class AutopilotCoordinator {
       state.consecutiveNoProgress,
       state.executor,
     );
-    if (executor) this.persistExecutor(sessionId, executor);
+    const executorChanged = executor ? this.persistExecutor(sessionId, executor) : false;
+    if (executorChanged && this.wakeForExecutorChange(sessionId, executor!)) return true;
     const decision = decideSupervisedLifecycle({
       plan: retained.plan,
       event,
@@ -1146,10 +1171,25 @@ export class AutopilotCoordinator {
     };
   }
 
-  private persistExecutor(sessionId: string, executor: ExecutorLifecycle): void {
+  private persistExecutor(sessionId: string, executor: ExecutorLifecycle): boolean {
     const current = this.deps.store.find(sessionId);
-    if (!current || JSON.stringify(current.executor) === JSON.stringify(executor)) return;
+    if (!current || JSON.stringify(current.executor) === JSON.stringify(executor)) return false;
     this.persist({ ...current, executor, updatedAt: this.deps.now() });
+    return true;
+  }
+
+  private wakeForExecutorChange(sessionId: string, executor: ExecutorLifecycle): boolean {
+    const processes = executor.ownedProcesses;
+    const conditions: ObservableWakeCondition[] = [
+      ...(processes.some((process) => process.state === 'exited-awaiting-result')
+        ? (['processExited', 'processResultAvailable'] as const)
+        : []),
+      ...(processes.some((process) => process.state === 'terminated-for-budget')
+        ? (['processLimitBreached'] as const)
+        : []),
+      'executorChanged',
+    ];
+    return conditions.some((condition) => this.semanticEvent(sessionId, condition));
   }
 
   private freshExecutorIdentity(sessionId: string) {
@@ -1353,6 +1393,7 @@ export class AutopilotCoordinator {
     return 'unknown';
   }
   private decision(sessionId: string, state: AutopilotSession) {
+    if (state.supervision?.outcome === 'parked') return { kind: 'observe' as const };
     const plan = this.deps.plan(sessionId);
     const now = this.deps.now();
     return decideAutopilot({

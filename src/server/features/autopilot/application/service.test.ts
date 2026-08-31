@@ -14,6 +14,11 @@ import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
 import { SqliteAutopilotStore } from '../../../platform/persistence/sqlite-autopilot-store.js';
+import {
+  recordAutomaticContinuation,
+  semanticProgressKey,
+  startSupervisionProtocol,
+} from '../domain/supervision-protocol.js';
 
 const now = '2026-08-20T12:00:00.000Z';
 const plan = {
@@ -629,6 +634,163 @@ describe('AutopilotCoordinator', () => {
     expect(controls.size).toBe(1);
     expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1);
     expect(events.filter((type) => type === 'autopilot.continuation-scheduled')).toHaveLength(1);
+  });
+  it('starts exactly one structured probe turn on the third unchanged continuation', async () => {
+    const planFingerprint = JSON.stringify([['l1', 'WIP', 'UNREVIEWED', []]]);
+    const progressKey = semanticProgressKey({
+      plan: { identity: 'p1', fingerprint: planFingerprint, currentPosition: 'l1' },
+      review: { status: null },
+      checkpoint: { pendingTurnId: null, terminalReviewAccepted: false },
+      pendingInteractions: [],
+      executor: { generation: 0, state: null },
+      ownedProcesses: [],
+      agentActivity: [{ agentId: 'root', sequence: 0, state: 'idle' }],
+    });
+    let supervision = startSupervisionProtocol(progressKey);
+    supervision = recordAutomaticContinuation(supervision, progressKey);
+    supervision = recordAutomaticContinuation(supervision, progressKey);
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'backoff',
+      requestedEnabled: true,
+      planIdentity: 'p1',
+      planFingerprint,
+      generation: 1,
+      consecutiveNoProgress: 2,
+      nextEvaluationAt: now,
+      lastControlId: 'probe-control',
+      stopReason: null,
+      supervision,
+      updatedAt: now,
+    };
+    const controls = new Map<string, import('./ports.js').AutopilotControl>([
+      [
+        's:probe-control',
+        {
+          sessionId: 's',
+          controlId: 'probe-control',
+          status: 'scheduled' as const,
+          createdAt: now,
+          updatedAt: now,
+          failureCode: null,
+          turnId: null,
+        },
+      ],
+    ]);
+    const timers: Array<() => void> = [];
+    const starts = vi.fn(async () => {});
+    const events: string[] = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: (sessionId, controlId) => controls.get(`${sessionId}:${controlId}`) ?? null,
+        saveControl: (control) =>
+          controls.set(`${control.sessionId}:${control.controlId}`, control),
+        controlIds: () => new Set([...controls.values()].map((control) => control.controlId)),
+      },
+      now: () => now,
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: (callback) => {
+        timers.push(callback);
+        return () => {};
+      },
+      nextControlId: () => 'unused',
+      turnStarter: { start: starts },
+      publish: (_sessionId, type) => events.push(type),
+    });
+
+    coordinator.restore('s');
+    timers.shift()!();
+    await vi.waitFor(() => expect(starts).toHaveBeenCalledTimes(1));
+
+    expect(state?.supervision).toMatchObject({ outcome: 'probeRequired', probeKey: progressKey });
+    expect(events.filter((type) => type === 'autopilot.probe-required')).toHaveLength(1);
+  });
+
+  it('keeps a structured wait turn-free until a matching semantic event grants one retry', () => {
+    let currentPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = plan;
+    let state: AutopilotSession | null = null;
+    let scheduled = 0;
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      plan: () => ({ plan: currentPlan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => {
+        scheduled += 1;
+        return () => {};
+      },
+      nextControlId: () => 'retry-control',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    coordinator.enable('s');
+    state = {
+      ...state!,
+      state: 'monitoring',
+      nextEvaluationAt: null,
+      lastControlId: null,
+      supervision: {
+        ...state!.supervision!,
+        outcome: 'probeRequired',
+        unchangedContinuations: 3,
+        probeKey: state!.supervision!.progressKey,
+      },
+    };
+    expect(
+      coordinator.reportProbe('s', {
+        id: 'wait-report',
+        kind: 'wait',
+        leaseId: 'lease-1',
+        wakeConditions: ['planChanged'],
+      }),
+    ).toBe(true);
+    const parkedScheduleCount = scheduled;
+
+    coordinator.evaluate('s');
+    coordinator.semanticEvent('s', 'agentActivityChanged');
+    expect(scheduled).toBe(parkedScheduleCount);
+    expect(state?.supervision?.outcome).toBe('parked');
+
+    currentPlan = {
+      ...plan,
+      steps: [{ ...plan.steps[0]!, state: 'TODO' as const }],
+    };
+    expect(coordinator.semanticEvent('s', 'planChanged')).toBe(true);
+    expect(state?.supervision).toMatchObject({ outcome: 'retrying', retryKey: expect.any(String) });
+    expect(scheduled).toBe(parkedScheduleCount + 1);
+    expect(coordinator.semanticEvent('s', 'planChanged')).toBe(false);
+    expect(scheduled).toBe(parkedScheduleCount + 1);
   });
   it('does not replay an issued command after a restart boundary', () => {
     let state: AutopilotSession | null = {

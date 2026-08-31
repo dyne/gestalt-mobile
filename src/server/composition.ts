@@ -497,6 +497,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           occurredAt,
         ),
       );
+    autopilot.semanticEvent(sessionId, 'interactionChanged');
   };
   const publishAttentionSettlement = (
     sessionId: string,
@@ -723,6 +724,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
               : {}),
           });
+          autopilot.semanticEvent(sessionId, 'interactionChanged');
           const updated = RelaySession.rehydrate(session).requestInteraction(
             interaction,
             new Date().toISOString(),

@@ -143,7 +143,10 @@ describe('bounded probe protocol', () => {
       'active',
       'probeRequired',
     ]);
-    expect(recordAutomaticContinuation(states[3]!, key)).toEqual(states[3]);
+    expect(recordAutomaticContinuation(states[3]!, key)).toMatchObject({
+      outcome: 'safetyPaused',
+      safetyPauseReason: 'invalidProbeReport',
+    });
   });
 
   it('parks only a supported structured wait and ignores duplicate reports', () => {
@@ -228,7 +231,9 @@ describe('one retry and safety pause', () => {
       condition: 'processExited',
       progressKey: wakeKey,
     });
-    const paused = recordAutomaticContinuation(retrying, wakeKey);
+    const retryIssued = recordAutomaticContinuation(retrying, wakeKey);
+    expect(retryIssued).toMatchObject({ outcome: 'retrying', unchangedContinuations: 1 });
+    const paused = recordAutomaticContinuation(retryIssued, wakeKey);
     expect(paused).toMatchObject({ outcome: 'safetyPaused', safetyPauseReason: 'retryRecurrence' });
     expect(
       recordAutomaticContinuation(
