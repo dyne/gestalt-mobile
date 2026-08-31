@@ -139,6 +139,41 @@ describe('SessionsView session base tree', () => {
     expect(autopilot.getAttribute('aria-pressed')).toBe('true');
     expect(autopilot.classList.contains('accentPressed')).toBe(true);
   });
+  it('makes a disconnected session activity projection explicit in local Autopilot liveness', () => {
+    renderView({
+      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      autopilotSnapshots: new Map([
+        [
+          'live',
+          {
+            state: 'monitoring',
+            enabled: true,
+            retry: { position: 0, limit: 3 },
+            updatedAt: '2026-08-31T12:00:00.000Z',
+          },
+        ],
+      ]),
+      activitySnapshots: new Map([
+        [
+          'live',
+          {
+            sessionId: 'live',
+            confidence: 'stale',
+            aggregateSubagents: 'idle',
+            root: {
+              state: 'disconnected',
+              observedAt: '2026-08-31T12:00:00.000Z',
+              lastActivityAt: '2026-08-31T12:00:00.000Z',
+            },
+            subagents: [],
+          },
+        ],
+      ]),
+    });
+    const liveness = screen.getByRole('status', { name: 'Monitoring disconnected' });
+    expect(liveness.getAttribute('data-state')).toBe('disconnected');
+    expect(liveness.classList.contains('active')).toBe(false);
+  });
   it('uses clear approval labels while emitting the Codex policy value', async () => {
     const onapprovalpolicychange = vi.fn();
     renderView({ onapprovalpolicychange });

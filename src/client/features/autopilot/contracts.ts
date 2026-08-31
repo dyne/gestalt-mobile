@@ -5,7 +5,7 @@
  */
 
 export type AutopilotState =
-  'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed';
+  'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed' | 'safetyPaused';
 
 export type AutopilotSnapshot = Readonly<{
   state: AutopilotState;
@@ -51,9 +51,14 @@ export function isAutopilotSnapshot(value: unknown): value is AutopilotSnapshot 
   return (
     typeof snapshot.enabled === 'boolean' &&
     typeof snapshot.state === 'string' &&
-    ['disabled', 'monitoring', 'backoff', 'attentionRequired', 'completed'].includes(
-      snapshot.state,
-    ) &&
+    [
+      'disabled',
+      'monitoring',
+      'backoff',
+      'attentionRequired',
+      'completed',
+      'safetyPaused',
+    ].includes(snapshot.state) &&
     Boolean(snapshot.retry) &&
     typeof snapshot.retry === 'object' &&
     Number.isInteger((snapshot.retry as Record<string, unknown>).position) &&

@@ -188,9 +188,11 @@ export function planStatusFilePath(statusDirectory: string, canonicalPlanPath: s
 
 class ActiveLease implements PlanStatusLease {
   private watcher: Watcher | undefined;
+  private planWatcher: Watcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
   private activeStatusPath: string | undefined;
+  private activePlanPath: string | undefined;
   private lastEmittedUpdate: string | undefined;
 
   constructor(
@@ -218,7 +220,9 @@ class ActiveLease implements PlanStatusLease {
     if (this.closed) return;
     this.closed = true;
     if (this.debounce) clearTimeout(this.debounce);
+    if (this.planDebounce) clearTimeout(this.planDebounce);
     void this.watcher?.return?.();
+    void this.planWatcher?.return?.();
     this.onClose();
   }
 
@@ -257,6 +261,33 @@ class ActiveLease implements PlanStatusLease {
       const pendingStatusPath = this.pendingStatusPath;
       this.pendingStatusPath = undefined;
       void (pendingStatusPath ? this.refreshPath(pendingStatusPath) : this.refreshLatest());
+    }, 25);
+  }
+
+  private watchActivePlan(planPath: string): void {
+    if (this.activePlanPath === planPath && this.planWatcher) return;
+    void this.planWatcher?.return?.();
+    this.activePlanPath = planPath;
+    void (async () => {
+      try {
+        this.planWatcher = watch(dirname(planPath), { persistent: false });
+        for await (const event of this.planWatcher) {
+          if (this.closed || basename(String(event.filename ?? '')) !== basename(planPath))
+            continue;
+          this.schedulePlanRefresh();
+        }
+      } catch {
+        // The status signal remains the bounded recovery path.
+      }
+    })();
+  }
+
+  private planDebounce: ReturnType<typeof setTimeout> | undefined;
+  private schedulePlanRefresh(): void {
+    if (this.planDebounce) clearTimeout(this.planDebounce);
+    this.planDebounce = setTimeout(() => {
+      this.planDebounce = undefined;
+      if (this.activeStatusPath) void this.refreshPath(this.activeStatusPath);
     }, 25);
   }
 
@@ -321,6 +352,7 @@ class ActiveLease implements PlanStatusLease {
         if (!this.closed && !(await this.isDismissed(identity)) && !this.closed) {
           const previousStatusPath = this.activeStatusPath;
           this.activeStatusPath = statusPath;
+          this.watchActivePlan(planPath);
           this.onActiveStatusPath(statusPath);
           const update = {
             kind: 'updated',

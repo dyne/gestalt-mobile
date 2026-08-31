@@ -151,6 +151,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pending: new Set(),
     errors: new Map(),
   });
+  // A sequenced socket projection is newer than an unsequenced list response.
+  // Keep the exact owning-session plan until the next socket event supersedes it.
+  let latestSessionPlans = $state.raw<ReadonlyMap<string, SupervisedPlan | undefined>>(new Map());
   let sessionListEpoch = 0;
   let sessionListAbort: AbortController | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
@@ -301,7 +304,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   const deviceClient = createDeviceClient((input, init) => authorizedFetch(input, init));
   const planController = createPlanController(
     { getPlan: relay.getPlan, closePlan: relay.closePlan },
-    (next) => (planState = next),
+    (next) => {
+      planState = next;
+      if (next.kind === 'ready' || next.kind === 'closing')
+        sessions = sessions.map((item) =>
+          item.id === next.sessionId ? { ...item, plan: next.plan } : item,
+        );
+    },
   );
   const sessionCache = createSessionCache();
   const toastQueue = createToastQueue();
@@ -522,7 +531,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     try {
       const next = await relay.listSessions(abort.signal);
       if (epoch !== sessionListEpoch || abort.signal.aborted) return;
-      sessions = next;
+      sessions = next.map((session) => {
+        if (!latestSessionPlans.has(session.id)) return session;
+        return { ...session, plan: latestSessionPlans.get(session.id) };
+      });
       const active = observedSessions(
         sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
       );
@@ -726,6 +738,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (next === 'sessions') {
       if (sessionSubview === 'profile-manager') void closeProfileManager(false);
       void refreshSessionLists();
+      if (sessionId) planController.refresh(sessionId);
     }
   }
 
@@ -744,6 +757,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (document.visibilityState !== 'visible') return;
       if (tab === 'git' && gitWorkspaceId) void gitController.refresh();
       if (tab === 'plan') refreshPlanSurface();
+      if (tab === 'sessions') {
+        void refreshSessionLists();
+        if (sessionId) planController.refresh(sessionId);
+      }
     });
   }
 
@@ -1155,6 +1172,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (event.type !== 'plan.updated' && event.type !== 'plan.closed') return;
     planController.applyEvent(selectedId, event);
     if (event.type === 'plan.closed') {
+      latestSessionPlans = new Map(latestSessionPlans).set(selectedId, undefined);
       sessions = sessions.map((item) =>
         item.id === selectedId ? { ...item, plan: undefined } : item,
       );
@@ -1165,6 +1183,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       : isSupervisedPlan(event.payload)
         ? event.payload
         : null;
+    if (plan) latestSessionPlans = new Map(latestSessionPlans).set(selectedId, plan);
     if (plan)
       sessions = sessions.map((item) => (item.id === selectedId ? { ...item, plan } : item));
   }
