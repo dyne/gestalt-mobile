@@ -14,6 +14,7 @@ import {
   AUTOPILOT_CONTINUATION_PROMPT,
   AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
   AUTOPILOT_PROMPT_VERSION,
+  autopilotExecutorLaunchPrompt,
   decideAutopilot,
   defaultAutopilotPolicy,
   executionComplete,
@@ -126,7 +127,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v4');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v5');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -134,6 +135,33 @@ describe('autopilot policy', () => {
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
+  });
+  it('uses a fresh physical task and explicit model handoff for a replacement executor', () => {
+    const prompt = autopilotExecutorLaunchPrompt({
+      canonicalTaskName: 'l7',
+      canonicalPosition: 'L7',
+      generation: 2,
+      taskName: 'l7_g2',
+    });
+    expect(prompt).toContain('Launch task_name l7_g2 for canonical L7');
+    expect(prompt).toContain('the durable l7 slot may remain reserved');
+    expect(prompt).toContain(
+      "Do not reuse that task_name or attempt to change an existing agent's model in place",
+    );
+    expect(prompt).toContain(
+      'spawn l7_g2 with agent_type worker and an explicit model selected by the supervisor',
+    );
+    expect(prompt).toContain('Transfer sole L7 ownership');
+  });
+  it('keeps the canonical task name for the first executor generation', () => {
+    const prompt = autopilotExecutorLaunchPrompt({
+      canonicalTaskName: 'l7',
+      canonicalPosition: 'L7',
+      generation: 1,
+      taskName: 'l7',
+    });
+    expect(prompt).toContain('Launch task_name l7 for canonical L7');
+    expect(prompt).not.toContain('replacement generation');
   });
   type ActivityChange = Partial<
     Pick<AgentActivitySnapshot, 'confidence' | 'aggregateSubagents'>

@@ -79,6 +79,7 @@ import { AutopilotCoordinator } from './features/autopilot/application/service.j
 import {
   AUTOPILOT_CONTINUATION_PROMPT,
   AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
+  autopilotExecutorLaunchPrompt,
   defaultAutopilotPolicy,
 } from './features/autopilot/application/policy.js';
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
@@ -349,7 +350,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
         const continuationPrompt = launchIdentity
-          ? `${AUTOPILOT_CONTINUATION_PROMPT} Launch task_name ${launchIdentity.taskName} for canonical ${launchIdentity.canonicalPosition}; retain the canonical label in status and review output.`
+          ? autopilotExecutorLaunchPrompt(launchIdentity)
           : AUTOPILOT_CONTINUATION_PROMPT;
         const started = await runtime.startTurn(
           writer.session,

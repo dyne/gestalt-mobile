@@ -7,12 +7,20 @@
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
+import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
 
-export const AUTOPILOT_PROMPT_VERSION = 'v4';
+export const AUTOPILOT_PROMPT_VERSION = 'v5';
 export const AUTOPILOT_CONTINUATION_PROMPT =
   'Inspect the active supervised Org Plan. Refer to every L1 as L<a> and each nested L2 as L<a>.<b>, using one-based positions. For a subagent dedicated to that position, use the collaboration-safe task_name l<a> or l<a>_<b> and refer to it by its canonical L label. Invoke gestalt_org_plan_attention only for a decision-table blocker. When the Autopilot probe is active, register gestalt_autopilot_wait_lease with an observable wake condition, declare genuine attention, or immediately do actionable work; never acknowledge waiting in prose. Do not send a status-only response.';
 export const AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT =
   'Continue the same assigned Org L1 from its durable state. A prior turn ending did not complete the objective. Consume any supplied process result, take the next legal L2 action, and report only at the L1 review boundary or through structured attention.';
+
+/** Builds a physical launch instruction while keeping durable L1 identity canonical. */
+export function autopilotExecutorLaunchPrompt(identity: ExecutorIdentity): string {
+  const launch = `Launch task_name ${identity.taskName} for canonical ${identity.canonicalPosition}; retain the canonical label in status and review output.`;
+  if (identity.generation === 1) return `${AUTOPILOT_CONTINUATION_PROMPT} ${launch}`;
+  return `${AUTOPILOT_CONTINUATION_PROMPT} ${launch} This is replacement generation ${identity.generation}: the durable ${identity.canonicalTaskName} slot may remain reserved. Do not reuse that task_name or attempt to change an existing agent's model in place. Interrupt the previous physical executor if it is still running, then spawn ${identity.taskName} with agent_type worker and an explicit model selected by the supervisor. Transfer sole ${identity.canonicalPosition} ownership and continue from its durable Org Plan and worktree state.`;
+}
 
 export type AutopilotPolicy = Readonly<{
   quiescenceMs: number;
