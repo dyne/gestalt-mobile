@@ -14,6 +14,10 @@ import {
   GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
   parseOrgPlanCheckpoint,
 } from '../../../shared/contracts/org-plan-checkpoint.js';
+import {
+  GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
+  parseAutopilotWaitLease,
+} from '../../../shared/contracts/autopilot-wait-lease.js';
 
 export function toPendingInteraction(input: {
   id: number;
@@ -36,6 +40,12 @@ export function toPendingInteraction(input: {
       const checkpoint = parseOrgPlanCheckpoint(input.params.arguments);
       return checkpoint
         ? { requestId: String(input.id), kind: 'orgPlanCheckpoint', payload: checkpoint }
+        : null;
+    }
+    if (input.params.tool === GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME) {
+      const lease = parseAutopilotWaitLease(input.params.arguments);
+      return lease
+        ? { requestId: String(input.id), kind: 'autopilotWaitLease', payload: lease }
         : null;
     }
     return null;
@@ -61,6 +71,19 @@ export function resolvedServerRequestId(input: {
   ))
     return null;
   return String(requestId);
+}
+
+export function isAutopilotWaitLeaseCall(input: {
+  id: number;
+  method: string;
+  params: unknown;
+}): boolean {
+  return (
+    Number.isSafeInteger(input.id) &&
+    input.method === 'item/tool/call' &&
+    isRecord(input.params) &&
+    input.params.tool === GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

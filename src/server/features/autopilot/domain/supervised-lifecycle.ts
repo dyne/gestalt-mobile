@@ -6,6 +6,10 @@
 
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import { orgPlanAgentDisplayName } from '../../../../shared/org-plan-position.js';
+import {
+  parseSupervisionProtocolState,
+  type SupervisionProtocolState,
+} from './supervision-protocol.js';
 
 export type ExecutorOutcome = 'objective_complete' | 'partial' | 'blocked' | 'cancelled' | 'failed';
 
@@ -77,6 +81,7 @@ export type ExecutorLifecycle = Readonly<{
 export type PersistedSupervisedLifecycle = Readonly<{
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
+  supervision?: SupervisionProtocolState;
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
@@ -163,10 +168,18 @@ export function parsePersistedSupervisedLifecycle(
   if (blockingValue && !blocking) return undefined;
   const executorValue = record(root.executor);
   const checkpointsValue = record(root.checkpoints);
+  const supervisionValue = root.supervision;
+  const supervision =
+    supervisionValue === undefined ? undefined : parseSupervisionProtocolState(supervisionValue);
+  if (supervisionValue !== undefined && !supervision) return undefined;
   const checkpoints = checkpointsValue ? parseCheckpoints(checkpointsValue) : undefined;
   if (checkpointsValue && !checkpoints) return undefined;
   if (!executorValue)
-    return { ...(blocking ? { blocking } : {}), ...(checkpoints ? { checkpoints } : {}) };
+    return {
+      ...(blocking ? { blocking } : {}),
+      ...(supervision ? { supervision } : {}),
+      ...(checkpoints ? { checkpoints } : {}),
+    };
   const processesValue = executorValue.ownedProcesses;
   if (!Array.isArray(processesValue) || processesValue.length > 64) return undefined;
   const ownedProcesses = processesValue.flatMap((candidate) => {
@@ -272,6 +285,7 @@ export function parsePersistedSupervisedLifecycle(
       continuationCount,
     },
     ...(blocking ? { blocking } : {}),
+    ...(supervision ? { supervision } : {}),
     ...(checkpoints ? { checkpoints } : {}),
   };
 }

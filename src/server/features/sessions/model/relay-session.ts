@@ -43,7 +43,8 @@ export type PendingInteraction = {
     | 'userInput'
     | 'quiz'
     | 'orgPlanAttention'
-    | 'orgPlanCheckpoint';
+    | 'orgPlanCheckpoint'
+    | 'autopilotWaitLease';
   payload: unknown;
   turnId?: string | null;
   requestedAt?: string;

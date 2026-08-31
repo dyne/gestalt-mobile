@@ -126,12 +126,13 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v3');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v4');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('task_name l<a> or l<a>_<b>');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
   type ActivityChange = Partial<
@@ -321,5 +322,47 @@ describe('autopilot policy', () => {
         policy: defaultAutopilotPolicy,
       }),
     ).toEqual({ kind: 'requestAttention', reason: 'startUnavailable' });
+  });
+
+  it('pauses only after the bounded automatic-action cap is exceeded', () => {
+    const active = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh' as const,
+      root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+      aggregateSubagents: 'idle' as const,
+    };
+    const state = {
+      ...disabledAutopilot('s', now),
+      state: 'monitoring' as const,
+      requestedEnabled: true,
+    };
+    const incomplete = {
+      ...plan(),
+      executionComplete: false,
+      allDone: false,
+      steps: [{ ...plan().steps[0]!, state: 'WIP' as const }],
+    };
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit,
+        now,
+        policy: defaultAutopilotPolicy,
+      }).kind,
+    ).toBe('scheduleContinuation');
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit + 1,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'safetyPause', reason: 'actionRateExceeded' });
   });
 });

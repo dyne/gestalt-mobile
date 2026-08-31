@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { GESTALT_QUIZ_TOOL_NAME } from '../../../shared/contracts/quiz.js';
 import { GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME } from '../../../shared/contracts/org-plan-attention.js';
+import { GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { resolvedServerRequestId, toPendingInteraction } from './server-request.js';
 
 describe('Codex server request mapping', () => {
@@ -108,6 +109,31 @@ describe('Codex server request mapping', () => {
             resumeCondition: 'planRevision',
           },
         },
+      }),
+    ).toBeNull();
+  });
+
+  it('maps only a structured bounded Autopilot wait lease', () => {
+    expect(
+      toPendingInteraction({
+        id: 14,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
+          arguments: {
+            version: 1,
+            reportId: 'report-1',
+            leaseId: 'lease-1',
+            wakeConditions: ['processExited'],
+          },
+        },
+      }),
+    ).toMatchObject({ requestId: '14', kind: 'autopilotWaitLease' });
+    expect(
+      toPendingInteraction({
+        id: 15,
+        method: 'item/tool/call',
+        params: { tool: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME, arguments: { version: 1 } },
       }),
     ).toBeNull();
   });
