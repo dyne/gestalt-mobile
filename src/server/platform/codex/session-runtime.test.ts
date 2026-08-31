@@ -14,6 +14,7 @@ import {
 } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
+import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
@@ -1210,6 +1211,7 @@ describe('CodexSessionRuntime', () => {
         gestaltQuizDynamicTool,
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
+        gestaltAutopilotWaitLeaseDynamicTool,
       ],
     });
   });
@@ -1612,6 +1614,7 @@ describe('CodexSessionRuntime', () => {
           gestaltQuizDynamicTool,
           gestaltOrgPlanAttentionDynamicTool,
           gestaltOrgPlanCheckpointDynamicTool,
+          gestaltAutopilotWaitLeaseDynamicTool,
         ],
       });
     },

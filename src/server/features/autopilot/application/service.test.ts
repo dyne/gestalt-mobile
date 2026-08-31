@@ -1565,4 +1565,59 @@ describe('AutopilotCoordinator', () => {
     coordinator.enable('s');
     expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(published);
   });
+  it('does not schedule duplicate active observations and tears down callbacks', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    let cancellations = 0;
+    const active = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh' as const,
+      root: {
+        ...createAgentActivitySnapshot('s', now).root,
+        state: 'working' as const,
+        lastActivityAt: now,
+      },
+    };
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => active,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {
+        cancellations += 1;
+      },
+      nextControlId: () => 'next',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    coordinator.activityChanged('s');
+    coordinator.activityChanged('s');
+    expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
+    coordinator.dispose('s');
+    expect(cancellations).toBe(0);
+  });
 });

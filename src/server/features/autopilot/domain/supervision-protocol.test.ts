@@ -275,4 +275,13 @@ describe('one retry and safety pause', () => {
       ),
     ).toMatchObject({ outcome: 'active' });
   });
+
+  it('persists invalid probe-report pauses distinctly from retry recurrence', () => {
+    const paused = {
+      ...startSupervisionProtocol(initialKey),
+      outcome: 'safetyPaused' as const,
+      safetyPauseReason: 'invalidProbeReport' as const,
+    };
+    expect(parseSupervisionProtocolState(JSON.parse(JSON.stringify(paused)))).toEqual(paused);
+  });
 });

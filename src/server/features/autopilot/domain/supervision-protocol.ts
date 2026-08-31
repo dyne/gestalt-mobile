@@ -87,7 +87,7 @@ export type SupervisionProtocolState = Readonly<{
     wakeConditions: readonly ObservableWakeCondition[];
   }> | null;
   retryKey: string | null;
-  safetyPauseReason: 'retryRecurrence' | null;
+  safetyPauseReason: 'retryRecurrence' | 'invalidProbeReport' | null;
 }>;
 
 export function startSupervisionProtocol(progressKey: string): SupervisionProtocolState {
@@ -222,7 +222,11 @@ export function parseSupervisionProtocolState(
     return undefined;
   const waitLease = parseWaitLease(candidate.waitLease);
   if (waitLease === undefined) return undefined;
-  if (candidate.safetyPauseReason !== null && candidate.safetyPauseReason !== 'retryRecurrence')
+  if (
+    candidate.safetyPauseReason !== null &&
+    candidate.safetyPauseReason !== 'retryRecurrence' &&
+    candidate.safetyPauseReason !== 'invalidProbeReport'
+  )
     return undefined;
   return {
     ...base,

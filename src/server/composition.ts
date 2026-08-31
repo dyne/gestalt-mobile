@@ -49,7 +49,11 @@ import {
 } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
-import { resolvedServerRequestId, toPendingInteraction } from './platform/codex/server-request.js';
+import {
+  isAutopilotWaitLeaseCall,
+  resolvedServerRequestId,
+  toPendingInteraction,
+} from './platform/codex/server-request.js';
 import {
   parseOrgPlanCheckpoint,
   toOrgPlanCheckpointToolResponse,
@@ -81,6 +85,10 @@ import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
 import { parseOrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
+import {
+  autopilotWaitLeaseToolResponse,
+  type AutopilotWaitLease,
+} from '../shared/contracts/autopilot-wait-lease.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
@@ -617,7 +625,50 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         (sessionId, request, origin) => {
           const rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
-          if (!rawInteraction || !session) return false;
+          if (!session) return false;
+          if (!rawInteraction && isAutopilotWaitLeaseCall(request)) {
+            const rootOwned =
+              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
+            if (rootOwned) autopilot.rejectProbe(sessionId);
+            return (
+              runtime?.resolveServerRequest(
+                sessionId,
+                String(request.id),
+                autopilotWaitLeaseToolResponse(),
+              ) === true
+            );
+          }
+          if (!rawInteraction) return false;
+          if (rawInteraction.kind === 'autopilotWaitLease') {
+            const lease = rawInteraction.payload as AutopilotWaitLease;
+            const rootOwned =
+              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
+            const accepted =
+              rootOwned &&
+              autopilot.reportProbe(sessionId, {
+                id: lease.reportId,
+                kind: 'wait',
+                leaseId: lease.leaseId,
+                wakeConditions: lease.wakeConditions,
+              });
+            if (!accepted) {
+              if (rootOwned) autopilot.rejectProbe(sessionId);
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  autopilotWaitLeaseToolResponse(),
+                ) === true
+              );
+            }
+            return (
+              runtime?.resolveServerRequest(
+                sessionId,
+                rawInteraction.requestId,
+                autopilotWaitLeaseToolResponse(),
+              ) === true
+            );
+          }
           if (rawInteraction.kind === 'orgPlanCheckpoint') {
             const checkpoint = parseOrgPlanCheckpoint(rawInteraction.payload);
             const retained = supervisedPlans.find(sessionId);

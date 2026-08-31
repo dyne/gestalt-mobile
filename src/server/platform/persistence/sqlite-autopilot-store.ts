@@ -24,9 +24,14 @@ export class SqliteAutopilotStore implements AutopilotStore {
     if (!row) return null;
     const lifecycle = parseLifecycle(row.lifecycle_json);
     if (
-      !['disabled', 'monitoring', 'backoff', 'attentionRequired', 'completed'].includes(
-        String(row.state),
-      ) ||
+      ![
+        'disabled',
+        'monitoring',
+        'backoff',
+        'attentionRequired',
+        'completed',
+        'safetyPaused',
+      ].includes(String(row.state)) ||
       ![
         'manualDisabled',
         'planRequired',
@@ -40,6 +45,7 @@ export class SqliteAutopilotStore implements AutopilotStore {
         'planRemoved',
         'planReplaced',
         'sessionEnded',
+        'safetyPaused',
         'null',
       ].includes(String(row.stop_reason)) ||
       !Number.isSafeInteger(Number(row.generation)) ||
@@ -81,10 +87,11 @@ export class SqliteAutopilotStore implements AutopilotStore {
         state.nextEvaluationAt,
         state.lastControlId,
         state.stopReason,
-        state.executor || state.blocking || state.checkpoints
+        state.executor || state.blocking || state.supervision || state.checkpoints
           ? JSON.stringify({
               executor: state.executor,
               blocking: state.blocking,
+              supervision: state.supervision,
               checkpoints: state.checkpoints,
             })
           : null,
@@ -239,7 +246,9 @@ export class SqliteAutopilotStore implements AutopilotStore {
   }
 }
 
-function parseLifecycle(value: unknown): Pick<AutopilotSession, 'executor' | 'blocking'> | null {
+function parseLifecycle(
+  value: unknown,
+): Pick<AutopilotSession, 'executor' | 'blocking' | 'supervision' | 'checkpoints'> | null {
   if (value === null || value === undefined) return {};
   if (typeof value !== 'string' || value.length > 256_000) return null;
   try {

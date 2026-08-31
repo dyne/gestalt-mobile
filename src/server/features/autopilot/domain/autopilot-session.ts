@@ -5,9 +5,10 @@
  */
 
 import type { ExecutorLifecycle, StructuredBlock } from './supervised-lifecycle.js';
+import type { SupervisionProtocolState } from './supervision-protocol.js';
 
 export type AutopilotState =
-  'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed';
+  'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed' | 'safetyPaused';
 
 export type AutopilotStopReason =
   | 'manualDisabled'
@@ -21,7 +22,8 @@ export type AutopilotStopReason =
   | 'actionRateExceeded'
   | 'planRemoved'
   | 'planReplaced'
-  | 'sessionEnded';
+  | 'sessionEnded'
+  | 'safetyPaused';
 
 /** Durable, session-owned control state. It intentionally excludes plan paths and prompt text. */
 export type AutopilotSession = Readonly<{
@@ -37,6 +39,7 @@ export type AutopilotSession = Readonly<{
   stopReason: AutopilotStopReason | null;
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
+  supervision?: SupervisionProtocolState;
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
