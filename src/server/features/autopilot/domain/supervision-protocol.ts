@@ -114,8 +114,15 @@ export function recordAutomaticContinuation(
     state.outcome === 'safetyPaused'
   )
     return state;
+  // The probe itself is the one continuation allowed while this key is
+  // unchanged. Reaching the scheduling boundary again without a structured
+  // report or semantic progress means that probe failed closed.
+  if (state.outcome === 'probeRequired' && progressKey === state.probeKey)
+    return { ...state, outcome: 'safetyPaused', safetyPauseReason: 'invalidProbeReport' };
   if (state.outcome === 'retrying' && progressKey === state.retryKey)
-    return { ...state, outcome: 'safetyPaused', safetyPauseReason: 'retryRecurrence' };
+    return state.unchangedContinuations === 0
+      ? { ...state, unchangedContinuations: 1 }
+      : { ...state, outcome: 'safetyPaused', safetyPauseReason: 'retryRecurrence' };
   if (progressKey !== state.progressKey)
     return { ...startSupervisionProtocol(progressKey), lastReportId: state.lastReportId };
   const unchangedContinuations = Math.min(3, state.unchangedContinuations + 1) as 0 | 1 | 2 | 3;
