@@ -12,7 +12,8 @@ import { expectNoHorizontalOverflow } from './theme-evidence.js';
 import { THEME_STORAGE_KEY } from '../../src/client/features/theme/theme-registry.js';
 
 const evidence = '/tmp/gestalt-autopilot-evidence';
-type State = 'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed';
+type State =
+  'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'safetyPaused' | 'completed';
 type ContinuationPhase = 'scheduled' | 'backoff';
 const viewports = [
   { name: '320x568', width: 320, height: 568 },
@@ -282,6 +283,40 @@ test('Sessions keeps only active plan work below the Org title in the informatio
   expect(progressBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
   await expectNoHorizontalOverflow(page);
 });
+
+for (const item of [
+  {
+    name: 'compact-active',
+    state: 'monitoring' as const,
+    viewport: { width: 320, height: 568 },
+    zoom: 100,
+  },
+  {
+    name: 'desktop-paused',
+    state: 'safetyPaused' as const,
+    viewport: { width: 1280, height: 800 },
+    zoom: 200,
+  },
+]) {
+  test(`session liveness evidence ${item.name}`, async ({ page }) => {
+    await mkdir(evidence, { recursive: true });
+    await install(page, item.state);
+    const errors = await openEvidence(page, {
+      viewport: item.viewport,
+      theme: 'minimal-light',
+      zoom: item.zoom,
+    });
+    await page.getByRole('button', { name: 'Sessions' }).click();
+    const expected = item.state === 'monitoring' ? 'Monitoring active' : 'Monitoring safety paused';
+    await expect(page.getByRole('status', { name: expected })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({
+      path: `${evidence}/session-liveness-${item.name}.png`,
+      fullPage: false,
+    });
+    expect(errors).toEqual([]);
+  });
+}
 
 function captureBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -770,6 +805,34 @@ test('selected Chat receives live autopilot and attention journal events without
   await expect(page.getByText('Autopilot needs your attention.')).toHaveCount(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
+});
+
+test('a sequenced plan update merges into its owning Session card without a page reload', async ({
+  page,
+}) => {
+  let socket: { send(message: string): void } | undefined;
+  await install(page, 'monitoring', undefined, false, (connection) => (socket = connection));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect.poll(() => socket).toBeDefined();
+  const updatedPlan = { ...activePlan, title: 'Socket merged plan', doneSteps: 2, allDone: false };
+  socket!.send(
+    JSON.stringify({
+      type: 'relay.event',
+      event: {
+        sequence: 1,
+        type: 'plan.updated',
+        occurredAt: '2026-08-20T00:00:41.000Z',
+        payload: updatedPlan,
+      },
+    }),
+  );
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  const card = page.getByLabel('Open sessions').locator('li').first();
+  await expect(
+    card.getByRole('progressbar', { name: 'Plan progress for Socket merged plan' }),
+  ).toHaveAttribute('value', '2');
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggle converge without synthetic labels', async ({

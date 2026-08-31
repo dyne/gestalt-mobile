@@ -20,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
   import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
   import AutopilotControl from '../autopilot/AutopilotControl.svelte';
+  import AutopilotLiveness from '../autopilot/AutopilotLiveness.svelte';
   import type { AutopilotSnapshot } from '../autopilot/contracts.js';
   import type { OrgPlanAttention } from '../autopilot/contracts.js';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
@@ -159,6 +160,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 rootModel={session.model ?? models?.[0]}
               />
               <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
+              <AutopilotLiveness
+                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                connected={(activitySnapshots.get(session.id) ?? session.agentActivity)?.root
+                  .state !== 'disconnected'}
+              />
             </div>
             <div class="session-details">
               <div class="session-summary">

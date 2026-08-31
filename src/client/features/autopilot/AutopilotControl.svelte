@@ -30,6 +30,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     backoff: 'Waiting to continue',
     attentionRequired: 'Paused for attention',
     completed: 'Complete',
+    safetyPaused: 'Safety paused',
   };
   const reason: Record<string, string> = {
     planRequired: 'An incomplete supervised plan is required before Autopilot can start.',
@@ -46,6 +47,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     planReplaced: 'The retained plan changed. Enable Autopilot again after reviewing it.',
     sessionEnded: 'This session ended.',
     manualDisabled: 'Autopilot is off.',
+    safetyPaused:
+      'Autopilot paused after a repeated or invalid automatic continuation. Resume manually when ready.',
   };
   let status = $derived(autopilot ? names[autopilot.state] : 'Unavailable');
   let retryHelp = $derived(

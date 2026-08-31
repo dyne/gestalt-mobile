@@ -54,6 +54,31 @@ function leaseStatusPath(lease: PlanStatusLease, planPath: string): string {
 }
 
 describe('FilesystemPlanStatusSource', () => {
+  it('publishes one semantic update when the canonical active Org file changes without a new signal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
+    temporaryPaths.push(root);
+    const workspace = join(root, 'workspace');
+    const planPath = join(workspace, 'plan.org');
+    await mkdir(workspace);
+    await writeFile(planPath, org('Before watch'));
+    const updates: PlanStatusUpdate[] = [];
+    const source = new FilesystemPlanStatusSource(join(root, 'state'));
+    const lease = await source.open({ id: 'session-a', workspacePath: workspace }, (update) =>
+      updates.push(update),
+    );
+    await writeFile(leaseStatusPath(lease, planPath), signal(planPath));
+    await vi.waitFor(() =>
+      expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Before watch' } }),
+    );
+    const before = updates.length;
+    await writeFile(planPath, org('After watch'));
+    await vi.waitFor(() =>
+      expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'After watch' } }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(updates).toHaveLength(before + 1);
+    lease.close();
+  });
   it('re-reads the active Org file on an explicit refresh without a new helper signal', async () => {
     const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));
     temporaryPaths.push(root);
