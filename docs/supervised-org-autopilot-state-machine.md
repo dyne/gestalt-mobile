@@ -41,6 +41,14 @@ hours elapsed time, and 12 GiB RSS. Process inspection exposes PID, elapsed
 time, CPU, RSS, exit status, and an opaque result-artifact identifier; command
 text and output are not persisted in lifecycle state.
 
+The rolling automatic-action cap is subordinate to semantic progress. A plan,
+review, checkpoint, executor, process, interaction, or sequenced activity change
+starts a fresh unchanged-continuation budget, even when the older actions remain
+inside the rolling time window. Three unchanged continuations still require a
+structured probe; an invalid probe or a repeated unchanged retry safety-pauses
+the session. A validated Org attention record remains the explicit stop when
+the supervisor determines that progress requires outside action.
+
 ## Final-response guard
 
 Before a root turn is treated as terminal, the coordinator reads durable

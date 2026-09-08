@@ -9,9 +9,9 @@ import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
 
-export const AUTOPILOT_PROMPT_VERSION = 'v5';
+export const AUTOPILOT_PROMPT_VERSION = 'v6';
 export const AUTOPILOT_CONTINUATION_PROMPT =
-  'Inspect the active supervised Org Plan. Refer to every L1 as L<a> and each nested L2 as L<a>.<b>, using one-based positions. For a subagent dedicated to that position, use the collaboration-safe task_name l<a> or l<a>_<b> and refer to it by its canonical L label. Invoke gestalt_org_plan_attention only for a decision-table blocker. When the Autopilot probe is active, register gestalt_autopilot_wait_lease with an observable wake condition, declare genuine attention, or immediately do actionable work; never acknowledge waiting in prose. Do not send a status-only response.';
+  'Inspect the active supervised Org Plan. Refer to every L1 as L<a> and each nested L2 as L<a>.<b>, using one-based positions. For a subagent dedicated to that position, use the collaboration-safe task_name l<a> or l<a>_<b> and refer to it by its canonical L label. If the active L1 is still WIP and its executor stopped or is idle after a partial report or L2 checkpoint, call followup_task on that same executor before sending any response. Treat a status question as an interruption: answer briefly, then perform that continuation in the same turn. Invoke gestalt_org_plan_attention only for a decision-table blocker. When the Autopilot probe is active, register gestalt_autopilot_wait_lease with an observable wake condition, declare genuine attention, or immediately do actionable work; never acknowledge waiting in prose. Do not send a status-only response.';
 export const AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT =
   'Continue the same assigned Org L1 from its durable state. A prior turn ending did not complete the objective. Consume any supplied process result, take the next legal L2 action, and report only at the L1 review boundary or through structured attention.';
 
@@ -116,6 +116,8 @@ export function decideAutopilot(input: {
   hasActiveAttention?: boolean;
   lastTurnOutcome?: 'completed' | 'failed' | 'unknown';
   automaticActionCount?: number;
+  /** Opaque current key used only to keep a throughput cap from overriding real progress. */
+  semanticProgressKey?: string;
   now: string;
   policy: AutopilotPolicy;
 }): AutopilotDecision {
@@ -147,7 +149,17 @@ export function decideAutopilot(input: {
   // Quiz, approval, and other held requests are ordinary session work. Only a
   // validated Org attention record may turn an incomplete plan into a human stop.
   if (hasPendingInteraction) return { kind: 'observe' };
-  if ((input.automaticActionCount ?? 0) > policy.actionLimit)
+  const semanticProgressObserved = Boolean(
+    input.semanticProgressKey &&
+    state.supervision &&
+    input.semanticProgressKey !== state.supervision.progressKey,
+  );
+  const semanticLoopConfirmed = (state.supervision?.unchangedContinuations ?? 3) >= 3;
+  if (
+    (input.automaticActionCount ?? 0) > policy.actionLimit &&
+    !semanticProgressObserved &&
+    semanticLoopConfirmed
+  )
     return { kind: 'safetyPause', reason: 'actionRateExceeded' };
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
   if (Date.parse(now) - Date.parse(activity.root.lastActivityAt) > policy.staleAfterMs)
