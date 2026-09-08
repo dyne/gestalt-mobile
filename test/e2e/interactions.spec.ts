@@ -12,7 +12,10 @@ test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
 type PendingInteraction = { requestId: string; kind: string; payload: unknown };
 
-function session(pendingInteractions: PendingInteraction[]) {
+function session(
+  pendingInteractions: PendingInteraction[],
+  activeTurnId: string | null = 'turn-1',
+) {
   return {
     id: 'session-1',
     state: 'ready',
@@ -20,19 +23,23 @@ function session(pendingInteractions: PendingInteraction[]) {
     workspaceId: 'workspace-1',
     workspacePath: '/workspace',
     profile: 'default',
-    activeTurnId: 'turn-1',
+    activeTurnId,
     pendingInteractions,
   };
 }
 
-async function openChat(page: Page, pendingInteractions: PendingInteraction[]): Promise<void> {
+async function openChat(
+  page: Page,
+  pendingInteractions: PendingInteraction[],
+  activeTurnId: string | null = 'turn-1',
+): Promise<void> {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         workspaces: [],
         profiles: [],
-        sessions: [session(pendingInteractions)],
+        sessions: [session(pendingInteractions, activeTurnId)],
       }),
     }),
   );
@@ -41,7 +48,7 @@ async function openChat(page: Page, pendingInteractions: PendingInteraction[]): 
       contentType: 'application/json',
       body: JSON.stringify(
         chatSnapshot({
-          activeTurnId: 'turn-1',
+          activeTurnId,
           interactions: pendingInteractions.map((interaction) => ({
             requestId: interaction.requestId,
             kind: interaction.kind,
@@ -184,4 +191,74 @@ test('marks an interaction already cleared upstream as no longer pending', async
     'No longer awaiting a response',
   );
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+});
+
+test('submits a quiz as a follow-up prompt after its original turn has ended', async ({ page }) => {
+  await openChat(
+    page,
+    [
+      {
+        requestId: 'quiz-expired-upstream',
+        kind: 'quiz',
+        payload: {
+          questions: [
+            {
+              id: 'mode',
+              header: 'Mode',
+              question: 'How should this run?',
+              choices: [
+                { label: 'Solo', description: 'Use one agent.' },
+                { label: 'Team', description: 'Use several agents.' },
+              ],
+              allowCustom: false,
+              isSecret: false,
+            },
+          ],
+        },
+      },
+    ],
+    null,
+  );
+  const deliveries: string[] = [];
+  let promptAttempts = 0;
+  await page.route('**/api/sessions/session-1/turns', async (route) => {
+    deliveries.push('prompt');
+    promptAttempts += 1;
+    expect(route.request().postDataJSON()).toEqual({
+      text: 'Submitted quiz answers:\n- Mode — How should this run?\n  Team',
+    });
+    await route.fulfill({
+      status: promptAttempts === 1 ? 409 : 202,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        promptAttempts === 1
+          ? { code: 'SESSION_NOT_READY' }
+          : { accepted: true, activeTurnId: 'turn-2' },
+      ),
+    });
+  });
+  await page.route(
+    '**/api/sessions/session-1/interactions/quiz-expired-upstream',
+    async (route) => {
+      deliveries.push('interaction');
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ accepted: true, outcome: 'dismissed' }),
+      });
+    },
+  );
+
+  await page.getByRole('radio', { name: /Team/ }).click();
+  await page.getByRole('button', { name: 'Send answers' }).click();
+  await expect.poll(() => promptAttempts).toBe(1);
+  await expect(page.getByRole('button', { name: 'Send answers' })).toBeVisible();
+  expect(deliveries).toEqual(['prompt']);
+
+  await page.getByRole('button', { name: 'Send answers' }).click();
+
+  await expect(page.locator('[data-interaction-state="resolved"]')).toHaveText(
+    'No longer awaiting a response',
+  );
+  expect(deliveries).toEqual(['prompt', 'prompt', 'interaction']);
 });

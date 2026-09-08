@@ -523,6 +523,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     outcome: SafeInteractionOutcome = 'dismissed',
   ) => {
     for (const interaction of interactions.list(sessionId)) {
+      // Quiz answers remain useful after Codex clears the original dynamic-tool
+      // request: the client can deliver them as a follow-up prompt instead.
+      if (interaction.kind === 'quiz') continue;
       if (interactions.resolve(sessionId, interaction.requestId, occurredAt, outcome))
         publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
@@ -571,7 +574,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           if (resolvedRequestId) {
             const interaction = interactions.find(sessionId, resolvedRequestId);
             const outcome = interaction?.kind === 'orgPlanAttention' ? 'failed' : 'dismissed';
-            if (interactions.resolve(sessionId, resolvedRequestId, occurredAt, outcome)) {
+            if (
+              interaction?.kind !== 'quiz' &&
+              interactions.resolve(sessionId, resolvedRequestId, occurredAt, outcome)
+            ) {
               if (outcome === 'failed')
                 publishAttentionSettlement(sessionId, resolvedRequestId, occurredAt, outcome);
               else publishInteractionResolved(sessionId, resolvedRequestId, occurredAt, outcome);

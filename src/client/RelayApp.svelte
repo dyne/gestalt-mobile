@@ -1099,8 +1099,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       const prompt = chatView?.prompts.find(
         (candidate) => candidate.operationId === promptOperationId,
       );
-      if (!prompt || prompt.state === 'failed')
-        await chatController.queue(formatQuizAnswerPrompt(submitted), promptOperationId);
+      if (!prompt || prompt.state === 'failed') {
+        const answerPrompt = formatQuizAnswerPrompt(submitted);
+        if (chatView?.activeTurnId) await chatController.queue(answerPrompt, promptOperationId);
+        else await chatController.send(answerPrompt, promptOperationId);
+      }
+      const deliveredPrompt = chatController.view.prompts.find(
+        (candidate) => candidate.operationId === promptOperationId,
+      );
+      if (interaction.kind === 'quiz' && (!deliveredPrompt || deliveredPrompt.state === 'failed'))
+        return;
       await chatController.respond(interaction.requestId, response);
     } catch {
       shellStatus = 'Could not send quiz answers. Please try again.';
