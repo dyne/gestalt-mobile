@@ -10,7 +10,7 @@ import type { ModelCatalog } from '../../catalog/application/ports.js';
 import { DEFAULT_SESSION_MODEL, type StartSessionSettings } from '../application/start-settings.js';
 import type { SkillCatalog, SkillProfileStore } from '../../skills/application/ports.js';
 import {
-  applySkillSelectionSnapshot,
+  reconcileSkillSelectionSnapshot,
   type SkillProfile,
 } from '../../skills/model/skill-profile.js';
 import { SkillProfileError } from '../../skills/model/errors.js';
@@ -56,13 +56,18 @@ export async function startSession(
     deps.skillCatalog(input.profile).list(workspace.realPath),
   ]);
   const sourceProfile = selectedProfile ?? projectProfile;
+  const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
   const effectiveSkillSelection = {
     ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
-    skills: applySkillSelectionSnapshot(catalog.skills, sourceProfile?.skills).map((skill) => ({
-      name: skill.name,
-      path: skill.path,
-      enabled: skill.enabled,
-    })),
+    skills: [
+      ...reconciledSkills.skills.map((skill) => ({
+        name: skill.name,
+        path: skill.path,
+        enabled: skill.enabled,
+      })),
+      ...reconciledSkills.missing,
+    ],
+    ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
   };
   const branch = await deps.gitBranch?.(workspace.realPath);
   const session = RelaySession.create({

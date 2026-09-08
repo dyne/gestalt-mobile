@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type ToastKind = 'error' | 'success' | 'info';
+export type ToastKind = 'error' | 'success' | 'warning' | 'info';
 export type ToastPauseReason = 'hover' | 'focus';
 
 export type Toast = {
@@ -26,8 +26,8 @@ export type ToastQueue = {
   subscribe(listener: (toasts: Toast[]) => void): () => void;
 };
 
-/** Success toasts remain for 5 seconds; information toasts remain for 7 seconds. */
-export const toastTimeouts = { error: null, success: 5_000, info: 7_000 } as const;
+/** Errors persist; success and informational notices clear after a readable interval. */
+export const toastTimeouts = { error: null, success: 5_000, warning: 10_000, info: 7_000 } as const;
 export const visibleToastLimit = 3;
 
 type TimerHandle = ReturnType<typeof setTimeout>;

@@ -38,14 +38,14 @@ describe('GET /api/sessions/recent-threads', () => {
         cwd: '/projects/new',
         recencyAt: 200,
         resumeCommand:
-          "'codex-profile' 'cli' 'work' 'resume' 'thread-new' '-C' '/projects/new' '--include-non-interactive'",
+          "'codex' 'resume' 'thread-new' '-C' '/projects/new' '--include-non-interactive'",
       },
       {
         id: 'thread-old',
         cwd: '/projects/old',
         recencyAt: 100,
         resumeCommand:
-          "'codex-profile' 'cli' 'default' 'resume' 'thread-old' '-C' '/projects/old' '--include-non-interactive'",
+          "'codex' 'resume' 'thread-old' '-C' '/projects/old' '--include-non-interactive'",
       },
     ]);
     await app.close();

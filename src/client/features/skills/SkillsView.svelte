@@ -184,7 +184,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <p id="skills-status" class="error" role="alert">{snapshot.status.message}</p>
   {/if}
 
-  {#if snapshot.skills.length > 0}
+  {#if snapshot.skills.length > 0 || snapshot.missingSkills.length > 0}
     <div class="skills-toolbar">
       <button
         type="button"
@@ -196,6 +196,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </button>
       <p class="summary">{snapshot.enabledCount} of {snapshot.skills.length} skills enabled.</p>
     </div>
+    {#if snapshot.missingSkills.length > 0}
+      <section class="missing-skills" aria-labelledby="missing-skills-title">
+        <h3 id="missing-skills-title">Missing skills</h3>
+        <p>
+          These saved paths no longer exist. They are disabled for new sessions until restored or
+          removed from the profile.
+        </p>
+        <ul>
+          {#each snapshot.missingSkills as skill (skill.path)}
+            <li>
+              <div>
+                <strong>{skill.name}</strong>
+                <span class="missing-state">Missing · disabled</span>
+                <span class="path">{displaySkillPath(skill.path)}</span>
+              </div>
+              <button
+                type="button"
+                class="remove-missing"
+                aria-label={`Remove missing skill ${skill.name} from profile`}
+                onclick={() => {
+                  snapshot.removeMissingSkill(skill.path);
+                  changed();
+                }}>Remove</button
+              >
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
     <ul class="skill-list">
       {#each snapshot.skills as skill (skill.path)}
         <li class="skill-card" style:--brand-color={safeBrandColor(skill.brandColor)}>
@@ -254,6 +283,44 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .save-intent,
   .summary {
     max-inline-size: 70ch;
+  }
+  .missing-skills {
+    margin-block: 1rem;
+    border: 1px solid var(--theme-warning);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+  }
+  .missing-skills h3,
+  .missing-skills p {
+    margin-block-start: 0;
+  }
+  .missing-skills ul {
+    display: grid;
+    gap: 0.65rem;
+    margin-block-end: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .missing-skills li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.75rem;
+    border-block-start: 1px solid var(--theme-border);
+    padding-block-start: 0.65rem;
+  }
+  .missing-skills li > div {
+    display: grid;
+    min-inline-size: 0;
+    gap: 0.2rem;
+  }
+  .missing-state {
+    color: var(--theme-warning);
+    font-weight: 650;
+  }
+  .remove-missing {
+    inline-size: auto;
+    min-inline-size: 6rem;
   }
   form,
   .field-grid {
@@ -399,6 +466,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
   @media (max-width: 30rem) {
+    .missing-skills li {
+      grid-template-columns: 1fr;
+    }
+    .remove-missing {
+      inline-size: 100%;
+    }
     dl {
       grid-template-columns: 1fr;
       gap: 0.2rem;

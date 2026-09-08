@@ -30,7 +30,7 @@ export function registerListRecentThreads(
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
-    return threads.map(({ id, cwd, profile, recencyAt }) => {
+    return threads.map(({ id, cwd, recencyAt }) => {
       const metadata = deps.metadata?.(id);
       return {
         id,
@@ -41,7 +41,7 @@ export function registerListRecentThreads(
         ...(metadata?.orgPlanFilename === undefined
           ? {}
           : { orgPlanFilename: metadata.orgPlanFilename }),
-        resumeCommand: buildResumeCommand({ profile, threadId: id, workspacePath: cwd }),
+        resumeCommand: buildResumeCommand({ threadId: id, workspacePath: cwd }),
       };
     });
   });

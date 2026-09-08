@@ -35,7 +35,6 @@ describe('npm usage documentation', () => {
     '`--host 0.0.0.0`',
     '`--data-dir <path>`',
     'SIGINT or SIGTERM',
-    '`codex-profile cli gestalt app-server --stdio`',
     '`codex app-server --stdio`',
     'built-in passkey authentication',
     '`--public-origin`',

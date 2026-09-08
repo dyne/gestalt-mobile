@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -24,9 +24,9 @@ const profile = 'gestalt';
 type Session = { id: string; threadId: string | null; state: string; recovery?: unknown };
 
 async function main(): Promise<void> {
-  const installedCodexVersion = isolatedProfileCodexVersion();
+  const installedCodexVersion = currentEnvironmentCodexVersion();
   if (!installedCodexVersion) {
-    console.log('SKIP: isolated Gestalt profile is unavailable.');
+    console.log('SKIP: Codex is unavailable in the current launcher environment.');
     return;
   }
 
@@ -118,9 +118,8 @@ function tracedAppServer(lifecycle: string[]) {
   };
 }
 
-function isolatedProfileCodexVersion(): string | null {
-  if (!existsSync(join(homedir(), '.codex-gestalt'))) return null;
-  const result = spawnSync('codex-profile', ['cli', profile, '--version'], {
+function currentEnvironmentCodexVersion(): string | null {
+  const result = spawnSync('codex', ['--version'], {
     encoding: 'utf8',
     timeout: 5_000,
   });

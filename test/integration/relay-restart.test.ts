@@ -58,7 +58,7 @@ async function composeRelayApp(options: ComposeRelayAppOptions) {
   if (!store.sessionDevice(authorizationSessionId('test-session'), '2026-08-02T00:00:00.000Z'))
     store.saveSession(authorizationSessionId('test-session'), {
       deviceId: device.id,
-      expiresAt: '2026-09-01T00:00:00.000Z',
+      expiresAt: '2099-09-01T00:00:00.000Z',
     });
   store.close();
   const app = await createRelayApp({ ...options, homeDirectory });

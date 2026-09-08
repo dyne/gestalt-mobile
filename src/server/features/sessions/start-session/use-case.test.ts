@@ -120,4 +120,53 @@ describe('startSession', () => {
     });
     expect(activated).toMatchObject({ effectiveSkillSelection: result.effectiveSkillSelection });
   });
+
+  it('keeps a missing saved skill disabled without blocking session activation', async () => {
+    let activated: unknown;
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'default', skillProfile: 'stale' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        skillProfiles: {
+          readGlobalProfile: async () => ({
+            version: 1,
+            name: 'stale',
+            skills: [
+              {
+                name: 'modern-web-guidance',
+                path: '/skills/modern-web-guidance/SKILL.md',
+                enabled: true,
+              },
+            ],
+          }),
+          readWorkspaceDefault: async () => undefined,
+        },
+        skillCatalog: skills.skillCatalog,
+        activate: async (session) => {
+          activated = session;
+          return session;
+        },
+      },
+    );
+
+    expect(result.state).toBe('starting');
+    expect(result.effectiveSkillSelection).toMatchObject({
+      selectedProfileName: 'stale',
+      warnings: [
+        'Skill "modern-web-guidance" is missing and was disabled: /skills/modern-web-guidance/SKILL.md',
+      ],
+    });
+    expect(result.effectiveSkillSelection?.skills).toContainEqual({
+      name: 'modern-web-guidance',
+      path: '/skills/modern-web-guidance/SKILL.md',
+      enabled: false,
+    });
+    expect(activated).toBeDefined();
+  });
 });

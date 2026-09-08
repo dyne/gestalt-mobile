@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 
 import { composeRelayApp } from './composition.js';
 import { CliUsageError, parseConfig, type RelayConfig } from './config.js';
-import { CodexProfileCatalog } from './platform/catalog/codex-profile-catalog.js';
+import { LauncherProfileCatalog } from './platform/catalog/launcher-profile-catalog.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 
 const runFile = promisify(execFile);
@@ -43,9 +43,29 @@ export type CliDependencies = {
   stderr?: Output;
   signalSource?: Pick<NodeJS.Process, 'once' | 'removeListener'>;
   probeCodexVersion?: () => Promise<string | null>;
+  runStartupDoctor?: (cwd: string) => Promise<{ ok: boolean; report: string }>;
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
 };
+
+export async function runStartupDoctor(cwd: string): Promise<{ ok: boolean; report: string }> {
+  if (process.env.GESTALT_STARTUP_DIAGNOSTICS_DONE === '1') return { ok: true, report: '' };
+  try {
+    const result = await runFile('gestalt', ['doctor'], {
+      cwd,
+      env: process.env,
+      timeout: 60_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return { ok: true, report: `${result.stdout}${result.stderr}` };
+  } catch (error) {
+    const failure = error as Error & { stdout?: string; stderr?: string };
+    return {
+      ok: false,
+      report: `${failure.stdout ?? ''}${failure.stderr ?? ''}${failure.message ? `${failure.message}\n` : ''}`,
+    };
+  }
+}
 
 export function packageRoot(moduleUrl: string): string {
   let directory = dirname(fileURLToPath(moduleUrl));
@@ -195,13 +215,19 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     stderr.write(`Unknown skill profile: ${config.skillsProfile}\n\n${usage}\n`);
     return 2;
   }
+  const diagnosis = await (dependencies.runStartupDoctor ?? runStartupDoctor)(cwd);
+  if (diagnosis.report) stderr.write(diagnosis.report);
+  if (!diagnosis.ok)
+    stderr.write(
+      'WARNING: Startup diagnostics reported a problem; Gestalt Mobile will continue so it can show recovery controls.\n',
+    );
   const app = await (dependencies.compose ?? composeRelayApp)({
     root: config.root,
     dataDir: config.dataDir,
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),
-    profiles: new CodexProfileCatalog(),
+    profiles: new LauncherProfileCatalog(),
     installedCodexVersion: await (dependencies.probeCodexVersion ?? probeCodexVersion)(),
     startAppServers: true,
     homeDirectory: dependencies.homeDirectory,

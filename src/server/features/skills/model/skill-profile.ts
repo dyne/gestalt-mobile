@@ -238,6 +238,42 @@ export type CompiledSkillOverride = {
   warnings: string[];
 };
 
+export type ReconciledSkillSelection = {
+  skills: AvailableSkill[];
+  missing: SkillSelection;
+  warnings: string[];
+};
+
+/**
+ * Reconcile a saved snapshot against fresh discovery. Missing entries remain
+ * visible as disabled profile state, but are never passed to Codex.
+ */
+export function reconcileSkillSelectionSnapshot(
+  discovered: readonly AvailableSkill[],
+  selection?: SkillSelection,
+): ReconciledSkillSelection {
+  if (selection === undefined)
+    return {
+      skills: applySkillSelectionSnapshot(discovered),
+      missing: [],
+      warnings: [],
+    };
+  const reboundSelection = rebindVersionedPluginSkills(discovered, selection);
+  const discoveredPaths = new Set(discovered.map((skill) => canonicalSkillPath(skill.path)));
+  const missing = createSkillSelection(
+    reboundSelection
+      .filter((entry) => !discoveredPaths.has(entry.path))
+      .map((entry) => ({ ...entry, enabled: false })),
+  );
+  return {
+    skills: applySkillSelectionSnapshot(discovered, reboundSelection),
+    missing,
+    warnings: missing.map(
+      (entry) => `Skill "${entry.name}" is missing and was disabled: ${entry.path}`,
+    ),
+  };
+}
+
 /**
  * Compile a complete, process-local `skills.config` map from fresh discovery.
  * It neither writes configuration nor mutates the user Codex installation.
@@ -250,18 +286,13 @@ export function compileSkillOverride(input: {
   const effective = selectEffectiveSkillSelection(input);
   if (effective.selection === undefined)
     return { source: 'native', skillsConfig: undefined, warnings: [] };
-  const reboundSelection = rebindVersionedPluginSkills(input.discovered, effective.selection);
-  const discoveredPaths = new Set(input.discovered.map((skill) => canonicalSkillPath(skill.path)));
-  const warnings = reboundSelection
-    .filter((entry) => !discoveredPaths.has(entry.path))
-    .map((entry) => `Saved skill path is no longer discovered: ${entry.path}`);
-  const configured = applySkillSelectionSnapshot(input.discovered, reboundSelection);
+  const reconciled = reconcileSkillSelectionSnapshot(input.discovered, effective.selection);
   return {
     source: effective.source,
-    skillsConfig: configured
+    skillsConfig: reconciled.skills
       .map((skill) => ({ path: skill.path, enabled: skill.enabled }))
       .sort((left, right) => left.path.localeCompare(right.path)),
-    warnings,
+    warnings: reconciled.warnings,
   };
 }
 

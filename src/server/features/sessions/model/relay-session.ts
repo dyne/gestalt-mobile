@@ -57,6 +57,7 @@ export type PendingInteraction = {
 export type EffectiveSkillSelection = {
   selectedProfileName?: string;
   skills: SkillSelection;
+  warnings?: string[];
 };
 
 /** The user-facing identity of the most recent supervised Org Plan for a session. */
@@ -101,11 +102,15 @@ export function createSessionExecutionPolicy(input: {
 export function createEffectiveSkillSelection(
   input: EffectiveSkillSelection,
 ): EffectiveSkillSelection {
+  const warnings = (input.warnings ?? []).filter(
+    (warning): warning is string => typeof warning === 'string' && warning.length > 0,
+  );
   return {
     ...(input.selectedProfileName === undefined
       ? {}
       : { selectedProfileName: normalizeSkillProfileName(input.selectedProfileName) }),
     skills: createSkillSelection(input.skills),
+    ...(warnings.length > 0 ? { warnings: warnings.slice(0, 50) } : {}),
   };
 }
 

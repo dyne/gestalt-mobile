@@ -510,6 +510,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     try {
       sessionId = session.id;
+      for (const warning of session.effectiveSkillSelection?.warnings ?? [])
+        toastQueue.enqueue({
+          kind: 'warning',
+          code: 'SKILL_PROFILE_MISSING_SKILL',
+          message: warning,
+        });
       planController.select(session.id);
       void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();

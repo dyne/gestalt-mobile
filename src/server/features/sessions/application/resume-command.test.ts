@@ -12,9 +12,8 @@ describe('buildResumeCommand', () => {
     expect(
       buildResumeCommand({
         workspacePath: "/a b/it's",
-        profile: 'default',
         threadId: 't',
       }),
-    ).toContain("'/a b/it'\"'\"'s'");
+    ).toBe("'codex' 'resume' 't' '-C' '/a b/it'\"'\"'s' '--include-non-interactive'");
   });
 });

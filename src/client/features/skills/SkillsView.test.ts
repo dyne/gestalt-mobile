@@ -114,6 +114,38 @@ describe('SkillsView', () => {
     expect(screen.getByText('Always advertised')).toBeTruthy();
   });
 
+  it('highlights a missing disabled skill and removes it from the selected profile', async () => {
+    const state = await rendered();
+    state.missingSkills = [
+      {
+        name: 'modern-web-guidance',
+        path: '/home/gestalt/.agents/skills/modern-web-guidance/SKILL.md',
+        enabled: false,
+      },
+    ];
+    state.status = {
+      kind: 'warning',
+      message: '1 saved skill is missing and disabled.',
+    };
+    cleanup();
+    render(SkillsView, {
+      skillsState: state,
+      onrefresh: vi.fn(async () => undefined),
+      onprofileschange: vi.fn(),
+    });
+
+    expect(screen.getByRole('heading', { name: 'Missing skills' })).toBeTruthy();
+    expect(screen.getByText('Missing · disabled')).toBeTruthy();
+    expect(screen.getByText('~/.agents/skills/modern-web-guidance/SKILL.md')).toBeTruthy();
+
+    await fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Remove missing skill modern-web-guidance from profile',
+      }),
+    );
+    expect(state.missingSkills).toEqual([]);
+  });
+
   it('makes create and replace intent visible and saves a full profile', async () => {
     await rendered();
     const saveAs = screen.getByLabelText('Save as');

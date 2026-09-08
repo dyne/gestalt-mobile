@@ -104,6 +104,64 @@ describe('SkillsState', () => {
     expect(state.dirty).toBe(false);
   });
 
+  it('shows missing profile skills as disabled until they are removed and saved', async () => {
+    const replaceSkillProfile = vi.fn(async (_name, profile) => ({
+      ...profile,
+      path: '/profiles/stale.yml',
+    }));
+    const state = new SkillsState(
+      client({
+        listSkillProfiles: vi.fn(async () => ({
+          profiles: [
+            {
+              version: 1 as const,
+              name: 'stale',
+              path: '/profiles/stale.yml',
+              skills: [
+                {
+                  name: 'modern-web-guidance',
+                  path: '/skills/modern-web-guidance/SKILL.md',
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        })),
+        replaceSkillProfile,
+      }),
+    );
+
+    await state.load('workspace', 'default');
+    state.selectProfile('stale');
+
+    expect(state.missingSkills).toEqual([
+      {
+        name: 'modern-web-guidance',
+        path: '/skills/modern-web-guidance/SKILL.md',
+        enabled: false,
+      },
+    ]);
+    expect(state.status).toMatchObject({ kind: 'warning' });
+    expect(state.dirty).toBe(true);
+    expect(state.savePayload().skills).toContainEqual({
+      name: 'modern-web-guidance',
+      path: '/skills/modern-web-guidance/SKILL.md',
+      enabled: false,
+    });
+
+    state.removeMissingSkill('/skills/modern-web-guidance/SKILL.md');
+    await state.save();
+
+    expect(replaceSkillProfile).toHaveBeenCalledWith(
+      'stale',
+      expect.objectContaining({
+        skills: expect.not.arrayContaining([
+          expect.objectContaining({ path: '/skills/modern-web-guidance/SKILL.md' }),
+        ]),
+      }),
+    );
+  });
+
   it('does not let a saved profile or toggle hide an always-advertised skill', async () => {
     const gestaltSkill = {
       name: 'gestalt:org-plan',
