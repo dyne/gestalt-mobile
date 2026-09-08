@@ -34,7 +34,7 @@ const rp = {
   rpId: 'localhost',
   rpName: 'Gestalt Mobile' as const,
 };
-const expiresAt = '2026-09-01T00:00:00.000Z';
+const expiresAt = '2099-09-01T00:00:00.000Z';
 const contentionRepetitions = process.env.AUTH_CONTENTION_STRESS === '1' ? 10 : 1;
 
 afterEach(async () => {

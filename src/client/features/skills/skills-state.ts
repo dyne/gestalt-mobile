@@ -35,6 +35,7 @@ export type SkillsStatus =
   | { kind: 'error'; message: string };
 
 type EditableSkill = RelayAvailableSkill & { enabled: boolean };
+type MissingProfileSkill = { name: string; path: string; enabled: false };
 
 /** Feature-local orchestration for a complete, path-keyed profile snapshot. */
 export class SkillsState {
@@ -44,9 +45,11 @@ export class SkillsState {
   saveAsName = '';
   source: RelaySkillList['source'] = 'native';
   skills: EditableSkill[] = [];
+  missingSkills: MissingProfileSkill[] = [];
   profiles: RelaySkillProfileList['profiles'] = [];
   status: SkillsStatus = { kind: 'idle' };
   private baseline = new Map<string, boolean>();
+  private missingBaseline = new Map<string, { name: string; path: string; enabled: boolean }>();
   private saving = false;
   private deleting = false;
   private request: AbortController | null = null;
@@ -60,7 +63,15 @@ export class SkillsState {
   }
 
   get dirty(): boolean {
-    return this.skills.some((skill) => this.baseline.get(skill.path) !== skill.enabled);
+    return (
+      this.skills.some((skill) => this.baseline.get(skill.path) !== skill.enabled) ||
+      this.missingSkills.some(
+        (skill) => this.missingBaseline.get(skill.path)?.enabled !== skill.enabled,
+      ) ||
+      [...this.missingBaseline].some(
+        ([path]) => !this.missingSkills.some((skill) => skill.path === path),
+      )
+    );
   }
 
   get saveIntent(): 'create' | 'replace' {
@@ -115,11 +126,13 @@ export class SkillsState {
       );
       if (!this.current(generation, request)) return;
       this.applyAvailable(available);
-      this.status = available.errors.length
-        ? { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') }
-        : this.skills.length
-          ? { kind: 'ready' }
-          : { kind: 'empty' };
+      this.status = this.missingSkills.length
+        ? this.missingSkillsStatus()
+        : available.errors.length
+          ? { kind: 'warning', message: available.errors.map((error) => error.message).join(' ') }
+          : this.skills.length
+            ? { kind: 'ready' }
+            : { kind: 'empty' };
     } catch (error) {
       if (!this.current(generation, request) || request.signal.aborted) return;
       this.status = { kind: 'error', message: errorMessage(error) };
@@ -137,17 +150,26 @@ export class SkillsState {
     this.selectedProfileName = selected.name;
     this.saveAsName = selected.name;
     const enabled = new Map(selected.skills.map((skill) => [skill.path, skill.enabled]));
+    const availablePaths = new Set(this.skills.map((skill) => skill.path));
+    const missing = selected.skills.filter((skill) => !availablePaths.has(skill.path));
     this.skills = this.skills.map((skill) => ({
       ...skill,
       enabled: skill.alwaysAdvertised ? true : (enabled.get(skill.path) ?? false),
     }));
-    this.captureBaseline();
-    this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
+    this.missingSkills = missing.map((skill) => ({ ...skill, enabled: false }));
+    this.baseline = new Map(this.skills.map((skill) => [skill.path, skill.enabled]));
+    this.missingBaseline = new Map(missing.map((skill) => [skill.path, { ...skill }]));
+    this.status = this.missingSkills.length
+      ? this.missingSkillsStatus()
+      : this.skills.length
+        ? { kind: 'ready' }
+        : { kind: 'empty' };
   }
 
   selectDefaultProfile(): void {
     this.selectedProfileName = '';
     this.saveAsName = '';
+    this.missingSkills = [];
     this.skills = this.skills.map((skill) => ({ ...skill, enabled: skill.effectiveEnabled }));
     this.captureBaseline();
     this.status = this.skills.length ? { kind: 'ready' } : { kind: 'empty' };
@@ -159,11 +181,25 @@ export class SkillsState {
     );
   }
 
+  removeMissingSkill(path: string): void {
+    this.missingSkills = this.missingSkills.filter((skill) => skill.path !== path);
+    this.status = this.missingSkills.length
+      ? this.missingSkillsStatus()
+      : this.skills.length
+        ? { kind: 'ready' }
+        : { kind: 'empty' };
+  }
+
   reset(): void {
     this.skills = this.skills.map((skill) => ({
       ...skill,
       enabled: this.baseline.get(skill.path) ?? false,
     }));
+    this.missingSkills = [...this.missingBaseline.values()].map((skill) => ({
+      ...skill,
+      enabled: false,
+    }));
+    if (this.missingSkills.length) this.status = this.missingSkillsStatus();
   }
 
   async save(): Promise<void> {
@@ -209,6 +245,7 @@ export class SkillsState {
       );
       this.selectedProfileName = '';
       this.saveAsName = '';
+      this.missingSkills = [];
       this.captureBaseline();
       this.status = { kind: 'deleted' };
     } catch (error) {
@@ -244,6 +281,7 @@ export class SkillsState {
       name,
       skills: this.skills
         .map(({ name: skillName, path, enabled }) => ({ name: skillName, path, enabled }))
+        .concat(this.missingSkills)
         .sort((left, right) => left.path.localeCompare(right.path)),
     };
   }
@@ -254,13 +292,18 @@ export class SkillsState {
         .filter((skill) => this.baseline.get(skill.path) !== skill.enabled)
         .map((skill) => [skill.path, skill.enabled]),
     );
+    const missingByPath = new Map(this.missingSkills.map((skill) => [skill.path, skill.enabled]));
     this.source = available.source;
     this.skills = available.skills.map((skill) => ({
       ...skill,
       enabled: skill.alwaysAdvertised
         ? true
-        : (explicitEdits.get(skill.path) ?? skill.effectiveEnabled),
+        : (explicitEdits.get(skill.path) ??
+          missingByPath.get(skill.path) ??
+          skill.effectiveEnabled),
     }));
+    const availablePaths = new Set(available.skills.map((skill) => skill.path));
+    this.missingSkills = this.missingSkills.filter((skill) => !availablePaths.has(skill.path));
     this.baseline = new Map(
       available.skills.map((skill) => [
         skill.path,
@@ -271,6 +314,15 @@ export class SkillsState {
 
   private captureBaseline(): void {
     this.baseline = new Map(this.skills.map((skill) => [skill.path, skill.enabled]));
+    this.missingBaseline = new Map(this.missingSkills.map((skill) => [skill.path, { ...skill }]));
+  }
+
+  private missingSkillsStatus(): SkillsStatus {
+    const count = this.missingSkills.length;
+    return {
+      kind: 'warning',
+      message: `${count} saved ${count === 1 ? 'skill is' : 'skills are'} missing and disabled. Remove ${count === 1 ? 'it' : 'them'} from this profile, or restore the skill installation.`,
+    };
   }
 }
 

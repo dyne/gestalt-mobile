@@ -71,7 +71,7 @@ describe('JsonRpcClient', () => {
     const output = new PassThrough();
     const client = new JsonRpcClient(input, output);
     const pending = client.request('initialize', {});
-    const failure = new Error('spawn codex-profile ENOENT');
+    const failure = new Error('spawn codex ENOENT');
 
     client.fail(failure);
 

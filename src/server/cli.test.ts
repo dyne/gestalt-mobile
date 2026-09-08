@@ -137,6 +137,7 @@ describe('runCli', () => {
     const close = vi.fn(async () => {});
     const compose = vi.fn(async () => ({ listen, close }) as never);
     const probeCodexVersion = vi.fn(async () => 'codex-cli 1.2.3');
+    const runStartupDoctor = vi.fn(async () => ({ ok: true, report: 'Doctors passed.\n' }));
 
     expect(
       await runCli({
@@ -147,6 +148,7 @@ describe('runCli', () => {
         signalSource: fakeSignals(signals),
         compose,
         probeCodexVersion,
+        runStartupDoctor,
       }),
     ).toBe(0);
     expect(compose).toHaveBeenCalledWith(
@@ -164,6 +166,7 @@ describe('runCli', () => {
     );
     expect(listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 43210 });
     expect(stdout.value()).toBe('Gestalt Mobile listening on http://127.0.0.1:43210\n');
+    expect(runStartupDoctor).toHaveBeenCalledWith('/caller/project');
   });
 
   it('starts without passkey access control only after warning prominently', async () => {
@@ -183,6 +186,7 @@ describe('runCli', () => {
         signalSource: fakeSignals(signals),
         compose,
         probeCodexVersion: async () => null,
+        runStartupDoctor: async () => ({ ok: true, report: '' }),
       }),
     ).toBe(0);
     expect(compose).toHaveBeenCalledWith(expect.objectContaining({ passkeyAuthEnabled: false }));
@@ -212,9 +216,39 @@ describe('runCli', () => {
         signalSource: fakeSignals(signals),
         compose,
         probeCodexVersion: async () => null,
+        runStartupDoctor: async () => ({ ok: false, report: 'Doctor warning.\n' }),
       }),
     ).rejects.toThrow('address in use');
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues startup while surfacing a failed diagnosis', async () => {
+    const root = await createPackageFixture();
+    const stderr = output();
+    const signals = new EventEmitter();
+    const compose = vi.fn(
+      async () =>
+        ({
+          listen: vi.fn(async () => 'http://127.0.0.1:3000'),
+          close: vi.fn(async () => {}),
+        }) as never,
+    );
+
+    await expect(
+      runCli({
+        args: [],
+        moduleUrl: pathToFileURL(join(root, 'dist/server/server/main.js')).href,
+        stderr: stderr.stream,
+        signalSource: fakeSignals(signals),
+        compose,
+        probeCodexVersion: async () => null,
+        runStartupDoctor: async () => ({ ok: false, report: 'Context handshake failed.\n' }),
+      }),
+    ).resolves.toBe(0);
+
+    expect(stderr.value()).toContain('Context handshake failed.');
+    expect(stderr.value()).toContain('Gestalt Mobile will continue');
+    expect(compose).toHaveBeenCalledOnce();
   });
 });
 

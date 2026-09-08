@@ -180,7 +180,7 @@ describe('skill profile codec', () => {
         { path: '/skills/alpha/SKILL.md', enabled: false },
         { path: '/skills/beta/SKILL.md', enabled: false },
       ],
-      warnings: ['Saved skill path is no longer discovered: /skills/gone/SKILL.md'],
+      warnings: ['Skill "Gone" is missing and was disabled: /skills/gone/SKILL.md'],
     });
   });
 
@@ -242,7 +242,9 @@ describe('skill profile codec', () => {
         enabled: false,
       },
     ]);
-    expect(result.warnings).toEqual([`Saved skill path is no longer discovered: ${stalePath}`]);
+    expect(result.warnings).toEqual([
+      `Skill "gestalt:development-testing" is missing and was disabled: ${stalePath}`,
+    ]);
   });
 
   it('emits no override when neither explicit nor project selection exists', () => {

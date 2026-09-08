@@ -22,10 +22,12 @@ describe('ToastViewport', () => {
 
     queue.enqueue({ kind: 'error', message: 'Connection failed.' });
     queue.enqueue({ kind: 'success', message: 'Draft saved.' });
+    queue.enqueue({ kind: 'warning', message: 'A saved skill is missing.' });
     await Promise.resolve();
 
     expect(screen.getByRole('alert').getAttribute('aria-live')).toBe('assertive');
-    expect(screen.getByRole('status').getAttribute('aria-live')).toBe('polite');
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+    expect(screen.getByText('Warning')).toBeTruthy();
     expect(document.activeElement).toBe(focusAnchor);
     focusAnchor.remove();
   });

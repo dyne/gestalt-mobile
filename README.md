@@ -6,10 +6,9 @@ development with durable Codex sessions.
 ## Prerequisites
 
 - Node.js 24 or newer.
-- The `codex` CLI installed, available on `PATH`, and authenticated.
-- Optionally, `codex-profile` and a `~/.codex-gestalt` home. When both exist,
-  sessions use `codex-profile cli gestalt app-server --stdio`; otherwise they
-  fall back automatically to `codex app-server --stdio`.
+- The `codex` CLI installed, available on `PATH`, and authenticated. Gestalt's
+  launcher establishes the environment and Mobile starts `codex app-server --stdio`
+  directly within it.
 
 ## Install and run
 

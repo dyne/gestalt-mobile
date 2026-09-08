@@ -61,6 +61,7 @@ export type RelaySession = {
   effectiveSkillSelection?: {
     selectedProfileName?: string;
     skills: Array<{ name: string; path: string; enabled: boolean }>;
+    warnings?: string[];
   };
   lastOrgPlan?: { filename: string; title: string };
   plan?: SupervisedPlan;

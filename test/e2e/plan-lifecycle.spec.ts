@@ -155,7 +155,7 @@ async function seedAuthenticatedRelay(
   );
   store.saveSession(authorizationSessionId('plan-lifecycle-session'), {
     deviceId: device.id,
-    expiresAt: '2026-09-01T00:00:00.000Z',
+    expiresAt: '2099-09-01T00:00:00.000Z',
   });
   store.close();
 }

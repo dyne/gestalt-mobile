@@ -20,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <section
       class:error={toast.kind === 'error'}
       class:success={toast.kind === 'success'}
+      class:warning={toast.kind === 'warning'}
       class="toast"
       role={toast.kind === 'error' ? 'alert' : 'status'}
       aria-live={toast.kind === 'error' ? 'assertive' : 'polite'}
@@ -30,7 +31,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onfocusout={() => queue.resume(toast.id, 'focus')}
     >
       <span class="toast-symbol" aria-hidden="true">
-        {toast.kind === 'error' ? '!' : toast.kind === 'success' ? '✓' : 'i'}
+        {toast.kind === 'error' || toast.kind === 'warning'
+          ? '!'
+          : toast.kind === 'success'
+            ? '✓'
+            : 'i'}
       </span>
       <span class="toast-copy">
         <strong
@@ -38,7 +43,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             ? 'Error'
             : toast.kind === 'success'
               ? 'Success'
-              : 'Info'}</strong
+              : toast.kind === 'warning'
+                ? 'Warning'
+                : 'Info'}</strong
         >
         <span>{toast.message}</span>
         {#if toast.occurrences > 1}<small>Repeated {toast.occurrences} times.</small>{/if}
@@ -95,6 +102,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     color: var(--theme-success);
     border-color: var(--theme-success);
     border-inline-start-style: solid;
+  }
+
+  .toast.warning {
+    color: var(--theme-warning);
+    border-color: var(--theme-warning);
   }
 
   .toast-symbol {

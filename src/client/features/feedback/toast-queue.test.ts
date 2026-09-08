@@ -51,6 +51,7 @@ describe('toast queue', () => {
 
   it.each([
     ['success', toastTimeouts.success],
+    ['warning', toastTimeouts.warning],
     ['info', toastTimeouts.info],
   ] as const)('dismisses %s notifications after %dms', (kind, timeout) => {
     const queue = createToastQueue();
