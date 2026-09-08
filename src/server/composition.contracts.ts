@@ -3048,6 +3048,41 @@ describe('production composition', () => {
           expect.objectContaining({ requestId: '9', kind: 'orgPlanAttention', outcome: 'failed' }),
         ]),
       );
+
+      const quiz = handle!.request!({
+        id: 71,
+        method: 'item/tool/call',
+        params: {
+          tool: 'gestalt_quiz',
+          arguments: {
+            questions: [
+              {
+                id: 'mode',
+                header: 'Mode',
+                question: 'How should this run?',
+                choices: [
+                  { label: 'Solo', description: 'Use one agent.' },
+                  { label: 'Team', description: 'Use several agents.' },
+                ],
+                allowCustom: false,
+              },
+            ],
+          },
+        },
+      });
+      const clearedQuiz = quiz.catch((error: unknown) => error);
+      handle!.notify!({
+        method: 'serverRequest/resolved',
+        params: { threadId: 'thread-1', requestId: 71 },
+      });
+      expect(await clearedQuiz).toEqual(
+        expect.objectContaining({ message: 'CODEX_SERVER_REQUEST_CLEARED' }),
+      );
+      expect((await app.inject(`/api/sessions/${sessionId}/history`)).json().interactions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ requestId: '71', kind: 'quiz', resolvedAt: null }),
+        ]),
+      );
       await app.close();
     });
   });
