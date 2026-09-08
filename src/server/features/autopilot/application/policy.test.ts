@@ -10,6 +10,7 @@ import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import { disabledAutopilot } from '../domain/autopilot-session.js';
+import { startSupervisionProtocol } from '../domain/supervision-protocol.js';
 import {
   AUTOPILOT_CONTINUATION_PROMPT,
   AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
@@ -127,12 +128,18 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v5');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v6');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('task_name l<a> or l<a>_<b>');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'call followup_task on that same executor before sending any response',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'answer briefly, then perform that continuation in the same turn',
+    );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
@@ -392,5 +399,73 @@ describe('autopilot policy', () => {
         policy: defaultAutopilotPolicy,
       }),
     ).toEqual({ kind: 'safetyPause', reason: 'actionRateExceeded' });
+  });
+
+  it('does not apply the throughput cap when durable supervision observes semantic progress', () => {
+    const active = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh' as const,
+      root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+      aggregateSubagents: 'idle' as const,
+    };
+    const state = {
+      ...disabledAutopilot('s', now),
+      state: 'monitoring' as const,
+      requestedEnabled: true,
+      supervision: startSupervisionProtocol('before-progress'),
+    };
+    const incomplete = {
+      ...plan(),
+      executionComplete: false,
+      allDone: false,
+      steps: [{ ...plan().steps[0]!, state: 'WIP' as const }],
+    };
+
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit + 1,
+        semanticProgressKey: 'after-l2-checkpoint',
+        now,
+        policy: defaultAutopilotPolicy,
+      }).kind,
+    ).toBe('scheduleContinuation');
+  });
+
+  it('grants the fresh semantic loop budget after progress resets supervision', () => {
+    const active = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh' as const,
+      root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+      aggregateSubagents: 'idle' as const,
+    };
+    const state = {
+      ...disabledAutopilot('s', now),
+      state: 'monitoring' as const,
+      requestedEnabled: true,
+      supervision: startSupervisionProtocol('after-l2-checkpoint'),
+    };
+    const incomplete = {
+      ...plan(),
+      executionComplete: false,
+      allDone: false,
+      steps: [{ ...plan().steps[0]!, state: 'WIP' as const }],
+    };
+
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity: active,
+        hasPendingInteraction: false,
+        automaticActionCount: defaultAutopilotPolicy.actionLimit + 1,
+        semanticProgressKey: 'after-l2-checkpoint',
+        now,
+        policy: defaultAutopilotPolicy,
+      }).kind,
+    ).toBe('scheduleContinuation');
   });
 });

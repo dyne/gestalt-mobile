@@ -1396,6 +1396,7 @@ export class AutopilotCoordinator {
     if (state.supervision?.outcome === 'parked') return { kind: 'observe' as const };
     const plan = this.deps.plan(sessionId);
     const now = this.deps.now();
+    const currentProgressKey = this.progressKey(sessionId);
     return decideAutopilot({
       state,
       plan: plan?.plan ?? null,
@@ -1408,6 +1409,7 @@ export class AutopilotCoordinator {
           sessionId,
           new Date(Date.parse(now) - this.deps.policy.actionWindowMs).toISOString(),
         ) ?? 0,
+      semanticProgressKey: currentProgressKey,
       now,
       policy: this.deps.policy,
     });
