@@ -8,6 +8,44 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 
+test('keeps a failed prompt copyable and reports an unavailable workspace as a warning', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'workspace-unavailable-session',
+      state: 'ready',
+      threadId: 'workspace-unavailable-thread',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: null,
+    },
+  ]);
+  fixture.markWorkspaceUnavailable('workspace-unavailable-session');
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await page.getByRole('textbox', { name: 'Prompt' }).fill('Keep this text available');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+
+  const retainedPrompt = page.getByText('Keep this text available');
+  await expect(retainedPrompt).toBeVisible();
+  expect(await retainedPrompt.evaluate((element) => getComputedStyle(element).userSelect)).not.toBe(
+    'none',
+  );
+  const warning = page.getByRole('status').filter({
+    hasText: 'This session workspace is unavailable.',
+  });
+  await expect(warning).toContainText('Your message remains in the conversation for copying');
+  await expect(page.getByRole('button', { name: 'Retry send' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Dismiss warning notification' }).click();
+  await expect(warning).toHaveCount(0);
+});
+
 for (const viewport of [
   { name: 'mobile-100', width: 320, height: 568, fontScale: 100 },
   { name: 'tablet-200', width: 768, height: 1024, fontScale: 200 },

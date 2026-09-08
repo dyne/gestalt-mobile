@@ -47,6 +47,7 @@ export class ChatRelayFixture {
   readonly commands: RecordedCommand[] = [];
   readonly protocol: ProtocolCall[] = [];
   readonly writerLocks = new Set<string>();
+  readonly unavailableWorkspaces = new Set<string>();
   readonly sessions: Array<Record<string, unknown>> = [];
   readonly recentSessions: Array<Record<string, unknown>> = [];
   readonly recentOpenSessions = new Map<string, Record<string, unknown>>();
@@ -106,6 +107,18 @@ export class ChatRelayFixture {
         body: route.request().postDataJSON(),
         idempotencyKey: await route.request().headerValue('idempotency-key'),
       });
+      if (this.unavailableWorkspaces.has(id)) {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({
+            code: 'SESSION_WORKSPACE_UNAVAILABLE',
+            detail: 'The session workspace is unavailable.',
+            retryable: true,
+          }),
+        });
+        return;
+      }
       if (this.writerLocks.has(id)) {
         await route.fulfill({
           status: 409,
@@ -201,6 +214,10 @@ export class ChatRelayFixture {
   }
   lockWriter(sessionId: string): void {
     this.writerLocks.add(sessionId);
+  }
+
+  markWorkspaceUnavailable(sessionId: string): void {
+    this.unavailableWorkspaces.add(sessionId);
   }
   releaseWriter(sessionId: string): void {
     this.writerLocks.delete(sessionId);
