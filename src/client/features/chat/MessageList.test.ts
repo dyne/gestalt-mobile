@@ -229,9 +229,9 @@ describe('MessageList', () => {
       ],
     });
 
-    const disclosure = screen.getByText(/Work details · 2 activities/).closest('details');
+    const disclosure = screen.getByText('2 files changed · +13 −3').closest('details');
     expect(disclosure?.open).toBe(false);
-    await fireEvent.click(screen.getByText(/Work details · 2 activities/));
+    await fireEvent.click(screen.getByText('2 files changed · +13 −3'));
     const files = screen.getByRole('region', { name: 'Files changed' });
     expect(files.textContent).toContain('src/app.ts');
     expect(files.textContent).toContain('src/app.test.ts');
@@ -240,6 +240,78 @@ describe('MessageList', () => {
     expect(files.textContent).toContain('-3');
     expect(files.textContent).toContain('1s ago');
     expect(screen.queryByText('activity')).toBeNull();
+    const answer = screen.getByText('Done.');
+    expect(answer.compareDocumentPosition(disclosure!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('attaches child-agent file changes to each root answer instead of the chat tail', () => {
+    const start = Date.parse('2026-08-30T12:00:00.000Z');
+    render(MessageList, {
+      messages: [
+        {
+          id: 'prompt-1',
+          role: 'user',
+          turnId: 'root-1',
+          text: 'First task',
+          occurredAt: start,
+          complete: true,
+        },
+        {
+          id: 'answer-1',
+          role: 'assistant',
+          turnId: 'root-1',
+          phase: 'final_answer',
+          text: 'First done.',
+          occurredAt: start + 2_000,
+          complete: true,
+        },
+        {
+          id: 'prompt-2',
+          role: 'user',
+          turnId: 'root-2',
+          text: 'Second task',
+          occurredAt: start + 3_000,
+          complete: true,
+        },
+        {
+          id: 'answer-2',
+          role: 'assistant',
+          turnId: 'root-2',
+          phase: 'final_answer',
+          text: 'Second done.',
+          occurredAt: start + 5_000,
+          complete: true,
+        },
+      ],
+      activities: [
+        {
+          id: 'child-change-1',
+          label: 'File change · completed',
+          detail: 'src/first.ts',
+          turnId: 'child-1',
+          actorTurnId: 'child-1',
+          occurredAt: start + 1_000,
+          changes: [{ path: 'src/first.ts', additions: 4, deletions: 1 }],
+        },
+        {
+          id: 'child-change-2',
+          label: 'File change · completed',
+          detail: 'src/second.ts',
+          turnId: 'child-2',
+          actorTurnId: 'child-2',
+          occurredAt: start + 4_000,
+          changes: [{ path: 'src/second.ts', additions: 2, deletions: 3 }],
+        },
+      ],
+    });
+
+    const first = screen.getByText('First done.').closest('.answer-turn');
+    const second = screen.getByText('Second done.').closest('.answer-turn');
+    expect(first?.textContent).toContain('1 file changed · +4 −1');
+    expect(first?.textContent).not.toContain('src/second.ts');
+    expect(second?.textContent).toContain('1 file changed · +2 −3');
+    expect(second?.textContent).not.toContain('src/first.ts');
+    expect(document.querySelector('.progress-item')).toBeNull();
   });
 
   it('keeps a completed activity-only turn in history with its owning prompt', () => {
@@ -271,12 +343,14 @@ describe('MessageList', () => {
     });
 
     const prompt = screen.getByText('Change the app').closest('.prompt-turn');
-    expect(prompt?.querySelector('.chat-activity')).not.toBeNull();
+    expect(prompt?.querySelector('.work-details')).not.toBeNull();
     expect(prompt?.textContent).toContain('Successful commands');
     expect(prompt?.textContent).toContain('1');
     expect(prompt?.textContent).not.toContain('npm test');
-    expect(prompt?.textContent).toContain('src/app.ts');
-    expect(screen.getAllByRole('region', { name: 'Files changed' })).toHaveLength(1);
+    expect(prompt?.textContent).toContain('1 file changed · +? −?');
+    expect(screen.getByRole('region', { name: 'Files changed' }).closest('details')?.open).toBe(
+      false,
+    );
   });
 
   it('renders a durable resolved interaction in its owning prompt turn', () => {

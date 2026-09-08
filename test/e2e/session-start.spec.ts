@@ -1529,6 +1529,9 @@ test('projects a canonical activity from the Chat snapshot', async ({ page }) =>
   await expect(activity.locator('[data-command-outcome="failed"] dd')).toHaveText('1');
   await expect(page.getByText('git status')).toHaveCount(0);
   await expect(page.getByText('npm test')).toHaveCount(0);
+  const fileSummary = page.getByText('2 files changed · +? −?');
+  await expect(fileSummary).toBeVisible();
+  await fileSummary.click();
   const files = page.getByRole('region', { name: 'Files changed' });
   await expect(files).toContainText('src/app.ts');
   await expect(files).toContainText('src/app.test.ts');

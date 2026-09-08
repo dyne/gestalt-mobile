@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { summarizeChangedFiles } from './file-change-summary.js';
+import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
 
 describe('summarizeChangedFiles', () => {
   it('lists each path once with cumulative counts and its latest touch time', () => {
@@ -43,5 +43,20 @@ describe('summarizeChangedFiles', () => {
         { id: 'two', label: 'File change', detail: 'old.ts', occurredAt: 2_000 },
       ]),
     ).toEqual([{ path: 'old.ts', additions: null, deletions: null, touchedAt: 2_000 }]);
+  });
+
+  it('totals unique files and line changes without guessing legacy counts', () => {
+    expect(
+      summarizeFileChangeTotals([
+        { path: 'one.ts', additions: 6, deletions: 4 },
+        { path: 'two.ts', additions: 1, deletions: 0 },
+      ]),
+    ).toEqual({ files: 2, additions: 7, deletions: 4 });
+    expect(
+      summarizeFileChangeTotals([
+        { path: 'one.ts', additions: 6, deletions: 4 },
+        { path: 'legacy.ts', additions: null, deletions: null },
+      ]),
+    ).toEqual({ files: 2, additions: null, deletions: null });
   });
 });
