@@ -70,7 +70,7 @@
     "@fontsource/syne": "5.2.7",
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.2",
-    "fastify": "^5.10.0",
+    "fastify": "^5.12.3",
     "qrcode": "^1.5.4",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
