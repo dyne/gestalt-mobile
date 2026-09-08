@@ -530,7 +530,10 @@ test('summarizes repeated file changes with counts and latest touch time on mobi
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
-  await page.getByText(/Work details · 2 activities/).click();
+  const summary = page.getByText('2 files changed · +14 −4');
+  await expect(summary).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Files changed' })).not.toBeVisible();
+  await summary.click();
   const files = page.getByRole('region', { name: 'Files changed' });
   await expect(files.getByRole('listitem')).toHaveCount(2);
   await expect(files).toContainText('+6');

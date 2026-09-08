@@ -38,11 +38,11 @@ describe('WorkDetails', () => {
       ],
     });
 
-    const details = screen.getByText(/Work details · 5 activities/).closest('details');
+    const details = screen.getByText('1 file changed · +5 −3').closest('details');
     expect(details).not.toBeNull();
     expect(details?.open).toBe(false);
     expect(details?.hasAttribute('open')).toBe(false);
-    await fireEvent.click(screen.getByText(/Work details · 5 activities/));
+    await fireEvent.click(screen.getByText('1 file changed · +5 −3'));
     expect(screen.getByText('browser check')).not.toBeNull();
     expect(screen.getByRole('region', { name: 'Files changed' }).textContent).toContain('+5');
     expect(screen.getByRole('region', { name: 'Files changed' }).textContent).toContain('-3');

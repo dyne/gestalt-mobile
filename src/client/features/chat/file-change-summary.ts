@@ -13,6 +13,12 @@ export type ChangedFile = {
   touchedAt?: number;
 };
 
+export type FileChangeTotals = {
+  files: number;
+  additions: number | null;
+  deletions: number | null;
+};
+
 export function summarizeChangedFiles(activities: readonly HistoryActivity[]): ChangedFile[] {
   const files = new Map<string, ChangedFile>();
   for (const activity of activities) {
@@ -41,4 +47,16 @@ export function summarizeChangedFiles(activities: readonly HistoryActivity[]): C
     }
   }
   return [...files.values()];
+}
+
+export function summarizeFileChangeTotals(files: readonly ChangedFile[]): FileChangeTotals {
+  return {
+    files: files.length,
+    additions: files.every((file) => file.additions !== null)
+      ? files.reduce((total, file) => total + file.additions!, 0)
+      : null,
+    deletions: files.every((file) => file.deletions !== null)
+      ? files.reduce((total, file) => total + file.deletions!, 0)
+      : null,
+  };
 }

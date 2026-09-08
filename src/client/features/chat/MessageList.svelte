@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { ChatMessage } from './message-store.js';
   import { groupMessages } from './message-groups.js';
   import { formatElapsedAfter, formatMessageTime, formatRelativeAge } from './message-time.js';
-  import { summarizeChangedFiles } from './file-change-summary.js';
+  import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
@@ -81,20 +81,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (group.kind !== 'user') return [];
     return interactions.filter((interaction) => ownerGroupId(interaction) === group.id);
   }
-  function turnActivities(group: (typeof groups)[number]): HistoryActivity[] {
-    if (group.kind !== 'assistant') return [];
-    return activities.filter((activity) =>
-      activity.turnId ? activity.turnId === group.turnId : group.id === latestAssistantId,
+  function activityAnswerOwnerId(activity: HistoryActivity): string | null {
+    if (activity.turnId) {
+      const exact = assistantGroups.findLast((group) => group.turnId === activity.turnId);
+      if (exact) return exact.id;
+    }
+    if (activity.occurredAt === undefined) return latestAssistantId ?? null;
+    return (
+      assistantGroups.find(
+        (group) =>
+          group.answer !== null &&
+          group.occurredAt !== undefined &&
+          group.occurredAt >= activity.occurredAt!,
+      )?.id ?? null
     );
   }
-  function assistantOwnsActivity(activity: HistoryActivity): boolean {
-    return activity.turnId
-      ? assistantGroups.some((group) => group.turnId === activity.turnId)
-      : Boolean(latestAssistantId);
+  function turnActivities(group: (typeof groups)[number]): HistoryActivity[] {
+    if (group.kind !== 'assistant') return [];
+    return activities.filter((activity) => activityAnswerOwnerId(activity) === group.id);
   }
   function activityPromptOwnerId(activity: HistoryActivity): string | null {
-    if (!activity.turnId || assistantOwnsActivity(activity)) return null;
-    return promptGroups.findLast((group) => group.turnId === activity.turnId)?.id ?? null;
+    if (activityAnswerOwnerId(activity)) return null;
+    if (activity.turnId) {
+      const exact = promptGroups.findLast((group) => group.turnId === activity.turnId);
+      if (exact) return exact.id;
+    }
+    if (activity.occurredAt === undefined) return null;
+    return (
+      promptGroups.findLast(
+        (group) => group.occurredAt !== undefined && group.occurredAt <= activity.occurredAt!,
+      )?.id ?? null
+    );
   }
   function promptActivities(group: (typeof groups)[number]): HistoryActivity[] {
     if (group.kind !== 'user') return [];
@@ -102,7 +119,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   function detachedActivities(): HistoryActivity[] {
     return activities.filter(
-      (activity) => !assistantOwnsActivity(activity) && !activityPromptOwnerId(activity),
+      (activity) => !activityAnswerOwnerId(activity) && !activityPromptOwnerId(activity),
     );
   }
   let detached = $derived(detachedActivities());
@@ -160,28 +177,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 {#snippet changedFiles(items: HistoryActivity[])}
   {@const changes = summarizeChangedFiles(items)}
+  {@const totals = summarizeFileChangeTotals(changes)}
   {#if changes.length}
-    <section class="file-changes" aria-label="Files changed">
-      <strong>files changed</strong>
-      <ul>
-        {#each changes as change (change.path)}
-          <li>
-            <code class="file-path">{change.path}</code>
-            <span class="file-counts" aria-label="Line changes">
-              <span class="additions">+{change.additions ?? '?'}</span>
-              <span class="deletions">-{change.deletions ?? '?'}</span>
-            </span>
-            {#if change.touchedAt !== undefined}
-              <time datetime={new Date(change.touchedAt).toISOString()}>
-                {formatRelativeAge(change.touchedAt, now)}
-              </time>
-            {:else}
-              <span class="touch-unknown">time unknown</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    </section>
+    <details class="file-changes">
+      <summary>
+        {totals.files}
+        {totals.files === 1 ? 'file' : 'files'} changed ·
+        <span class="additions">+{totals.additions ?? '?'}</span>
+        <span class="deletions">−{totals.deletions ?? '?'}</span>
+      </summary>
+      <section aria-label="Files changed">
+        <ul>
+          {#each changes as change (change.path)}
+            <li>
+              <code class="file-path">{change.path}</code>
+              <span class="file-counts" aria-label="Line changes">
+                <span class="additions">+{change.additions ?? '?'}</span>
+                <span class="deletions">−{change.deletions ?? '?'}</span>
+              </span>
+              {#if change.touchedAt !== undefined}
+                <time datetime={new Date(change.touchedAt).toISOString()}>
+                  {formatRelativeAge(change.touchedAt, now)}
+                </time>
+              {:else}
+                <span class="touch-unknown">time unknown</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    </details>
   {/if}
 {/snippet}
 
@@ -312,10 +337,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {#if isPromptLive(group)}
               <div class="entry-heading"><strong>working</strong></div>
               <ActivityList activities={regularActivities(ownedActivities)} variant="live" />
+              {@render changedFiles(ownedActivities)}
             {:else}
-              <ActivityList activities={regularActivities(ownedActivities)} />
+              <WorkDetails activities={ownedActivities} {now} />
             {/if}
-            {@render changedFiles(ownedActivities)}
           </section>
         {/if}
       {:else if group.answer !== null}
@@ -360,8 +385,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {@render content(group.commentary)}
             </div>
           {/if}
-          <WorkDetails activities={ownedActivities} {now} />
           <div class="entry-content">{@render content(group.answer)}</div>
+          <WorkDetails activities={ownedActivities} {now} />
         </section>
       {:else if group.commentary !== null}
         {@const ownedActivities = turnActivities(group)}
@@ -387,9 +412,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <summary>commentary</summary>
               {@render content(group.commentary)}
             </details>
-            <ActivityList activities={regularActivities(ownedActivities)} />
+            <WorkDetails activities={ownedActivities} {now} />
           {/if}
-          {@render changedFiles(ownedActivities)}
+          {#if isLive(group)}{@render changedFiles(ownedActivities)}{/if}
         </section>
       {/if}
     </li>
@@ -414,10 +439,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {#if activeTurnId}
           <div class="entry-heading"><strong>working</strong></div>
           <ActivityList activities={regularActivities(detached)} variant="live" />
+          {@render changedFiles(detached)}
         {:else}
-          <ActivityList activities={regularActivities(detached)} />
+          <WorkDetails activities={detached} {now} />
         {/if}
-        {@render changedFiles(detached)}
       </section>
     </li>
   {/if}
@@ -529,8 +554,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border-radius: 0.375rem;
   }
 
-  .file-changes > strong {
+  .file-changes > summary {
+    color: var(--theme-text-muted);
     font-size: 0.875em;
+    cursor: pointer;
+  }
+
+  .file-changes > summary:focus-visible {
+    outline: 2px solid var(--theme-focus);
+    outline-offset: 2px;
   }
 
   .file-changes ul {

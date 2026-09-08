@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import type { HistoryActivity } from './activity-summary.js';
   import { presentActivity, summarizeCommandActivities } from './activity-presentation.js';
-  import { summarizeChangedFiles } from './file-change-summary.js';
+  import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
   import { formatRelativeAge } from './message-time.js';
 
   let { activities, now = Date.now() }: { activities: readonly HistoryActivity[]; now?: number } =
@@ -23,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }),
   );
   let files = $derived(summarizeChangedFiles(activities));
+  let fileTotals = $derived(summarizeFileChangeTotals(files));
   let nonCommandActivities = $derived(
     activities.flatMap((activity) => {
       const presentation = presentActivity(activity);
@@ -33,7 +34,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let activityCount = $derived(activities.length);
   let summary = $derived(
-    `Work details · ${activityCount} ${activityCount === 1 ? 'activity' : 'activities'} · ${commands.successful} successful commands · ${commands.failed} failed commands · ${files.length} ${files.length === 1 ? 'file' : 'files'}`,
+    files.length
+      ? `${fileTotals.files} ${fileTotals.files === 1 ? 'file' : 'files'} changed · +${fileTotals.additions ?? '?'} −${fileTotals.deletions ?? '?'}`
+      : `Work details · ${activityCount} ${activityCount === 1 ? 'activity' : 'activities'}`,
   );
 </script>
 
