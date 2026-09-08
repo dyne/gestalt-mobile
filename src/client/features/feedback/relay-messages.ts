@@ -13,7 +13,7 @@ const relayMessages = {
   SESSION_WRITER_BUSY:
     'This thread is active in another Codex client. Release it there, then retry sending here.',
   SESSION_WORKSPACE_UNAVAILABLE:
-    'This session workspace is unavailable. Restore access to it, then retry sending.',
+    'This session workspace is unavailable. Your message remains in the conversation for copying; restore workspace access before sending again.',
   SESSION_RUNTIME_DEPENDENCY_FAILED:
     'A required Codex runtime dependency is unavailable. Check Codex, then retry.',
   CODEX_PROTOCOL_INCOMPATIBLE:

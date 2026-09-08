@@ -279,6 +279,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     },
     onSendError: (error, operationId) => {
       const feedback = relayFeedback(error, 'MESSAGE_SEND_FAILED');
+      if (feedback.code === 'SESSION_WORKSPACE_UNAVAILABLE') {
+        writerFeedback = null;
+        retryOperationId = null;
+        toastQueue.enqueue({ kind: 'warning', ...feedback });
+        return;
+      }
       writerFeedback = feedback.message;
       retryOperationId = feedback.retryable ? operationId : null;
       shellStatus = reportRelayError(error, 'MESSAGE_SEND_FAILED');

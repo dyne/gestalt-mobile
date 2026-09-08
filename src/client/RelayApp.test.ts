@@ -7,11 +7,15 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-let controllerOptions: { publish(view: unknown): void } | null = null;
+let controllerOptions: {
+  publish(view: unknown): void;
+  onSendError?(error: unknown, operationId: string): void;
+} | null = null;
 let fakeController: {
   selected: string | null;
   select(id: string | null): void;
   emit(id: string, view: unknown): void;
+  failSend(error: unknown, operationId: string): void;
 } | null = null;
 let activityOptions: { publish(items: ReadonlyMap<string, unknown>): void } | null = null;
 vi.mock('./features/agent-activity/agent-activity-controller.js', () => ({
@@ -42,6 +46,7 @@ vi.mock('./features/chat/chat-controller.js', () => ({
         emit: (id, view) => {
           if (id === fakeController?.selected) controllerOptions?.publish(view);
         },
+        failSend: (error, operationId) => controllerOptions?.onSendError?.(error, operationId),
       };
     }
     select = (id: string | null) => {
@@ -307,5 +312,79 @@ describe('RelayApp chat controller composition', () => {
     expect(screen.getByText('Root agent')).toBeTruthy();
     expect(screen.getByText(/working · active/)).toBeTruthy();
     expect(screen.queryByText('activity unavailable')).toBeNull();
+  });
+
+  it('warns once without persistent retry UI when a session workspace is unavailable', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    const authorizedFetch = vi.fn(
+      async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify(
+            String(input) === '/api/bootstrap'
+              ? {
+                  workspaces: [],
+                  profiles: [],
+                  models: [],
+                  sessions: [{ id: 'a', state: 'ready', workspacePath: '/work/a' }],
+                }
+              : String(input) === '/api/skill-profiles'
+                ? { profiles: [] }
+                : [],
+          ),
+        ),
+    );
+    render(RelayApp, {
+      authorizedFetch,
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+    await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    fakeController?.emit('a', {
+      ...chatView('a', ''),
+      messages: [
+        {
+          id: 'prompt:send-1',
+          role: 'user',
+          text: 'Keep this message available',
+          complete: false,
+        },
+      ],
+      prompts: [
+        {
+          operationId: 'send-1',
+          key: 'prompt:send-1',
+          text: 'Keep this message available',
+          state: 'failed',
+        },
+      ],
+    });
+    fakeController?.failSend(
+      Object.assign(new Error('workspace unavailable'), {
+        code: 'SESSION_WORKSPACE_UNAVAILABLE',
+        retryable: true,
+      }),
+      'send-1',
+    );
+
+    expect(await screen.findByText('Keep this message available')).toBeTruthy();
+    const warningCopy = await screen.findByText(
+      /Your message remains in the conversation for copying/,
+    );
+    const warning = warningCopy.closest('[role="status"]');
+    expect(warning).not.toBeNull();
+    expect(warning?.classList.contains('warning')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Retry send' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
