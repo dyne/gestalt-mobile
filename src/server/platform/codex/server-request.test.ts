@@ -9,7 +9,12 @@ import { describe, expect, it } from 'vitest';
 import { GESTALT_QUIZ_TOOL_NAME } from '../../../shared/contracts/quiz.js';
 import { GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME } from '../../../shared/contracts/org-plan-attention.js';
 import { GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME } from '../../../shared/contracts/autopilot-wait-lease.js';
-import { resolvedServerRequestId, toPendingInteraction } from './server-request.js';
+import { GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME } from '../../../shared/contracts/agent-capacity-recovery.js';
+import {
+  isAgentCapacityRecoveryCall,
+  resolvedServerRequestId,
+  toPendingInteraction,
+} from './server-request.js';
 
 describe('Codex server request mapping', () => {
   it('maps a command approval to the relay interaction vocabulary', () => {
@@ -136,6 +141,29 @@ describe('Codex server request mapping', () => {
         params: { tool: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME, arguments: { version: 1 } },
       }),
     ).toBeNull();
+  });
+
+  it('recognizes only a bounded agent-capacity recovery call', () => {
+    expect(
+      isAgentCapacityRecoveryCall({
+        id: 16,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME,
+          arguments: { version: 1, reason: 'agentThreadLimit' },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentCapacityRecoveryCall({
+        id: 17,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME,
+          arguments: { version: 1, reason: 'other' },
+        },
+      }),
+    ).toBe(false);
   });
 
   it('decodes only bounded server-request resolution notifications', () => {

@@ -70,5 +70,8 @@ describe('publishable package manifest', () => {
     await expect(readFile('gestalt-supervision-capabilities.json', 'utf8')).resolves.toContain(
       '"acknowledgement-safe-composer"',
     );
+    await expect(readFile('gestalt-supervision-capabilities.json', 'utf8')).resolves.toContain(
+      '"agent-capacity-recovery"',
+    );
   });
 });

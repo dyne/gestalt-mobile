@@ -25,6 +25,7 @@ import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
+import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
 import { threadPlanName } from './thread-plan-name.js';
 import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
@@ -238,6 +239,12 @@ export class CodexSessionRuntime {
       }
     }
     this.stop(sessionId);
+  }
+
+  /** Replaces only this session's app-server while retaining its durable root thread. */
+  async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.stop(session.id);
+    return this.restore(session, now);
   }
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
@@ -735,6 +742,7 @@ export class CodexSessionRuntime {
             gestaltOrgPlanAttentionDynamicTool,
             gestaltOrgPlanCheckpointDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
+            gestaltAgentCapacityRecoveryDynamicTool,
           ],
         });
         result = {
@@ -834,6 +842,7 @@ export class CodexSessionRuntime {
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
+        gestaltAgentCapacityRecoveryDynamicTool,
       ],
       ...(session.model ? { model: session.model } : {}),
       ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),

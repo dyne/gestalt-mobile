@@ -1778,6 +1778,98 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('acknowledges root-owned capacity recovery before recycling only its app-server', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+      const first = handles.find((candidate) => candidate.calls.includes('thread/start'));
+      expect(first?.request).toBeDefined();
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'continue supervised work' },
+      });
+      expect(started.statusCode).toBe(202);
+      const turnId = started.json().activeTurnId as string;
+      const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+      const handlesBeforeRecovery = handles.length;
+      first!.notify?.({
+        method: 'turn/started',
+        params: { threadId, turn: { id: turnId } },
+      });
+
+      await expect(
+        first!.request!({
+          id: 90,
+          method: 'item/tool/call',
+          params: {
+            threadId: 'child-thread',
+            turnId,
+            tool: 'gestalt_agent_capacity_recovery',
+            arguments: { version: 1, reason: 'agentThreadLimit' },
+          },
+        }),
+      ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+      expect(handles).toHaveLength(handlesBeforeRecovery);
+
+      await expect(
+        first!.request!({
+          id: 91,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_agent_capacity_recovery',
+            arguments: { version: 1, reason: 'agentThreadLimit' },
+          },
+        }),
+      ).resolves.toEqual({
+        success: true,
+        contentItems: [
+          { type: 'inputText', text: '{"accepted":true,"action":"sessionRuntimeRecycle"}' },
+        ],
+      });
+
+      await expect.poll(() => handles.length).toBeGreaterThan(handlesBeforeRecovery);
+      const replacement = handles.find(
+        (candidate) =>
+          candidate !== first &&
+          candidate.requests.some((request) => request.method === 'thread/resume'),
+      );
+      expect(replacement?.requests).toContainEqual({
+        method: 'thread/resume',
+        params: expect.objectContaining({ threadId, cwd: join(root, 'workspace') }),
+      });
+      await expect
+        .poll(async () => (await app.inject(`/api/sessions/${sessionId}`)).json().state)
+        .toBe('ready');
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        threadId,
+        activeTurnId: null,
+        desiredState: 'active',
+      });
+      await app.close();
+    });
+
     it('publishes an idle websocket status after saving a completed turn', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
