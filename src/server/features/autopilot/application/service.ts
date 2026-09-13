@@ -82,6 +82,8 @@ export class AutopilotCoordinator {
   private readonly publishedSnapshots = new Map<string, string>();
   private readonly planEventKeys = new Map<string, string>();
   private readonly activityEventKeys = new Map<string, string>();
+  /** One reconciliation owns a session until it has published its next wake. */
+  private readonly reconciling = new Set<string>();
   /** Serializes asynchronous watchdog and timer work per relay session. */
   private readonly operations = new Map<string, Promise<void>>();
   constructor(private readonly deps: AutopilotDependencies) {}
@@ -159,6 +161,7 @@ export class AutopilotCoordinator {
     this.cancelTimer(sessionId);
     this.planEventKeys.delete(sessionId);
     this.activityEventKeys.delete(sessionId);
+    this.reconciling.delete(sessionId);
   }
   /** Accepts a session-owned structured probe response; no transcript text is inspected. */
   reportProbe(sessionId: string, report: ProbeReport): boolean {
@@ -251,6 +254,7 @@ export class AutopilotCoordinator {
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
     const nextFingerprint = fingerprint(currentPlan.plan);
+    const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
     if (
       prior.requestedEnabled &&
       prior.planIdentity === currentPlan.identity &&
@@ -269,10 +273,15 @@ export class AutopilotCoordinator {
       stopReason: null,
       executor: undefined,
       blocking: undefined,
-      supervision: recoverSafetyPause(
-        prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-        this.progressKey(sessionId),
-      ),
+      // A replacement plan cannot inherit a parked lease, retry key, or probe
+      // budget from a different semantic plan identity. Re-enabling the same
+      // plan still preserves its non-terminal protocol state.
+      supervision: replacing
+        ? startSupervisionProtocol(this.progressKey(sessionId))
+        : recoverSafetyPause(
+            prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+            this.progressKey(sessionId),
+          ),
       updatedAt: now,
     };
     this.persist(next);
@@ -349,7 +358,16 @@ export class AutopilotCoordinator {
         break;
       case 'reconcile':
         next = { ...prior, state: 'monitoring', nextEvaluationAt: null, updatedAt: now };
-        this.enqueue(sessionId, () => this.reconcile(sessionId, prior.generation));
+        if (!this.reconciling.has(sessionId)) {
+          this.reconciling.add(sessionId);
+          this.enqueue(sessionId, async () => {
+            try {
+              await this.reconcile(sessionId, prior.generation);
+            } finally {
+              this.reconciling.delete(sessionId);
+            }
+          });
+        }
         break;
       case 'scheduleContinuation':
         if (session?.activeTurnId || this.deps.pendingInteraction(sessionId)) break;
@@ -582,7 +600,10 @@ export class AutopilotCoordinator {
         occurredAt,
       },
     ]);
-    this.semanticEvent(sessionId, 'checkpointChanged');
+    // A lease only optimizes a probe that deliberately yielded. Checkpoints are
+    // authoritative progress events in their own right, so an incomplete plan
+    // must be evaluated even when no probe (and therefore no lease) exists.
+    if (!this.semanticEvent(sessionId, 'checkpointChanged')) this.evaluate(sessionId);
     return true;
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
@@ -603,12 +624,14 @@ export class AutopilotCoordinator {
       this.semanticEvent(sessionId, 'reviewChanged')
     )
       return;
-    if (executionComplete(plan.plan)) {
-      const eventKey = `plan:${fingerprint(plan.plan)}`;
-      if (this.planEventKeys.get(sessionId) === eventKey) return;
-      this.planEventKeys.set(sessionId, eventKey);
-      this.evaluate(sessionId);
-    }
+    // Plan and review changes are mandatory lifecycle inputs, not merely a
+    // completion detector.  A parked lease consumes the event above; without
+    // one, directly evaluate so an accepted L1 or a partial transition cannot
+    // strand the root waiting for unrelated activity.
+    const eventKey = `plan:${fingerprint(plan.plan)}`;
+    if (this.planEventKeys.get(sessionId) === eventKey) return;
+    this.planEventKeys.set(sessionId, eventKey);
+    this.evaluate(sessionId);
   }
   /**
    * Records a validated, session-private supervision request.  It intentionally
@@ -647,6 +670,12 @@ export class AutopilotCoordinator {
       stopReason: null,
       executor: undefined,
       blocking: undefined,
+      supervision: replacing
+        ? startSupervisionProtocol(this.progressKey(sessionId))
+        : recoverSafetyPause(
+            prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+            this.progressKey(sessionId),
+          ),
       updatedAt: now,
     };
     this.persist(next, cancelled);
@@ -660,7 +689,12 @@ export class AutopilotCoordinator {
     const prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled) return;
     const activity = this.deps.activity(sessionId);
-    if (!activity || activity.confidence !== 'fresh') return;
+    // A stale or absent activity projection is itself a mandatory wake input.
+    // Do not require a probe lease to restore the authoritative topology.
+    if (!activity || activity.confidence !== 'fresh') {
+      this.evaluate(sessionId);
+      return;
+    }
     const eventKey = JSON.stringify({
       root: [activity.root.state, activity.root.reason],
       children: activity.subagents.map((child) => [
@@ -680,6 +714,10 @@ export class AutopilotCoordinator {
     if (this.semanticEvent(sessionId, 'agentActivityChanged')) return;
     const disposition = classifyAgentActivity(activity);
     if (disposition === 'attention') {
+      this.evaluate(sessionId);
+      return;
+    }
+    if (disposition === 'reconcile') {
       this.evaluate(sessionId);
       return;
     }
@@ -1474,8 +1512,14 @@ export class AutopilotCoordinator {
         activity?.confidence === 'fresh' &&
         Date.parse(this.deps.now()) - Date.parse(activity.root.lastActivityAt) <=
           this.deps.policy.staleAfterMs
-      )
+      ) {
         this.evaluate(sessionId);
+      } else {
+        // A compatible read that did not yield fresh actor evidence is not a
+        // healthy wait. Keep one bounded watchdog armed for missed activity or
+        // late runtime recovery rather than silently settling the supervisor.
+        this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+      }
     } catch {
       const current = this.deps.store.find(sessionId);
       if (!current || current.generation !== generation) return;

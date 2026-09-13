@@ -903,7 +903,9 @@ describe('production composition', () => {
             })
           ).statusCode,
         ).toBe(200);
-        await vi.waitFor(() => expect(timers).toHaveLength(1));
+        // Initial supervision schedules its control and keeps a separate,
+        // bounded reconciliation watchdog while activity is still stale.
+        await vi.waitFor(() => expect(timers).toHaveLength(2));
         const staleTimer = timers[0];
         if (action === 'close') {
           await writeFile(
