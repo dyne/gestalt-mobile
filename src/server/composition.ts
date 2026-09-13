@@ -77,6 +77,7 @@ import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-com
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
 import { AutopilotCoordinator } from './features/autopilot/application/service.js';
+import { deriveSessionStatus } from './features/sessions/session-status.js';
 import {
   AUTOPILOT_CONTINUATION_PROMPT,
   AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT,
@@ -209,6 +210,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
   const events = new SessionEventBus();
   let notifyAutopilotActivity: (sessionId: string) => void = () => undefined;
+  let publishSessionStatus: (sessionId: string, occurredAt: string) => void = () => undefined;
   const attentionTransitions: OrgPlanAttentionTransitions = {
     subscribe: (sessionId, listener) =>
       events.subscribe(sessionId, (event) => {
@@ -242,6 +244,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           occurredAt,
         ),
       );
+      publishSessionStatus(snapshot.sessionId, occurredAt);
       notifyAutopilotActivity(snapshot.sessionId);
     },
     {
@@ -431,6 +434,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
   });
   notifyAutopilotActivity = (sessionId) => autopilot.activityChanged(sessionId);
+  publishSessionStatus = (sessionId, occurredAt) => {
+    const session = sessions.find(sessionId);
+    if (!session) return;
+    events.publish(
+      journal.append(
+        sessionId,
+        'session.status.updated',
+        deriveSessionStatus({
+          session,
+          plan: supervisedPlans.find(sessionId),
+          activity: activity.snapshot(sessionId, occurredAt),
+          autopilot: autopilot.snapshot(sessionId),
+          pendingAttention: interactions.list(sessionId).length > 0,
+          observedAt: occurredAt,
+        }),
+        occurredAt,
+      ),
+    );
+  };
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const workspaceFiles = new FilesystemWorkspaceFiles();
@@ -505,6 +527,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ),
       );
     autopilot.semanticEvent(sessionId, 'interactionChanged');
+    publishSessionStatus(sessionId, occurredAt);
   };
   const publishAttentionSettlement = (
     sessionId: string,
@@ -567,6 +590,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     if (update.kind === 'updated' && update.reason === 'supervision-start')
       autopilot.supervisionStarted(sessionId);
     autopilot.planStatusChanged(sessionId);
+    publishSessionStatus(sessionId, new Date().toISOString());
   };
   runtime = options.startAppServers
     ? new CodexSessionRuntime(

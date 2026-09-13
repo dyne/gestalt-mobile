@@ -15,7 +15,14 @@ describe('GET /api/sessions', () => {
     registerListSessions(app, { list: () => [{ id: 'session-1', state: 'ready' }] as never });
     const response = await app.inject({ method: 'GET', url: '/api/sessions' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([{ id: 'session-1', state: 'ready', resumeCommand: null }]);
+    expect(response.json()).toMatchObject([
+      {
+        id: 'session-1',
+        state: 'ready',
+        resumeCommand: null,
+        sessionStatus: { state: 'idle', reason: 'unknown' },
+      },
+    ]);
     await app.close();
   });
   it('maps the current activity snapshot without collaboration prompts', async () => {
@@ -31,7 +38,23 @@ describe('GET /api/sessions', () => {
         }) as never,
     });
     expect((await app.inject({ method: 'GET', url: '/api/sessions' })).json()).toMatchObject([
-      { agentActivity: { root: { state: 'idle' }, subagents: [] } },
+      {
+        agentActivity: { root: { state: 'idle' }, subagents: [] },
+        sessionStatus: { state: 'idle' },
+      },
+    ]);
+    await app.close();
+  });
+  it('reports an incomplete plan without healthy continuation as idle and degraded', async () => {
+    const app = fastify();
+    registerListSessions(app, {
+      list: () => [{ id: 'session-1', state: 'ready', threadId: null }] as never,
+      plan: () => ({ allDone: false }) as never,
+      autopilot: () =>
+        ({ health: { healthy: false, nextExpectedAction: 'Restore continuation.' } }) as never,
+    });
+    expect((await app.inject('/api/sessions')).json()).toMatchObject([
+      { sessionStatus: { state: 'idle', reason: 'incompleteWithoutContinuation' } },
     ]);
     await app.close();
   });

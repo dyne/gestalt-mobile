@@ -48,6 +48,8 @@ describe('AutopilotCoordinator', () => {
       let state: AutopilotSession | null = null;
       let identity = 'p1';
       let currentPlan = plan;
+      let currentActivity: import('../../agent-activity/model.js').AgentActivitySnapshot | null =
+        null;
       let session = {
         state: options.sessionState ?? 'ready',
         threadId: options.threadId === undefined ? 't' : options.threadId,
@@ -69,7 +71,7 @@ describe('AutopilotCoordinator', () => {
         policy: defaultAutopilotPolicy,
         plan: () => ({ plan: currentPlan, identity }),
         session: () => session,
-        activity: () => null,
+        activity: () => currentActivity,
         pendingInteraction: () => false,
         reconcile: async () => ({ compatible: true }),
         schedule: () => {
@@ -99,6 +101,9 @@ describe('AutopilotCoordinator', () => {
         },
         set session(value: typeof session) {
           session = value;
+        },
+        set activity(value: import('../../agent-activity/model.js').AgentActivitySnapshot | null) {
+          currentActivity = value;
         },
       };
     }
@@ -187,6 +192,93 @@ describe('AutopilotCoordinator', () => {
         code: 'AUTOPILOT_PLAN_COMPLETE',
       });
       expect(fixture.state).toBeNull();
+    });
+
+    it('uses only the fresh current canonical executor for snapshot health', async () => {
+      const fixture = subject();
+      fixture.coordinator.supervisionStarted('s');
+      await Promise.resolve();
+      await Promise.resolve();
+      const activity = (
+        child: Record<string, unknown>,
+        confidence: 'fresh' | 'stale' = 'fresh',
+      ) => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence,
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+        subagents: [
+          {
+            id: 'child',
+            state: 'working' as const,
+            reason: 'turnActive' as const,
+            observedAt: now,
+            lastActivityAt: now,
+            ...child,
+          },
+        ],
+      });
+      fixture.activity = activity({
+        canonicalPosition: 'L1',
+        canonicalTaskName: 'l1',
+        taskPath: '/root/l1',
+        threadId: 't1',
+        continuationGeneration: 2,
+      });
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({ healthy: true });
+      fixture.activity = activity({
+        canonicalPosition: 'L2',
+        canonicalTaskName: 'l2',
+        taskPath: '/root/l2',
+      });
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({
+        healthy: false,
+        phase: 'degraded',
+      });
+      fixture.activity = activity({
+        canonicalPosition: 'L1',
+        canonicalTaskName: 'explorer',
+        taskPath: '/root/x',
+      });
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({
+        healthy: false,
+        phase: 'degraded',
+      });
+      fixture.activity = activity(
+        { canonicalPosition: 'L1', canonicalTaskName: 'l1', taskPath: '/root/l1' },
+        'stale',
+      );
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({
+        healthy: false,
+        phase: 'degraded',
+      });
+    });
+
+    it('re-registers a valid parked lease after restart and removes it on disposal', () => {
+      const fixture = subject();
+      fixture.coordinator.supervisionStarted('s');
+      fixture.state = {
+        ...fixture.state!,
+        supervision: {
+          ...fixture.state!.supervision!,
+          outcome: 'parked',
+          probeKey: 'progress',
+          waitLease: {
+            id: 'lease',
+            probeKey: 'progress',
+            wakeConditions: ['agentActivityChanged'],
+          },
+        },
+      };
+      fixture.coordinator.restore('s');
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({
+        healthy: true,
+        phase: 'waitingForAgentEvent',
+      });
+      fixture.coordinator.dispose('s');
+      expect(fixture.coordinator.snapshot('s').health).toMatchObject({
+        healthy: false,
+        phase: 'degraded',
+      });
     });
 
     it('allows the root final after the authoritative final review passes', () => {
@@ -510,7 +602,7 @@ describe('AutopilotCoordinator', () => {
         controlIds: () => new Set([...controls.values()].map((control) => control.controlId)),
       },
       now: () => now,
-      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 1_000 },
       plan: () => ({ plan, identity: 'p1' }),
       session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
       activity: () => ({
@@ -534,6 +626,22 @@ describe('AutopilotCoordinator', () => {
     const scheduled = state!.lastControlId;
     expect(scheduled).toMatch(/^autopilot-/);
     expect(controls.get(`s:${scheduled}`)?.status).toBe('scheduled');
+    const scheduledSnapshot = events
+      .filter((event) => event.type === 'autopilot.updated')
+      .at(-1)!.payload;
+    expect(scheduledSnapshot).toEqual(coordinator.snapshot('s'));
+    expect(
+      (scheduledSnapshot as { health: { phase: string; healthy: boolean } }).health,
+    ).toMatchObject({
+      phase: 'continuationScheduled',
+      healthy: true,
+    });
+    expect(
+      events.filter((event) => event.type === 'session.status.updated').at(-1)?.payload,
+    ).toMatchObject({
+      state: 'working',
+      reason: 'autopilot',
+    });
     await timer?.();
     expect(events.filter((event) => event.type === 'autopilot.control-issued')[0]!.payload).toEqual(
       { controlId: scheduled },

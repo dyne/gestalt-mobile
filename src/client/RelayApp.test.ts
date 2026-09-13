@@ -10,12 +10,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 let controllerOptions: {
   publish(view: unknown): void;
   onSendError?(error: unknown, operationId: string): void;
+  onSessionEvent?(event: unknown): void;
 } | null = null;
 let fakeController: {
   selected: string | null;
   select(id: string | null): void;
   emit(id: string, view: unknown): void;
   failSend(error: unknown, operationId: string): void;
+  metadata(id: string, event: unknown): void;
 } | null = null;
 let activityOptions: { publish(items: ReadonlyMap<string, unknown>): void } | null = null;
 vi.mock('./features/agent-activity/agent-activity-controller.js', () => ({
@@ -47,6 +49,9 @@ vi.mock('./features/chat/chat-controller.js', () => ({
           if (id === fakeController?.selected) controllerOptions?.publish(view);
         },
         failSend: (error, operationId) => controllerOptions?.onSendError?.(error, operationId),
+        metadata: (id, event) => {
+          if (id === fakeController?.selected) controllerOptions?.onSessionEvent?.(event);
+        },
       };
     }
     select = (id: string | null) => {
@@ -138,6 +143,62 @@ describe('RelayApp chat controller composition', () => {
     expect(screen.queryByRole('navigation', { name: 'Primary' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open configuration' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open Chat in a separate window' })).toBeNull();
+  });
+
+  it('accepts a valid status only from the currently subscribed session and ignores malformed or late events', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    const authorizedFetch = vi.fn(
+      async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify(
+            String(input) === '/api/bootstrap'
+              ? {
+                  workspaces: [],
+                  profiles: [],
+                  models: [],
+                  sessions: [
+                    { id: 'a', state: 'ready', workspacePath: '/work/a' },
+                    { id: 'b', state: 'ready', workspacePath: '/work/b' },
+                  ],
+                }
+              : [],
+          ),
+        ),
+    );
+    render(RelayApp, {
+      authorizedFetch,
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+    await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+    const valid = {
+      type: 'session.status.updated',
+      sequence: 1,
+      payload: {
+        state: 'idle',
+        reason: 'incompleteWithoutContinuation',
+        confidence: 'fresh',
+        observedAt: '2026-09-13T12:00:00.000Z',
+        nextExpectedAction: 'Resume.',
+      },
+    };
+    fakeController?.metadata('a', valid);
+    await vi.waitFor(() => expect(screen.getByText('Idle')).toBeTruthy());
+    fakeController?.metadata('a', { ...valid, sequence: 2, payload: { state: 'working' } });
+    expect(screen.getByText('Idle')).toBeTruthy();
+    fakeController?.select('b');
+    fakeController?.metadata('a', valid);
+    expect(screen.queryByText('Resume.')).toBeNull();
   });
 
   it('opens a named window for the selected Chat session', async () => {

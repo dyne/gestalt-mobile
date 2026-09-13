@@ -5,6 +5,7 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
@@ -82,6 +83,8 @@ export class AutopilotCoordinator {
   private readonly publishedSnapshots = new Map<string, string>();
   private readonly planEventKeys = new Map<string, string>();
   private readonly activityEventKeys = new Map<string, string>();
+  /** Durable wait data is not proof that this process has a live subscription. */
+  private readonly parkedSubscriptions = new Map<string, string>();
   /** One reconciliation owns a session until it has published its next wake. */
   private readonly reconciling = new Set<string>();
   /** Serializes asynchronous watchdog and timer work per relay session. */
@@ -89,10 +92,11 @@ export class AutopilotCoordinator {
   constructor(private readonly deps: AutopilotDependencies) {}
 
   snapshot(sessionId: string): AutopilotSnapshot {
-    return autopilotSnapshot(
-      this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, this.deps.now()),
-      this.deps.policy.retryLimit,
-    );
+    const state = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, this.deps.now());
+    const control = state.lastControlId
+      ? this.deps.store.findControl(sessionId, state.lastControlId)
+      : null;
+    return this.snapshotFor(state, control ?? undefined);
   }
   controlIds(sessionId: string): ReadonlySet<string> {
     return this.deps.store.controlIds(sessionId);
@@ -117,7 +121,30 @@ export class AutopilotCoordinator {
     // coordinator. The plan-status watcher is authoritative and asynchronous,
     // so retaining enabled durable state until it supplies the projection is
     // safer than interpreting this short bootstrap gap as plan removal.
-    if (!this.deps.plan(sessionId)) return;
+    const retained = this.deps.plan(sessionId);
+    if (!retained) return;
+    if (state.supervision?.outcome === 'parked') {
+      if (retained.identity !== state.planIdentity) {
+        this.parkedSubscriptions.delete(sessionId);
+        return;
+      }
+      const validated = autopilotSnapshot(state, this.deps.policy.retryLimit, {
+        activeTurn: Boolean(session.activeTurnId),
+        executorActive: false,
+        control: 'none',
+        timerArmed: false,
+        reconciling: false,
+        planMatches: true,
+        parkedSubscriptionActive: true,
+        transitionFresh: true,
+        observedAt: this.deps.now(),
+      });
+      if (state.supervision.waitLease && validated.health.wait.wakeCategories.length > 0) {
+        this.parkedSubscriptions.set(sessionId, state.supervision.waitLease.id);
+        return;
+      }
+      this.parkedSubscriptions.delete(sessionId);
+    }
     const control = state.lastControlId
       ? this.deps.store.findControl(sessionId, state.lastControlId)
       : null;
@@ -162,6 +189,7 @@ export class AutopilotCoordinator {
     this.planEventKeys.delete(sessionId);
     this.activityEventKeys.delete(sessionId);
     this.reconciling.delete(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
   }
   /** Accepts a session-owned structured probe response; no transcript text is inspected. */
   reportProbe(sessionId: string, report: ProbeReport): boolean {
@@ -172,6 +200,9 @@ export class AutopilotCoordinator {
       report,
     );
     if (nextProtocol === state.supervision) return false;
+    if (nextProtocol.outcome === 'parked' && nextProtocol.waitLease)
+      this.parkedSubscriptions.set(sessionId, nextProtocol.waitLease.id);
+    else this.parkedSubscriptions.delete(sessionId);
     const now = this.deps.now();
     this.persist({
       ...state,
@@ -230,6 +261,7 @@ export class AutopilotCoordinator {
     if (!state?.requestedEnabled || !state.supervision) return false;
     const nextProtocol = consumeObservableWake(state.supervision, wake);
     if (nextProtocol === state.supervision) return false;
+    this.parkedSubscriptions.delete(sessionId);
     this.persist({ ...state, supervision: nextProtocol, updatedAt: this.deps.now() });
     this.evaluate(sessionId);
     return true;
@@ -418,6 +450,9 @@ export class AutopilotCoordinator {
           failureCode: null,
           turnId: null,
         };
+        // The durable event must describe an actually armed future wake, not
+        // merely a control row that is about to receive one.
+        this.arm(sessionId, prior.generation, decision.at);
         this.persist(next, control, [
           {
             sessionId,
@@ -427,7 +462,6 @@ export class AutopilotCoordinator {
           },
         ]);
         next = prior;
-        this.arm(sessionId, prior.generation, decision.at);
         break;
       case 'requestAttention': {
         const blocking = this.deps.attention?.(sessionId) ?? undefined;
@@ -801,15 +835,18 @@ export class AutopilotCoordinator {
       consecutiveNoProgress: prior.consecutiveNoProgress + 1,
       updatedAt: now,
     };
+    const priorControl = this.deps.store.findControl(sessionId, controlId);
+    if (!priorControl || priorControl.status !== 'scheduled') return false;
+    const issuedControl = { ...priorControl, status: 'issued' as const, updatedAt: now };
     const events = [
-      ...this.snapshotEvents(next),
+      ...this.snapshotEvents(next, issuedControl),
       { sessionId, type: 'autopilot.control-issued', payload: { controlId }, occurredAt: now },
     ];
     const control = this.deps.store.claimControlIssued
       ? this.deps.store.claimControlIssued(sessionId, controlId, now, next, events)
       : this.legacyClaim(sessionId, controlId, next, events);
     if (!control) return false;
-    this.publishedSnapshots.set(sessionId, this.semanticSnapshot(next));
+    this.publishedSnapshots.set(sessionId, this.semanticSnapshot(next, control));
     this.flushOutbox(sessionId);
     return true;
   }
@@ -818,14 +855,14 @@ export class AutopilotCoordinator {
     control?: AutopilotControl,
     events: readonly AutopilotAuditEvent[] = [],
   ): void {
-    const snapshotEvents = this.snapshotEvents(next);
+    const snapshotEvents = this.snapshotEvents(next, control);
     this.commit({
       state: next,
       ...(control ? { control } : {}),
       events: [...snapshotEvents, ...events],
     });
     if (snapshotEvents.length)
-      this.publishedSnapshots.set(next.sessionId, this.semanticSnapshot(next));
+      this.publishedSnapshots.set(next.sessionId, this.semanticSnapshot(next, control));
     this.flushOutbox(next.sessionId);
   }
   private arm(sessionId: string, generation: number, at: string): void {
@@ -1363,22 +1400,106 @@ export class AutopilotCoordinator {
     });
     this.flushOutbox(sessionId);
   }
-  private semanticSnapshot(next: AutopilotSession): string {
+  private authoritativeExecutorActive(
+    next: AutopilotSession,
+    plan: SupervisedPlan | null,
+    activity: AgentActivitySnapshot | null,
+  ): boolean {
+    if (!plan || activity?.confidence !== 'fresh') return false;
+    const selected = plan.steps.findIndex(
+      (step) => step.id === plan.currentStepId || step.state === 'WIP',
+    );
+    const index = selected >= 0 ? selected : plan.steps.findIndex((step) => step.state !== 'DONE');
+    if (index < 0) return false;
+    const position = `L${index + 1}`;
+    const taskName = `l${index + 1}`;
+    const child = activity.subagents
+      .filter(
+        (candidate) =>
+          candidate.canonicalPosition === position &&
+          candidate.canonicalTaskName === taskName &&
+          (!next.executor ||
+            ((candidate.threadId ?? candidate.id) === next.executor.threadId &&
+              candidate.taskPath === next.executor.taskPath)),
+      )
+      .sort(
+        (left, right) => (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1),
+      )[0];
+    return Boolean(
+      child &&
+      (child.state === 'working' ||
+        child.state === 'awaitingAgent' ||
+        child.ownedProcesses?.some(
+          (process) => process.state === 'running' || process.state === 'detached-active',
+        )),
+    );
+  }
+  /** Builds both GET and pre-commit event payloads from the same prospective facts. */
+  private snapshotFor(
+    next: AutopilotSession,
+    prospectiveControl?: AutopilotControl,
+  ): AutopilotSnapshot {
+    const session = this.deps.session(next.sessionId);
+    const plan = this.deps.plan(next.sessionId);
+    const activity = this.deps.activity(next.sessionId);
+    const now = this.deps.now();
+    const control =
+      prospectiveControl ??
+      (next.lastControlId ? this.deps.store.findControl(next.sessionId, next.lastControlId) : null);
+    return autopilotSnapshot(next, this.deps.policy.retryLimit, {
+      activeTurn: Boolean(session?.activeTurnId),
+      executorActive: this.authoritativeExecutorActive(next, plan?.plan ?? null, activity),
+      control: control?.status ?? 'none',
+      timerArmed: this.timers.has(next.sessionId),
+      reconciling: this.reconciling.has(next.sessionId),
+      planMatches: Boolean(plan && plan.identity === next.planIdentity),
+      parkedSubscriptionActive:
+        Boolean(next.supervision?.waitLease) &&
+        this.parkedSubscriptions.get(next.sessionId) === next.supervision?.waitLease?.id,
+      transitionFresh: Date.parse(now) - Date.parse(next.updatedAt) <= 120_000,
+      observedAt: now,
+    });
+  }
+  private semanticSnapshot(next: AutopilotSession, control?: AutopilotControl): string {
     return JSON.stringify({
-      ...autopilotSnapshot(next, this.deps.policy.retryLimit),
+      ...this.snapshotFor(next, control),
       updatedAt: '',
     });
   }
-  private snapshotEvents(next: AutopilotSession): readonly AutopilotAuditEvent[] {
-    const semantic = this.semanticSnapshot(next);
+  private snapshotEvents(
+    next: AutopilotSession,
+    control?: AutopilotControl,
+  ): readonly AutopilotAuditEvent[] {
+    const semantic = this.semanticSnapshot(next, control);
     if (this.publishedSnapshots.get(next.sessionId) === semantic) return [];
+    const session = this.deps.session(next.sessionId);
+    const plan = this.deps.plan(next.sessionId)?.plan ?? null;
+    const activity = this.deps.activity(next.sessionId);
+    const snapshot = this.snapshotFor(next, control);
     return [
       {
         sessionId: next.sessionId,
         type: 'autopilot.updated',
-        payload: autopilotSnapshot(next, this.deps.policy.retryLimit),
+        payload: snapshot,
         occurredAt: next.updatedAt,
       },
+      ...(session
+        ? [
+            {
+              sessionId: next.sessionId,
+              type: 'session.status.updated',
+              payload: deriveSessionStatus({
+                session,
+                plan,
+                activity,
+                autopilot: snapshot,
+                pendingAttention: this.deps.pendingInteraction(next.sessionId),
+                observedAt: next.updatedAt,
+              }),
+              occurredAt: next.updatedAt,
+            } satisfies AutopilotAuditEvent,
+          ]
+        : []),
     ];
   }
   private flushOutbox(sessionId: string): void {

@@ -447,6 +447,7 @@ export class ChatController {
       event.type === 'plan.updated' ||
       event.type === 'plan.closed' ||
       event.type === 'agent.activity.updated' ||
+      event.type === 'session.status.updated' ||
       event.type === 'autopilot.updated' ||
       event.type === 'org-plan.attention-required' ||
       event.type === 'org-plan.attention-resolved'
@@ -481,6 +482,8 @@ export class ChatController {
       return (
         typeof value.sessionId === 'string' && Boolean(value.root) && Array.isArray(value.subagents)
       );
+    if (event.type === 'session.status.updated')
+      return typeof value.state === 'string' && typeof value.reason === 'string';
     if (
       event.type === 'autopilot.updated' ||
       event.type === 'org-plan.attention-required' ||

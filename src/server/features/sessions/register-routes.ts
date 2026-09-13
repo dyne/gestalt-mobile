@@ -59,7 +59,13 @@ export function registerSessionRoutes(
       reportFailure: (operation, error) =>
         deps.logger.error(`${operation} failed: ${safeErrorLabel(error)}`),
     });
-    registerGetSession(app, sessions.find, sessions.agentActivity, sessions.autopilotSnapshot);
+    registerGetSession(
+      app,
+      sessions.find,
+      sessions.agentActivity,
+      sessions.autopilotSnapshot,
+      sessions.plan,
+    );
     if (sessions.refreshActivity)
       registerRefreshActivity(app, {
         exists: (id) => sessions.find(id) !== null,

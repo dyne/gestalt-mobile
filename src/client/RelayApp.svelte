@@ -50,6 +50,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { ChatFollowTail } from './features/chat/chat-follow-tail.js';
   import { ChatTailScheduler } from './features/chat/chat-tail-scheduler.js';
   import type { ProjectionEvent } from './features/chat/chat-projection.js';
+  import { isSessionStatus } from './features/sessions/session-status.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
   import { createToastQueue } from './features/feedback/toast-queue.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
@@ -1175,6 +1176,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const selectedId = sessionId;
     if (!selectedId) return;
     if (event.type === 'agent.activity.updated') {
+      return;
+    }
+    if (event.type === 'session.status.updated') {
+      const status = event.payload;
+      if (isSessionStatus(status))
+        sessions = sessions.map((item) =>
+          item.id === selectedId ? { ...item, sessionStatus: status } : item,
+        );
       return;
     }
     if (

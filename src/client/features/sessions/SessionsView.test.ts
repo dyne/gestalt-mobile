@@ -139,6 +139,48 @@ describe('SessionsView session base tree', () => {
     expect(autopilot.getAttribute('aria-pressed')).toBe('true');
     expect(autopilot.classList.contains('accentPressed')).toBe(true);
   });
+  it('renders a stable, explainable idle verdict for an incomplete session', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'stuck',
+          state: 'ready',
+          workspacePath: '/work',
+          sessionStatus: {
+            state: 'idle',
+            reason: 'incompleteWithoutContinuation',
+            confidence: 'fresh',
+            observedAt: '2026-09-13T12:00:00.000Z',
+            nextExpectedAction: 'Resume supervision.',
+          },
+        },
+      ],
+    });
+    expect(
+      screen.getByRole('group', { name: /idle: incompletewithoutcontinuation/i }),
+    ).toBeTruthy();
+    expect(screen.getByText(/Resume supervision/)).toBeTruthy();
+  });
+  it('keeps stale working evidence calm while fresh working evidence pulses', () => {
+    const status = {
+      state: 'working' as const,
+      reason: 'autopilot' as const,
+      observedAt: '2026-09-13T12:00:00.000Z',
+      nextExpectedAction: 'Wait.',
+      confidence: 'stale' as const,
+    };
+    const { container, unmount } = renderView({
+      sessions: [{ id: 's', state: 'ready', sessionStatus: status }],
+    });
+    expect(container.querySelector('.verdict-dot')?.classList.contains('live')).toBe(false);
+    unmount();
+    renderView({
+      sessions: [
+        { id: 's', state: 'ready', sessionStatus: { ...status, confidence: 'fresh' as const } },
+      ],
+    });
+    expect(document.querySelector('.verdict-dot')?.classList.contains('live')).toBe(true);
+  });
   it('makes a disconnected session activity projection explicit in local Autopilot liveness', () => {
     renderView({
       sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
@@ -170,7 +212,7 @@ describe('SessionsView session base tree', () => {
         ],
       ]),
     });
-    const liveness = screen.getByRole('status', { name: 'Monitoring disconnected' });
+    const liveness = screen.getByRole('status', { name: 'Autopilot disconnected' });
     expect(liveness.getAttribute('data-state')).toBe('disconnected');
     expect(liveness.classList.contains('active')).toBe(false);
   });
