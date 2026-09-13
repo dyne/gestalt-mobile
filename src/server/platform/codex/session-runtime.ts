@@ -413,9 +413,10 @@ export class CodexSessionRuntime {
     const owned = this.sessions.get(session.id);
     if (!owned) return [];
     const children: DirectChildThread[] = [];
+    const childIds = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
-    for (let page = 0; page < 4 && children.length < 64; page += 1) {
+    for (let page = 0; page < 4 && childIds.size < 64; page += 1) {
       const result = await owned.process.rpc.request('thread/list', {
         parentThreadId: session.threadId,
         ...(cursor ? { cursor } : {}),
@@ -442,6 +443,7 @@ export class CodexSessionRuntime {
             rawStatus === 'systemError'
               ? rawStatus
               : undefined;
+          childIds.add(value.id);
           return [
             {
               id: value.id,
@@ -462,18 +464,18 @@ export class CodexSessionRuntime {
           ];
         }),
       );
+      if (childIds.size > 64) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
       const next =
         typeof response?.nextCursor === 'string' && response.nextCursor.length <= 256
           ? response.nextCursor
           : undefined;
-      if (!next) return this.withResolvedChildModels(owned, children);
-      if (cursors.has(next) || children.length >= 64)
-        throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
+      if (!next) return this.withResolvedChildModels(owned, uniqueDirectChildren(children));
+      if (cursors.has(next) || childIds.size >= 64) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
       cursors.add(next);
       cursor = next;
     }
     if (cursor) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
-    return this.withResolvedChildModels(owned, children);
+    return this.withResolvedChildModels(owned, uniqueDirectChildren(children));
   }
 
   private async withResolvedChildModels(
@@ -968,6 +970,15 @@ export class CodexSessionRuntime {
     if (notification.method === 'turn/completed' && turnId) resource.turnThreads.delete(turnId);
     return origin;
   }
+}
+
+/** `thread/list` pages can replay an id while a child transitions. Keep its newest row. */
+function uniqueDirectChildren(
+  children: readonly DirectChildThread[],
+): readonly DirectChildThread[] {
+  const result = new Map<string, DirectChildThread>();
+  for (const child of children) result.set(child.id, child);
+  return [...result.values()].slice(0, 64);
 }
 
 function isMethodNotFound(error: unknown): boolean {

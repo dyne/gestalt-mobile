@@ -102,6 +102,36 @@ describe('AgentActivityController', () => {
         root: { state: 'wat', observedAt: 'now', lastActivityAt: 'now' },
       }),
     ).toBe(false);
+    expect(
+      isAgentActivitySnapshot({
+        ...snapshot('s'),
+        subagents: [
+          {
+            id: 'child',
+            state: 'idle',
+            observedAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-01T00:00:00.000Z',
+            ownedProcesses: [
+              { state: 'invented', ownership: 'executor', observedAt: '2026-01-01T00:00:00.000Z' },
+            ],
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isAgentActivitySnapshot({
+        ...snapshot('s'),
+        subagents: [
+          {
+            id: 'child',
+            state: 'idle',
+            observedAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-01T00:00:00.000Z',
+            ownedProcesses: [{ state: 'running', ownership: 'executor', observedAt: 'not-a-date' }],
+          },
+        ],
+      }),
+    ).toBe(false);
   });
   it('ignores a late hydrate after explicit removal', async () => {
     const read = deferred<{ agentActivity?: unknown }>();

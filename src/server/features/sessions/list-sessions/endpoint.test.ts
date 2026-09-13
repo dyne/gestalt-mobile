@@ -35,6 +35,46 @@ describe('GET /api/sessions', () => {
     ]);
     await app.close();
   });
+  it('redacts private process fields from list activity snapshots', async () => {
+    const app = fastify();
+    registerListSessions(app, {
+      list: () => [{ id: 'session-1', state: 'ready', threadId: null }] as never,
+      activity: () =>
+        ({
+          sessionId: 'session-1',
+          root: { state: 'idle' },
+          aggregateSubagents: 'idle',
+          confidence: 'fresh',
+          subagents: [
+            {
+              id: 'child',
+              state: 'idle',
+              reason: 'unknown',
+              observedAt: '2026-01-01T00:00:00Z',
+              lastActivityAt: '2026-01-01T00:00:00Z',
+              ownedProcesses: [
+                {
+                  processId: 'private',
+                  itemId: 'private',
+                  ownerThreadId: 'private',
+                  ownerTaskPath: 'private',
+                  ownership: 'supervisor',
+                  state: 'running',
+                  observedAt: '2026-01-01T00:00:00Z',
+                  elapsedMs: 1,
+                  cpuPercent: 1,
+                  rssBytes: 1,
+                },
+              ],
+            },
+          ],
+        }) as never,
+    });
+    const body = JSON.stringify((await app.inject('/api/sessions')).json());
+    expect(body).not.toContain('private');
+    expect(body).toContain('"ownership":"supervisor"');
+    await app.close();
+  });
   it('includes each session retained plan without changing durable session state', async () => {
     const app = fastify();
     registerListSessions(app, {

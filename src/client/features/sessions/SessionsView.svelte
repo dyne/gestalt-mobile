@@ -158,6 +158,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
                 popupAlign="start"
                 rootModel={session.model ?? models?.[0]}
+                plan={session.plan}
               />
               <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
               <AutopilotLiveness

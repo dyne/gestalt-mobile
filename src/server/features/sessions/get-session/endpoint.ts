@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { buildResumeCommand } from '../application/resume-command.js';
+import { toAgentActivityDto } from '../../agent-activity/activity-dto.js';
 
 export function registerGetSession(
   app: FastifyInstance,
@@ -21,7 +22,7 @@ export function registerGetSession(
     return session
       ? reply.send({
           ...session,
-          ...(activity ? { agentActivity: activity(session.id) } : {}),
+          ...(activity ? { agentActivity: toAgentActivityDto(activity(session.id)) } : {}),
           ...(autopilot ? { autopilot: autopilot(session.id) } : {}),
           resumeCommand: session.threadId ? buildResumeCommand(session) : null,
         })

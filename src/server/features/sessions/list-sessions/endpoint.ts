@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { buildResumeCommand } from '../application/resume-command.js';
+import { toAgentActivityDto } from '../../agent-activity/activity-dto.js';
 
 export function registerListSessions(
   app: FastifyInstance,
@@ -25,7 +26,7 @@ export function registerListSessions(
       const plan = deps.plan?.(session.id) ?? null;
       return {
         ...session,
-        ...(deps.activity ? { agentActivity: deps.activity(session.id) } : {}),
+        ...(deps.activity ? { agentActivity: toAgentActivityDto(deps.activity(session.id)) } : {}),
         ...(deps.autopilot ? { autopilot: deps.autopilot(session.id) } : {}),
         ...(plan ? { plan } : {}),
         resumeCommand: session.threadId ? buildResumeCommand(session) : null,

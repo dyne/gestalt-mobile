@@ -199,6 +199,10 @@ export function projectAgentActivity(
       const before = children.get(fact.childId);
       const taskPath = fact.childTaskPath ?? before?.taskPath;
       const identity = taskPath ? parseOrgPlanAgentIdentity(taskPath) : null;
+      const terminalReviewer =
+        taskPath?.split('/').filter(Boolean).at(-1) === 'final_review' ||
+        before?.canonicalTaskName === 'final_review' ||
+        fact.childRole === 'org-plan-reviewer';
       const outcome = childOutcome(fact.childStatus, fact.collaborationAction, before?.outcome);
       const child: SubagentActivity = Object.freeze({
         id: fact.childId,
@@ -225,7 +229,9 @@ export function projectAgentActivity(
               canonicalPosition: identity.canonicalPosition,
               continuationGeneration: identity.generation,
             }
-          : {}),
+          : terminalReviewer
+            ? { canonicalTaskName: 'final_review' }
+            : {}),
         ...(outcome ? { outcome } : {}),
         ...(fact.childOwnedProcesses
           ? { ownedProcesses: Object.freeze([...fact.childOwnedProcesses]) }
@@ -263,13 +269,23 @@ export function withActivityConfidence(
   return snapshot.confidence === confidence ? snapshot : Object.freeze({ ...snapshot, confidence });
 }
 
-/** Process loss revokes child identities; recovery must repopulate them from a fresh list read. */
+/**
+ * A process disconnect makes the roster stale, but is not evidence that its
+ * children ceased to exist. Keep their authoritative identity and present the
+ * last known physical generation as disconnected until disposal or a later
+ * reconciliation replaces it.
+ */
 export function clearAgentActivityChildren(snapshot: AgentActivitySnapshot): AgentActivitySnapshot {
   if (snapshot.subagents.length === 0 && snapshot.aggregateSubagents === 'idle') return snapshot;
+  const subagents = Object.freeze(
+    snapshot.subagents.map((child) =>
+      Object.freeze({ ...child, state: 'disconnected' as const, reason: 'processExited' as const }),
+    ),
+  );
   return Object.freeze({
     ...snapshot,
-    subagents: Object.freeze([]),
-    aggregateSubagents: 'idle' as const,
+    subagents,
+    aggregateSubagents: aggregate(subagents),
   });
 }
 
@@ -363,6 +379,12 @@ function semantic(snapshot: AgentActivitySnapshot): unknown {
       nickname: child.nickname,
       role: child.role,
       model: child.model,
+      taskPath: child.taskPath,
+      canonicalTaskName: child.canonicalTaskName,
+      canonicalPosition: child.canonicalPosition,
+      continuationGeneration: child.continuationGeneration,
+      outcome: child.outcome,
+      ownedProcesses: child.ownedProcesses,
       state: child.state,
       reason: child.reason,
     })),

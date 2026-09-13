@@ -8,6 +8,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { onMount, untrack } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
   import { orgPlanAgentDisplayName } from '../../../shared/org-plan-position.js';
+  import type { SupervisedPlan } from '../plans/contracts.js';
   import type { AgentActivitySnapshot, AgentActivityState } from './contracts.js';
   import { activityAnnouncement } from './announcement-policy.js';
   import { compactElapsedTime } from './relative-activity-time.js';
@@ -16,11 +17,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     compact = false,
     popupAlign = 'end',
     rootModel,
+    plan,
   }: {
     activity: AgentActivitySnapshot | null;
     compact?: boolean;
     popupAlign?: 'start' | 'end';
     rootModel?: string;
+    plan?: SupervisedPlan;
   } = $props();
   const labels: Record<AgentActivityState, string> = {
     working: 'working',
@@ -33,6 +36,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type MonitorAgent = Readonly<{
     key: string;
     name: string;
+    planOrder: number;
+    generation: number;
     role?: string;
     model?: string;
     state: AgentActivityState;
@@ -60,12 +65,49 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ? activity.root.state
         : activity.aggregateSubagents,
   );
+  function l1Title(position?: string): string | undefined {
+    const match = /^L([1-9]\d*)$/.exec(position ?? '');
+    return match ? plan?.steps[Number(match[1]) - 1]?.title : undefined;
+  }
+  function childName(child: AgentActivitySnapshot['subagents'][number]): string {
+    const title = l1Title(child.canonicalPosition);
+    if (child.canonicalPosition && title) return `${child.canonicalPosition} — ${title}`;
+    if (child.canonicalPosition) return `${child.canonicalPosition} — title unavailable`;
+    if (
+      (child.canonicalTaskName === 'final_review' ||
+        child.role === 'final-reviewer' ||
+        child.role === 'org-plan-reviewer') &&
+      plan
+    )
+      return `Final review — ${plan.title}`;
+    return `Non-plan agent — ${orgPlanAgentDisplayName(child.nickname ?? child.role ?? 'unknown agent')}`;
+  }
+  function rootName(): string {
+    return plan ? `Supervisor — ${plan.title}` : 'Supervisor';
+  }
+  function positionOrder(position?: string): number {
+    const match = /^L([1-9]\d*)(?:\.([1-9]\d*))?$/.exec(position ?? '');
+    return match ? Number(match[1]) * 1_000 + Number(match[2] ?? 0) : Number.MAX_SAFE_INTEGER;
+  }
+  function childOrder(
+    left: AgentActivitySnapshot['subagents'][number],
+    right: AgentActivitySnapshot['subagents'][number],
+  ): number {
+    return (
+      positionOrder(left.canonicalPosition) - positionOrder(right.canonicalPosition) ||
+      (left.continuationGeneration ?? 1) - (right.continuationGeneration ?? 1) ||
+      stateOrder[left.state] - stateOrder[right.state] ||
+      childName(left).localeCompare(childName(right))
+    );
+  }
   let orderedAgents = $derived.by<readonly MonitorAgent[]>(() => {
     if (!activity) return [];
     return [
       {
         key: 'root',
-        name: 'Root agent',
+        name: rootName(),
+        planOrder: -1,
+        generation: 0,
         role: 'supervisor',
         ...(rootModel ? { model: rootModel } : {}),
         state: activity.root.state,
@@ -73,7 +115,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       },
       ...activity.subagents.map((child) => ({
         key: `child:${child.id}`,
-        name: orgPlanAgentDisplayName(child.nickname ?? child.id),
+        name: childName(child),
+        planOrder: positionOrder(child.canonicalPosition),
+        generation: child.continuationGeneration ?? 1,
         ...(child.role ? { role: child.role } : {}),
         ...(child.model ? { model: child.model } : {}),
         state: child.state,
@@ -81,20 +125,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       })),
     ].sort(
       (left, right) =>
-        stateOrder[left.state] - stateOrder[right.state] || left.name.localeCompare(right.name),
+        left.planOrder - right.planOrder ||
+        left.generation - right.generation ||
+        stateOrder[left.state] - stateOrder[right.state] ||
+        left.name.localeCompare(right.name),
     );
   });
-  let orderedSubagents = $derived(
-    activity
-      ? [...activity.subagents].sort(
-          (left, right) =>
-            stateOrder[left.state] - stateOrder[right.state] ||
-            orgPlanAgentDisplayName(left.nickname ?? left.id).localeCompare(
-              orgPlanAgentDisplayName(right.nickname ?? right.id),
-            ),
-        )
-      : [],
-  );
+  let orderedSubagents = $derived(activity ? [...activity.subagents].sort(childOrder) : []);
   onMount(() => {
     const timer = window.setInterval(() => (now = Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -174,9 +211,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <ul>
           {#each orderedSubagents as child (child.id)}
             <li>
-              <strong>{orgPlanAgentDisplayName(child.nickname ?? child.id)}</strong>{child.role
-                ? ` · ${child.role}`
-                : ''}{child.model ? ` · Model: ${child.model}` : ''} —
+              <strong>{childName(child)}</strong>{child.role ? ` · ${child.role}` : ''}{child.model
+                ? ` · Model: ${child.model}`
+                : ''} —
               {labels[child.state]} <small>{child.lastActivityAt}</small>
             </li>
           {/each}

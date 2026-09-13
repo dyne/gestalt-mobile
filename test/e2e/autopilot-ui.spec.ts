@@ -501,7 +501,7 @@ for (const item of cases) {
       expect(shapes[0].radius).toBe(shapes[1].radius);
       expect(Math.abs(shapes[0].height - shapes[1].height)).toBeLessThanOrEqual(1);
       await agents.click();
-      await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
+      await expect(page.getByLabel('Agent activity')).toContainText('Supervisor');
       await expect(page.getByLabel('Agent activity')).toContainText('waiting for child');
       await expect(page.getByLabel('Agent activity')).toContainText(
         'supervisor · Model: gpt-5.6-sol',

@@ -48,6 +48,7 @@ import {
   type RelaySessionSnapshot,
 } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
+import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import {
   isAutopilotWaitLeaseCall,
@@ -234,7 +235,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const activity = new AgentActivityRegistry(
     (snapshot, occurredAt) => {
       events.publish(
-        journal.append(snapshot.sessionId, 'agent.activity.updated', snapshot, occurredAt),
+        journal.append(
+          snapshot.sessionId,
+          'agent.activity.updated',
+          toAgentActivityDto(snapshot),
+          occurredAt,
+        ),
       );
       notifyAutopilotActivity(snapshot.sessionId);
     },

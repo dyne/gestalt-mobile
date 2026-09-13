@@ -19,6 +19,97 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('keeps the latest duplicate across pages and permits exactly 64 unique children', async () => {
+    let page = 0;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'initialize' || method === 'thread/resume') return {};
+          page += 1;
+          return page === 1
+            ? {
+                data: [
+                  { id: 'child', status: { type: 'notLoaded' } },
+                  ...Array.from({ length: 62 }, (_, index) => ({
+                    id: `child-${index}`,
+                    status: { type: 'idle' },
+                  })),
+                ],
+                nextCursor: 'next',
+              }
+            : {
+                data: [
+                  {
+                    id: 'child',
+                    status: { type: 'active' },
+                    source: { subagent: { thread_spawn: { agent_path: '/root/l4_g2' } } },
+                  },
+                ],
+              };
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 's',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    const children = await runtime.listDirectChildren(session);
+    expect(children).toHaveLength(63);
+    expect(children.find((child) => child.id === 'child')).toMatchObject({
+      status: 'active',
+      taskPath: '/root/l4_g2',
+    });
+  });
+  it('accepts exactly 64 unique children without a next cursor', async () => {
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) =>
+          method === 'initialize' || method === 'thread/resume'
+            ? {}
+            : {
+                data: Array.from({ length: 64 }, (_, index) => ({
+                  id: `child-${index}`,
+                  status: { type: 'idle' },
+                })),
+              },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'sixty-four',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+    await expect(runtime.listDirectChildren(session)).resolves.toHaveLength(64);
+  });
   it('keeps the resolved child model published by thread settings across history refreshes', async () => {
     let publishNotification:
       ((notification: { method: string; params: unknown }) => void) | undefined;
