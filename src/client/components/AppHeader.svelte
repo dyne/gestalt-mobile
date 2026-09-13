@@ -17,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onlock = () => {},
     ondevices = () => {},
     onscratchpad = () => {},
+    onupdaterestart = async () => {},
     ondetach,
   }: {
     theme: ThemeId;
@@ -28,8 +29,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
     onscratchpad?: () => void;
+    onupdaterestart?: () => Promise<void>;
     ondetach?: () => void;
   } = $props();
+
+  let updateDialog = $state<HTMLDialogElement | null>(null);
+  let updateCancel = $state<HTMLButtonElement | null>(null);
+  let updatePending = $state(false);
+
+  function openUpdateRestart(): void {
+    updateDialog?.showModal();
+    queueMicrotask(() => updateCancel?.focus());
+  }
+
+  async function confirmUpdateRestart(): Promise<void> {
+    updatePending = true;
+    try {
+      await onupdaterestart();
+      updateDialog?.close();
+    } catch {
+      // The application reports the actionable failure through the shared toast queue.
+    } finally {
+      updatePending = false;
+    }
+  }
 </script>
 
 <header class="app-header">
@@ -116,7 +139,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onclick={onlock}>Lock Gestalt Mobile</button
     >
   {/if}
+  <div class="maintenance-actions">
+    <button
+      type="button"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
+      onclick={openUpdateRestart}>Update and restart</button
+    >
+  </div>
 </div>
+
+<dialog
+  bind:this={updateDialog}
+  aria-labelledby="update-restart-title"
+  aria-describedby="update-restart-description"
+  oncancel={(event) => updatePending && event.preventDefault()}
+>
+  <h2 id="update-restart-title">Update Gestalt?</h2>
+  <p id="update-restart-description">
+    Mobile and every active session will disconnect briefly. Saved sessions remain available after
+    the relay restarts.
+  </p>
+  <div class="dialog-actions">
+    <button
+      bind:this={updateCancel}
+      type="button"
+      disabled={updatePending}
+      onclick={() => updateDialog?.close()}>Cancel</button
+    >
+    <button type="button" disabled={updatePending} onclick={() => void confirmUpdateRestart()}
+      >{updatePending ? 'Starting update…' : 'Update and restart'}</button
+    >
+  </div>
+</dialog>
 
 <style>
   .session-path {
@@ -154,6 +209,50 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     stroke-linecap: round;
     stroke-linejoin: round;
     stroke-width: 1.75;
+  }
+
+  .maintenance-actions {
+    margin-block-start: 0.5rem;
+    padding-block-start: 0.5rem;
+    border-block-start: 1px solid var(--theme-border);
+  }
+
+  .maintenance-actions button {
+    inline-size: 100%;
+  }
+
+  dialog {
+    box-sizing: border-box;
+    inline-size: min(28rem, calc(100vw - 2rem));
+    padding: 1.25rem;
+    color: var(--theme-text);
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+    box-shadow: 0 1rem 2.5rem var(--theme-shadow);
+  }
+
+  dialog::backdrop {
+    background: color-mix(in srgb, var(--theme-page) 58%, transparent);
+  }
+
+  dialog h2 {
+    margin-block: 0 0.5rem;
+  }
+
+  dialog p {
+    margin-block: 0 1.25rem;
+    color: var(--theme-text-muted);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+  }
+
+  .dialog-actions button:last-child {
+    font-weight: 700;
   }
 
   @media (max-width: 34rem) {

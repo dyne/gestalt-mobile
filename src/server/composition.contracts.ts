@@ -2185,6 +2185,7 @@ describe('production composition', () => {
           'protected',
         ],
         ['POST', '/api/git/clone', '/api/git/clone', 'protected'],
+        ['POST', '/api/maintenance/update-restart', '/api/maintenance/update-restart', 'protected'],
         ['GET', '/api/skills', '/api/skills', 'protected'],
         ['HEAD', '/api/skills', '/api/skills', 'protected'],
         ['GET', '/api/skill-profiles', '/api/skill-profiles', 'protected'],

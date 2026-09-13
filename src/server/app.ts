@@ -57,6 +57,8 @@ import { registerAutopilotRoutes } from './features/autopilot/register-routes.js
 import type { AutopilotCoordinator } from './features/autopilot/application/service.js';
 import { registerFileRoutes } from './features/files/register-routes.js';
 import type { WorkspaceFileSource } from './features/files/application/ports.js';
+import { registerMaintenanceRoutes } from './features/maintenance/register-routes.js';
+import type { UpdateRestartScheduler } from './features/maintenance/application/ports.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -212,6 +214,9 @@ export type AppDependencies = {
     ListSkillProfilesDependencies &
     ReplaceSkillProfileDependencies &
     DeleteSkillProfileDependencies;
+  maintenance?: {
+    updateRestart: UpdateRestartScheduler;
+  };
   auth?: {
     repository: AuthorizationRepository;
     clock: Clock;
@@ -260,6 +265,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerFileRoutes(app, deps);
   registerGitRoutes(app, deps);
   registerSkillRoutes(app, deps);
+  registerMaintenanceRoutes(app, deps);
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }
