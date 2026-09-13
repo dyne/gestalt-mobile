@@ -51,6 +51,7 @@ import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import {
+  isAgentCapacityRecoveryCall,
   isAutopilotWaitLeaseCall,
   resolvedServerRequestId,
   toPendingInteraction,
@@ -93,6 +94,7 @@ import {
   autopilotWaitLeaseToolResponse,
   type AutopilotWaitLease,
 } from '../shared/contracts/autopilot-wait-lease.js';
+import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
@@ -500,6 +502,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
+  let scheduleAgentCapacityRecovery: (
+    sessionId: string,
+    acknowledge: () => boolean,
+  ) => boolean = () => false;
   let planMeasurementRefresh: PlanMeasurementRefresh | undefined;
   const publishInteractionResolved = (
     sessionId: string,
@@ -671,6 +677,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
+          if (!rawInteraction && isAgentCapacityRecoveryCall(request)) {
+            const rootOwned =
+              origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
+            return (
+              rootOwned &&
+              scheduleAgentCapacityRecovery(
+                sessionId,
+                () =>
+                  runtime?.resolveServerRequest(
+                    sessionId,
+                    String(request.id),
+                    agentCapacityRecoveryToolResponse(),
+                  ) === true,
+              )
+            );
+          }
           if (!rawInteraction && isAutopilotWaitLeaseCall(request)) {
             const rootOwned =
               origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
@@ -834,6 +856,38 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
   if (runtime) {
+    const capacityRecoveries = new Set<string>();
+    scheduleAgentCapacityRecovery = (sessionId, acknowledge) => {
+      if (capacityRecoveries.has(sessionId) || !acknowledge()) return false;
+      capacityRecoveries.add(sessionId);
+      setTimeout(() => {
+        void (async () => {
+          try {
+            if (closing) return;
+            const session = sessions.find(sessionId);
+            if (!session || session.desiredState !== 'active' || !session.threadId) return;
+            const recovering = RelaySession.rehydrate(session).beginRecovery(
+              new Date().toISOString(),
+            ).snapshot;
+            saveSession(recovering);
+            try {
+              const restored = await runtime.recycle(recovering, new Date().toISOString());
+              saveSession(restored);
+            } catch {
+              const current = sessions.find(sessionId);
+              if (current)
+                saveSession(
+                  RelaySession.rehydrate(current).requireAttention(new Date().toISOString())
+                    .snapshot,
+                );
+            }
+          } finally {
+            capacityRecoveries.delete(sessionId);
+          }
+        })();
+      }, 500);
+      return true;
+    };
     const supervisor = new SessionSupervisor(
       async (sessionId) => {
         const session = sessions.find(sessionId);

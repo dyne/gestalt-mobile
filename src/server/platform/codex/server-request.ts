@@ -18,6 +18,10 @@ import {
   GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
   parseAutopilotWaitLease,
 } from '../../../shared/contracts/autopilot-wait-lease.js';
+import {
+  GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME,
+  parseAgentCapacityRecovery,
+} from '../../../shared/contracts/agent-capacity-recovery.js';
 
 export function toPendingInteraction(input: {
   id: number;
@@ -83,6 +87,20 @@ export function isAutopilotWaitLeaseCall(input: {
     input.method === 'item/tool/call' &&
     isRecord(input.params) &&
     input.params.tool === GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME
+  );
+}
+
+export function isAgentCapacityRecoveryCall(input: {
+  id: number;
+  method: string;
+  params: unknown;
+}): boolean {
+  return (
+    Number.isSafeInteger(input.id) &&
+    input.method === 'item/tool/call' &&
+    isRecord(input.params) &&
+    input.params.tool === GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME &&
+    parseAgentCapacityRecovery(input.params.arguments) !== null
   );
 }
 

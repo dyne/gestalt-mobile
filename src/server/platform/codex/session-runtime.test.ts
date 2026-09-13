@@ -15,6 +15,8 @@ import {
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
+import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
+import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
@@ -1303,6 +1305,7 @@ describe('CodexSessionRuntime', () => {
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
+        gestaltAgentCapacityRecoveryDynamicTool,
       ],
     });
   });
@@ -1453,6 +1456,62 @@ describe('CodexSessionRuntime', () => {
       params: { threadId: 'thread-1' },
     });
     expect(closed).toBe(1);
+  });
+
+  it('recycles one app-server and resumes the same durable root thread', async () => {
+    let launches = 0;
+    let closed = 0;
+    const calls: Array<{ launch: number; method: string; params: unknown }> = [];
+    const runtime = new CodexSessionRuntime(() => {
+      const launch = ++launches;
+      return {
+        rpc: {
+          request: async (method, params) => {
+            calls.push({ launch, method, params });
+            return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {
+          closed += 1;
+        },
+      };
+    });
+    const ready = await runtime.start(
+      {
+        id: 'session-1',
+        workspaceId: 'workspace-1',
+        workspacePath: '/workspace',
+        profile: 'default',
+        threadId: null,
+        state: 'starting',
+        desiredState: 'active',
+        activeTurnId: null,
+        protocolVersion: null,
+        failureCount: 0,
+        pendingInteractions: [],
+        createdAt: 'before',
+        updatedAt: 'before',
+      },
+      'started',
+    );
+
+    const recovering = RelaySession.rehydrate(ready).beginRecovery('recovering').snapshot;
+    const restored = await runtime.recycle(recovering, 'restored');
+
+    expect({ launches, closed }).toEqual({ launches: 2, closed: 1 });
+    expect(restored).toMatchObject({
+      threadId: 'thread-1',
+      state: 'ready',
+      desiredState: 'active',
+      activeTurnId: null,
+    });
+    expect(calls).toContainEqual({
+      launch: 2,
+      method: 'thread/resume',
+      params: expect.objectContaining({ threadId: 'thread-1', cwd: '/workspace' }),
+    });
   });
 
   it('does not report an explicit release as an unexpected process exit', async () => {
@@ -1706,6 +1765,7 @@ describe('CodexSessionRuntime', () => {
           gestaltOrgPlanAttentionDynamicTool,
           gestaltOrgPlanCheckpointDynamicTool,
           gestaltAutopilotWaitLeaseDynamicTool,
+          gestaltAgentCapacityRecoveryDynamicTool,
         ],
       });
     },
