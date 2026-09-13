@@ -12,10 +12,18 @@ const path = process.argv[2];
 if (!path) throw new Error('Usage: check-package-contents.mjs <npm-pack-json>');
 const [report] = JSON.parse(await readFile(path, 'utf8'));
 const files = report.files.map((file) => file.path);
-const required = ['package.json', 'README.md', 'LICENSE', 'dist/server/server/main.js'];
+const required = [
+  'package.json',
+  'README.md',
+  'LICENSE',
+  'dist/server/server/main.js',
+  'gestalt-supervision-capabilities.json',
+];
 const invalid = files.filter(
   (file) =>
-    !['package.json', 'README.md', 'LICENSE'].includes(file) &&
+    !['package.json', 'README.md', 'LICENSE', 'gestalt-supervision-capabilities.json'].includes(
+      file,
+    ) &&
     !file.startsWith('dist/server/') &&
     !file.startsWith('dist/client/'),
 );

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "component": "mobile",
+  "supervisionContract": 1,
+  "capabilities": [
+    "supervision-start",
+    "wait-lease-tool",
+    "checkpoint-tool",
+    "controller-status",
+    "canonical-agent-identity",
+    "session-verdict",
+    "acknowledgement-safe-composer",
+    "org-plan-contract"
+  ]
+}

@@ -31,7 +31,13 @@ describe('publishable package manifest', () => {
       bin: { 'gestalt-mobile': 'dist/server/server/main.js' },
       engines: { node: '>=24.0.0' },
       license: 'AGPL-3.0-or-later',
-      files: ['dist/server', 'dist/client', 'README.md', 'LICENSE'],
+      files: [
+        'dist/server',
+        'dist/client',
+        'README.md',
+        'LICENSE',
+        'gestalt-supervision-capabilities.json',
+      ],
     });
     expect(manifest.private).not.toBe(true);
     expect(Object.keys(manifest.bin)).toEqual(['gestalt-mobile']);
@@ -57,5 +63,12 @@ describe('publishable package manifest', () => {
     expect(manifest.files).toContain('README.md');
     expect(manifest.dependencies).toHaveProperty('@simplewebauthn/server');
     expect(manifest.dependencies).toHaveProperty('@simplewebauthn/browser');
+  });
+
+  it('ships the bounded supervision capability contract for offline doctors', async () => {
+    expect(manifest.files).toContain('gestalt-supervision-capabilities.json');
+    await expect(readFile('gestalt-supervision-capabilities.json', 'utf8')).resolves.toContain(
+      '"acknowledgement-safe-composer"',
+    );
   });
 });
