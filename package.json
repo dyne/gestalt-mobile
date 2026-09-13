@@ -26,7 +26,8 @@
     "dist/server",
     "dist/client",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "gestalt-supervision-capabilities.json"
   ],
   "engines": {
     "node": ">=24.0.0"
