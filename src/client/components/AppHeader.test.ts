@@ -6,10 +6,20 @@
 
 /* @vitest-environment jsdom */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppHeader from './AppHeader.svelte';
+
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+});
 
 afterEach(cleanup);
 
@@ -66,6 +76,28 @@ describe('AppHeader', () => {
     expect(action.getAttribute('popovertargetaction')).toBe('hide');
     await fireEvent.click(action);
     expect(onscratchpad).toHaveBeenCalledOnce();
+  });
+
+  it('requires confirmation before scheduling an update and restart', async () => {
+    const onupdaterestart = vi.fn(async () => undefined);
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onupdaterestart });
+
+    const menu = document.getElementById('configuration-panel')!;
+    await fireEvent.click(
+      within(menu).getByRole('button', { name: 'Update and restart', hidden: true }),
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Update Gestalt?' });
+    expect(dialog.hasAttribute('open')).toBe(true);
+    expect(onupdaterestart).not.toHaveBeenCalled();
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(cancel);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Update and restart' }));
+
+    expect(onupdaterestart).toHaveBeenCalledOnce();
+    expect(dialog.hasAttribute('open')).toBe(false);
   });
 
   it('omits passkey-only actions when passkey access control is disabled', () => {

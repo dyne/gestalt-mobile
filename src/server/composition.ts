@@ -88,6 +88,7 @@ import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
 import { parseOrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
+import { GestaltUpdateRestartScheduler } from './platform/process/gestalt-update-restart.js';
 import {
   autopilotWaitLeaseToolResponse,
   type AutopilotWaitLease,
@@ -919,6 +920,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           };
         },
       },
+      maintenance: { updateRestart: new GestaltUpdateRestartScheduler() },
       skills: {
         workspaces,
         profiles: options.profiles,
