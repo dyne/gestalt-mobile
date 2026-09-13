@@ -67,7 +67,8 @@ export type ChatControllerOptions = Readonly<{
   onRelayEvent?: (event: ProjectionEvent) => void;
   onHistoryError?: (error: unknown) => void;
   onSendError?: (error: unknown, operationId: string) => void;
-  onSendAccepted?: (operationId: string) => void;
+  onSendAccepted?: (sessionId: string, operationId: string) => void;
+  onHistoryPromptAccepted?: (sessionId: string, operationId: string) => void;
 }>;
 const noCache: ChatCache = { read: async () => null, write: async () => {} };
 const historyRetryDelays = [250, 750, 1_500] as const;
@@ -209,6 +210,13 @@ export class ChatController {
       starting: this.#projection.lifecycle === 'starting',
     });
   }
+  canSubmit(kind: 'send' | 'queue' | 'interrupt-send'): boolean {
+    if (!this.#sessionId) return false;
+    if (kind === 'send') return !this.#projection.activeTurnId;
+    return Boolean(
+      this.#projection.activeTurnId && (kind !== 'queue' || this.#options.relay.queueTurnInput),
+    );
+  }
   select(sessionId: string | null, options: ChatSelectionOptions = {}): void {
     if (this.#disposed || this.#sessionId === sessionId) return;
     this.#stop();
@@ -231,8 +239,9 @@ export class ChatController {
       if (this.#current(id, generation)) {
         this.#historyKnownEmpty = false;
         this.#set(promotePrompt(this.#projection, operationId, turn.activeTurnId ?? null));
-        this.#options.onSendAccepted?.(operationId);
       }
+      // Settlement belongs to the captured session even when its view was replaced.
+      this.#options.onSendAccepted?.(id, operationId);
     } catch (error: unknown) {
       if (this.#current(id, generation)) {
         this.#set(failPrompt(this.#projection, operationId));
@@ -259,8 +268,8 @@ export class ChatController {
       const accepted = await queueTurnInput(id, turn, text.trim(), operationId);
       if (this.#current(id, generation)) {
         this.#set(promotePrompt(this.#projection, operationId, accepted.activeTurnId));
-        this.#options.onSendAccepted?.(operationId);
       }
+      this.#options.onSendAccepted?.(id, operationId);
     } catch (error: unknown) {
       if (this.#current(id, generation)) {
         this.#set(failPrompt(this.#projection, operationId));
@@ -283,8 +292,8 @@ export class ChatController {
       const started = await this.#startAfterInterrupt(id, generation, text.trim(), operationId);
       if (this.#current(id, generation)) {
         this.#set(promotePrompt(this.#projection, operationId, started.activeTurnId ?? null));
-        this.#options.onSendAccepted?.(operationId);
       }
+      this.#options.onSendAccepted?.(id, operationId);
     } catch (error: unknown) {
       if (this.#current(id, generation)) {
         this.#set(failPrompt(this.#projection, operationId));
@@ -520,6 +529,9 @@ export class ChatController {
         this.#historyRetry = null;
         this.#authoritativeGeneration = generation;
         this.#set(acceptSnapshot(this.#projection, decoded));
+        for (const item of decoded.items)
+          if (item.kind === 'user' && typeof item.operationId === 'string')
+            this.#options.onHistoryPromptAccepted?.(id, item.operationId);
         if (recovering) this.#replaceSocket(id, generation);
       })
       .catch((error: unknown) => {

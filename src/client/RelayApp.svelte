@@ -100,7 +100,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { weeklyQuotaRemaining } from './features/plans/weekly-quota.js';
   import { workspacePlanNameFromHref } from './features/plans/org-plan-link.js';
   import PlansView, { type PlansCatalogState } from './features/plans/PlansView.svelte';
-  import { createSessionCache } from './features/sessions/session-cache.js';
+  import {
+    createSessionCache,
+    type PendingDraftOperation,
+  } from './features/sessions/session-cache.js';
   import SessionsView from './features/sessions/SessionsView.svelte';
   import { validateStartForm } from './features/sessions/start-form.js';
   import {
@@ -170,6 +173,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let retryOperationId = $state<string | null>(null);
   let recoveryNotice = $state<string | null>(null);
   let message = $state('');
+  let draftRevision = 0;
+  type PendingDraftSubmission = Readonly<
+    {
+      sessionId: string;
+    } & PendingDraftOperation
+  >;
+  const pendingDraftSubmissions = new Map<string, PendingDraftSubmission>();
   let planState = $state<PlanState>({ kind: 'unavailable', sessionId: null });
   let plansCatalog = $state.raw<PlansCatalogState>({ kind: 'no-workspace' });
   let passivePlan = $state.raw<SupervisedPlan | WorkspaceOrgPreview | null>(null);
@@ -290,10 +300,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       retryOperationId = feedback.retryable ? operationId : null;
       shellStatus = reportRelayError(error, 'MESSAGE_SEND_FAILED');
     },
-    onSendAccepted: (operationId) => {
+    onSendAccepted: (acceptedSessionId, operationId) => {
       if (retryOperationId === operationId) {
         writerFeedback = null;
         retryOperationId = null;
+      }
+      const submitted = pendingDraftSubmissions.get(operationId);
+      if (submitted && submitted.sessionId === acceptedSessionId)
+        void consumeAcceptedDraft(submitted);
+    },
+    onHistoryPromptAccepted: (acceptedSessionId, operationId) => {
+      const submitted = pendingDraftSubmissions.get(operationId);
+      if (submitted && submitted.sessionId === acceptedSessionId) {
+        void consumeAcceptedDraft(submitted);
       }
     },
   });
@@ -393,7 +412,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         : bootstrap.sessions.some((session) => session.id === remembered)
           ? remembered
           : (bootstrap.sessions[0]?.id ?? null);
-      if (sessionId) message = await sessionCache.readDraft(sessionId);
+      if (sessionId) {
+        const envelope = await sessionCache.readDraftEnvelope(sessionId);
+        message = envelope.text;
+        draftRevision = envelope.revision;
+        restorePendingDrafts(sessionId, envelope.pending);
+      }
       sessions = bootstrap.sessions;
       const active = observedSessions(
         bootstrap.sessions.filter((session) => ['ready', 'turnActive'].includes(session.state)),
@@ -526,7 +550,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       planController.select(session.id);
       void sessionCache.saveSelectedSession(session.id);
       await refreshSessions();
-      message = await sessionCache.readDraft(session.id);
+      const envelope = await sessionCache.readDraftEnvelope(session.id);
+      message = envelope.text;
+      draftRevision = envelope.revision;
+      restorePendingDrafts(session.id, envelope.pending);
       chatController.select(session.id, { history: 'empty' });
       activityController.select(session.id);
       enterChatContext();
@@ -611,8 +638,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       chatController.select(id);
       activityController.select(id);
       enterChatContext();
-      const draft = await sessionCache.readDraft(id);
-      if (generation === openGeneration && sessionId === id) message = draft;
+      const envelope = await sessionCache.readDraftEnvelope(id);
+      if (generation === openGeneration && sessionId === id) {
+        message = envelope.text;
+        draftRevision = envelope.revision;
+        restorePendingDrafts(id, envelope.pending);
+      }
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');
     } finally {
@@ -689,34 +720,79 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
-  async function sendMessage() {
+  async function submitDraft(kind: 'send' | 'queue' | 'interrupt-send'): Promise<void> {
+    if (!sessionId || !message.trim() || !chatController.canSubmit(kind)) return;
+    const duplicate = [...pendingDraftSubmissions.values()].some(
+      (entry) => entry.sessionId === sessionId && entry.revision === draftRevision,
+    );
+    if (duplicate) return;
     const operationId = createIdempotencyKey();
-    void chatController.send(message, operationId);
-    clearDraftAfterSend();
+    const submitted = { sessionId, revision: draftRevision, text: message, operationId, kind };
+    pendingDraftSubmissions.set(operationId, submitted);
+    void sessionCache.addPendingDraftOperation(sessionId, submitted);
+    if (kind === 'send') void chatController.send(submitted.text, operationId);
+    else if (kind === 'queue') void chatController.queue(submitted.text, operationId);
+    else void chatController.interruptAndSend(submitted.text, operationId);
   }
 
-  async function queueMessage() {
-    const operationId = createIdempotencyKey();
-    void chatController.queue(message, operationId);
-    clearDraftAfterSend();
+  const sendMessage = () => submitDraft('send');
+  const queueMessage = () => submitDraft('queue');
+  const interruptAndSendMessage = () => submitDraft('interrupt-send');
+
+  async function consumeAcceptedDraft(submitted: PendingDraftSubmission): Promise<void> {
+    // Acknowledgement can arrive after a session change. Tombstone that session only if
+    // its stored revision is still the immutable submitted revision.
+    const consumed = await sessionCache.consumeAcceptedDraft(
+      submitted.sessionId,
+      submitted.revision,
+      submitted.operationId,
+    );
+    if (consumed) pendingDraftSubmissions.delete(submitted.operationId);
+    if (consumed && submitted.sessionId === sessionId && submitted.revision === draftRevision) {
+      if (retryOperationId === submitted.operationId) {
+        retryOperationId = null;
+        writerFeedback = null;
+      }
+      message = '';
+      draftRevision = consumed.revision;
+      scheduleTail('explicit');
+    } else if (submitted.sessionId === sessionId && submitted.revision === draftRevision) {
+      recoveryNotice =
+        'The accepted prompt could not be saved locally. Keep this text until recovery completes.';
+      writerFeedback = 'The previous submission is awaiting local recovery. Retry is available.';
+      retryOperationId = submitted.operationId;
+    }
   }
 
-  async function interruptAndSendMessage() {
-    const operationId = createIdempotencyKey();
-    void chatController.interruptAndSend(message, operationId);
-    clearDraftAfterSend();
-  }
-
-  function clearDraftAfterSend(): void {
-    message = '';
-    scheduleTail('explicit');
-    if (sessionId) void sessionCache.saveDraft(sessionId, '');
+  function restorePendingDrafts(
+    restoredSessionId: string,
+    pending: readonly PendingDraftOperation[] | undefined,
+  ): void {
+    for (const operation of pending ?? [])
+      pendingDraftSubmissions.set(operation.operationId, {
+        sessionId: restoredSessionId,
+        ...operation,
+      });
+    if (restoredSessionId === sessionId && (pending?.length ?? 0) > 0) {
+      recoveryNotice =
+        'A submitted prompt is being recovered. It will not be sent again automatically.';
+      writerFeedback = 'A previous submission was not confirmed. Retry is available.';
+      retryOperationId = pending![0]!.operationId;
+    }
   }
 
   async function retrySend(): Promise<void> {
     if (!retryOperationId) return;
     writerFeedback = null;
-    await chatController.retryPrompt(retryOperationId);
+    const recovered = pendingDraftSubmissions.get(retryOperationId);
+    if (!recovered) {
+      await chatController.retryPrompt(retryOperationId);
+      return;
+    }
+    if (recovered.kind === 'send') await chatController.send(recovered.text, recovered.operationId);
+    else if (recovered.kind === 'queue')
+      await chatController.queue(recovered.text, recovered.operationId);
+    else await chatController.interruptAndSend(recovered.text, recovered.operationId);
   }
 
   async function interruptTurn() {
@@ -1142,7 +1218,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function updateDraft(value: string) {
     message = value;
-    if (sessionId) void sessionCache.saveDraft(sessionId, value);
+    draftRevision += 1;
+    const currentSessionId = sessionId;
+    if (currentSessionId)
+      void sessionCache.replaceDraftText(currentSessionId, value, draftRevision);
   }
 
   function errorMessage(error: unknown): string {
