@@ -300,7 +300,73 @@ describe('ChatController', () => {
     });
     await controller.retryPrompt('stable-operation');
     expect(start).toHaveBeenNthCalledWith(2, 's', 'prompt', 'stable-operation');
-    expect(onSendAccepted).toHaveBeenCalledWith('stable-operation');
+    expect(onSendAccepted).toHaveBeenCalledWith('s', 'stable-operation');
+    controller.dispose();
+  });
+  it('reports relay acceptance for the captured session after selection changes', async () => {
+    const env = environment();
+    const result = deferred<{ activeTurnId: string }>();
+    const onSendAccepted = vi.fn();
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 0,
+          items: [],
+          turns: [],
+          interactions: [],
+          activeTurnId: null,
+        }),
+        startTurn: vi.fn().mockReturnValue(result.promise),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      onSendAccepted,
+    });
+    controller.select('a');
+    await Promise.resolve();
+    const sending = controller.send('private instruction', 'operation-a');
+    controller.select('b');
+    result.resolve({ activeTurnId: 'turn-a' });
+    await sending;
+    expect(onSendAccepted).toHaveBeenCalledWith('a', 'operation-a');
+    expect(controller.view.sessionId).toBe('b');
+    controller.dispose();
+  });
+  it('reports an accepted operation discovered in authoritative history after reload', async () => {
+    const env = environment();
+    const onHistoryPromptAccepted = vi.fn();
+    const controller = new ChatController({
+      ...env,
+      relay: {
+        getHistory: vi.fn().mockResolvedValue({
+          baseSequence: 1,
+          items: [
+            {
+              id: 'user-1',
+              kind: 'user',
+              text: 'private instruction',
+              operationId: 'recovered-operation',
+            },
+          ],
+          turns: [],
+          interactions: [],
+          activeTurnId: null,
+        }),
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => new Socket() as unknown as WebSocket,
+      onHistoryPromptAccepted,
+    });
+    controller.select('s');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onHistoryPromptAccepted).toHaveBeenCalledWith('s', 'recovered-operation');
     controller.dispose();
   });
   it('takes a second snapshot when a gap arrives during the initial snapshot', async () => {

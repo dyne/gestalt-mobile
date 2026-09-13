@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 let controllerOptions: {
   publish(view: unknown): void;
   onSendError?(error: unknown, operationId: string): void;
+  onSendAccepted?(sessionId: string, operationId: string): void;
+  onHistoryPromptAccepted?(sessionId: string, operationId: string): void;
   onSessionEvent?(event: unknown): void;
 } | null = null;
 let fakeController: {
@@ -17,9 +19,70 @@ let fakeController: {
   select(id: string | null): void;
   emit(id: string, view: unknown): void;
   failSend(error: unknown, operationId: string): void;
+  acceptSend(operationId: string): void;
   metadata(id: string, event: unknown): void;
 } | null = null;
 let activityOptions: { publish(items: ReadonlyMap<string, unknown>): void } | null = null;
+let submittedOperationId: string | null = null;
+let submittedSessionId: string | null = null;
+let submittedKind: 'send' | 'queue' | 'interrupt-send' | null = null;
+let rejectAcceptedDraftConsume = false;
+const controllerCalls = vi.hoisted(() => ({ send: 0, queue: 0, interruptAndSend: 0 }));
+type CachedDraft = {
+  text: string;
+  revision: number;
+  pending?: Array<{ operationId: string; text: string; revision: number; kind: string }>;
+};
+const cachedDrafts = vi.hoisted(() => new Map<string, CachedDraft>());
+vi.mock('./features/sessions/session-cache.js', () => ({
+  createSessionCache: () => ({
+    readSelectedSession: async () => null,
+    saveSelectedSession: async () => {},
+    readDraft: async (id: string) => cachedDrafts.get(id)?.text ?? '',
+    saveDraft: async (id: string, text: string) => {
+      const current = cachedDrafts.get(id)?.revision ?? 0;
+      cachedDrafts.set(id, { text, revision: current + 1 });
+    },
+    readDraftEnvelope: async (id: string) => cachedDrafts.get(id) ?? { text: '', revision: 0 },
+    saveDraftEnvelope: async (id: string, draft: { text: string; revision: number }) => {
+      cachedDrafts.set(id, draft);
+    },
+    replaceDraftText: async (id: string, text: string, revision: number) => {
+      cachedDrafts.set(id, { ...(cachedDrafts.get(id) ?? {}), text, revision });
+    },
+    addPendingDraftOperation: async (
+      id: string,
+      operation: NonNullable<CachedDraft['pending']>[number],
+    ) => {
+      const current = cachedDrafts.get(id) ?? { text: '', revision: 0 };
+      cachedDrafts.set(id, {
+        ...current,
+        pending: [
+          ...(current.pending ?? []).filter((entry) => entry.operationId !== operation.operationId),
+          operation,
+        ],
+      });
+    },
+    consumeAcceptedDraft: async (id: string, revision: number, operationId: string) => {
+      if (rejectAcceptedDraftConsume) return null;
+      const current = cachedDrafts.get(id) ?? { text: '', revision: 0 };
+      if (
+        current.revision !== revision ||
+        !current.pending?.some((entry) => entry.operationId === operationId)
+      )
+        return null;
+      const consumed = {
+        text: '',
+        revision: revision + 1,
+        pending: current.pending.filter((entry) => entry.operationId !== operationId),
+      };
+      cachedDrafts.set(id, consumed);
+      return consumed;
+    },
+    readCursor: async () => 0,
+    saveCursor: async () => {},
+  }),
+}));
 vi.mock('./features/agent-activity/agent-activity-controller.js', () => ({
   AgentActivityController: class {
     constructor(options: typeof activityOptions) {
@@ -49,6 +112,8 @@ vi.mock('./features/chat/chat-controller.js', () => ({
           if (id === fakeController?.selected) controllerOptions?.publish(view);
         },
         failSend: (error, operationId) => controllerOptions?.onSendError?.(error, operationId),
+        acceptSend: (operationId) =>
+          controllerOptions?.onSendAccepted?.(submittedSessionId ?? '', operationId),
         metadata: (id, event) => {
           if (id === fakeController?.selected) controllerOptions?.onSessionEvent?.(event);
         },
@@ -62,8 +127,26 @@ vi.mock('./features/chat/chat-controller.js', () => ({
       fakeController?.emit(id, view);
     };
     refresh = vi.fn();
+    canSubmit = vi.fn(() => true);
     dispose = vi.fn();
-    send = vi.fn();
+    send = vi.fn((_text: string, operationId: string) => {
+      controllerCalls.send += 1;
+      submittedOperationId = operationId;
+      submittedSessionId = this.selected;
+      submittedKind = 'send';
+    });
+    queue = vi.fn((_text: string, operationId: string) => {
+      controllerCalls.queue += 1;
+      submittedOperationId = operationId;
+      submittedSessionId = this.selected;
+      submittedKind = 'queue';
+    });
+    interruptAndSend = vi.fn((_text: string, operationId: string) => {
+      controllerCalls.interruptAndSend += 1;
+      submittedOperationId = operationId;
+      submittedSessionId = this.selected;
+      submittedKind = 'interrupt-send';
+    });
     interrupt = vi.fn();
     respond = vi.fn();
   },
@@ -86,16 +169,182 @@ const chatView = (id: string, text: string) => ({
   starting: false,
 });
 
+async function renderChat(
+  initialSessions = [
+    { id: 'a', state: 'ready', workspacePath: '/a' },
+    { id: 'b', state: 'ready', workspacePath: '/b' },
+  ],
+): Promise<HTMLTextAreaElement> {
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('scrollTo', vi.fn());
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  Element.prototype.scrollIntoView = vi.fn();
+  render(RelayApp, {
+    authorizedFetch: async (input: RequestInfo | URL) =>
+      new Response(
+        JSON.stringify(
+          String(input) === '/api/bootstrap'
+            ? { workspaces: [], profiles: [], models: [], sessions: initialSessions }
+            : [],
+        ),
+      ),
+    passkeyAuthEnabled: false,
+    theme: 'minimal-dark',
+    onlock: vi.fn(),
+  });
+  await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+  await fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+  return screen.getByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement;
+}
+
 describe('RelayApp chat controller composition', () => {
   afterEach(() => {
     cleanup();
     controllerOptions = null;
     fakeController = null;
     activityOptions = null;
+    submittedOperationId = null;
+    submittedSessionId = null;
+    submittedKind = null;
+    rejectAcceptedDraftConsume = false;
+    controllerCalls.send = 0;
+    controllerCalls.queue = 0;
+    controllerCalls.interruptAndSend = 0;
+    cachedDrafts.clear();
     vi.unstubAllGlobals();
     window.history.replaceState({}, '', '/');
     if (originalScrollIntoView) Element.prototype.scrollIntoView = originalScrollIntoView;
     else delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+  it('retains a submitted draft until its matching relay acceptance, without erasing a newer edit', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+    render(RelayApp, {
+      authorizedFetch: async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify(
+            String(input) === '/api/bootstrap'
+              ? {
+                  workspaces: [],
+                  profiles: [],
+                  models: [],
+                  sessions: [
+                    { id: 'a', state: 'ready', workspacePath: '/a' },
+                    { id: 'b', state: 'ready', workspacePath: '/b' },
+                  ],
+                }
+              : [],
+          ),
+        ),
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+    await vi.waitFor(() => expect(fakeController?.selected).toBe('a'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement;
+    await fireEvent.input(prompt, { target: { value: 'private instruction' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    expect(prompt.value).toBe('private instruction');
+    fakeController?.acceptSend('missing-operation');
+    expect(prompt.value).toBe('private instruction');
+    // The production controller reports the generated operation ID. Obtain it from its optimistic view.
+    expect(submittedOperationId).not.toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /Sessions/i }));
+    const sessionB = screen.getByText('/b').closest('li')!;
+    await fireEvent.click(within(sessionB).getByRole('button', { name: 'Open' }));
+    await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
+    fakeController?.acceptSend(submittedOperationId!);
+    await vi.waitFor(() => expect(cachedDrafts.get('a')?.text).toBe(''));
+  });
+  it('clears a matching acknowledgement exactly once, but preserves an edit made before it', async () => {
+    const prompt = await renderChat();
+    await fireEvent.input(prompt, { target: { value: 'first instruction' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    const operationId = submittedOperationId!;
+    await fireEvent.input(prompt, { target: { value: 'newer instruction' } });
+    fakeController?.acceptSend(operationId);
+    await vi.waitFor(() => expect(cachedDrafts.get('a')?.text).toBe('newer instruction'));
+    expect(prompt.value).toBe('newer instruction');
+    fakeController?.acceptSend(operationId);
+    await Promise.resolve();
+    expect(cachedDrafts.get('a')).toMatchObject({ text: 'newer instruction', revision: 2 });
+  });
+  it('submits one relay call for a revision, retains failed text, and retries with the same ID', async () => {
+    const prompt = await renderChat();
+    await fireEvent.input(prompt, { target: { value: 'exact failed instruction' } });
+    const send = screen.getByRole('button', { name: 'Send prompt' });
+    await fireEvent.click(send);
+    await fireEvent.click(send);
+    const operationId = submittedOperationId!;
+    expect(controllerCalls.send).toBe(1);
+    fakeController?.failSend(new Error('offline'), operationId);
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Retry send' })).toBeTruthy());
+    expect(prompt.value).toBe('exact failed instruction');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry send' }));
+    expect(controllerCalls.send).toBe(2);
+    expect(submittedOperationId).toBe(operationId);
+  });
+  it('restores a pending draft and accepts it from authoritative history without another relay call', async () => {
+    cachedDrafts.set('a', {
+      text: 'recovered instruction',
+      revision: 7,
+      pending: [
+        { operationId: 'recovered-op', text: 'recovered instruction', revision: 7, kind: 'send' },
+      ],
+    });
+    const prompt = await renderChat();
+    await vi.waitFor(() => expect(prompt.value).toBe('recovered instruction'));
+    controllerOptions?.onHistoryPromptAccepted?.('a', 'recovered-op');
+    await vi.waitFor(() => expect(cachedDrafts.get('a')?.text).toBe(''));
+    expect(controllerCalls.send).toBe(0);
+  });
+  it('preserves text and reuses the operation ID when acceptance cannot be consumed locally', async () => {
+    const prompt = await renderChat();
+    await fireEvent.input(prompt, { target: { value: 'retain after cache failure' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }));
+    const operationId = submittedOperationId!;
+    rejectAcceptedDraftConsume = true;
+    fakeController?.acceptSend(operationId);
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Retry send' })).toBeTruthy());
+    expect(prompt.value).toBe('retain after cache failure');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry send' }));
+    expect(submittedOperationId).toBe(operationId);
+  });
+  it('keeps queue and interrupt-send drafts until their own acknowledgement', async () => {
+    const prompt = await renderChat();
+    fakeController?.emit('a', { ...chatView('a', ''), activeTurnId: 'turn-a' });
+    await fireEvent.input(prompt, { target: { value: 'queued instruction' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose prompt action' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Queue message' }));
+    const queueOperation = submittedOperationId!;
+    expect(submittedKind).toBe('queue');
+    expect(prompt.value).toBe('queued instruction');
+    fakeController?.acceptSend(queueOperation);
+    await vi.waitFor(() => expect(prompt.value).toBe(''));
+
+    await fireEvent.input(prompt, { target: { value: 'interrupt instruction' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Choose prompt action' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Interrupt and send' }));
+    const interruptOperation = submittedOperationId!;
+    expect(submittedKind).toBe('interrupt-send');
+    expect(prompt.value).toBe('interrupt instruction');
+    fakeController?.acceptSend(interruptOperation);
+    await vi.waitFor(() => expect(prompt.value).toBe(''));
   });
   it('pins a detached Chat window to its URL session without rendering app navigation', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: false }));
