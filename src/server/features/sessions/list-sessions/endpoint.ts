@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
 import { buildResumeCommand } from '../application/resume-command.js';
 import { toAgentActivityDto } from '../../agent-activity/activity-dto.js';
+import { deriveSessionStatus } from '../session-status.js';
 
 export function registerListSessions(
   app: FastifyInstance,
@@ -24,11 +25,21 @@ export function registerListSessions(
   app.get('/api/sessions', async () =>
     deps.list().map((session) => {
       const plan = deps.plan?.(session.id) ?? null;
+      const activity = deps.activity?.(session.id) ?? null;
+      const autopilot = deps.autopilot?.(session.id) ?? null;
       return {
         ...session,
-        ...(deps.activity ? { agentActivity: toAgentActivityDto(deps.activity(session.id)) } : {}),
-        ...(deps.autopilot ? { autopilot: deps.autopilot(session.id) } : {}),
+        ...(activity ? { agentActivity: toAgentActivityDto(activity) } : {}),
+        ...(autopilot ? { autopilot } : {}),
         ...(plan ? { plan } : {}),
+        sessionStatus: deriveSessionStatus({
+          session,
+          plan,
+          activity,
+          autopilot,
+          pendingAttention: Boolean(session.pendingInteractions?.length),
+          observedAt: new Date().toISOString(),
+        }),
         resumeCommand: session.threadId ? buildResumeCommand(session) : null,
       };
     }),

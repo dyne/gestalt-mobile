@@ -11,19 +11,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     connected = true,
   }: { autopilot: AutopilotSnapshot | null; connected?: boolean } = $props();
   let livenessState = $derived(!connected ? 'disconnected' : (autopilot?.state ?? 'unknown'));
-  let active = $derived(livenessState === 'monitoring' || livenessState === 'backoff');
+  let active = $derived(Boolean(autopilot?.health?.healthy));
   let now = $state(Date.now());
   let visible = $state(typeof document === 'undefined' || document.visibilityState !== 'hidden');
   let label = $derived(
     livenessState === 'disconnected'
-      ? 'Monitoring disconnected'
+      ? 'Autopilot disconnected'
       : livenessState === 'attentionRequired'
-        ? 'Monitoring needs attention'
+        ? 'Autopilot needs attention'
         : livenessState === 'safetyPaused'
-          ? 'Monitoring safety paused'
+          ? 'Autopilot safety paused'
           : active
-            ? 'Monitoring active'
-            : 'Monitoring inactive',
+            ? 'Autopilot continuation active'
+            : 'Autopilot continuation inactive',
   );
 
   function refreshClock() {

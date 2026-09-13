@@ -26,6 +26,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
   import AutopilotSafetyStop from '../autopilot/AutopilotSafetyStop.svelte';
   import PlanProgress from '../plans/PlanProgress.svelte';
+  import { isSessionStatus } from './session-status.js';
 
   type Props = {
     sessions: RelaySession[];
@@ -129,6 +130,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ul class="session-list" aria-label="Open sessions">
         {#each openSessions as session (session.id)}
           {@const details = managedSessionDetails(session)}
+          {@const sessionStatus = isSessionStatus(session.sessionStatus)
+            ? session.sessionStatus
+            : null}
           <li
             class:current-session={session.id === selectedSessionId}
             class="managed-session open-session"
@@ -169,6 +173,29 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </div>
             <div class="session-details">
               <div class="session-summary">
+                {#if sessionStatus}
+                  <details
+                    class="session-verdict"
+                    data-state={sessionStatus.state}
+                    aria-label={`${sessionStatus.state === 'working' ? 'Working' : 'Idle'}: ${sessionStatus.reason}`}
+                  >
+                    <summary
+                      aria-label={`${sessionStatus.state === 'working' ? 'Working' : 'Idle'}: ${sessionStatus.reason}`}
+                    >
+                      <span
+                        class:live={sessionStatus.state === 'working' &&
+                          sessionStatus.confidence === 'fresh'}
+                        class="verdict-dot"
+                        aria-hidden="true"
+                      ></span>
+                      {sessionStatus.state === 'working' ? 'Working' : 'Idle'}
+                    </summary>
+                    <p>
+                      {sessionStatus.reason}. {sessionStatus.nextExpectedAction}
+                      Evidence confidence: {sessionStatus.confidence}.
+                    </p>
+                  </details>
+                {/if}
                 {#if details.updatedAt !== null}
                   <time datetime={new Date(details.updatedAt).toISOString()}>
                     {formatRelativeTime(details.updatedAt)}
@@ -454,6 +481,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow-wrap: anywhere;
   }
 
+  .session-verdict {
+    margin-block-end: 0.45rem;
+    color: var(--theme-text-muted);
+  }
+  .session-verdict summary {
+    display: inline-flex;
+    gap: 0.35rem;
+    align-items: center;
+    cursor: pointer;
+    color: var(--theme-text);
+    font-weight: 700;
+  }
+  .session-verdict p {
+    max-inline-size: 65ch;
+    margin: 0.35rem 0 0;
+  }
+  .verdict-dot {
+    inline-size: 0.55rem;
+    block-size: 0.55rem;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .verdict-dot.live {
+    color: var(--theme-accent);
+    animation: status-pulse 1.6s ease-out infinite;
+  }
+  @keyframes status-pulse {
+    50% {
+      opacity: 0.35;
+      transform: scale(0.75);
+    }
+  }
+
   .org-plan-metadata {
     display: grid;
     gap: 0.125rem;
@@ -562,6 +622,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   @media (max-width: 28rem) {
     .model-control {
       margin-inline-start: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .verdict-dot.live {
+      animation: none;
     }
   }
 </style>

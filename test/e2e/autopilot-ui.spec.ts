@@ -60,7 +60,12 @@ const activePlan = {
   currentStepId: 'plan-current-child',
 } as const;
 
-function autopilot(state: State, reason?: string, continuationPhase?: ContinuationPhase) {
+function autopilot(
+  state: State,
+  reason?: string,
+  continuationPhase?: ContinuationPhase,
+  healthyController = false,
+) {
   const isScheduledContinuation = state === 'backoff' && continuationPhase === 'scheduled';
   return {
     state,
@@ -78,6 +83,19 @@ function autopilot(state: State, reason?: string, continuationPhase?: Continuati
       limit: 3,
     },
     updatedAt: '2026-08-20T00:00:00.000Z',
+    ...(healthyController
+      ? {
+          health: {
+            healthy: true,
+            phase: state === 'backoff' ? 'continuationScheduled' : 'rootWorking',
+            supervision: 'active',
+            wait: { present: false, wakeCategories: [] },
+            nextExpectedAction: 'Wait for the next supervised action.',
+            observedAt: '2026-08-20T00:00:00.000Z',
+            lastTransitionAt: '2026-08-20T00:00:00.000Z',
+          },
+        }
+      : {}),
     ...(state === 'backoff'
       ? {
           lastAutomaticAction: {
@@ -113,6 +131,7 @@ async function install(
   awaitingChild = false,
   continuationPhase?: ContinuationPhase,
   includePlan = false,
+  healthyController = false,
 ) {
   const session = {
     id: 'session-1',
@@ -148,7 +167,7 @@ async function install(
           },
         }
       : {}),
-    autopilot: autopilot(state, reason, continuationPhase),
+    autopilot: autopilot(state, reason, continuationPhase, healthyController),
     pendingInteractions: hasAttention ? [attention] : [],
     ...(includePlan
       ? {
@@ -204,7 +223,9 @@ async function install(
   await page.route('**/api/sessions/session-1/autopilot', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ autopilot: autopilot(state, reason, continuationPhase) }),
+      body: JSON.stringify({
+        autopilot: autopilot(state, reason, continuationPhase, healthyController),
+      }),
     }),
   );
   await page.route('**/api/sessions/session-1/attention/attention-1/resolve', (route) =>
@@ -215,6 +236,20 @@ async function install(
   );
   await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, (socket) => onsocket?.(socket));
 }
+
+test('renders a healthy controller as active without exposing its control identity', async ({
+  page,
+}) => {
+  await install(page, 'monitoring', undefined, false, undefined, false, undefined, false, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sessions' }).click();
+  await expect(page.getByRole('status', { name: 'Autopilot continuation active' })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('control-1');
+  await page.screenshot({
+    path: `${evidence}/session-liveness-healthy-working.png`,
+    fullPage: false,
+  });
+});
 
 test('Sessions keeps only active plan work below the Org title in the information column', async ({
   page,
@@ -307,7 +342,8 @@ for (const item of [
       zoom: item.zoom,
     });
     await page.getByRole('button', { name: 'Sessions' }).click();
-    const expected = item.state === 'monitoring' ? 'Monitoring active' : 'Monitoring safety paused';
+    const expected =
+      item.state === 'monitoring' ? 'Autopilot continuation inactive' : 'Autopilot safety paused';
     await expect(page.getByRole('status', { name: expected })).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await page.screenshot({

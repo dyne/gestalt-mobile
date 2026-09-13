@@ -67,6 +67,23 @@ export type RelaySession = {
   plan?: SupervisedPlan;
   agentActivity?: AgentActivitySnapshot;
   autopilot?: AutopilotSnapshot;
+  sessionStatus?: {
+    state: 'working' | 'idle';
+    reason:
+      | 'needsYou'
+      | 'complete'
+      | 'rootTurn'
+      | 'agent'
+      | 'process'
+      | 'autopilot'
+      | 'incompleteWithoutContinuation'
+      | 'stopped'
+      | 'disconnected'
+      | 'unknown';
+    confidence: 'fresh' | 'stale' | 'reconciling';
+    observedAt: string;
+    nextExpectedAction: string;
+  };
 };
 export type RestoreSessionResult = RelaySession & {
   recovery?: { historyUnavailable: true; replacementCreated: true };

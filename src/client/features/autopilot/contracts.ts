@@ -10,6 +10,50 @@ export type AutopilotState =
 export type AutopilotSnapshot = Readonly<{
   state: AutopilotState;
   enabled: boolean;
+  health?: Readonly<{
+    healthy: boolean;
+    phase:
+      | 'off'
+      | 'rootWorking'
+      | 'continuationScheduled'
+      | 'waitingForAgentEvent'
+      | 'checkingState'
+      | 'needsYou'
+      | 'safetyPaused'
+      | 'complete'
+      | 'degraded';
+    supervision:
+      | 'active'
+      | 'probeRequired'
+      | 'parked'
+      | 'retrying'
+      | 'attentionRequired'
+      | 'safetyPaused'
+      | 'none';
+    wait: Readonly<{
+      present: boolean;
+      wakeCategories: readonly (
+        | 'planChanged'
+        | 'reviewChanged'
+        | 'checkpointChanged'
+        | 'interactionChanged'
+        | 'executorChanged'
+        | 'processExited'
+        | 'processResultAvailable'
+        | 'processLimitBreached'
+        | 'agentActivityChanged'
+      )[];
+    }>;
+    observedAt: string;
+    lastTransitionAt: string;
+    nextExpectedAction: string;
+    degradationReason?:
+      | 'missingContinuation'
+      | 'invalidWaitLease'
+      | 'controllerUnavailable'
+      | 'staleTransition'
+      | 'planMismatch';
+  }>;
   reason?: string;
   retry: Readonly<{ position: number; limit: number }>;
   lastAutomaticAction?: Readonly<{ controlId: string; summary: string }>;
@@ -44,6 +88,8 @@ export type OrgPlanAttentionEnvelope = Readonly<{
 
 const text = (value: unknown, maximum = 600): value is string =>
   typeof value === 'string' && value.length <= maximum;
+const timestamp = (value: unknown): value is string =>
+  text(value, 64) && !Number.isNaN(Date.parse(value));
 
 export function isAutopilotSnapshot(value: unknown): value is AutopilotSnapshot {
   if (!value || typeof value !== 'object') return false;
@@ -65,7 +111,67 @@ export function isAutopilotSnapshot(value: unknown): value is AutopilotSnapshot 
     Number.isInteger((snapshot.retry as Record<string, unknown>).limit) &&
     text(snapshot.updatedAt, 64) &&
     (snapshot.reason === undefined || text(snapshot.reason, 80)) &&
-    (snapshot.nextEvaluationAt === undefined || text(snapshot.nextEvaluationAt, 64))
+    (snapshot.nextEvaluationAt === undefined || text(snapshot.nextEvaluationAt, 64)) &&
+    (snapshot.health === undefined || validHealth(snapshot.health))
+  );
+}
+
+function validHealth(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const health = value as Record<string, unknown>;
+  if (!health.wait || typeof health.wait !== 'object') return false;
+  const wait = health.wait as Record<string, unknown>;
+  return (
+    typeof health.healthy === 'boolean' &&
+    typeof health.phase === 'string' &&
+    [
+      'off',
+      'rootWorking',
+      'continuationScheduled',
+      'waitingForAgentEvent',
+      'checkingState',
+      'needsYou',
+      'safetyPaused',
+      'complete',
+      'degraded',
+    ].includes(health.phase) &&
+    [
+      'active',
+      'probeRequired',
+      'parked',
+      'retrying',
+      'attentionRequired',
+      'safetyPaused',
+      'none',
+    ].includes(health.supervision as string) &&
+    typeof wait.present === 'boolean' &&
+    Array.isArray(wait.wakeCategories) &&
+    wait.wakeCategories.length <= 9 &&
+    new Set(wait.wakeCategories).size === wait.wakeCategories.length &&
+    wait.wakeCategories.every((item: unknown) =>
+      [
+        'planChanged',
+        'reviewChanged',
+        'checkpointChanged',
+        'interactionChanged',
+        'executorChanged',
+        'processExited',
+        'processResultAvailable',
+        'processLimitBreached',
+        'agentActivityChanged',
+      ].includes(item as string),
+    ) &&
+    timestamp(health.observedAt) &&
+    timestamp(health.lastTransitionAt) &&
+    text(health.nextExpectedAction) &&
+    (health.degradationReason === undefined ||
+      [
+        'missingContinuation',
+        'invalidWaitLease',
+        'controllerUnavailable',
+        'staleTransition',
+        'planMismatch',
+      ].includes(health.degradationReason as string))
   );
 }
 

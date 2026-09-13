@@ -32,6 +32,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     completed: 'Complete',
     safetyPaused: 'Safety paused',
   };
+  const phaseNames: Record<NonNullable<AutopilotSnapshot['health']>['phase'], string> = {
+    off: 'Off',
+    rootWorking: 'On · root working',
+    continuationScheduled: 'On · continuation scheduled',
+    waitingForAgentEvent: 'On · waiting for agent event',
+    checkingState: 'On · checking state',
+    needsYou: 'Paused · needs you',
+    safetyPaused: 'Safety paused',
+    complete: 'Complete',
+    degraded: 'On · continuation unavailable',
+  };
   const reason: Record<string, string> = {
     planRequired: 'An incomplete supervised plan is required before Autopilot can start.',
     planComplete: 'This plan is complete, so Autopilot is unavailable.',
@@ -50,7 +61,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     safetyPaused:
       'Autopilot paused after a repeated or invalid automatic continuation. Resume manually when ready.',
   };
-  let status = $derived(autopilot ? names[autopilot.state] : 'Unavailable');
+  let status = $derived(
+    autopilot
+      ? autopilot.health
+        ? phaseNames[autopilot.health.phase]
+        : names[autopilot.state]
+      : 'Unavailable',
+  );
   let retryHelp = $derived(
     autopilot?.state === 'backoff' && autopilot.retry.position > 0 && autopilot.retry.limit > 0
       ? `Retry ${autopilot.retry.position} of ${autopilot.retry.limit}.`
@@ -59,6 +76,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let help = $derived(
     (autopilot?.reason ? reason[autopilot.reason] : null) ??
       retryHelp ??
+      autopilot?.health?.nextExpectedAction ??
       (autopilot?.state === 'monitoring'
         ? 'Autopilot is monitoring this supervised plan.'
         : autopilot?.state === 'attentionRequired'
