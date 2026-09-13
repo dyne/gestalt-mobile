@@ -1778,6 +1778,67 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('publishes an idle websocket status after saving a completed turn', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+      const handle = handles.find((candidate) => candidate.notify);
+      expect(handle?.notify).toBeDefined();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+        {
+          headers: {
+            origin: relyingParty.publicOrigin,
+            cookie: 'gestalt_mobile_session=test-session',
+          },
+        },
+      );
+      const messages: Array<{ event: { type: string; payload: Record<string, unknown> } }> = [];
+      socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+      await once(socket, 'open');
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'complete this turn' },
+      });
+      expect(started.statusCode).toBe(202);
+      const turnId = started.json().activeTurnId as string;
+      handle!.notify!({ method: 'turn/completed', params: { turn: { id: turnId } } });
+      await vi.waitFor(() => {
+        const status = messages
+          .filter((message) => message.event.type === 'session.status.updated')
+          .at(-1)?.event.payload;
+        expect(status).toMatchObject({ state: 'idle' });
+      });
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        activeTurnId: null,
+      });
+      socket.close();
+      await app.close();
+    });
+
     it('forgets a session while activity reconciliation is pending without publishing late activity', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

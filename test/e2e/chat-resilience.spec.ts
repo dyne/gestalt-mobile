@@ -558,13 +558,13 @@ test('retains an optimistic prompt while turn HTTP is deferred', async ({ page }
       pendingInteractions: [],
     },
   ]);
-  fixture.deferTurn('session-1');
+  const turn = fixture.deferTurn('session-1');
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.fill('optimistic prompt');
   await page.getByRole('button', { name: 'Send prompt' }).click();
-  await expect(prompt).toHaveValue('');
+  await expect(prompt).toHaveValue('optimistic prompt');
   await expect(page.getByText('optimistic prompt')).toBeVisible();
   const promptHandle = await page.getByText('optimistic prompt').elementHandle();
   await expect.poll(() => fixture.commands.length).toBe(1);
@@ -609,9 +609,8 @@ test('retains an optimistic prompt while turn HTTP is deferred', async ({ page }
   await expect(page.getByText('recovered final')).toBeVisible();
   await expect(page.getByText('optimistic prompt')).toBeVisible();
   expect(await promptHandle?.evaluate((node) => node.isConnected)).toBe(true);
-  fixture.turns
-    .get('session-1')
-    ?.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-1' } });
+  turn.resolve({ kind: 'fulfill', status: 202, body: { activeTurnId: 'turn-1' } });
+  await expect(prompt).toHaveValue('');
   expect(fixture.commands).toHaveLength(1);
 });
 

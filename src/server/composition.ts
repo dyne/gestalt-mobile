@@ -598,8 +598,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         undefined,
         (sessionId, notification, origin) => {
           const occurredAt = new Date().toISOString();
-          for (const activityFact of decodeAgentActivityFacts(sessionId, occurredAt, notification))
-            activity.observe(activityFact);
+          const activityFacts = decodeAgentActivityFacts(sessionId, occurredAt, notification);
           const resolvedRequestId = resolvedServerRequestId(notification);
           if (resolvedRequestId) {
             const interaction = interactions.find(sessionId, resolvedRequestId);
@@ -636,7 +635,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             currentSession?.activeTurnId,
             resolvedOrigin,
           );
-          if (!normalized) return;
+          if (!normalized) {
+            for (const activityFact of activityFacts) activity.observe(activityFact);
+            return;
+          }
           let completedSession:
             import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | undefined;
           if (normalized.type === 'turnCompleted') {
@@ -652,6 +654,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
             planMeasurementRefresh?.refreshNow(sessionId);
           }
+          // Activity publication also derives and broadcasts the session verdict.
+          // Complete the durable turn first so its status cannot retain the just-finished
+          // activeTurnId while the completion fact makes the root appear idle.
+          for (const activityFact of activityFacts) activity.observe(activityFact);
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
           );

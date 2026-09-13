@@ -394,11 +394,12 @@ for (const viewport of [
     );
     await page.getByRole('textbox', { name: 'Prompt' }).fill('send while reading');
     await page.getByRole('button', { name: 'Send prompt' }).click();
-    await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('');
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('send while reading');
     await expect.poll(() => requests).toBe(1);
     await expect(page.getByText('send while reading')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
     await fulfill?.();
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('');
     expect(requests).toBe(1);
   });
   test(`follow-tail follows streaming but preserves reading position (${viewport.name})`, async ({
