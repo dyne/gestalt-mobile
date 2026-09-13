@@ -88,6 +88,9 @@ describe('AutopilotCoordinator', () => {
         get schedules() {
           return schedules;
         },
+        set state(value: AutopilotSession | null) {
+          state = value;
+        },
         set identity(value: string) {
           identity = value;
         },
@@ -147,6 +150,34 @@ describe('AutopilotCoordinator', () => {
         planIdentity: 'p2',
       });
     });
+
+    it.each(['parked', 'probeRequired', 'retrying'] as const)(
+      'starts a fresh protocol when replacing a %s plan',
+      (outcome) => {
+        const fixture = subject();
+        fixture.coordinator.supervisionStarted('s');
+        fixture.state = {
+          ...fixture.state!,
+          supervision: {
+            ...fixture.state!.supervision!,
+            outcome,
+            ...(outcome === 'parked'
+              ? {
+                  waitLease: {
+                    id: 'old',
+                    probeKey: 'old',
+                    wakeConditions: ['checkpointChanged'] as const,
+                  },
+                }
+              : {}),
+          },
+        };
+        fixture.identity = 'p2';
+        fixture.coordinator.supervisionStarted('s');
+        expect(fixture.state?.supervision).toMatchObject({ outcome: 'active' });
+        expect(fixture.state?.supervision?.waitLease).toBeNull();
+      },
+    );
 
     it('does not arm a completed plan', () => {
       const fixture = subject();
@@ -792,6 +823,83 @@ describe('AutopilotCoordinator', () => {
     expect(coordinator.semanticEvent('s', 'planChanged')).toBe(false);
     expect(scheduled).toBe(parkedScheduleCount + 1);
   });
+  it.each(['none', 'parked'] as const)(
+    'evaluates an accepted checkpoint exactly once with a %s lease and replays idempotently',
+    (lease) => {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        updatedAt: now,
+        supervision:
+          lease === 'parked'
+            ? {
+                ...startSupervisionProtocol('progress'),
+                outcome: 'parked',
+                probeKey: 'progress',
+                waitLease: {
+                  id: 'lease',
+                  probeKey: 'progress',
+                  wakeConditions: ['checkpointChanged'],
+                },
+              }
+            : startSupervisionProtocol('progress'),
+      };
+      const controls = new Map<string, import('./ports.js').AutopilotControl>();
+      let schedules = 0;
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: (_s, id) => controls.get(id) ?? null,
+          saveControl: (control) => controls.set(control.controlId, control),
+          controlIds: () => new Set(controls.keys()),
+        },
+        now: () => now,
+        policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+        plan: () => ({ plan, identity: 'p' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => ({
+          ...createAgentActivitySnapshot('s', now),
+          confidence: 'fresh',
+          root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+        }),
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => {
+          schedules += 1;
+          return () => {};
+        },
+        nextControlId: () => 'checkpoint-control',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+      const checkpoint = {
+        version: 1 as const,
+        kind: 'l1Accepted' as const,
+        planIdentity: 'p',
+        l1Id: 'l1',
+        position: 'L1',
+        verdict: 'ACCEPT' as const,
+        commit: { kind: 'notRequired' as const },
+      };
+      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+      expect(schedules).toBe(1);
+      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+      expect(schedules).toBe(1);
+      if (lease === 'parked') expect(state?.supervision?.outcome).toBe('retrying');
+    },
+  );
   it('does not replay an issued command after a restart boundary', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
@@ -961,7 +1069,7 @@ describe('AutopilotCoordinator', () => {
     });
   });
   it.each(['confidence', 'timestamp'] as const)(
-    'does not recurse when compatible reconciliation leaves %s stale',
+    'arms one bounded watchdog when compatible reconciliation leaves %s stale',
     async (staleBy) => {
       let state: AutopilotSession | null = null;
       let reconciliations = 0;
@@ -1012,7 +1120,7 @@ describe('AutopilotCoordinator', () => {
       await Promise.resolve();
 
       expect(reconciliations).toBe(1);
-      expect(schedules).toBe(0);
+      expect(schedules).toBe(1);
       expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
     },
   );
@@ -1072,7 +1180,7 @@ describe('AutopilotCoordinator', () => {
     });
     expect(control.status).toBe('cancelled');
   });
-  it('ignores ordinary updates within the retained incomplete plan', () => {
+  it('reconciles an ordinary retained incomplete-plan update without a wait lease', async () => {
     const initial: AutopilotSession = {
       sessionId: 's',
       state: 'monitoring',
@@ -1114,10 +1222,19 @@ describe('AutopilotCoordinator', () => {
     });
 
     coordinator.planStatusChanged('s');
+    coordinator.planStatusChanged('s');
+    await Promise.resolve();
+    await Promise.resolve();
 
-    expect(state).toBe(initial);
-    expect(schedule).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
+    expect(state).toMatchObject({ state: 'monitoring', requestedEnabled: true });
+    expect(state).not.toBe(initial);
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      's',
+      'autopilot.updated',
+      expect.objectContaining({ enabled: true, state: 'monitoring' }),
+      now,
+    );
   });
   it('cancels pending continuation and resets retries only when subagents resume work', () => {
     let state: AutopilotSession | null = {
