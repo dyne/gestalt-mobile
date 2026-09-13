@@ -17,6 +17,17 @@ const fact = (kind: Parameters<typeof projectAgentActivity>[1]['kind'], more = {
   ...more,
 });
 describe('agent activity projector', () => {
+  it('derives the terminal reviewer from its authoritative task path', () => {
+    const snapshot = projectAgentActivity(createAgentActivitySnapshot('s', at), {
+      sessionId: 's',
+      occurredAt: at,
+      kind: 'collaboration',
+      childId: 'review',
+      childTaskPath: '/root/final_review',
+      childRole: 'org-plan-reviewer',
+    });
+    expect(snapshot.subagents).toMatchObject([{ canonicalTaskName: 'final_review' }]);
+  });
   it('gives pending interaction precedence over an active turn', () => {
     const active = projectAgentActivity(createAgentActivitySnapshot('s', at), fact('turnStarted'));
     expect(projectAgentActivity(active, fact('interactionPending')).root).toMatchObject({

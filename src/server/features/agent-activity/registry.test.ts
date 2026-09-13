@@ -85,21 +85,38 @@ describe('agent activity registry', () => {
     const next = registry.childrenReconciled('s', '2026-01-01T00:00:01.000Z', []);
     expect(next.subagents).toMatchObject([{ id: 'child', state: 'disconnected' }]);
   });
-  it('clears child identities when the owning process exits', () => {
+  it('retains child identities as disconnected when the owning process exits', () => {
     const registry = new AgentActivityRegistry(() => {});
     registry.childrenReconciled('s', at, [{ id: 'child', status: 'active' }]);
     const exited = registry.disconnected('s', '2026-01-01T00:00:01.000Z');
     expect(exited).toMatchObject({
       confidence: 'stale',
       root: { state: 'disconnected' },
-      subagents: [],
-      aggregateSubagents: 'idle',
+      subagents: [{ id: 'child', state: 'disconnected', reason: 'processExited' }],
+      aggregateSubagents: 'disconnected',
     });
     expect(
-      registry.childrenReconciled('s', '2026-01-01T00:00:02.000Z', [
-        { id: 'recovered', status: 'active' },
-      ]).subagents,
-    ).toMatchObject([{ id: 'recovered', state: 'working' }]);
+      registry
+        .childrenReconciled('s', '2026-01-01T00:00:02.000Z', [
+          { id: 'recovered', status: 'active' },
+        ])
+        .subagents.find((child) => child.id === 'recovered'),
+    ).toMatchObject({ id: 'recovered', state: 'working' });
+  });
+  it('publishes a metadata-only canonical identity update exactly once', () => {
+    const publish = vi.fn();
+    const registry = new AgentActivityRegistry(publish);
+    registry.childrenReconciled('s', at, [{ id: 'child', status: 'idle' }]);
+    registry.childrenReconciled('s', at, [
+      { id: 'child', status: 'idle', taskPath: '/root/l2_g3' },
+    ]);
+    registry.childrenReconciled('s', at, [
+      { id: 'child', status: 'idle', taskPath: '/root/l2_g3' },
+    ]);
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(registry.snapshot('s', at).subagents).toMatchObject([
+      { canonicalPosition: 'L2', continuationGeneration: 3 },
+    ]);
   });
   it('fails closed for an unqualified child-list row', () => {
     const registry = new AgentActivityRegistry(() => {});

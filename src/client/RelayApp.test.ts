@@ -309,7 +309,7 @@ describe('RelayApp chat controller composition', () => {
     expect(sessionB.textContent).toContain('activity unavailable');
     await fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
     await vi.waitFor(() => expect(screen.getByText('Agents (1)')).toBeTruthy());
-    expect(screen.getByText('Root agent')).toBeTruthy();
+    expect(screen.getByText('Supervisor')).toBeTruthy();
     expect(screen.getByText(/working · active/)).toBeTruthy();
     expect(screen.queryByText('activity unavailable')).toBeNull();
   });

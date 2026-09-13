@@ -32,4 +32,45 @@ describe('GET /api/sessions/:id', () => {
     });
     await app.close();
   });
+  it('strips private process fields from activity responses', async () => {
+    const app = fastify();
+    registerGetSession(
+      app,
+      () => ({ id: 's', threadId: null }) as never,
+      () =>
+        ({
+          sessionId: 's',
+          root: { state: 'idle' },
+          aggregateSubagents: 'idle',
+          confidence: 'fresh',
+          subagents: [
+            {
+              id: 'child',
+              state: 'idle',
+              reason: 'unknown',
+              observedAt: '2026-01-01T00:00:00Z',
+              lastActivityAt: '2026-01-01T00:00:00Z',
+              ownedProcesses: [
+                {
+                  processId: 'secret',
+                  itemId: 'secret',
+                  ownerThreadId: 'secret',
+                  ownerTaskPath: 'secret',
+                  ownership: 'executor',
+                  state: 'running',
+                  observedAt: '2026-01-01T00:00:00Z',
+                  elapsedMs: 1,
+                  cpuPercent: 1,
+                  rssBytes: 1,
+                },
+              ],
+            },
+          ],
+        }) as never,
+    );
+    const body = JSON.stringify((await app.inject('/api/sessions/s')).json());
+    expect(body).not.toContain('secret');
+    expect(body).toContain('"ownership":"executor"');
+    await app.close();
+  });
 });

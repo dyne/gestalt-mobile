@@ -2837,6 +2837,9 @@ describe('production composition', () => {
       expect(
         activityEvents.filter((message) => message.event.type === 'agent.activity.updated'),
       ).toHaveLength(initialActivityEvents + 1);
+      expect(JSON.stringify(activityEvents)).not.toMatch(
+        /ownerThreadId|ownerTaskPath|itemId|cpuPercent|rssBytes|resultArtifact/,
+      );
       const activitySequence = activityEvents.find(
         (message) => message.event.type === 'agent.activity.updated',
       )!.event.sequence;
