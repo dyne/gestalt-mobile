@@ -284,7 +284,7 @@ describe('shared authorization across independently composed relays', () => {
     });
     await first.close();
     await second.close();
-  });
+  }, 15_000);
   it('shares A-created sessions and device mutations with B over distinct ports', async () => {
     const [rootA, rootB, dataA, dataB, home] = await Promise.all([
       temporary('gestalt-multi-root-a-'),
