@@ -31,7 +31,7 @@ be idle while its owned command is still running.
 | Owned process exits                                   | Consume its opaque result artifact and resume the executor |
 | Owned process exceeds elapsed-time or RSS policy      | Terminate that exact process and resume diagnosis          |
 | User asks for status                                  | Publish status, then perform the next lifecycle action     |
-| Valid Org attention request exists                    | Persist its reason/resume condition and allow yielding     |
+| Valid Org attention request exists                    | Cancel queued continuation, persist it, and stop nudging   |
 | Every L1 is DONE and REVIEWED and final review passes | Allow successful termination                               |
 
 Continuation delay grows exponentially from one second and is capped at one
@@ -47,7 +47,9 @@ starts a fresh unchanged-continuation budget, even when the older actions remain
 inside the rolling time window. Three unchanged continuations still require a
 structured probe; an invalid probe or a repeated unchanged retry safety-pauses
 the session. A validated Org attention record remains the explicit stop when
-the supervisor determines that progress requires outside action.
+the supervisor determines that progress requires outside action. Its pending
+dynamic-tool request disables Autopilot and generation-fences any stale timer;
+only explicit resolution and re-enabling can resume automatic supervision.
 
 ## Final-response guard
 

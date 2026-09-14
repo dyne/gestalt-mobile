@@ -1610,6 +1610,83 @@ describe('AutopilotCoordinator', () => {
     });
     expect(coordinator.turnCompleted('s')).toBe(true);
   });
+  it('cancels an armed continuation when structured attention arrives', async () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    let control: import('./ports.js').AutopilotControl | null = null;
+    let attention = false;
+    let scheduled: () => void = () => {
+      throw new Error('continuation was not scheduled');
+    };
+    const cancel = vi.fn();
+    const start = vi.fn(async () => {});
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => control,
+        saveControl: (next) => {
+          control = next;
+        },
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+        aggregateSubagents: 'idle',
+      }),
+      pendingInteraction: () => attention,
+      attention: () =>
+        attention ? { reason: 'permissionRequired', resumeCondition: 'permissionGranted' } : null,
+      reconcile: async () => ({ compatible: true }),
+      schedule: (callback) => {
+        scheduled = callback;
+        return cancel;
+      },
+      nextControlId: () => 'armed-control',
+      turnStarter: { start },
+      publish: () => {},
+    });
+
+    coordinator.evaluate('s');
+    expect(state).toMatchObject({ state: 'backoff', lastControlId: 'armed-control' });
+    expect(control).toMatchObject({ status: 'scheduled' });
+
+    attention = true;
+    coordinator.evaluate('s');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(state).toMatchObject({
+      state: 'attentionRequired',
+      requestedEnabled: false,
+      lastControlId: null,
+      blocking: { reason: 'permissionRequired', resumeCondition: 'permissionGranted' },
+    });
+    expect(control).toMatchObject({ status: 'cancelled' });
+
+    scheduled();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(start).not.toHaveBeenCalled();
+  });
   it('paces a settled oscillating session without manufacturing a human blocker', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
