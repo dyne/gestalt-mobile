@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import type { ComponentVersion } from '../../shared/contracts/component-version.js';
   import { themes, type ThemeId } from '../features/theme/theme-registry.js';
 
   let {
@@ -13,6 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionModel = null,
     weeklyQuotaRemaining = null,
     passkeyAuthEnabled = true,
+    componentVersions = [],
     onthemechange,
     onlock = () => {},
     ondevices = () => {},
@@ -26,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionModel?: string | null;
     weeklyQuotaRemaining?: number | null;
     passkeyAuthEnabled?: boolean;
+    componentVersions?: readonly ComponentVersion[];
     onthemechange: (theme: ThemeId) => void;
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
@@ -147,6 +150,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onclick={onlock}>Lock Gestalt Mobile</button
     >
   {/if}
+  {#if componentVersions.length}
+    <section class="component-versions" aria-labelledby="component-versions-title">
+      <h2 id="component-versions-title">Versions</h2>
+      <dl>
+        {#each componentVersions as component (component.id)}
+          <div>
+            <dt>{component.label}</dt>
+            <dd title={component.version ?? 'Version unavailable'}>
+              {component.version ?? 'Unavailable'}
+            </dd>
+          </div>
+        {/each}
+      </dl>
+    </section>
+  {/if}
   <div class="maintenance-actions">
     <button
       type="button"
@@ -223,6 +241,54 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block-start: 0.5rem;
     padding-block-start: 0.5rem;
     border-block-start: 1px solid var(--theme-border);
+  }
+
+  .component-versions {
+    margin-block-start: 0.75rem;
+    padding-block-start: 0.75rem;
+    border-block-start: 1px solid var(--theme-border);
+  }
+
+  .component-versions h2 {
+    margin: 0 0 0.4rem;
+    color: var(--theme-text-muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .component-versions dl {
+    display: grid;
+    gap: 0.25rem;
+    margin: 0;
+  }
+
+  .component-versions dl > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(5rem, auto);
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+
+  .component-versions dt,
+  .component-versions dd {
+    min-inline-size: 0;
+    margin: 0;
+    font-size: 0.75rem;
+  }
+
+  .component-versions dt {
+    color: var(--theme-text-muted);
+  }
+
+  .component-versions dd {
+    overflow: hidden;
+    font-family: var(--theme-font-code);
+    font-variant-numeric: tabular-nums;
+    text-align: end;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .maintenance-actions button {

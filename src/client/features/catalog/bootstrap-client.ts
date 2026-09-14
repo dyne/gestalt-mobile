@@ -5,6 +5,7 @@
  */
 
 import type { RelaySession } from '../sessions/relay-client.js';
+import type { ComponentVersion } from '../../../shared/contracts/component-version.js';
 
 export type WorkspaceOption = {
   id: string;
@@ -19,6 +20,7 @@ export type Bootstrap = {
   profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
   models?: string[];
   sessions: RelaySession[];
+  versions: ComponentVersion[];
   capabilities: {
     approvals: true;
     userInput: true;

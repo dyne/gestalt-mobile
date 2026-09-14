@@ -96,6 +96,7 @@ import {
 } from '../shared/contracts/autopilot-wait-lease.js';
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
+import type { ComponentVersion } from '../shared/contracts/component-version.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -108,6 +109,7 @@ export type ComposeRelayAppOptions = {
   staticDir?: string;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
+  componentVersions?: readonly ComponentVersion[];
   startAppServers?: boolean;
   activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
   activitySchedule?: (callback: () => void, delayMs: number) => () => void;
@@ -1003,6 +1005,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               };
             }),
         },
+        versions: options.componentVersions,
         protocolCompatible: protocol.compatible,
       },
       sessionRoutes: {

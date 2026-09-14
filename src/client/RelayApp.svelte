@@ -40,6 +40,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
+  import type { ComponentVersion } from '../shared/contracts/component-version.js';
   import { createChatCache } from './features/chat/chat-cache.js';
   import {
     detachedChatUrl,
@@ -141,6 +142,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let workspaceTree = $state<WorkspaceOption[]>([]);
   const defaultSessionModel = 'gpt-5.6-terra';
   let sessionModels = $state.raw<string[]>([defaultSessionModel]);
+  let componentVersions = $state.raw<ComponentVersion[]>([]);
   let sessionModel = $state(defaultSessionModel);
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
   let skillsState = $state<SkillsState | null>(null);
@@ -425,6 +427,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
       sessionModels = [...new Set([defaultSessionModel, ...(bootstrap.models ?? [])])];
+      componentVersions = bootstrap.versions ?? [];
       if (!detachedSessionId) await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
@@ -1364,6 +1367,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           ? (sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel)
           : null}
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
+        {componentVersions}
         {passkeyAuthEnabled}
         {onlock}
         ondevices={() => (devicesOpen = true)}

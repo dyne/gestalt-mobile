@@ -35,6 +35,7 @@ const bootstrap = {
   ],
   profiles: [{ name: 'default', state: 'ok', status: 'ready' }],
   sessions: [],
+  versions: [],
   capabilities: {
     approvals: true,
     userInput: true,

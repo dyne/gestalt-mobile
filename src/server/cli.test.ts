@@ -149,6 +149,11 @@ describe('runCli', () => {
         compose,
         probeCodexVersion,
         runStartupDoctor,
+        environment: {
+          GESTALT_MANAGER_VERSION: '0.1.0',
+          GESTALT_AGENTS_VERSION: '2.9.0',
+          GESTALT_CONTEXT_MODE_VERSION: '2.9.0',
+        },
       }),
     ).toBe(0);
     expect(compose).toHaveBeenCalledWith(
@@ -156,6 +161,13 @@ describe('runCli', () => {
         root: resolve('/caller/workspace'),
         staticDir: resolve(root, 'dist/client'),
         installedCodexVersion: 'codex-cli 1.2.3',
+        componentVersions: [
+          { id: 'gestalt', label: 'Gestalt manager', version: '0.1.0' },
+          { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.1.0' },
+          { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
+          { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
+          { id: 'codex', label: 'Codex CLI', version: 'codex-cli 1.2.3' },
+        ],
         relyingParty: {
           publicOrigin: 'http://localhost:43210',
           rpId: 'localhost',
