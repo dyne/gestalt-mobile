@@ -128,7 +128,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v6');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v7');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -141,6 +141,7 @@ describe('autopilot policy', () => {
       'answer briefly, then perform that continuation in the same turn',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('never rely on blocker prose as the signal');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
   it('uses a fresh physical task and explicit model handoff for a replacement executor', () => {
