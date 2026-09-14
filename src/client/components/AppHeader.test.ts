@@ -87,6 +87,34 @@ describe('AppHeader', () => {
     expect(onnotifications).toHaveBeenCalledOnce();
   });
 
+  it('lists exact running component versions in the burger popover', () => {
+    render(AppHeader, {
+      theme: 'dyne-org',
+      onthemechange: () => {},
+      componentVersions: [
+        { id: 'gestalt', label: 'Gestalt manager', version: '0.1.0' },
+        { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
+        { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
+        { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
+        { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
+      ],
+    });
+
+    const versions = screen.getByRole('region', { name: 'Versions', hidden: true });
+    expect(
+      [...versions.querySelectorAll('dl > div')].map((row) => [
+        row.querySelector('dt')?.textContent,
+        row.querySelector('dd')?.textContent?.trim(),
+      ]),
+    ).toEqual([
+      ['Gestalt manager', '0.1.0'],
+      ['Gestalt Mobile', '0.33.0'],
+      ['Gestalt Agents', '2.9.0'],
+      ['Context Mode', '2.9.0'],
+      ['Codex CLI', 'codex-cli 0.144.3'],
+    ]);
+  });
+
   it('requires confirmation before scheduling an update and restart', async () => {
     const onupdaterestart = vi.fn(async () => undefined);
     render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onupdaterestart });

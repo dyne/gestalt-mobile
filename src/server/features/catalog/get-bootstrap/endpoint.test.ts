@@ -41,6 +41,10 @@ describe('GET /api/bootstrap', () => {
       },
       profiles: { list: async () => [{ name: 'default', state: 'ok', status: 'ready' }] },
       sessions: { list: () => [] },
+      versions: [
+        { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
+        { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
+      ],
       protocolCompatible: true,
     });
     const response = await app.inject('/api/bootstrap');
@@ -74,6 +78,10 @@ describe('GET /api/bootstrap', () => {
       ],
       profiles: [{ name: 'default', state: 'ok', status: 'ready' }],
       sessions: [],
+      versions: [
+        { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
+        { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
+      ],
       capabilities: { approvals: true, userInput: true, git: true, protocolCompatible: true },
     });
     await app.close();

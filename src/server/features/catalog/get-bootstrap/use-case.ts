@@ -6,11 +6,13 @@
 
 import type { ModelCatalog, ProfileCatalog, WorkspaceCatalog } from '../application/ports.js';
 import type { BootstrapResponse } from './response.js';
+import type { ComponentVersion } from '../../../../shared/contracts/component-version.js';
 export type BootstrapDependencies = {
   workspaces: Pick<WorkspaceCatalog, 'list'>;
   profiles: Pick<ProfileCatalog, 'list'>;
   models?: Pick<ModelCatalog, 'list'>;
   sessions: { list(): unknown[] };
+  versions?: readonly ComponentVersion[];
   protocolCompatible: boolean;
 };
 export async function getBootstrap(deps: BootstrapDependencies): Promise<BootstrapResponse> {
@@ -24,6 +26,7 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
     profiles,
     models,
     sessions: deps.sessions.list(),
+    versions: deps.versions ?? [],
     capabilities: {
       approvals: true,
       userInput: true,

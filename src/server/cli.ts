@@ -16,6 +16,7 @@ import { composeRelayApp } from './composition.js';
 import { CliUsageError, parseConfig, type RelayConfig } from './config.js';
 import { LauncherProfileCatalog } from './platform/catalog/launcher-profile-catalog.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
+import type { ComponentVersion } from '../shared/contracts/component-version.js';
 
 const runFile = promisify(execFile);
 
@@ -46,7 +47,38 @@ export type CliDependencies = {
   runStartupDoctor?: (cwd: string) => Promise<{ ok: boolean; report: string }>;
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
+  environment?: NodeJS.ProcessEnv;
 };
+
+function managedVersion(value: string | undefined): string | null {
+  return value && /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(value) ? value : null;
+}
+
+export function componentVersions(
+  mobileVersion: string,
+  codexVersion: string | null,
+  environment: NodeJS.ProcessEnv = process.env,
+): readonly ComponentVersion[] {
+  return [
+    {
+      id: 'gestalt',
+      label: 'Gestalt manager',
+      version: managedVersion(environment.GESTALT_MANAGER_VERSION),
+    },
+    { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: mobileVersion },
+    {
+      id: 'gestalt-agents',
+      label: 'Gestalt Agents',
+      version: managedVersion(environment.GESTALT_AGENTS_VERSION),
+    },
+    {
+      id: 'context-mode',
+      label: 'Context Mode',
+      version: managedVersion(environment.GESTALT_CONTEXT_MODE_VERSION),
+    },
+    { id: 'codex', label: 'Codex CLI', version: codexVersion },
+  ];
+}
 
 export async function runStartupDoctor(cwd: string): Promise<{ ok: boolean; report: string }> {
   if (process.env.GESTALT_STARTUP_DIAGNOSTICS_DONE === '1') return { ok: true, report: '' };
@@ -221,6 +253,8 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     stderr.write(
       'WARNING: Startup diagnostics reported a problem; Gestalt Mobile will continue so it can show recovery controls.\n',
     );
+  const installedCodexVersion = await (dependencies.probeCodexVersion ?? probeCodexVersion)();
+  const mobileVersion = await packageVersion(moduleUrl);
   const app = await (dependencies.compose ?? composeRelayApp)({
     root: config.root,
     dataDir: config.dataDir,
@@ -228,7 +262,12 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),
     profiles: new LauncherProfileCatalog(),
-    installedCodexVersion: await (dependencies.probeCodexVersion ?? probeCodexVersion)(),
+    installedCodexVersion,
+    componentVersions: componentVersions(
+      mobileVersion,
+      installedCodexVersion,
+      dependencies.environment,
+    ),
     startAppServers: true,
     homeDirectory: dependencies.homeDirectory,
     explicitSkillProfile,

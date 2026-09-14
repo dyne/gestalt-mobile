@@ -5,10 +5,12 @@
  */
 
 import type { ProfileOption, WorkspaceOption } from '../application/ports.js';
+import type { ComponentVersion } from '../../../../shared/contracts/component-version.js';
 export type BootstrapResponse = {
   workspaces: WorkspaceOption[];
   profiles: ProfileOption[];
   models: string[];
   sessions: unknown[];
+  versions: readonly ComponentVersion[];
   capabilities: { approvals: true; userInput: true; git: true; protocolCompatible: boolean };
 };
