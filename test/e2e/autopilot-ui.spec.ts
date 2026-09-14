@@ -148,6 +148,7 @@ async function install(
             sessionId: 'session-1',
             root: {
               state: 'awaitingAgent',
+              contextUsedPercent: 23,
               observedAt: '2026-08-20T00:00:00.000Z',
               lastActivityAt: '2026-08-20T00:00:00.000Z',
             },
@@ -157,6 +158,7 @@ async function install(
                 nickname: 'Builder',
                 role: 'explorer',
                 model: 'gpt-5.6-luna',
+                contextUsedPercent: 47,
                 state: 'working',
                 observedAt: '2026-08-20T00:00:00.000Z',
                 lastActivityAt: '2026-08-20T00:00:00.000Z',
@@ -219,6 +221,9 @@ async function install(
         }),
       ),
     }),
+  );
+  await page.route('**/api/sessions/session-1/activity/refresh', (route) =>
+    route.fulfill({ status: 204 }),
   );
   await page.route('**/api/sessions/session-1/autopilot', (route) =>
     route.fulfill({
@@ -537,8 +542,10 @@ for (const item of cases) {
       expect(shapes[0].radius).toBe(shapes[1].radius);
       expect(Math.abs(shapes[0].height - shapes[1].height)).toBeLessThanOrEqual(1);
       await agents.click();
-      await expect(page.getByLabel('Agent activity')).toContainText('Supervisor');
+      await expect(page.getByLabel('Agent activity')).toContainText('l0');
       await expect(page.getByLabel('Agent activity')).toContainText('waiting for child');
+      await expect(page.getByLabel('Agent activity')).toContainText('(ctx: 23%)');
+      await expect(page.getByLabel('Agent activity')).toContainText('(ctx: 47%)');
       await expect(page.getByLabel('Agent activity')).toContainText(
         'supervisor · Model: gpt-5.6-sol',
       );

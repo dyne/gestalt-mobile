@@ -994,17 +994,35 @@ describe('AutopilotCoordinator', () => {
       });
       const checkpoint = {
         version: 1 as const,
-        kind: 'l1Accepted' as const,
+        kind: 'l2Completed' as const,
         planIdentity: 'p',
         l1Id: 'l1',
-        position: 'L1',
-        verdict: 'ACCEPT' as const,
-        commit: { kind: 'notRequired' as const },
+        l2Id: 'l2',
+        position: 'L1.1',
+        status: 'DONE' as const,
+        changes: 'Added the report boundary.',
+        files: 'src/reporting.ts',
+        tests: 'Focused tests passed.',
       };
       expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
       expect(schedules).toBe(1);
       expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
       expect(schedules).toBe(1);
+      expect(
+        coordinator.checkpointAccepted(
+          's',
+          { ...checkpoint, changes: 'Conflicting replay.' },
+          'turn-1',
+          now,
+        ),
+      ).toBe(false);
+      expect(state?.checkpoints).toMatchObject({
+        reportedL2Ids: ['["l1","l2"]'],
+        pendingTurnId: 'turn-1',
+        pendingKind: 'l2Completed',
+      });
+      expect(coordinator.turnCompleted('s')).toBe(true);
+      expect(state?.checkpoints).toMatchObject({ pendingTurnId: null, pendingKind: null });
       if (lease === 'parked') expect(state?.supervision?.outcome).toBe('retrying');
     },
   );

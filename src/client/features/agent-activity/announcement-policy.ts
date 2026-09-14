@@ -27,11 +27,11 @@ export function activityAnnouncement(
   const critical = next.root.state === 'blocked' || next.root.state === 'awaitingHuman';
   return {
     polite: changed
-      ? `Supervisor ${announcementLabel(next.root.state)}; subagents ${announcementLabel(next.aggregateSubagents)}.`
+      ? `l0 ${announcementLabel(next.root.state)}; subagents ${announcementLabel(next.aggregateSubagents)}.`
       : '',
     critical:
       critical && (!previous || previous.root.state !== next.root.state)
-        ? `Supervisor ${announcementLabel(next.root.state)}.`
+        ? `l0 ${announcementLabel(next.root.state)}.`
         : '',
   };
 }

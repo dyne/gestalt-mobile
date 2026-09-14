@@ -555,19 +555,25 @@ export class AutopilotCoordinator {
       validStructuredBlock(state.blocking);
     if (checkpointBoundary && state?.checkpoints) {
       const occurredAt = this.deps.now();
+      const pendingKind =
+        state.checkpoints.pendingKind ??
+        (state.checkpoints.terminalReviewAccepted ? 'terminalReviewAccepted' : 'l1Accepted');
       this.persist(
         {
           ...state,
-          checkpoints: { ...state.checkpoints, pendingTurnId: null },
+          checkpoints: { ...state.checkpoints, pendingTurnId: null, pendingKind: null },
           updatedAt: occurredAt,
         },
         undefined,
         [
           {
             sessionId,
-            type: state.checkpoints.terminalReviewAccepted
-              ? 'org-plan.terminal-review-reported'
-              : 'org-plan.milestone-reported',
+            type:
+              pendingKind === 'l2Completed'
+                ? 'org-plan.step-reported'
+                : pendingKind === 'terminalReviewAccepted'
+                  ? 'org-plan.terminal-review-reported'
+                  : 'org-plan.milestone-reported',
             payload: { turnId: state.checkpoints.pendingTurnId },
             occurredAt,
           },
@@ -604,19 +610,26 @@ export class AutopilotCoordinator {
       return false;
     const previous = prior.checkpoints;
     if (previous && previous.planIdentity !== retained.identity) return false;
-    const reported = previous?.reportedL1Ids ?? [];
+    const reportedL1Ids = previous?.reportedL1Ids ?? [];
+    const reportedL2Ids = previous?.reportedL2Ids ?? [];
     const key = createHash('sha256').update(JSON.stringify(checkpoint)).digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
     if (acceptedKeys.includes(key)) return true;
-    if (checkpoint.kind === 'l1Accepted' && reported.includes(checkpoint.l1Id)) return false;
+    const l2Key =
+      checkpoint.kind === 'l2Completed' ? JSON.stringify([checkpoint.l1Id, checkpoint.l2Id]) : null;
+    if (l2Key && reportedL2Ids.includes(l2Key)) return false;
+    if (checkpoint.kind === 'l1Accepted' && reportedL1Ids.includes(checkpoint.l1Id)) return false;
     if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
       return false;
     const checkpoints = {
       protocolVersion: 1 as const,
       planIdentity: retained.identity,
-      reportedL1Ids: checkpoint.kind === 'l1Accepted' ? [...reported, checkpoint.l1Id] : reported,
+      reportedL2Ids: l2Key ? [...reportedL2Ids, l2Key] : reportedL2Ids,
+      reportedL1Ids:
+        checkpoint.kind === 'l1Accepted' ? [...reportedL1Ids, checkpoint.l1Id] : reportedL1Ids,
       acceptedKeys: [...acceptedKeys, key],
       pendingTurnId: turnId,
+      pendingKind: checkpoint.kind,
       terminalReviewAccepted:
         checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
     };
@@ -624,13 +637,22 @@ export class AutopilotCoordinator {
       {
         sessionId,
         type:
-          checkpoint.kind === 'l1Accepted'
-            ? 'org-plan.milestone-checkpointed'
-            : 'org-plan.terminal-review-checkpointed',
+          checkpoint.kind === 'l2Completed'
+            ? 'org-plan.step-checkpointed'
+            : checkpoint.kind === 'l1Accepted'
+              ? 'org-plan.milestone-checkpointed'
+              : 'org-plan.terminal-review-checkpointed',
         payload:
-          checkpoint.kind === 'l1Accepted'
-            ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
-            : { turnId },
+          checkpoint.kind === 'l2Completed'
+            ? {
+                l1Id: checkpoint.l1Id,
+                l2Id: checkpoint.l2Id,
+                position: checkpoint.position,
+                turnId,
+              }
+            : checkpoint.kind === 'l1Accepted'
+              ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
+              : { turnId },
         occurredAt,
       },
     ]);

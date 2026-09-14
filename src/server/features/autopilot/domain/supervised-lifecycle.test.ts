@@ -11,6 +11,7 @@ import {
   classifyExecutorOutcome,
   decideSupervisedLifecycle,
   executorIdentity,
+  parsePersistedSupervisedLifecycle,
   type ExecutorLifecycle,
   type SupervisedLifecycleInput,
 } from './supervised-lifecycle.js';
@@ -81,6 +82,32 @@ const input = (change: Partial<SupervisedLifecycleInput> = {}): SupervisedLifecy
 });
 
 describe('supervised Org Plan lifecycle', () => {
+  it('loads legacy checkpoints and infers their pending report kind', () => {
+    expect(
+      parsePersistedSupervisedLifecycle({
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          reportedL1Ids: ['l1'],
+          acceptedKeys: ['key'],
+          pendingTurnId: 'turn',
+          terminalReviewAccepted: false,
+        },
+      }),
+    ).toEqual({
+      checkpoints: {
+        protocolVersion: 1,
+        planIdentity: 'plan',
+        reportedL2Ids: [],
+        reportedL1Ids: ['l1'],
+        acceptedKeys: ['key'],
+        pendingTurnId: 'turn',
+        pendingKind: 'l1Accepted',
+        terminalReviewAccepted: false,
+      },
+    });
+  });
+
   it('treats an incomplete FINAL_ANSWER as partial and rejects the root final', () => {
     expect(
       classifyExecutorOutcome({

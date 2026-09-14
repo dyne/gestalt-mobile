@@ -16,6 +16,7 @@ describe('agent activity DTO', () => {
       kind: 'collaboration',
       childId: 'child',
       childTaskPath: '/root/l1_g2',
+      contextUsedPercent: 42,
       childOwnedProcesses: [
         {
           processId: 'private',
@@ -35,6 +36,7 @@ describe('agent activity DTO', () => {
     });
     const dto = JSON.stringify(toAgentActivityDto(snapshot));
     expect(dto).toContain('"canonicalPosition":"L1"');
+    expect(dto).toContain('"contextUsedPercent":42');
     expect(dto).not.toMatch(/private|ownerThreadId|ownerTaskPath|cpuPercent|rssBytes|osPid/);
   });
 });

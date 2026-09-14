@@ -105,6 +105,18 @@ describe('AgentActivityController', () => {
     expect(
       isAgentActivitySnapshot({
         ...snapshot('s'),
+        root: { ...snapshot('s').root, contextUsedPercent: 101 },
+      }),
+    ).toBe(false);
+    expect(
+      isAgentActivitySnapshot({
+        ...snapshot('s'),
+        root: { ...snapshot('s').root, contextUsedPercent: 48 },
+      }),
+    ).toBe(true);
+    expect(
+      isAgentActivitySnapshot({
+        ...snapshot('s'),
         subagents: [
           {
             id: 'child',

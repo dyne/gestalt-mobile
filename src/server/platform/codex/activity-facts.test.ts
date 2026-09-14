@@ -7,6 +7,25 @@ import { describe, expect, it } from 'vitest';
 import { decodeAgentActivityFact, decodeAgentActivityFacts } from './activity-facts.js';
 const at = '2026-01-01T00:00:00.000Z';
 describe('agent activity app-server characterization', () => {
+  it('derives bounded context use from the app-server thread usage update', () => {
+    expect(
+      decodeAgentActivityFact('s', at, {
+        method: 'thread/tokenUsage/updated',
+        params: {
+          threadId: 'child',
+          turnId: 'turn',
+          tokenUsage: { last: { totalTokens: 73_400 }, modelContextWindow: 128_000 },
+        },
+      }),
+    ).toMatchObject({ kind: 'contextUsage', threadId: 'child', contextUsedPercent: 57 });
+    expect(
+      decodeAgentActivityFacts('s', at, {
+        method: 'thread/tokenUsage/updated',
+        params: { threadId: 'child', tokenUsage: { last: { totalTokens: 1 } } },
+      }),
+    ).toEqual([]);
+  });
+
   it('maps bounded current root and collaboration shapes', () => {
     expect(
       decodeAgentActivityFact('s', at, {

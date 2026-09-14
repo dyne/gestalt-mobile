@@ -5,7 +5,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createToastQueue, toastTimeouts } from './toast-queue.js';
+import {
+  createToastQueue,
+  NOTIFICATION_HISTORY_STORAGE_KEY,
+  toastTimeouts,
+} from './toast-queue.js';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -90,5 +94,53 @@ describe('toast queue', () => {
 
     expect(listener).toHaveBeenCalledTimes(2);
     expect(listener.mock.calls[1]?.[0]).toHaveLength(1);
+  });
+
+  it('retains dismissed and expired notifications in newest-first device-local history', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const queue = createToastQueue({ historyStorage: storage, now: () => 1_000 });
+    const first = queue.enqueue({ kind: 'warning', message: 'Recovering prompt.' });
+    queue.dismiss(first);
+    queue.enqueue({ kind: 'success', message: 'Recovered.' });
+
+    expect(queue.historySnapshot().map((item) => item.message)).toEqual([
+      'Recovered.',
+      'Recovering prompt.',
+    ]);
+    expect(JSON.parse(values.get(NOTIFICATION_HISTORY_STORAGE_KEY)!)).toHaveLength(2);
+
+    const restored = createToastQueue({ historyStorage: storage });
+    expect(restored.snapshot()).toEqual([]);
+    expect(restored.historySnapshot().map((item) => item.message)).toEqual([
+      'Recovered.',
+      'Recovering prompt.',
+    ]);
+  });
+
+  it('deduplicates a coded warning in both the viewport and history', () => {
+    const queue = createToastQueue({ now: () => 2_000 });
+    const first = queue.enqueue({ kind: 'warning', code: 'RECOVERY_OP', message: 'Recovering.' });
+    const repeated = queue.enqueue({
+      kind: 'warning',
+      code: 'RECOVERY_OP',
+      message: 'Unsafe replacement.',
+    });
+
+    expect(repeated).toBe(first);
+    expect(queue.snapshot()).toEqual([
+      {
+        id: first,
+        kind: 'warning',
+        code: 'RECOVERY_OP',
+        message: 'Recovering.',
+        occurrences: 2,
+      },
+    ]);
+    expect(queue.historySnapshot()).toHaveLength(1);
+    expect(queue.historySnapshot()[0]?.occurrences).toBe(2);
   });
 });

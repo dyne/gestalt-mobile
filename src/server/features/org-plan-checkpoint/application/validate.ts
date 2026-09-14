@@ -23,6 +23,15 @@ export function validOrgPlanCheckpoint(
   const l1 = plan.steps.find((step) => step.id === checkpoint.l1Id);
   if (!l1) return false;
   const position = `L${plan.steps.indexOf(l1) + 1}`;
+  if (checkpoint.kind === 'l2Completed') {
+    const l2 = l1.children.find((step) => step.id === checkpoint.l2Id);
+    if (!l2) return false;
+    return (
+      checkpoint.position === `${position}.${l1.children.indexOf(l2) + 1}` &&
+      l2.state === 'DONE' &&
+      l1.reviewStatus === 'UNREVIEWED'
+    );
+  }
   return (
     checkpoint.position === position &&
     l1.state === 'DONE' &&

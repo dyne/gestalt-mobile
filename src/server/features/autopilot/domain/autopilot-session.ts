@@ -47,9 +47,11 @@ export type AutopilotSession = Readonly<{
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
+    reportedL2Ids?: readonly string[];
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
+    pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
     terminalReviewAccepted: boolean;
   }>;
   updatedAt: string;

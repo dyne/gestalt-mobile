@@ -153,6 +153,7 @@ vi.mock('./features/chat/chat-controller.js', () => ({
 }));
 
 import RelayApp from './RelayApp.svelte';
+import { NOTIFICATION_HISTORY_STORAGE_KEY } from './features/feedback/toast-queue.js';
 
 const chatView = (id: string, text: string) => ({
   sessionId: id,
@@ -217,6 +218,7 @@ describe('RelayApp chat controller composition', () => {
     controllerCalls.queue = 0;
     controllerCalls.interruptAndSend = 0;
     cachedDrafts.clear();
+    window.localStorage.removeItem(NOTIFICATION_HISTORY_STORAGE_KEY);
     vi.unstubAllGlobals();
     window.history.replaceState({}, '', '/');
     if (originalScrollIntoView) Element.prototype.scrollIntoView = originalScrollIntoView;
@@ -312,6 +314,32 @@ describe('RelayApp chat controller composition', () => {
     controllerOptions?.onHistoryPromptAccepted?.('a', 'recovered-op');
     await vi.waitFor(() => expect(cachedDrafts.get('a')?.text).toBe(''));
     expect(controllerCalls.send).toBe(0);
+  });
+  it('presents pending-draft recovery once as a dismissible notification with recent history', async () => {
+    cachedDrafts.set('a', {
+      text: 'recovered instruction',
+      revision: 7,
+      pending: [
+        { operationId: 'recovered-op', text: 'recovered instruction', revision: 7, kind: 'send' },
+      ],
+    });
+
+    await renderChat();
+    const message =
+      'A submitted prompt is being recovered. It will not be sent again automatically. Retry is available.';
+    const notifications = screen.getByLabelText('Notifications');
+    expect(within(notifications).getAllByText(message)).toHaveLength(1);
+    expect(
+      screen.queryByText('A previous submission was not confirmed. Retry is available.'),
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry send' })).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss warning notification' }));
+    expect(screen.queryByText(message)).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Open configuration' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Notifications', hidden: true }));
+    expect(screen.getByRole('heading', { name: 'Recent notifications' })).toBeTruthy();
+    expect(screen.getByText(message)).toBeTruthy();
   });
   it('preserves text and reuses the operation ID when acceptance cannot be consumed locally', async () => {
     const prompt = await renderChat();
@@ -619,7 +647,7 @@ describe('RelayApp chat controller composition', () => {
     expect(sessionB.textContent).toContain('activity unavailable');
     await fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
     await vi.waitFor(() => expect(screen.getByText('Agents (1)')).toBeTruthy());
-    expect(screen.getByText('Supervisor')).toBeTruthy();
+    expect(screen.getByText('l0')).toBeTruthy();
     expect(screen.getByText(/working · active/)).toBeTruthy();
     expect(screen.queryByText('activity unavailable')).toBeNull();
   });

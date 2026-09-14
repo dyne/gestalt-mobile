@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 /* @vitest-environment jsdom */
-import { cleanup, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import AgentActivityIndicators from './AgentActivityIndicators.svelte';
 
 describe('AgentActivityIndicators', () => {
@@ -43,13 +43,13 @@ describe('AgentActivityIndicators', () => {
     };
     const view = render(AgentActivityIndicators, { activity });
     const alert = view.container.querySelector('[role="alert"]')!;
-    expect(alert.textContent).toBe('Supervisor blocked.');
+    expect(alert.textContent).toBe('l0 blocked.');
     await view.rerender({
       activity: { ...activity, root: { ...activity.root, observedAt: 'later' } },
     });
     expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
     await view.rerender({ activity: { ...activity, sessionId: 'b' } });
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe('Supervisor blocked.');
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe('l0 blocked.');
   });
   it('labels reconciling freshness and preserves a native disclosure target', () => {
     const view = render(AgentActivityIndicators, {
@@ -90,7 +90,7 @@ describe('AgentActivityIndicators', () => {
           subagents: [],
         },
       });
-      expect(screen.getByText(/Supervisor:/).textContent).toBeTruthy();
+      expect(screen.getByText(/l0:/).textContent).toBeTruthy();
     });
   }
   it('uses native disclosure and readable labels for critical child activity', () => {
@@ -116,10 +116,10 @@ describe('AgentActivityIndicators', () => {
         ],
       },
     });
-    expect(screen.getByText('Supervisor: needs you')).toBeTruthy();
+    expect(screen.getByText(/l0: needs you/)).toBeTruthy();
     expect(screen.getByText('May be stale')).toBeTruthy();
     expect(container.querySelector('details summary')).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toBe('Supervisor needs you.');
+    expect(screen.getByRole('alert').textContent).toBe('l0 needs you.');
   });
   it('combines root and child agents with compact latest-activity times', () => {
     const now = Date.now();
@@ -132,6 +132,7 @@ describe('AgentActivityIndicators', () => {
         aggregateSubagents: 'idle',
         root: {
           state: 'idle',
+          contextUsedPercent: 18,
           observedAt: new Date(now - 2 * 60_000).toISOString(),
           lastActivityAt: new Date(now - 2 * 60_000).toISOString(),
         },
@@ -141,6 +142,7 @@ describe('AgentActivityIndicators', () => {
             nickname: 'Worker',
             role: 'explorer',
             model: 'gpt-5.6-luna',
+            contextUsedPercent: 64,
             state: 'idle',
             observedAt: new Date(now - 2 * 60 * 60_000).toISOString(),
             lastActivityAt: new Date(now - 2 * 60 * 60_000).toISOString(),
@@ -153,10 +155,10 @@ describe('AgentActivityIndicators', () => {
     expect(agents).toBeTruthy();
     expect(agents.classList.contains('app-control')).toBe(true);
     expect(screen.queryByText('Current')).toBeNull();
-    expect(screen.getByText('Supervisor')).toBeTruthy();
-    expect(screen.getByText('Non-plan agent — Worker')).toBeTruthy();
-    expect(screen.getByText('supervisor · Model: gpt-5.6-sol')).toBeTruthy();
-    expect(screen.getByText('explorer · Model: gpt-5.6-luna')).toBeTruthy();
+    expect(screen.getByText('l0')).toBeTruthy();
+    expect(screen.getByText('Worker')).toBeTruthy();
+    expect(screen.getByText('(ctx: 18%) · supervisor · Model: gpt-5.6-sol')).toBeTruthy();
+    expect(screen.getByText('(ctx: 64%) · explorer · Model: gpt-5.6-luna')).toBeTruthy();
     expect(screen.getByText('idle since 2m')).toBeTruthy();
     expect(screen.getByText('idle since 2h')).toBeTruthy();
   });
@@ -167,9 +169,24 @@ describe('AgentActivityIndicators', () => {
     });
 
     expect(screen.getByText('Agents (1)')).toBeTruthy();
-    expect(screen.getByText('Root agent')).toBeTruthy();
+    expect(screen.getByText('l0')).toBeTruthy();
     expect(screen.getByText('activity unavailable')).toBeTruthy();
     expect(getComputedStyle(container.querySelector('.agent-activity')!).display).not.toBe('none');
+  });
+  it('refreshes activity whenever the compact agent list opens', async () => {
+    const onopen = vi.fn();
+    const { container } = render(AgentActivityIndicators, {
+      compact: true,
+      activity: null,
+      onopen,
+    });
+    const details = container.querySelector('details')!;
+    details.open = true;
+    await fireEvent(details, new Event('toggle'));
+    expect(onopen).toHaveBeenCalledOnce();
+    details.open = false;
+    await fireEvent(details, new Event('toggle'));
+    expect(onopen).toHaveBeenCalledOnce();
   });
   it('orders the root then plan positions before lifecycle state', () => {
     const now = new Date().toISOString();
@@ -201,7 +218,7 @@ describe('AgentActivityIndicators', () => {
 
     expect(
       [...container.querySelectorAll('.agents li strong')].map((node) => node.textContent),
-    ).toEqual(['Supervisor', 'Non-plan agent — Worker', 'Non-plan agent — Offline']);
+    ).toEqual(['l0', 'Worker', 'Offline']);
   });
   it('presents a dedicated plan subagent with its canonical position label', () => {
     const now = new Date().toISOString();
@@ -250,10 +267,10 @@ describe('AgentActivityIndicators', () => {
         ],
       },
     });
-    expect(screen.getByText('L2 — Current L2 title')).toBeTruthy();
+    expect(screen.getByText('l2 — Current L2 title')).toBeTruthy();
     expect(screen.queryByText('random-nickname')).toBeNull();
   });
-  it('uses the retained plan title for root, executor, and terminal-review labels', () => {
+  it('uses exact task names and appends an L title only once', () => {
     const now = new Date().toISOString();
     render(AgentActivityIndicators, {
       plan: {
@@ -300,9 +317,10 @@ describe('AgentActivityIndicators', () => {
         ],
       },
     });
-    expect(screen.getByText('Supervisor — Continuity plan')).toBeTruthy();
-    expect(screen.getByText('L1 — First milestone')).toBeTruthy();
-    expect(screen.getByText('Final review — Continuity plan')).toBeTruthy();
+    expect(screen.getByText('l0')).toBeTruthy();
+    expect(screen.getByText('l1 — First milestone')).toBeTruthy();
+    expect(screen.getByText('final_review')).toBeTruthy();
+    expect(screen.queryByText('Continuity plan')).toBeNull();
     expect(screen.queryByText('random')).toBeNull();
   });
   it('keeps the canonical label when a plan title is missing, reordered, or appended', () => {
@@ -333,7 +351,7 @@ describe('AgentActivityIndicators', () => {
         ],
       },
     });
-    expect(screen.getByText('L9 — title unavailable')).toBeTruthy();
+    expect(screen.getByText('l9')).toBeTruthy();
     expect(screen.queryByText('random')).toBeNull();
     view.unmount();
   });
@@ -364,7 +382,7 @@ describe('AgentActivityIndicators', () => {
       currentStepId: '',
     };
     const view = render(AgentActivityIndicators, { activity, plan: base });
-    expect(screen.getByText('L2 — title unavailable')).toBeTruthy();
+    expect(screen.getByText('l2')).toBeTruthy();
     await view.rerender({
       activity,
       plan: {
@@ -393,7 +411,7 @@ describe('AgentActivityIndicators', () => {
         currentStepId: 'two',
       },
     });
-    expect(screen.getByText('L2 — Appended title')).toBeTruthy();
+    expect(screen.getByText('l2 — Appended title')).toBeTruthy();
     expect(screen.queryByText('random')).toBeNull();
   });
 });

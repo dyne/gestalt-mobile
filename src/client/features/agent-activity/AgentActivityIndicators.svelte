@@ -7,7 +7,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
-  import { orgPlanAgentDisplayName } from '../../../shared/org-plan-position.js';
   import type { SupervisedPlan } from '../plans/contracts.js';
   import type { AgentActivitySnapshot, AgentActivityState } from './contracts.js';
   import { activityAnnouncement } from './announcement-policy.js';
@@ -18,12 +17,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     popupAlign = 'end',
     rootModel,
     plan,
+    onopen = () => {},
   }: {
     activity: AgentActivitySnapshot | null;
     compact?: boolean;
     popupAlign?: 'start' | 'end';
     rootModel?: string;
     plan?: SupervisedPlan;
+    onopen?: () => void;
   } = $props();
   const labels: Record<AgentActivityState, string> = {
     working: 'working',
@@ -38,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     name: string;
     planOrder: number;
     generation: number;
+    contextUsedPercent?: number;
     role?: string;
     model?: string;
     state: AgentActivityState;
@@ -71,19 +73,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   function childName(child: AgentActivitySnapshot['subagents'][number]): string {
     const title = l1Title(child.canonicalPosition);
-    if (child.canonicalPosition && title) return `${child.canonicalPosition} — ${title}`;
-    if (child.canonicalPosition) return `${child.canonicalPosition} — title unavailable`;
-    if (
-      (child.canonicalTaskName === 'final_review' ||
-        child.role === 'final-reviewer' ||
-        child.role === 'org-plan-reviewer') &&
-      plan
-    )
-      return `Final review — ${plan.title}`;
-    return `Non-plan agent — ${orgPlanAgentDisplayName(child.nickname ?? child.role ?? 'unknown agent')}`;
+    const name =
+      child.canonicalTaskName ??
+      child.canonicalPosition?.toLowerCase() ??
+      child.nickname ??
+      child.role ??
+      child.id;
+    return title ? `${name} — ${title}` : name;
   }
   function rootName(): string {
-    return plan ? `Supervisor — ${plan.title}` : 'Supervisor';
+    return 'l0';
+  }
+  function contextLabel(value?: number): string {
+    return value === undefined ? '(ctx: —)' : `(ctx: ${value}%)`;
   }
   function positionOrder(position?: string): number {
     const match = /^L([1-9]\d*)(?:\.([1-9]\d*))?$/.exec(position ?? '');
@@ -108,6 +110,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         name: rootName(),
         planOrder: -1,
         generation: 0,
+        contextUsedPercent: activity.root.contextUsedPercent,
         role: 'supervisor',
         ...(rootModel ? { model: rootModel } : {}),
         state: activity.root.state,
@@ -118,6 +121,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         name: childName(child),
         planOrder: positionOrder(child.canonicalPosition),
         generation: child.continuationGeneration ?? 1,
+        contextUsedPercent: child.contextUsedPercent,
         ...(child.role ? { role: child.role } : {}),
         ...(child.model ? { model: child.model } : {}),
         state: child.state,
@@ -166,7 +170,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   aria-label="Agent activity"
 >
   {#if compact}
-    <details class="agents">
+    <details class="agents" ontoggle={(event) => event.currentTarget.open && onopen()}>
       <AppControl element="summary" compact full state={compactState}
         >Agents ({(activity?.subagents.length ?? 0) + 1})</AppControl
       >
@@ -176,7 +180,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <li>
               <strong>{agent.name}</strong>
               <span class="agent-metadata"
-                >{[agent.role, agent.model ? `Model: ${agent.model}` : 'Model unavailable']
+                >{[
+                  contextLabel(agent.contextUsedPercent),
+                  agent.role,
+                  agent.model ? `Model: ${agent.model}` : 'Model unavailable',
+                ]
                   .filter(Boolean)
                   .join(' · ')}</span
               >
@@ -187,11 +195,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/each}
         {:else}
           <li>
-            <strong>Root agent</strong>
+            <strong>l0</strong>
             <span class="agent-metadata"
-              >{['supervisor', rootModel ? `Model: ${rootModel}` : 'Model unavailable'].join(
-                ' · ',
-              )}</span
+              >{['(ctx: —)', 'supervisor', rootModel ? `Model: ${rootModel}` : 'Model unavailable']
+                .filter(Boolean)
+                .join(' · ')}</span
             >
             <span class="unavailable" role="status">activity unavailable</span>
           </li>
@@ -201,7 +209,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if activity}
     <div class="chips">
       <span class="chip" data-state={activity.root.state}
-        ><span aria-hidden="true">●</span> Supervisor: {labels[activity.root.state]}</span
+        ><span aria-hidden="true">●</span> l0: {labels[activity.root.state]}
+        {contextLabel(activity.root.contextUsedPercent)}</span
       >
       <details class="children">
         <summary class="chip" data-state={activity.aggregateSubagents}
@@ -211,7 +220,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <ul>
           {#each orderedSubagents as child (child.id)}
             <li>
-              <strong>{childName(child)}</strong>{child.role ? ` · ${child.role}` : ''}{child.model
+              <strong>{childName(child)}</strong> · {contextLabel(
+                child.contextUsedPercent,
+              )}{child.role ? ` · ${child.role}` : ''}{child.model
                 ? ` · Model: ${child.model}`
                 : ''} —
               {labels[child.state]} <small>{child.lastActivityAt}</small>

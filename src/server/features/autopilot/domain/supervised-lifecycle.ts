@@ -85,9 +85,11 @@ export type PersistedSupervisedLifecycle = Readonly<{
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
+    reportedL2Ids?: readonly string[];
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
+    pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
     terminalReviewAccepted: boolean;
   }>;
 }>;
@@ -295,6 +297,14 @@ function parseCheckpoints(
 ): PersistedSupervisedLifecycle['checkpoints'] | undefined {
   const planIdentity = boundedText(value.planIdentity);
   if (value.protocolVersion !== 1 || !planIdentity) return undefined;
+  const rawReportedL2Ids = value.reportedL2Ids ?? [];
+  if (!Array.isArray(rawReportedL2Ids) || rawReportedL2Ids.length > 512) return undefined;
+  const reportedL2Ids = rawReportedL2Ids.map((id) => boundedText(id)).filter(Boolean) as string[];
+  if (
+    reportedL2Ids.length !== rawReportedL2Ids.length ||
+    new Set(reportedL2Ids).size !== reportedL2Ids.length
+  )
+    return undefined;
   if (!Array.isArray(value.reportedL1Ids) || value.reportedL1Ids.length > 128) return undefined;
   const reportedL1Ids = value.reportedL1Ids
     .map((id) => boundedText(id))
@@ -304,7 +314,7 @@ function parseCheckpoints(
     new Set(reportedL1Ids).size !== reportedL1Ids.length
   )
     return undefined;
-  if (!Array.isArray(value.acceptedKeys) || value.acceptedKeys.length > 128) return undefined;
+  if (!Array.isArray(value.acceptedKeys) || value.acceptedKeys.length > 768) return undefined;
   const acceptedKeys = value.acceptedKeys
     .map((key) => boundedText(key))
     .filter(Boolean) as string[];
@@ -316,12 +326,27 @@ function parseCheckpoints(
   const pendingTurnId = value.pendingTurnId === null ? null : boundedText(value.pendingTurnId);
   if (pendingTurnId === undefined) return undefined;
   if (typeof value.terminalReviewAccepted !== 'boolean') return undefined;
+  const pendingKind =
+    value.pendingKind === undefined
+      ? pendingTurnId
+        ? value.terminalReviewAccepted
+          ? 'terminalReviewAccepted'
+          : 'l1Accepted'
+        : null
+      : value.pendingKind;
+  if (
+    pendingKind !== null &&
+    !['l2Completed', 'l1Accepted', 'terminalReviewAccepted'].includes(String(pendingKind))
+  )
+    return undefined;
   return {
     protocolVersion: 1,
     planIdentity,
+    reportedL2Ids,
     reportedL1Ids,
     acceptedKeys,
     pendingTurnId,
+    pendingKind: pendingKind as 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null,
     terminalReviewAccepted: value.terminalReviewAccepted,
   };
 }

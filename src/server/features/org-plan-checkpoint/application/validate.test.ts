@@ -22,7 +22,17 @@ const plan = {
       priority: 'A' as const,
       reviewStatus: 'REVIEWED' as const,
       description: {},
-      children: [],
+      children: [
+        {
+          id: 'l2',
+          title: 'L2',
+          level: 2 as const,
+          state: 'DONE' as const,
+          priority: 'A' as const,
+          description: {},
+          children: [],
+        },
+      ],
     },
   ],
 };
@@ -37,6 +47,58 @@ const checkpoint = {
 };
 
 describe('validOrgPlanCheckpoint', () => {
+  it('requires a matching DONE L2 under an unreviewed L1', () => {
+    const l2Checkpoint = {
+      version: 1 as const,
+      kind: 'l2Completed' as const,
+      planIdentity: 'plan',
+      l1Id: 'l1',
+      l2Id: 'l2',
+      position: 'L1.1',
+      status: 'DONE' as const,
+      changes: 'Completed L2.',
+      files: 'src/reporting.ts',
+      tests: 'Focused tests passed.',
+    };
+    const input = {
+      checkpoint: l2Checkpoint,
+      plan: {
+        ...plan,
+        steps: [
+          {
+            ...plan.steps[0],
+            state: 'WIP' as const,
+            reviewStatus: 'UNREVIEWED' as const,
+          },
+        ],
+      },
+      planIdentity: 'plan',
+      rootOwned: true,
+      hasActiveL1Writer: () => true,
+    };
+    expect(validOrgPlanCheckpoint(input)).toBe(true);
+    expect(
+      validOrgPlanCheckpoint({
+        ...input,
+        checkpoint: { ...l2Checkpoint, position: 'L1.2' },
+      }),
+    ).toBe(false);
+    expect(
+      validOrgPlanCheckpoint({
+        ...input,
+        plan: {
+          ...input.plan,
+          steps: [
+            {
+              ...input.plan.steps[0],
+              children: [{ ...input.plan.steps[0].children[0], state: 'WIP' as const }],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('requires the active root, matching reviewed L1, and no active writer', () => {
     const input = {
       checkpoint,
