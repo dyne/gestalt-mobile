@@ -22,6 +22,18 @@ const accepted = {
   findings: 'No P1 findings.',
   tests: 'npm test passed.',
 };
+const completed = {
+  version: 1,
+  kind: 'l2Completed',
+  planIdentity: 'a'.repeat(32),
+  l1Id: 'improve-supervision-reporting',
+  l2Id: 'add-l2-boundary',
+  position: 'L2.1',
+  status: 'DONE',
+  changes: 'Added a compact reporting boundary.',
+  files: 'src/reporting.ts; src/reporting.test.ts',
+  tests: 'Focused tests passed.',
+};
 
 describe('Org Plan checkpoint contract', () => {
   it('exposes a closed schema-v1 dynamic tool', () => {
@@ -30,6 +42,7 @@ describe('Org Plan checkpoint contract', () => {
       inputSchema: { additionalProperties: false },
     });
     expect(parseOrgPlanCheckpoint(accepted)).toEqual(accepted);
+    expect(parseOrgPlanCheckpoint(completed)).toEqual(completed);
   });
 
   it('keeps L1 and terminal variants disjoint and bounded', () => {
@@ -51,5 +64,9 @@ describe('Org Plan checkpoint contract', () => {
       }),
     ).toMatchObject({ kind: 'terminalReviewAccepted' });
     expect(parseOrgPlanCheckpoint({ ...accepted, kind: 'terminalReviewAccepted' })).toBeNull();
+    expect(parseOrgPlanCheckpoint({ ...completed, position: 'L2' })).toBeNull();
+    expect(parseOrgPlanCheckpoint({ ...completed, verdict: 'ACCEPT' })).toBeNull();
+    expect(parseOrgPlanCheckpoint({ ...completed, status: 'WIP' })).toBeNull();
+    expect(parseOrgPlanCheckpoint({ ...completed, files: undefined })).toBeNull();
   });
 });

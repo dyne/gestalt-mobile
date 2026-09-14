@@ -78,6 +78,34 @@ export function decodeAgentActivityFacts(
           },
         ]
       : [];
+  if (input.method === 'thread/tokenUsage/updated') {
+    const usage = record(params.tokenUsage);
+    const last = record(usage?.last);
+    const totalTokens = last?.totalTokens;
+    const modelContextWindow = usage?.modelContextWindow;
+    if (
+      !id(params.threadId) ||
+      typeof totalTokens !== 'number' ||
+      !Number.isFinite(totalTokens) ||
+      totalTokens < 0 ||
+      typeof modelContextWindow !== 'number' ||
+      !Number.isFinite(modelContextWindow) ||
+      modelContextWindow <= 0
+    )
+      return [];
+    return [
+      {
+        sessionId,
+        occurredAt,
+        kind: 'contextUsage',
+        threadId: id(params.threadId),
+        contextUsedPercent: Math.min(
+          100,
+          Math.max(0, Math.round((totalTokens / modelContextWindow) * 100)),
+        ),
+      },
+    ];
+  }
   if (input.method === 'item/started' || input.method === 'item/completed') {
     const item = record(params.item);
     if (item?.type !== 'collabAgentToolCall' && item?.type !== 'collabToolCall') return [];

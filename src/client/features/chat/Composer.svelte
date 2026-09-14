@@ -64,6 +64,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let reasoningMenuOpen = $derived(argumentPicker === 'reasoning');
   let sendEnabled = $derived(!activeTurnId && !starting && Boolean(message.trim()));
   let hasPrompt = $derived(Boolean(message.trim()));
+  let retryFromPrompt = $derived(retryable && !retryMessage);
 
   function chooseActiveAction(action: 'queue' | 'interrupt-send'): void {
     actionMenuOpen = false;
@@ -224,7 +225,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </svg>
       </button>
     {:else}
-      <button type="button" aria-label="Send prompt" disabled={!sendEnabled} onclick={onsend}>
+      <button
+        type="button"
+        aria-label={retryFromPrompt ? 'Retry send' : 'Send prompt'}
+        disabled={!sendEnabled}
+        onclick={retryFromPrompt ? onretry : onsend}
+      >
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M9 10 5 14l4 4M5 14h8a6 6 0 0 0 6-6V6" />
         </svg>

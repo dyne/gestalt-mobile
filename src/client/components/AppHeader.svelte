@@ -16,6 +16,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onthemechange,
     onlock = () => {},
     ondevices = () => {},
+    onnotifications = () => {},
     onscratchpad = () => {},
     onupdaterestart = async () => {},
     ondetach,
@@ -28,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onthemechange: (theme: ThemeId) => void;
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
+    onnotifications?: () => void;
     onscratchpad?: () => void;
     onupdaterestart?: () => Promise<void>;
     ondetach?: () => void;
@@ -118,6 +120,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </select>
   </label>
+  <button
+    type="button"
+    popovertarget="configuration-panel"
+    popovertargetaction="hide"
+    onclick={onnotifications}>Notifications</button
+  >
   <button
     type="button"
     popovertarget="configuration-panel"

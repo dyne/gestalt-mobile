@@ -94,6 +94,12 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       body: JSON.stringify(chatSnapshot()),
     });
   });
+  await page.route('**/api/sessions/session-1/activity/refresh', (route) =>
+    route.fulfill({ status: 204 }),
+  );
+  await page.route('**/api/sessions/session-1', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) }),
+  );
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
@@ -108,7 +114,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   );
   await expect(page.getByText('Agents (1)')).toBeVisible();
   await page.getByText('Agents (1)').click();
-  await expect(page.getByLabel('Agent activity')).toContainText('Root agent');
+  await expect(page.getByLabel('Agent activity')).toContainText('l0');
   await expect(page.getByLabel('Agent activity')).toContainText('activity unavailable');
   await page.getByText('Agents (1)').click();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');

@@ -6,6 +6,7 @@
     "supervision-start",
     "wait-lease-tool",
     "checkpoint-tool",
+    "l2-report-boundary",
     "agent-capacity-recovery",
     "controller-status",
     "canonical-agent-identity",

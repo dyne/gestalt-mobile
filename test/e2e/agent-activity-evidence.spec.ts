@@ -34,7 +34,7 @@ for (const viewport of [
           (value) => (document.documentElement.style.fontSize = `${value * 100}%`),
           scale,
         );
-        await expect(page.getByText('Supervisor: waiting for child').first()).toBeVisible();
+        await expect(page.getByText('l0: waiting for child').first()).toBeVisible();
         for (const state of [
           'working',
           'awaitingAgent',

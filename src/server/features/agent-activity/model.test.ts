@@ -17,6 +17,31 @@ const fact = (kind: Parameters<typeof projectAgentActivity>[1]['kind'], more = {
   ...more,
 });
 describe('agent activity projector', () => {
+  it('updates context percentages without changing root or child activity state', () => {
+    let snapshot = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('threadStarted', { threadId: 'root', status: 'idle' }),
+    );
+    snapshot = projectAgentActivity(
+      snapshot,
+      fact('collaboration', {
+        childId: 'child',
+        childThreadId: 'child',
+        childStatus: 'idle',
+      }),
+    );
+    snapshot = projectAgentActivity(
+      snapshot,
+      fact('contextUsage', { threadId: 'root', contextUsedPercent: 25 }),
+    );
+    snapshot = projectAgentActivity(
+      snapshot,
+      fact('contextUsage', { threadId: 'child', contextUsedPercent: 50 }),
+    );
+    expect(snapshot.root).toMatchObject({ state: 'idle', contextUsedPercent: 25 });
+    expect(snapshot.subagents[0]).toMatchObject({ state: 'idle', contextUsedPercent: 50 });
+  });
+
   it('derives the terminal reviewer from its authoritative task path', () => {
     const snapshot = projectAgentActivity(createAgentActivitySnapshot('s', at), {
       sessionId: 's',

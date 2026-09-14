@@ -59,6 +59,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onselectopen: (id: string) => void;
     onclose: (id: string) => void;
     onautopilottoggle?: (id: string, enabled: boolean) => void;
+    onactivityopen?: (id: string) => void;
     onautopilotresolve?: (
       id: string,
       action: 'resume' | 'disableAutopilot',
@@ -101,6 +102,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onselectopen,
     onclose,
     onautopilottoggle = () => {},
+    onactivityopen = () => {},
     onautopilotresolve = () => {},
     onopenrecent,
     onforget,
@@ -163,6 +165,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 popupAlign="start"
                 rootModel={session.model ?? models?.[0]}
                 plan={session.plan}
+                onopen={() => onactivityopen(session.id)}
               />
               <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
               <AutopilotLiveness

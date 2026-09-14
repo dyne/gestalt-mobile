@@ -9,7 +9,13 @@ export type AgentActivityState =
 export type AgentActivityConfidence = 'fresh' | 'stale' | 'reconciling';
 export type AgentActivitySnapshot = Readonly<{
   sessionId: string;
-  root: { state: AgentActivityState; reason?: string; observedAt: string; lastActivityAt: string };
+  root: {
+    state: AgentActivityState;
+    reason?: string;
+    contextUsedPercent?: number;
+    observedAt: string;
+    lastActivityAt: string;
+  };
   subagents: readonly {
     id: string;
     nickname?: string;
@@ -19,6 +25,7 @@ export type AgentActivitySnapshot = Readonly<{
     canonicalPosition?: string;
     continuationGeneration?: number;
     outcome?: 'partial' | 'cancelled' | 'failed';
+    contextUsedPercent?: number;
     ownedProcesses?: readonly {
       state:
         | 'running'
@@ -84,7 +91,11 @@ export function isAgentActivitySnapshot(
       validText(actor.lastActivityAt, 64) &&
       !Number.isNaN(Date.parse(actor.observedAt as string)) &&
       !Number.isNaN(Date.parse(actor.lastActivityAt as string)) &&
-      (actor.reason === undefined || validText(actor.reason, 64))
+      (actor.reason === undefined || validText(actor.reason, 64)) &&
+      (actor.contextUsedPercent === undefined ||
+        (Number.isInteger(actor.contextUsedPercent) &&
+          (actor.contextUsedPercent as number) >= 0 &&
+          (actor.contextUsedPercent as number) <= 100))
     );
   };
   return (

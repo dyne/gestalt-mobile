@@ -78,6 +78,15 @@ describe('AppHeader', () => {
     expect(onscratchpad).toHaveBeenCalledOnce();
   });
 
+  it('opens recent notifications from the burger popover', async () => {
+    const onnotifications = vi.fn();
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onnotifications });
+    const action = screen.getByRole('button', { name: 'Notifications', hidden: true });
+    expect(action.getAttribute('popovertargetaction')).toBe('hide');
+    await fireEvent.click(action);
+    expect(onnotifications).toHaveBeenCalledOnce();
+  });
+
   it('requires confirmation before scheduling an update and restart', async () => {
     const onupdaterestart = vi.fn(async () => undefined);
     render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onupdaterestart });

@@ -6,7 +6,7 @@
 
 import type { AgentActivitySnapshot } from './model.js';
 
-/** Public roster projection: never expose process, thread, task-path, or host metrics identifiers. */
+/** Public roster projection: expose bounded context use, never raw host metrics or identifiers. */
 export function toAgentActivityDto(snapshot: AgentActivitySnapshot): unknown {
   return {
     sessionId: snapshot.sessionId,
@@ -22,6 +22,9 @@ export function toAgentActivityDto(snapshot: AgentActivitySnapshot): unknown {
         ? { continuationGeneration: child.continuationGeneration }
         : {}),
       ...(child.outcome ? { outcome: child.outcome } : {}),
+      ...(child.contextUsedPercent !== undefined
+        ? { contextUsedPercent: child.contextUsedPercent }
+        : {}),
       ownedProcesses: (child.ownedProcesses ?? []).slice(0, 64).map((process) => ({
         state: process.state,
         ownership: process.ownership,

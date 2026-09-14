@@ -28,6 +28,7 @@ export type AgentActivityReason =
 export type RootAgentActivity = Readonly<{
   state: AgentActivityState;
   reason: AgentActivityReason;
+  contextUsedPercent?: number;
   observedAt: string;
   lastActivityAt: string;
 }>;
@@ -42,6 +43,7 @@ export type SubagentActivity = Readonly<{
   canonicalPosition?: string;
   continuationGeneration?: number;
   outcome?: 'partial' | 'cancelled' | 'failed';
+  contextUsedPercent?: number;
   ownedProcesses?: readonly AgentOwnedProcess[];
   state: AgentActivityState;
   reason: AgentActivityReason;
@@ -89,6 +91,7 @@ export type AgentActivityFact = Readonly<{
     | 'interactionPending'
     | 'interactionResolved'
     | 'collaboration'
+    | 'contextUsage'
     | 'processExited'
     | 'observed';
   threadId?: string;
@@ -103,6 +106,7 @@ export type AgentActivityFact = Readonly<{
   childOwnedProcesses?: readonly AgentOwnedProcess[];
   childStatus?: string;
   collaborationAction?: string;
+  contextUsedPercent?: number;
   attentionReason?: Extract<
     AgentActivityReason,
     | 'planChange'
@@ -156,6 +160,16 @@ export function projectAgentActivity(
   if (fact.threadId && current.rootThreadId && fact.threadId !== current.rootThreadId) {
     const child = current.subagents.find((candidate) => candidate.threadId === fact.threadId);
     if (!child) return current;
+    if (fact.kind === 'contextUsage' && validPercent(fact.contextUsedPercent)) {
+      const subagents = Object.freeze(
+        current.subagents.map((candidate) =>
+          candidate.id === child.id
+            ? Object.freeze({ ...candidate, contextUsedPercent: fact.contextUsedPercent })
+            : candidate,
+        ),
+      );
+      return Object.freeze({ ...current, subagents });
+    }
     const childFact = { ...fact };
     delete childFact.threadId;
     return projectAgentActivity(current, {
@@ -169,7 +183,10 @@ export function projectAgentActivity(
   const root = {
     ...current.root,
     observedAt,
-    lastActivityAt: later(current.root.lastActivityAt, fact.occurredAt),
+    lastActivityAt:
+      fact.kind === 'contextUsage'
+        ? current.root.lastActivityAt
+        : later(current.root.lastActivityAt, fact.occurredAt),
   };
   const children = new Map(current.subagents.map((child) => [child.id, child]));
   if (fact.kind === 'turnStarted') Object.assign(root, { state: 'working', reason: 'turnActive' });
@@ -191,6 +208,8 @@ export function projectAgentActivity(
   if (fact.kind === 'processExited')
     Object.assign(root, { state: 'disconnected', reason: 'processExited' });
   if (fact.kind === 'threadStatus') applyStatus(root, fact.status);
+  if (fact.kind === 'contextUsage' && validPercent(fact.contextUsedPercent))
+    root.contextUsedPercent = fact.contextUsedPercent;
   if (fact.kind === 'collaboration') {
     // Older servers may omit experimental child metadata. That is a capability
     // downgrade, not evidence that the root process disappeared.
@@ -233,6 +252,11 @@ export function projectAgentActivity(
             ? { canonicalTaskName: 'final_review' }
             : {}),
         ...(outcome ? { outcome } : {}),
+        ...(validPercent(fact.contextUsedPercent)
+          ? { contextUsedPercent: fact.contextUsedPercent }
+          : validPercent(before?.contextUsedPercent)
+            ? { contextUsedPercent: before.contextUsedPercent }
+            : {}),
         ...(fact.childOwnedProcesses
           ? { ownedProcesses: Object.freeze([...fact.childOwnedProcesses]) }
           : before?.ownedProcesses
@@ -361,6 +385,9 @@ function aggregate(children: readonly SubagentActivity[]): AgentActivityState {
 function validTimestamp(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
+function validPercent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
+}
 function later(left: string, right: string): string {
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
@@ -372,12 +399,17 @@ function semantic(snapshot: AgentActivitySnapshot): unknown {
     sessionId: snapshot.sessionId,
     rootThreadId: snapshot.rootThreadId,
     confidence: snapshot.confidence,
-    root: { state: snapshot.root.state, reason: snapshot.root.reason },
+    root: {
+      state: snapshot.root.state,
+      reason: snapshot.root.reason,
+      contextUsedPercent: snapshot.root.contextUsedPercent,
+    },
     subagents: snapshot.subagents.map((child) => ({
       id: child.id,
       threadId: child.threadId,
       nickname: child.nickname,
       role: child.role,
+      contextUsedPercent: child.contextUsedPercent,
       model: child.model,
       taskPath: child.taskPath,
       canonicalTaskName: child.canonicalTaskName,

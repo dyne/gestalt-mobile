@@ -52,7 +52,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { ProjectionEvent } from './features/chat/chat-projection.js';
   import { isSessionStatus } from './features/sessions/session-status.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
-  import { createToastQueue } from './features/feedback/toast-queue.js';
+  import NotificationHistory from './features/feedback/NotificationHistory.svelte';
+  import {
+    browserNotificationHistoryStorage,
+    createToastQueue,
+  } from './features/feedback/toast-queue.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
   import ToastViewport from './features/feedback/ToastViewport.svelte';
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
@@ -127,6 +131,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let chatView = $state<ChatViewState | null>(null);
   let tab = $state<Tab>(detachedSessionId ? 'chat' : 'sessions');
   let devicesOpen = $state(false);
+  let notificationsOpen = $state(false);
   let scratchpadOpen = $state(false);
   let fileBrowserRoot = $state<WorkspaceOption | null>(null);
   let fileBrowserTrigger = $state<HTMLButtonElement | null>(null);
@@ -171,7 +176,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let openGeneration = 0;
   let writerFeedback = $state<string | null>(null);
   let retryOperationId = $state<string | null>(null);
-  let recoveryNotice = $state<string | null>(null);
   let message = $state('');
   let draftRevision = 0;
   type PendingDraftSubmission = Readonly<
@@ -339,7 +343,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     },
   );
   const sessionCache = createSessionCache();
-  const toastQueue = createToastQueue();
+  const toastQueue = createToastQueue({ historyStorage: browserNotificationHistoryStorage() });
   const evidenceContext = new URLSearchParams(location.search).get('tree-evidence');
   const toastEvidence = new URLSearchParams(location.search).get('toast-evidence');
   const activityEvidence = new URLSearchParams(location.search).get('activity-evidence');
@@ -380,6 +384,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function closeScratchpad(): void {
     scratchpadOpen = false;
+    void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
+  }
+
+  function closeNotifications(): void {
+    notificationsOpen = false;
     void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
   }
 
@@ -770,10 +779,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       draftRevision = consumed.revision;
       scheduleTail('explicit');
     } else if (submitted.sessionId === sessionId && submitted.revision === draftRevision) {
-      recoveryNotice =
-        'The accepted prompt could not be saved locally. Keep this text until recovery completes.';
-      writerFeedback = 'The previous submission is awaiting local recovery. Retry is available.';
+      writerFeedback = null;
       retryOperationId = submitted.operationId;
+      toastQueue.enqueue({
+        kind: 'warning',
+        code: `PROMPT_LOCAL_RECOVERY_${submitted.operationId}`,
+        message:
+          'The accepted prompt could not be saved locally. Keep this text until recovery completes. Retry is available.',
+      });
     }
   }
 
@@ -787,10 +800,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ...operation,
       });
     if (restoredSessionId === sessionId && (pending?.length ?? 0) > 0) {
-      recoveryNotice =
-        'A submitted prompt is being recovered. It will not be sent again automatically.';
-      writerFeedback = 'A previous submission was not confirmed. Retry is available.';
+      writerFeedback = null;
       retryOperationId = pending![0]!.operationId;
+      toastQueue.enqueue({
+        kind: 'warning',
+        code: `PROMPT_RECOVERY_${retryOperationId}`,
+        message:
+          'A submitted prompt is being recovered. It will not be sent again automatically. Retry is available.',
+      });
     }
   }
 
@@ -1336,7 +1353,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpointerup={completeTabSwipe}
     onpointercancel={cancelTabSwipe}
   >
-    {#if !devicesOpen && !detachedSessionId}<AppHeader
+    {#if !devicesOpen && !notificationsOpen && !detachedSessionId}<AppHeader
         {theme}
         sessionPath={tab === 'chat'
           ? displayWorkspacePath(
@@ -1350,6 +1367,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {passkeyAuthEnabled}
         {onlock}
         ondevices={() => (devicesOpen = true)}
+        onnotifications={() => (notificationsOpen = true)}
         onscratchpad={openScratchpad}
         onupdaterestart={updateRestart}
         onthemechange={setTheme}
@@ -1383,14 +1401,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {onlock}
         oncreatepasskey={(ticket) => oncreatepasskey(ticket)}
       />
+    {:else if notificationsOpen}
+      <NotificationHistory queue={toastQueue} onclose={closeNotifications} />
     {:else}
-      {#if recoveryNotice}
-        <div class="recovery-notice" role="status" aria-live="polite" aria-atomic="true">
-          <span>{recoveryNotice}</span>
-          <button type="button" onclick={() => (recoveryNotice = null)}>Dismiss</button>
-        </div>
-      {/if}
-
       {#if tab === 'chat'}
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
@@ -1466,6 +1479,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 rootModel={sessions.find((session) => session.id === sessionId)?.model ??
                   defaultSessionModel}
                 plan={sessions.find((session) => session.id === sessionId)?.plan}
+                onopen={() => sessionId && void activityController.resync(sessionId)}
               />
             </div>
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
@@ -1565,6 +1579,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onselectopen={openSession}
             onclose={(id) => void closeSession(id)}
             onautopilottoggle={toggleAutopilot}
+            onactivityopen={(id) => void activityController.resync(id)}
             onautopilotresolve={resolveAutopilotAttention}
             onopenrecent={(session) => void openRecentSession(session)}
             onforget={(id) => void forgetSession(id)}
