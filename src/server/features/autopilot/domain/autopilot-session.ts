@@ -81,7 +81,11 @@ export type AutopilotSnapshot = Readonly<{
       | 'attentionRequired'
       | 'safetyPaused'
       | 'none';
-    wait: Readonly<{ present: boolean; wakeCategories: readonly ObservableWakeCondition[] }>;
+    wait: Readonly<{
+      present: boolean;
+      wakeCategories: readonly ObservableWakeCondition[];
+      resumeAt?: string;
+    }>;
     observedAt: string;
     lastTransitionAt: string;
     nextExpectedAction: string;
@@ -220,6 +224,9 @@ export function autopilotSnapshot(
       wait: {
         present: Boolean(state.supervision?.waitLease),
         wakeCategories: [...waitCategories].slice(0, 9),
+        ...(state.supervision?.waitLease?.resumeAt
+          ? { resumeAt: state.supervision.waitLease.resumeAt }
+          : {}),
       },
       observedAt: facts.observedAt,
       lastTransitionAt: state.updatedAt,

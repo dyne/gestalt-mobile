@@ -51,6 +51,7 @@ import { AgentActivityRegistry } from './features/agent-activity/registry.js';
 import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import {
+  completedCommandId,
   isAgentCapacityRecoveryCall,
   isAutopilotWaitLeaseCall,
   resolvedServerRequestId,
@@ -644,6 +645,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             currentSession?.activeTurnId,
             resolvedOrigin,
           );
+          const rootCommandId =
+            resolvedOrigin.kind === 'root' ? completedCommandId(notification) : null;
+          if (rootCommandId) autopilot.rootProcessCompleted(sessionId, rootCommandId);
           if (!normalized) {
             for (const activityFact of activityFacts) activity.observe(activityFact);
             return;
@@ -714,12 +718,19 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
             const accepted =
               rootOwned &&
-              autopilot.reportProbe(sessionId, {
-                id: lease.reportId,
-                kind: 'wait',
-                leaseId: lease.leaseId,
-                wakeConditions: lease.wakeConditions,
-              });
+              (lease.version === 2
+                ? autopilot.registerProactiveWait(sessionId, {
+                    id: lease.reportId,
+                    leaseId: lease.leaseId,
+                    wakeConditions: lease.wakeConditions,
+                    maxWaitMs: lease.maxWaitMs,
+                  })
+                : autopilot.reportProbe(sessionId, {
+                    id: lease.reportId,
+                    kind: 'wait',
+                    leaseId: lease.leaseId,
+                    wakeConditions: lease.wakeConditions,
+                  }));
             if (!accepted) {
               if (rootOwned) autopilot.rejectProbe(sessionId);
               return (

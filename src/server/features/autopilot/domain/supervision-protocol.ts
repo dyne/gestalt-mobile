@@ -85,6 +85,7 @@ export type SupervisionProtocolState = Readonly<{
     id: string;
     probeKey: string;
     wakeConditions: readonly ObservableWakeCondition[];
+    resumeAt?: string;
   }> | null;
   retryKey: string | null;
   safetyPauseReason: 'retryRecurrence' | 'invalidProbeReport' | null;
@@ -141,6 +142,41 @@ export type ProbeReport =
       wakeConditions: readonly ObservableWakeCondition[];
     }>;
 
+export type ProactiveWaitReport = Readonly<{
+  id: string;
+  leaseId: string;
+  wakeConditions: readonly ObservableWakeCondition[];
+  resumeAt: string;
+}>;
+
+/** Registers one explicit long-wait episode without changing future pulse policy. */
+export function registerProactiveWait(
+  state: SupervisionProtocolState,
+  report: ProactiveWaitReport,
+): SupervisionProtocolState {
+  if (
+    state.lastReportId === report.id ||
+    state.outcome === 'parked' ||
+    state.outcome === 'attentionRequired' ||
+    state.outcome === 'safetyPaused' ||
+    !Number.isFinite(Date.parse(report.resumeAt))
+  )
+    return state;
+  const wakeConditions = uniqueSupportedWakeConditions(report.wakeConditions);
+  if (!report.leaseId || wakeConditions.length === 0) return state;
+  return {
+    ...state,
+    outcome: 'parked',
+    lastReportId: report.id,
+    waitLease: {
+      id: report.leaseId,
+      probeKey: state.progressKey,
+      wakeConditions,
+      resumeAt: report.resumeAt,
+    },
+  };
+}
+
 /** Accepts only structured, bounded probe reports. Unsupported waits fail closed. */
 export function reportProbe(
   state: SupervisionProtocolState,
@@ -185,6 +221,11 @@ export function consumeObservableWake(
     wake.progressKey === lease.probeKey
   )
     return state;
+  if (lease.resumeAt)
+    return {
+      ...startSupervisionProtocol(wake.progressKey),
+      lastReportId: state.lastReportId,
+    };
   return {
     ...state,
     outcome: 'retrying',
@@ -193,6 +234,27 @@ export function consumeObservableWake(
     probeKey: null,
     waitLease: null,
     retryKey: wake.progressKey,
+  };
+}
+
+/** A proactive deadline consumes only its matching episode and restores normal policy. */
+export function consumeWaitDeadline(
+  state: SupervisionProtocolState,
+  leaseId: string,
+  observedAt: string,
+): SupervisionProtocolState {
+  const lease = state.waitLease;
+  if (
+    state.outcome !== 'parked' ||
+    !lease?.resumeAt ||
+    lease.id !== leaseId ||
+    !Number.isFinite(Date.parse(observedAt)) ||
+    Date.parse(observedAt) < Date.parse(lease.resumeAt)
+  )
+    return state;
+  return {
+    ...startSupervisionProtocol(state.progressKey),
+    lastReportId: state.lastReportId,
   };
 }
 
@@ -285,7 +347,17 @@ function parseWaitLease(value: unknown): SupervisionProtocolState['waitLease'] |
   const wakeConditions = uniqueSupportedWakeConditions(
     candidate.wakeConditions as ObservableWakeCondition[],
   );
-  return wakeConditions.length === candidate.wakeConditions.length
-    ? { id: candidate.id, probeKey: candidate.probeKey, wakeConditions }
-    : undefined;
+  if (wakeConditions.length !== candidate.wakeConditions.length) return undefined;
+  const resumeAt = candidate.resumeAt;
+  if (
+    resumeAt !== undefined &&
+    (typeof resumeAt !== 'string' || !Number.isFinite(Date.parse(resumeAt)))
+  )
+    return undefined;
+  return {
+    id: candidate.id,
+    probeKey: candidate.probeKey,
+    wakeConditions,
+    ...(typeof resumeAt === 'string' ? { resumeAt } : {}),
+  };
 }

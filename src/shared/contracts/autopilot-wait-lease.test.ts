@@ -38,4 +38,14 @@ describe('Autopilot wait lease contract', () => {
     expect(parseAutopilotWaitLease({ ...lease, transcript: 'wait please' })).toBeNull();
     expect(parseAutopilotWaitLease({ ...lease, reportId: 'x'.repeat(129) })).toBeNull();
   });
+
+  it('accepts only bounded version 2 one-shot deadlines', () => {
+    const proactive = { ...lease, version: 2 as const, maxWaitMs: 3_600_000 };
+    expect(parseAutopilotWaitLease(proactive)).toEqual(proactive);
+    expect(parseAutopilotWaitLease({ ...proactive, maxWaitMs: 59_999 })).toBeNull();
+    expect(parseAutopilotWaitLease({ ...proactive, maxWaitMs: 86_400_001 })).toBeNull();
+    expect(parseAutopilotWaitLease({ ...proactive, maxWaitMs: 60_000.5 })).toBeNull();
+    expect(parseAutopilotWaitLease({ ...lease, version: 2 })).toBeNull();
+    expect(parseAutopilotWaitLease({ ...lease, maxWaitMs: 60_000 })).toBeNull();
+  });
 });
