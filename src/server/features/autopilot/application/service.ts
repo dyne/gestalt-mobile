@@ -36,6 +36,8 @@ import {
   type AutopilotPolicy,
 } from './policy.js';
 import {
+  consumeCheckpointBoundary,
+  consumeObsoleteWait,
   consumeObservableWake,
   consumeWaitDeadline,
   recordAutomaticContinuation,
@@ -360,7 +362,10 @@ export class AutopilotCoordinator {
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
     const nextFingerprint = fingerprint(currentPlan.plan);
     const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
-    if (replacing) this.cancelWaitTimer(sessionId);
+    if (replacing) {
+      this.cancelWaitTimer(sessionId);
+      this.parkedSubscriptions.delete(sessionId);
+    }
     if (
       prior.requestedEnabled &&
       prior.planIdentity === currentPlan.identity &&
@@ -379,15 +384,15 @@ export class AutopilotCoordinator {
       stopReason: null,
       executor: undefined,
       blocking: undefined,
-      // A replacement plan cannot inherit a parked lease, retry key, or probe
-      // budget from a different semantic plan identity. Re-enabling the same
-      // plan still preserves its non-terminal protocol state.
-      supervision: replacing
-        ? startSupervisionProtocol(this.progressKey(sessionId))
-        : recoverSafetyPause(
-            prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-            this.progressKey(sessionId),
-          ),
+      supervision: recoverSafetyPause(
+        consumeObsoleteWait(
+          replacing
+            ? startSupervisionProtocol(this.progressKey(sessionId))
+            : (prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId))),
+          this.progressKey(sessionId),
+        ),
+        this.progressKey(sessionId),
+      ),
       updatedAt: now,
     };
     this.persist(next);
@@ -407,6 +412,7 @@ export class AutopilotCoordinator {
       !prior.requestedEnabled &&
       prior.state === 'disabled' &&
       !cancelled &&
+      !prior.supervision?.waitLease &&
       (!currentPlan || prior.planIdentity === currentPlan.identity)
     )
       return this.snapshot(sessionId);
@@ -420,7 +426,7 @@ export class AutopilotCoordinator {
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: 'manualDisabled',
       blocking: undefined,
-      supervision: recoverSafetyPause(
+      supervision: consumeObsoleteWait(
         prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
         this.progressKey(sessionId),
       ),
@@ -429,6 +435,7 @@ export class AutopilotCoordinator {
     this.persist(next, cancelled);
     this.cancelTimer(sessionId);
     this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
     return this.snapshot(sessionId);
   }
   cancel(sessionId: string, reason: 'planRemoved' | 'planReplaced' | 'sessionEnded'): void {
@@ -446,12 +453,17 @@ export class AutopilotCoordinator {
         ...(cancelled ? { lastControlId: null } : {}),
         stopReason: reason,
         blocking: undefined,
+        supervision: consumeObsoleteWait(
+          prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+          this.progressKey(sessionId),
+        ),
         updatedAt: now,
       },
       cancelled,
     );
     this.cancelTimer(sessionId);
     this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
     const prior = this.deps.store.find(sessionId);
@@ -670,7 +682,10 @@ export class AutopilotCoordinator {
       });
       this.flushOutbox(sessionId);
     }
-    this.activitySettled(sessionId, 'rootFinalAttempt');
+    // The persisted checkpoint is the continuation trigger. It becomes
+    // actionable only after the root final has closed its owning turn.
+    if (checkpointBoundary) this.evaluate(sessionId);
+    else this.activitySettled(sessionId, 'rootFinalAttempt');
     return finalAllowed;
   }
   /** Records an already validated root-only checkpoint; it never changes Org state. */
@@ -688,7 +703,18 @@ export class AutopilotCoordinator {
     if (previous && previous.planIdentity !== retained.identity) return false;
     const reportedL1Ids = previous?.reportedL1Ids ?? [];
     const reportedL2Ids = previous?.reportedL2Ids ?? [];
-    const key = createHash('sha256').update(JSON.stringify(checkpoint)).digest('hex');
+    const canonicalPosition =
+      checkpoint.kind === 'terminalReviewAccepted' ? 'terminal' : checkpoint.position;
+    const key = createHash('sha256')
+      .update(
+        JSON.stringify([
+          retained.identity,
+          fingerprint(retained.plan),
+          checkpoint.kind,
+          canonicalPosition,
+        ]),
+      )
+      .digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
     if (acceptedKeys.includes(key)) return true;
     const l2Key =
@@ -709,33 +735,48 @@ export class AutopilotCoordinator {
       terminalReviewAccepted:
         checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
     };
-    this.persist({ ...prior, checkpoints, updatedAt: occurredAt }, undefined, [
+    const checkpointed = { ...prior, checkpoints, updatedAt: occurredAt };
+    this.persist(
       {
-        sessionId,
-        type:
-          checkpoint.kind === 'l2Completed'
-            ? 'org-plan.step-checkpointed'
-            : checkpoint.kind === 'l1Accepted'
-              ? 'org-plan.milestone-checkpointed'
-              : 'org-plan.terminal-review-checkpointed',
-        payload:
-          checkpoint.kind === 'l2Completed'
-            ? {
-                l1Id: checkpoint.l1Id,
-                l2Id: checkpoint.l2Id,
-                position: checkpoint.position,
-                turnId,
-              }
-            : checkpoint.kind === 'l1Accepted'
-              ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
-              : { turnId },
-        occurredAt,
+        ...checkpointed,
+        supervision: checkpointed.supervision
+          ? consumeCheckpointBoundary(
+              checkpointed.supervision,
+              this.progressKeyFor(sessionId, checkpointed, retained),
+            )
+          : checkpointed.supervision,
       },
-    ]);
-    // A lease only optimizes a probe that deliberately yielded. Checkpoints are
-    // authoritative progress events in their own right, so an incomplete plan
-    // must be evaluated even when no probe (and therefore no lease) exists.
-    if (!this.semanticEvent(sessionId, 'checkpointChanged')) this.evaluate(sessionId);
+      undefined,
+      [
+        {
+          sessionId,
+          type:
+            checkpoint.kind === 'l2Completed'
+              ? 'org-plan.step-checkpointed'
+              : checkpoint.kind === 'l1Accepted'
+                ? 'org-plan.milestone-checkpointed'
+                : 'org-plan.terminal-review-checkpointed',
+          payload:
+            checkpoint.kind === 'l2Completed'
+              ? {
+                  l1Id: checkpoint.l1Id,
+                  l2Id: checkpoint.l2Id,
+                  position: checkpoint.position,
+                  turnId,
+                }
+              : checkpoint.kind === 'l1Accepted'
+                ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
+                : { turnId },
+          occurredAt,
+        },
+      ],
+    );
+    // Persistence and acknowledgement stay on the short checkpoint path. Any
+    // pre-boundary lease is already obsolete, but continuation is deliberately
+    // deferred until the matching root final closes the turn.
+    this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
+    this.cancelTimer(sessionId);
     return true;
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
@@ -791,6 +832,7 @@ export class AutopilotCoordinator {
     if (replacing) {
       this.cancelTimer(sessionId);
       this.cancelWaitTimer(sessionId);
+      this.parkedSubscriptions.delete(sessionId);
     }
     const next: AutopilotSession = {
       ...prior,
@@ -805,12 +847,15 @@ export class AutopilotCoordinator {
       stopReason: null,
       executor: undefined,
       blocking: undefined,
-      supervision: replacing
-        ? startSupervisionProtocol(this.progressKey(sessionId))
-        : recoverSafetyPause(
-            prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-            this.progressKey(sessionId),
-          ),
+      supervision: recoverSafetyPause(
+        consumeObsoleteWait(
+          replacing
+            ? startSupervisionProtocol(this.progressKey(sessionId))
+            : (prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId))),
+          this.progressKey(sessionId),
+        ),
+        this.progressKey(sessionId),
+      ),
       updatedAt: now,
     };
     this.persist(next, cancelled);
@@ -830,20 +875,10 @@ export class AutopilotCoordinator {
       this.evaluate(sessionId);
       return;
     }
-    const eventKey = JSON.stringify({
-      root: [activity.root.state, activity.root.reason],
-      children: activity.subagents.map((child) => [
-        child.id,
-        child.state,
-        child.reason,
-        child.continuationGeneration ?? 0,
-        (child.ownedProcesses ?? []).map((process) => [
-          process.processId,
-          process.state,
-          process.ownership,
-        ]),
-      ]),
-    });
+    // Reuse the canonical semantic projection: child order, timestamps, and
+    // activity prose cannot manufacture an extra wake, while a child-only
+    // lifecycle transition remains visible with an unchanged root.
+    const eventKey = this.progressKey(sessionId);
     if (this.activityEventKeys.get(sessionId) === eventKey) return;
     this.activityEventKeys.set(sessionId, eventKey);
     if (this.semanticEvent(sessionId, 'agentActivityChanged')) return;
@@ -902,6 +937,8 @@ export class AutopilotCoordinator {
   }
   manualSend(sessionId: string): void {
     this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior || !prior.requestedEnabled) return;
     const now = this.deps.now();
@@ -913,6 +950,10 @@ export class AutopilotCoordinator {
         generation: prior.generation + 1,
         nextEvaluationAt: null,
         lastControlId: null,
+        supervision: consumeObsoleteWait(
+          prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+          this.progressKey(sessionId),
+        ),
         updatedAt: now,
       },
       cancelled,
@@ -1146,6 +1187,14 @@ export class AutopilotCoordinator {
           this.waitTimers.delete(sessionId);
           const state = this.deps.store.find(sessionId);
           if (!state?.requestedEnabled || !state.supervision) return;
+          const lease = state.supervision.waitLease;
+          if (
+            state.supervision.outcome !== 'parked' ||
+            !lease ||
+            lease.id !== leaseId ||
+            lease.resumeAt !== resumeAt
+          )
+            return;
           const protocol = consumeWaitDeadline(state.supervision, leaseId, this.deps.now());
           if (protocol === state.supervision) {
             this.armWaitDeadline(sessionId, leaseId, resumeAt);
@@ -1416,11 +1465,63 @@ export class AutopilotCoordinator {
 
   private armExecutorRefresh(sessionId: string, delayMs: number): void {
     if (this.executorTimers.has(sessionId)) return;
+    const state = this.deps.store.find(sessionId);
+    const plan = this.deps.plan(sessionId);
+    const executor =
+      state && plan
+        ? this.currentExecutor(sessionId, plan.plan, state.consecutiveNoProgress, state.executor)
+        : undefined;
+    const fence =
+      state && plan && !this.deps.session(sessionId)?.activeTurnId
+        ? {
+            generation: state.generation,
+            identity: plan.identity,
+            fingerprint: fingerprint(plan.plan),
+            state: state.state,
+            supervision: state.supervision?.outcome ?? null,
+            checkpoint: JSON.stringify(state.checkpoints ?? null),
+            canonicalPosition: executor?.canonicalPosition ?? null,
+            executorThreadId: executor?.threadId ?? null,
+            executorGeneration: executor?.continuationGeneration ?? null,
+          }
+        : null;
+    if (!fence) return;
+    let delivered = false;
     this.executorTimers.set(
       sessionId,
       this.deps.schedule(() => {
         this.executorTimers.delete(sessionId);
+        if (delivered) {
+          this.audit(sessionId, 'autopilot.executor-refresh-stale', { fence });
+          return;
+        }
+        delivered = true;
         this.enqueue(sessionId, async () => {
+          const current = this.deps.store.find(sessionId);
+          const currentPlan = this.deps.plan(sessionId);
+          const currentChild = fence.executorThreadId
+            ? this.deps
+                .activity(sessionId)
+                ?.subagents.find((child) => (child.threadId ?? child.id) === fence.executorThreadId)
+            : null;
+          if (
+            !current?.requestedEnabled ||
+            this.deps.pendingInteraction(sessionId) ||
+            current.generation !== fence.generation ||
+            current.state !== fence.state ||
+            (current.supervision?.outcome ?? null) !== fence.supervision ||
+            JSON.stringify(current.checkpoints ?? null) !== fence.checkpoint ||
+            currentPlan?.identity !== fence.identity ||
+            !currentPlan ||
+            fingerprint(currentPlan.plan) !== fence.fingerprint ||
+            Boolean(this.deps.session(sessionId)?.activeTurnId) ||
+            (fence.executorThreadId !== null &&
+              (currentChild?.canonicalPosition !== fence.canonicalPosition ||
+                (currentChild.continuationGeneration ?? 1) !== fence.executorGeneration))
+          ) {
+            this.audit(sessionId, 'autopilot.executor-refresh-stale', { fence });
+            return;
+          }
           await this.deps.executorController?.refresh(sessionId);
           if (!(await this.enforceSupervisedLifecycle(sessionId, 'processObserved')))
             this.evaluate(sessionId);
@@ -1437,13 +1538,70 @@ export class AutopilotCoordinator {
     trigger: Parameters<NonNullable<AutopilotDependencies['executorController']>['resume']>[3],
   ): void {
     if (this.executorTimers.has(sessionId)) return;
+    const state = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    const armedChild = this.deps
+      .activity(sessionId)
+      ?.subagents.find((child) => (child.threadId ?? child.id) === threadId);
+    const fence =
+      state && retained
+        ? {
+            sessionGeneration: state.generation,
+            planIdentity: retained.identity,
+            planFingerprint: fingerprint(retained.plan),
+            canonicalPosition:
+              armedChild?.canonicalPosition ?? state.executor?.canonicalPosition ?? null,
+            executorThreadId: threadId,
+            executorGeneration: generation - 1,
+            supervisionOutcome: state.supervision?.outcome ?? null,
+            checkpoint: JSON.stringify(state.checkpoints ?? null),
+            boundaryState: state.state,
+          }
+        : null;
+    if (!fence || this.deps.session(sessionId)?.activeTurnId) return;
+    let delivered = false;
     this.executorTimers.set(
       sessionId,
       this.deps.schedule(() => {
         this.executorTimers.delete(sessionId);
+        if (delivered) {
+          this.audit(sessionId, 'autopilot.executor-continuation-stale', {
+            threadId,
+            generation,
+            trigger: trigger.kind,
+            fence,
+          });
+          return;
+        }
+        delivered = true;
         this.enqueue(sessionId, async () => {
           const current = this.deps.store.find(sessionId);
-          if (!current?.requestedEnabled || this.deps.pendingInteraction(sessionId)) return;
+          const latestPlan = this.deps.plan(sessionId);
+          const currentChild = this.deps
+            .activity(sessionId)
+            ?.subagents.find((child) => (child.threadId ?? child.id) === fence.executorThreadId);
+          const valid =
+            current?.requestedEnabled &&
+            !this.deps.pendingInteraction(sessionId) &&
+            current.generation === fence.sessionGeneration &&
+            current.state === fence.boundaryState &&
+            (current.supervision?.outcome ?? null) === fence.supervisionOutcome &&
+            JSON.stringify(current.checkpoints ?? null) === fence.checkpoint &&
+            !this.deps.session(sessionId)?.activeTurnId &&
+            latestPlan?.identity === fence.planIdentity &&
+            latestPlan &&
+            fingerprint(latestPlan.plan) === fence.planFingerprint &&
+            currentChild?.canonicalPosition === fence.canonicalPosition &&
+            (currentChild.continuationGeneration ?? 1) === fence.executorGeneration;
+          if (!valid) {
+            this.audit(sessionId, 'autopilot.executor-continuation-stale', {
+              threadId,
+              generation,
+              trigger: trigger.kind,
+              fence,
+            });
+            return;
+          }
           try {
             await this.deps.executorController?.resume(sessionId, threadId, generation, trigger);
             this.audit(sessionId, 'autopilot.executor-resumed', {
@@ -1704,6 +1862,14 @@ export class AutopilotCoordinator {
   }
   private progressKey(sessionId: string): string {
     const retained = this.deps.plan(sessionId);
+    const state = this.deps.store.find(sessionId);
+    return this.progressKeyFor(sessionId, state, retained);
+  }
+  private progressKeyFor(
+    sessionId: string,
+    state: AutopilotSession | null,
+    retained: Readonly<{ plan: SupervisedPlan; identity: string }> | null,
+  ): string {
     const activity = this.deps.activity(sessionId);
     const interactions = this.deps.pendingInteraction(sessionId)
       ? [{ id: 'pending', kind: 'session', state: 'pending' }]
@@ -1716,22 +1882,33 @@ export class AutopilotCoordinator {
       },
       review: { status: null },
       checkpoint: {
-        pendingTurnId: this.deps.store.find(sessionId)?.checkpoints?.pendingTurnId ?? null,
-        terminalReviewAccepted:
-          this.deps.store.find(sessionId)?.checkpoints?.terminalReviewAccepted ?? false,
+        pendingTurnId: state?.checkpoints?.pendingTurnId ?? null,
+        terminalReviewAccepted: state?.checkpoints?.terminalReviewAccepted ?? false,
       },
       pendingInteractions: interactions,
       executor: {
-        generation: this.deps.store.find(sessionId)?.executor?.continuationGeneration ?? 0,
-        state: this.deps.store.find(sessionId)?.executor?.outcome ?? null,
+        generation: state?.executor?.continuationGeneration ?? 0,
+        state: state?.executor?.outcome ?? null,
       },
-      ownedProcesses: (this.deps.store.find(sessionId)?.executor?.ownedProcesses ?? []).map(
-        (process) => ({
+      ownedProcesses: (state?.executor?.ownedProcesses ?? []).map((process) => ({
+        id: process.processId,
+        state: process.state,
+        ownerGeneration: state?.executor?.continuationGeneration ?? 0,
+      })),
+      childActivity: (activity?.subagents ?? []).map((child) => ({
+        id: child.id,
+        threadId: child.threadId ?? null,
+        taskName: child.canonicalTaskName ?? null,
+        position: child.canonicalPosition ?? null,
+        generation: child.continuationGeneration ?? 0,
+        state: child.state,
+        outcome: child.outcome ?? null,
+        ownedProcesses: (child.ownedProcesses ?? []).map((process) => ({
           id: process.processId,
           state: process.state,
-          ownerGeneration: this.deps.store.find(sessionId)?.executor?.continuationGeneration ?? 0,
-        }),
-      ),
+          ownership: process.ownership,
+        })),
+      })),
       agentActivity: [
         ...(activity
           ? [

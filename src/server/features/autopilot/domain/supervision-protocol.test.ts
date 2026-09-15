@@ -8,7 +8,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   consumeObservableWake,
+  consumeObsoleteWait,
   consumeWaitDeadline,
+  lifecycleBoundaries,
+  lifecycleBoundaryDisposition,
   parseSupervisionProtocolState,
   recordAutomaticContinuation,
   recoverSafetyPause,
@@ -27,6 +30,18 @@ const facts = (change: Partial<SemanticProgressFacts> = {}): SemanticProgressFac
   pendingInteractions: [{ id: 'interaction-1', kind: 'approval', state: 'pending' }],
   executor: { generation: 1, state: 'working' },
   ownedProcesses: [{ id: 'process-1', state: 'running', ownerGeneration: 1 }],
+  childActivity: [
+    {
+      id: 'child-1',
+      threadId: 'thread-1',
+      taskName: 'l1',
+      position: 'L1',
+      generation: 1,
+      state: 'working',
+      outcome: 'partial',
+      ownedProcesses: [{ id: 'child-process-1', state: 'running', ownership: 'executor' }],
+    },
+  ],
   agentActivity: [{ agentId: 'root', sequence: 4, state: 'working' }],
   ...change,
 });
@@ -93,6 +108,53 @@ describe('semantic supervision progress key', () => {
     expect(semanticProgressKey(facts(change))).not.toBe(semanticProgressKey(facts()));
   });
 
+  it('canonicalizes child order while retaining every semantic lifecycle field', () => {
+    const child = facts().childActivity[0]!;
+    const second = {
+      ...child,
+      id: 'child-2',
+      threadId: 'thread-2',
+      taskName: 'l2',
+      position: 'L2',
+      generation: 3,
+      state: 'idle',
+      outcome: null,
+      ownedProcesses: [{ id: 'child-process-2', state: 'exited', ownership: 'supervisor' }],
+    };
+    expect(semanticProgressKey(facts({ childActivity: [child, second] }))).toBe(
+      semanticProgressKey(facts({ childActivity: [second, child] })),
+    );
+    expect(semanticProgressKey(facts({ childActivity: [child] }))).not.toBe(
+      semanticProgressKey(facts({ childActivity: [{ ...child, state: 'blocked' }] })),
+    );
+  });
+
+  it('selects bounded child and process facts independently of observation order', () => {
+    const children = Array.from({ length: 65 }, (_, index) => ({
+      id: `child-${String(index).padStart(3, '0')}`,
+      threadId: `thread-${index}`,
+      taskName: `l${index + 1}`,
+      position: `L${index + 1}`,
+      generation: index,
+      state: 'idle',
+      outcome: null,
+      ownedProcesses: Array.from({ length: 33 }, (_, process) => ({
+        id: `process-${String(process).padStart(3, '0')}`,
+        state: 'running',
+        ownership: 'executor',
+      })),
+    }));
+    expect(semanticProgressKey(facts({ childActivity: children }))).toBe(
+      semanticProgressKey(
+        facts({
+          childActivity: children
+            .map((child) => ({ ...child, ownedProcesses: [...child.ownedProcesses].reverse() }))
+            .reverse(),
+        }),
+      ),
+    );
+  });
+
   it('does not accept timestamps or repeated prose as semantic inputs', () => {
     const key = semanticProgressKey(facts());
     expect(
@@ -122,6 +184,45 @@ describe('semantic supervision progress key', () => {
     );
     expect(reverse).toBe(forward);
   });
+});
+
+describe('lifecycle boundary cancellation matrix', () => {
+  const expected: Readonly<
+    Record<
+      (typeof lifecycleBoundaries)[number],
+      readonly [
+        'cancel' | 'arm',
+        'cancel',
+        'consume' | 'preserve',
+        'cancel' | 'preserve',
+        'cancel' | 'preserve',
+      ]
+    >
+  > = {
+    checkpointPersisted: ['cancel', 'cancel', 'consume', 'preserve', 'cancel'],
+    matchingRootFinal: ['arm', 'cancel', 'consume', 'preserve', 'cancel'],
+    proactiveWaitRegistered: ['cancel', 'cancel', 'preserve', 'cancel', 'cancel'],
+    waitDeadline: ['cancel', 'cancel', 'consume', 'cancel', 'cancel'],
+    manualOff: ['cancel', 'cancel', 'consume', 'cancel', 'cancel'],
+    manualInterruption: ['cancel', 'cancel', 'consume', 'cancel', 'preserve'],
+    explicitRecovery: ['cancel', 'cancel', 'consume', 'cancel', 'preserve'],
+    planReplacement: ['cancel', 'cancel', 'consume', 'cancel', 'cancel'],
+    attention: ['cancel', 'cancel', 'consume', 'cancel', 'cancel'],
+    terminal: ['cancel', 'cancel', 'consume', 'cancel', 'cancel'],
+  };
+
+  it.each(lifecycleBoundaries)(
+    '%s has one authoritative disposition for every live resource',
+    (boundary) => {
+      expect([
+        lifecycleBoundaryDisposition(boundary, 'rootTimer'),
+        lifecycleBoundaryDisposition(boundary, 'executorTimer'),
+        lifecycleBoundaryDisposition(boundary, 'waitLease'),
+        lifecycleBoundaryDisposition(boundary, 'pendingCheckpoint'),
+        lifecycleBoundaryDisposition(boundary, 'manualAction'),
+      ]).toEqual(expected[boundary]);
+    },
+  );
 });
 
 describe('bounded probe protocol', () => {
@@ -255,6 +356,22 @@ describe('proactive one-shot wait', () => {
       progressKey: progressed,
       waitLease: null,
       lastReportId: 'event-report',
+    });
+  });
+
+  it('durably consumes obsolete leases idempotently without weakening attention stops', () => {
+    const parked = registerProactiveWait(startSupervisionProtocol(key), {
+      id: 'obsolete-report',
+      leaseId: 'obsolete-lease',
+      wakeConditions: ['executorChanged'],
+      resumeAt,
+    });
+    const consumed = consumeObsoleteWait(parked, key);
+    expect(consumed).toMatchObject({ outcome: 'active', waitLease: null });
+    expect(consumeObsoleteWait(consumed, key)).toEqual(consumed);
+    expect(consumeObsoleteWait({ ...parked, outcome: 'attentionRequired' }, key)).toMatchObject({
+      outcome: 'attentionRequired',
+      waitLease: null,
     });
   });
 });

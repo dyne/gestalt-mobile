@@ -5,6 +5,7 @@
  */
 
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,7 @@ import {
   planStatusFilePath,
 } from './platform/plans/filesystem-plan-status-source.js';
 import { toOrgPlanAttentionToolResponse } from '../shared/contracts/org-plan-attention.js';
+import { toOrgPlanCheckpointToolResponse } from '../shared/contracts/org-plan-checkpoint.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -203,6 +205,30 @@ function attentionCall(id: number, reason: 'hardBlock' | 'permissionRequired' = 
         requestedAction: 'Provide the requested decision.',
         resumeCondition:
           reason === 'permissionRequired' ? 'permissionGranted' : 'externalStateChanged',
+      },
+    },
+  };
+}
+
+function l2CheckpointCall(id: number, threadId: string, turnId: string, planIdentity: string) {
+  return {
+    id,
+    method: 'item/tool/call',
+    params: {
+      threadId,
+      turnId,
+      tool: 'gestalt_org_plan_checkpoint',
+      arguments: {
+        version: 1,
+        kind: 'l2Completed',
+        planIdentity,
+        l1Id: 'parent',
+        l2Id: 'child',
+        position: 'L1.1',
+        status: 'DONE',
+        changes: 'Recorded the completed child.',
+        files: 'src/checkpoint.ts',
+        tests: 'Focused tests passed.',
       },
     },
   };
@@ -806,6 +832,183 @@ describe('production composition', () => {
       recovered!.restore(accepted.sessionId);
       expect(accepted.handles.flatMap((handle) => handle.calls)).not.toContain('turn/start');
       await accepted.app.close();
+    });
+
+    it('acknowledges a checkpoint before scheduling and drops an obsolete executor wait lease', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      let coordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      const first = timers.find((timer) => !timer.cancelled && !timer.fired);
+      expect(first).toBeDefined();
+      first!.fired = true;
+      first!.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles.flatMap((handle) =>
+            handle.requests.filter((request) => request.method === 'turn/start'),
+          ),
+        ).toHaveLength(1),
+      );
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const active = database
+        .prepare('SELECT active_turn_id FROM relay_sessions WHERE id = ?')
+        .get(fixture.sessionId) as { active_turn_id: string };
+      database.close();
+      expect(
+        coordinator!.registerProactiveWait(fixture.sessionId, {
+          id: 'pre-checkpoint-report',
+          leaseId: 'pre-checkpoint-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+      await writeFile(join(fixture.workspacePath, 'autopilot.org'), autopilotPlanText('DONE'));
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json().steps[0]
+              .children[0].state,
+        )
+        .toBe('DONE');
+      const handle = fixture.handles.find((candidate) =>
+        candidate.requests.some((request) => request.method === 'turn/start'),
+      )!;
+      const threadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId as string;
+      const schedulesBeforeCheckpoint = timers.length;
+      const planIdentity = createHash('sha256')
+        .update(join(fixture.workspacePath, 'autopilot.org'))
+        .digest('hex');
+      await expect(
+        handle.request!(l2CheckpointCall(811, threadId, active.active_turn_id, planIdentity)),
+      ).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      expect(timers).toHaveLength(schedulesBeforeCheckpoint);
+      expect(coordinator!.snapshot(fixture.sessionId).health).not.toMatchObject({
+        phase: 'waitingForAgentEvent',
+      });
+      const startsBeforeFinal = fixture.handles
+        .flatMap((candidate) => candidate.requests)
+        .filter((request) => request.method === 'turn/start').length;
+      // A completion from another turn cannot release the durable checkpoint
+      // boundary, including after the short acknowledgement has returned.
+      handle.notify!({
+        method: 'turn/completed',
+        params: { threadId, turn: { id: 'wrong-turn' } },
+      });
+      await Promise.resolve();
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(startsBeforeFinal);
+      // Destroy the old runtime and rebuild the coordinator over the same
+      // SQLite store. The persisted checkpoint remains inert until its owning
+      // root final is observed by the replacement runtime.
+      await fixture.app.close();
+      const rebuiltTimers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const rebuiltHandles: LiveServerHandle[] = [];
+      let rebuiltCoordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const rebuilt = await composeAuthorizedApp({
+        root: fixture.root,
+        dataDir: fixture.dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(rebuiltHandles),
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          rebuiltTimers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          rebuiltCoordinator = value;
+        },
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      await vi.waitFor(() => expect(rebuiltCoordinator).toBeDefined());
+      expect(rebuiltTimers).toHaveLength(0);
+      expect(rebuiltCoordinator!.turnCompleted(fixture.sessionId)).toBe(true);
+      await vi.waitFor(() => expect(rebuiltTimers.length).toBe(1));
+      await rebuilt.close();
+    });
+
+    it('rejects a checkpoint delivered after its owning root final has closed', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const first = timers[0]!;
+      first.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles
+            .flatMap((handle) => handle.requests)
+            .filter((request) => request.method === 'turn/start'),
+        ).toHaveLength(1),
+      );
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const active = database
+        .prepare('SELECT active_turn_id FROM relay_sessions WHERE id = ?')
+        .get(fixture.sessionId) as { active_turn_id: string };
+      database.close();
+      const handle = fixture.handles.find((candidate) => candidate.notify && candidate.request)!;
+      const threadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId as string;
+      handle.notify!({
+        method: 'turn/completed',
+        params: { threadId, turn: { id: active.active_turn_id } },
+      });
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+        )
+        .toBeNull();
+      const timersAfterFinal = timers.length;
+      const startsAfterFinal = fixture.handles
+        .flatMap((candidate) => candidate.requests)
+        .filter((request) => request.method === 'turn/start').length;
+      const planIdentity = createHash('sha256')
+        .update(join(fixture.workspacePath, 'autopilot.org'))
+        .digest('hex');
+      await expect(
+        handle.request!(l2CheckpointCall(812, threadId, active.active_turn_id, planIdentity)),
+      ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+      expect(timers).toHaveLength(timersAfterFinal);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(startsAfterFinal);
+      await fixture.app.close();
     });
 
     it('production attention request requires explicit re-enable and a complete plan transitions to completed', async () => {
