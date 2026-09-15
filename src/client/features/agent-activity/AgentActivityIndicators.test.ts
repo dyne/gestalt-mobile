@@ -267,10 +267,10 @@ describe('AgentActivityIndicators', () => {
         ],
       },
     });
-    expect(screen.getByText('l2 — Current L2 title')).toBeTruthy();
+    expect(screen.getByText('l2')).toBeTruthy();
     expect(screen.queryByText('random-nickname')).toBeNull();
   });
-  it('uses exact task names and appends an L title only once', () => {
+  it('uses exact task names without appending plan titles or nicknames', () => {
     const now = new Date().toISOString();
     render(AgentActivityIndicators, {
       plan: {
@@ -318,7 +318,8 @@ describe('AgentActivityIndicators', () => {
       },
     });
     expect(screen.getByText('l0')).toBeTruthy();
-    expect(screen.getByText('l1 — First milestone')).toBeTruthy();
+    expect(screen.getByText('l1')).toBeTruthy();
+    expect(screen.queryByText('First milestone')).toBeNull();
     expect(screen.getByText('final_review')).toBeTruthy();
     expect(screen.queryByText('Continuity plan')).toBeNull();
     expect(screen.queryByText('random')).toBeNull();
@@ -355,7 +356,7 @@ describe('AgentActivityIndicators', () => {
     expect(screen.queryByText('random')).toBeNull();
     view.unmount();
   });
-  it('reactively replaces an executor title after an appended plan update', async () => {
+  it('keeps the exact executor name after an appended plan update', async () => {
     const now = new Date().toISOString();
     const activity = {
       sessionId: 's',
@@ -411,7 +412,8 @@ describe('AgentActivityIndicators', () => {
         currentStepId: 'two',
       },
     });
-    expect(screen.getByText('l2 — Appended title')).toBeTruthy();
+    expect(screen.getByText('l2')).toBeTruthy();
+    expect(screen.queryByText('Appended title')).toBeNull();
     expect(screen.queryByText('random')).toBeNull();
   });
 });

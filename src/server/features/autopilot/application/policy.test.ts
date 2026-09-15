@@ -128,23 +128,30 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v8');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v9');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
-    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('task_name l<a> or l<a>_<b>');
-    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('exact literal task_name l<a>');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
-      'call followup_task on that same executor before sending any response',
+      'Never create an L2-specific task name or append a title',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
-      'answer briefly, then perform that continuation in the same turn',
+      'checkpoint call must be the last tool call of that root turn',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('Do not send a status-only response.');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'On this later Autopilot turn, resume the same executor after an L2 boundary',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'answer briefly, then perform the applicable continuation in the same turn',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('version 2');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gh pr checks --watch');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('one episode');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('never rely on blocker prose as the signal');
+    expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('Whenever an L2 reaches DONE');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
   it('uses a fresh physical task and explicit model handoff for a replacement executor', () => {

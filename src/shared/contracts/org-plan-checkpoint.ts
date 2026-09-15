@@ -237,7 +237,15 @@ export function toOrgPlanCheckpointToolResponse(): {
   contentItems: Array<{ type: 'inputText'; text: string }>;
   success: true;
 } {
-  return { success: true, contentItems: [{ type: 'inputText', text: '{"accepted":true}' }] };
+  return {
+    success: true,
+    contentItems: [
+      {
+        type: 'inputText',
+        text: '{"accepted":true,"next":"emitBoundaryFinalAndEndTurn","allowFurtherTools":false}',
+      },
+    ],
+  };
 }
 
 function isPosition(value: unknown): value is string {
