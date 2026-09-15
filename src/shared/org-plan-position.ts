@@ -16,12 +16,12 @@ export type OrgPlanAgentIdentity = Readonly<{
 
 export function parseOrgPlanAgentIdentity(nameOrPath: string): OrgPlanAgentIdentity | null {
   const name = nameOrPath.split('/').filter(Boolean).at(-1) ?? nameOrPath;
-  const match = /^(l([1-9]\d*)(?:_([1-9]\d*))?)(?:_g([1-9]\d*))?$/.exec(name);
+  const match = /^(l([1-9]\d*))(?:_g([1-9]\d*))?$/.exec(name);
   if (!match) return null;
   return {
     canonicalTaskName: match[1]!,
-    canonicalPosition: orgPlanPosition(Number(match[2]), match[3] ? Number(match[3]) : undefined),
-    generation: match[4] ? Number(match[4]) : 1,
+    canonicalPosition: orgPlanPosition(Number(match[2])),
+    generation: match[3] ? Number(match[3]) : 1,
   };
 }
 

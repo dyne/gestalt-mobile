@@ -13,11 +13,11 @@ describe('Org Plan positions', () => {
     expect(orgPlanPosition(2, 5)).toBe('L2.5');
   });
 
-  it('presents tool-safe dedicated subagent names as canonical positions', () => {
+  it('presents exact L1 executor names and replacement generations canonically', () => {
     expect(orgPlanAgentDisplayName('l2')).toBe('L2');
-    expect(orgPlanAgentDisplayName('l2_5')).toBe('L2.5');
-    expect(orgPlanAgentDisplayName('l2_5_g3')).toBe('L2.5');
     expect(orgPlanAgentDisplayName('/root/l4_g2')).toBe('L4');
+    expect(orgPlanAgentDisplayName('l2_5')).toBe('l2_5');
+    expect(orgPlanAgentDisplayName('l2_5_g3')).toBe('l2_5_g3');
     expect(orgPlanAgentDisplayName('researcher')).toBe('researcher');
     expect(orgPlanAgentDisplayName('l0_2')).toBe('l0_2');
   });

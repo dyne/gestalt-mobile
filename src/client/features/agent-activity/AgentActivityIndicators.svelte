@@ -67,19 +67,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ? activity.root.state
         : activity.aggregateSubagents,
   );
-  function l1Title(position?: string): string | undefined {
-    const match = /^L([1-9]\d*)$/.exec(position ?? '');
-    return match ? plan?.steps[Number(match[1]) - 1]?.title : undefined;
-  }
   function childName(child: AgentActivitySnapshot['subagents'][number]): string {
-    const title = l1Title(child.canonicalPosition);
-    const name =
+    return (
       child.canonicalTaskName ??
       child.canonicalPosition?.toLowerCase() ??
       child.nickname ??
       child.role ??
-      child.id;
-    return title ? `${name} — ${title}` : name;
+      child.id
+    );
   }
   function rootName(): string {
     return 'l0';

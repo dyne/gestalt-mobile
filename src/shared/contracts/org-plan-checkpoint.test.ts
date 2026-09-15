@@ -9,6 +9,7 @@ import {
   GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
   gestaltOrgPlanCheckpointDynamicTool,
   parseOrgPlanCheckpoint,
+  toOrgPlanCheckpointToolResponse,
 } from './org-plan-checkpoint.js';
 
 const accepted = {
@@ -68,5 +69,17 @@ describe('Org Plan checkpoint contract', () => {
     expect(parseOrgPlanCheckpoint({ ...completed, verdict: 'ACCEPT' })).toBeNull();
     expect(parseOrgPlanCheckpoint({ ...completed, status: 'WIP' })).toBeNull();
     expect(parseOrgPlanCheckpoint({ ...completed, files: undefined })).toBeNull();
+  });
+
+  it('directs the root to publish the accepted boundary before any more tools', () => {
+    expect(toOrgPlanCheckpointToolResponse()).toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: 'inputText',
+          text: '{"accepted":true,"next":"emitBoundaryFinalAndEndTurn","allowFurtherTools":false}',
+        },
+      ],
+    });
   });
 });
