@@ -1517,11 +1517,328 @@ describe('AutopilotCoordinator', () => {
         pendingTurnId: 'turn-1',
         pendingKind: 'l2Completed',
       });
-      expect(coordinator.turnCompleted('s')).toBe(true);
+      // A failed transport is durable but cannot bypass the root-final fence.
+      expect(coordinator.checkpointHandoffFailed('s', 'turn-1')).toBe(true);
+      expect(coordinator.checkpointHandoffFailed('s', 'turn-1')).toBe(false);
+      expect(state?.checkpoints).toMatchObject({
+        pendingTurnId: 'turn-1',
+        checkpointHandoffFailed: true,
+      });
+      expect(schedules).toBe(0);
+      expect(coordinator.recoverCheckpointHandoff('s')).toBe(true);
       expect(schedules).toBe(1);
-      expect(state?.checkpoints).toMatchObject({ pendingTurnId: null, pendingKind: null });
+      expect(state?.checkpoints).toMatchObject({
+        pendingTurnId: null,
+        pendingKind: null,
+        checkpointHandoffFailed: false,
+      });
+      expect(coordinator.recoverCheckpointHandoff('s')).toBe(false);
     },
   );
+  it('reports a reopened L2 once while ignoring append-only plan refinement', () => {
+    const completedPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
+      ...plan,
+      steps: [
+        {
+          ...plan.steps[0]!,
+          children: [
+            {
+              id: 'l2',
+              title: 'l2',
+              level: 2 as const,
+              state: 'DONE' as const,
+              priority: 'A' as const,
+              description: {},
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    let planState = completedPlan;
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan: planState, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => null,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'c',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    const checkpoint = {
+      version: 1 as const,
+      kind: 'l2Completed' as const,
+      planIdentity: 'p',
+      l1Id: 'l1',
+      l2Id: 'l2',
+      position: 'L1.1',
+      status: 'DONE' as const,
+      changes: 'x',
+      files: 'x',
+      tests: 'x',
+    };
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+    planState = {
+      ...planState,
+      steps: [{ ...completedPlan.steps[0]!, reviewStatus: 'REVIEWED' as const }],
+    };
+    coordinator.planStatusChanged('s');
+    planState = completedPlan;
+    coordinator.planStatusChanged('s');
+    expect(state?.checkpoints?.completionEpochs).toContainEqual({
+      target: '["l2","l1","l2"]',
+      epoch: 0,
+      reopened: false,
+      completed: true,
+    });
+    // A parent review/reopen cycle is not a child completion epoch.
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1-replay', now)).toBe(true);
+    planState = {
+      ...planState,
+      steps: [...planState.steps, { ...planState.steps[0]!, id: 'append', children: [] }],
+    };
+    coordinator.planStatusChanged('s');
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(true);
+    planState = {
+      ...planState,
+      steps: [
+        {
+          ...completedPlan.steps[0]!,
+          children: [{ ...completedPlan.steps[0]!.children[0]!, state: 'WIP' as const }],
+        },
+      ],
+    };
+    coordinator.planStatusChanged('s');
+    planState = completedPlan;
+    coordinator.planStatusChanged('s');
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-3', now)).toBe(true);
+    expect(state?.checkpoints?.completionEpochs).toContainEqual({
+      target: '["l2","l1","l2"]',
+      epoch: 1,
+      reopened: false,
+      completed: true,
+    });
+    expect(state?.checkpoints?.reportedL2Ids).toEqual(['["l1","l2"]']);
+  });
+  it('advances an L1 epoch only when its own accepted review state reopens', () => {
+    const acceptedPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
+      ...plan,
+      steps: [{ ...plan.steps[0]!, state: 'DONE', reviewStatus: 'REVIEWED' }],
+      doneSteps: 1,
+      allDone: true,
+    };
+    let planState = acceptedPlan;
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p',
+      planFingerprint: 'f',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      updatedAt: now,
+    };
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan: planState, identity: 'p' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => null,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'c',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    const checkpoint = {
+      version: 1 as const,
+      kind: 'l1Accepted' as const,
+      planIdentity: 'p',
+      l1Id: 'l1',
+      position: 'L1',
+      verdict: 'ACCEPT' as const,
+      commit: { kind: 'notRequired' as const },
+    };
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+    expect(
+      coordinator.checkpointAccepted(
+        's',
+        { ...checkpoint, findings: 'conflicting summary' },
+        'turn-1',
+        now,
+      ),
+    ).toBe(true);
+    planState = { ...acceptedPlan, title: 'append-only refinement' };
+    coordinator.planStatusChanged('s');
+    expect(state?.checkpoints?.completionEpochs).toContainEqual({
+      target: '["l1","l1"]',
+      epoch: 0,
+      reopened: false,
+      completed: true,
+    });
+    planState = {
+      ...acceptedPlan,
+      steps: [{ ...acceptedPlan.steps[0]!, reviewStatus: 'UNREVIEWED' }],
+    };
+    coordinator.planStatusChanged('s');
+    planState = acceptedPlan;
+    coordinator.planStatusChanged('s');
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(true);
+    expect(state?.checkpoints?.completionEpochs).toContainEqual({
+      target: '["l1","l1"]',
+      epoch: 1,
+      reopened: false,
+      completed: true,
+    });
+  });
+  it('persists a reopened L2 epoch and idempotent replay through a SQLite restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-checkpoint-epoch-'));
+    const path = join(directory, 'relay.sqlite');
+    const completedPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
+      ...plan,
+      steps: [
+        {
+          ...plan.steps[0]!,
+          children: [
+            {
+              id: 'l2',
+              title: 'l2',
+              level: 2,
+              state: 'DONE',
+              priority: 'A',
+              description: {},
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    let planState = completedPlan;
+    const checkpoint = {
+      version: 1 as const,
+      kind: 'l2Completed' as const,
+      planIdentity: 'p',
+      l1Id: 'l1',
+      l2Id: 'l2',
+      position: 'L1.1',
+      status: 'DONE' as const,
+      changes: 'x',
+      files: 'x',
+      tests: 'x',
+    };
+    const coordinator = (database: DatabaseSync) =>
+      new AutopilotCoordinator({
+        store: new SqliteAutopilotStore(database),
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan: planState, identity: 'p' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => () => {},
+        nextControlId: () => 'c',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+    try {
+      const first = new DatabaseSync(path);
+      migrate(first);
+      first
+        .prepare(
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+        )
+        .run();
+      new SqliteAutopilotStore(first).save({
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        updatedAt: now,
+      });
+      const active = coordinator(first);
+      expect(active.checkpointAccepted('s', checkpoint, 'first', now)).toBe(true);
+      planState = {
+        ...completedPlan,
+        steps: [
+          {
+            ...completedPlan.steps[0]!,
+            children: [{ ...completedPlan.steps[0]!.children[0]!, state: 'WIP' }],
+          },
+        ],
+      };
+      active.planStatusChanged('s');
+      planState = completedPlan;
+      active.planStatusChanged('s');
+      expect(active.checkpointAccepted('s', checkpoint, 'second', now)).toBe(true);
+      await Promise.resolve();
+      await Promise.resolve();
+      first.close();
+      const reopened = new DatabaseSync(path);
+      migrate(reopened);
+      const restored = new SqliteAutopilotStore(reopened).find('s');
+      expect(restored?.checkpoints).toMatchObject({
+        completionEpochs: [
+          { target: '["l2","l1","l2"]', epoch: 1, reopened: false, completed: true },
+        ],
+        reportedL2Ids: ['["l1","l2"]'],
+      });
+      expect(coordinator(reopened).checkpointAccepted('s', checkpoint, 'replay', now)).toBe(true);
+      await Promise.resolve();
+      await Promise.resolve();
+      reopened.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('does not replay an issued command after a restart boundary', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',

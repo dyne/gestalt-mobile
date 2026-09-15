@@ -66,6 +66,23 @@ describe('JsonRpcClient', () => {
     await expect(written).resolves.toContain('"id":41');
   });
 
+  it('reports server-response settlement only after the response write completes', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const settlements: unknown[] = [];
+    client.onServerRequest(() => ({ acknowledged: true }));
+    client.onServerResponseSettled((settlement) => settlements.push(settlement));
+    const written = new Promise<void>((resolve) => output.once('data', () => resolve()));
+    input.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 42, method: 'item/tool/call', params: {} })}\n`,
+    );
+    expect(settlements).toEqual([]);
+    await written;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settlements).toEqual([{ id: 42, outcome: 'resultWritten' }]);
+  });
+
   it('rejects pending and later requests after the app-server process fails', async () => {
     const input = new PassThrough();
     const output = new PassThrough();

@@ -205,6 +205,18 @@ describe('SqliteAutopilotStore', () => {
         nextEvaluationAt: '2026-08-20T00:00:00.000Z',
         lastControlId: 'opaque-control',
         stopReason: null,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'identity',
+          completionEpochs: [
+            { target: '["l2","l1","l2"]', epoch: 1, reopened: false, completed: true },
+          ],
+          reportedL1Ids: [],
+          reportedL2Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: null,
+          terminalReviewAccepted: false,
+        },
         updatedAt: '2026-08-20T00:00:01.000Z',
       });
       initial.saveControl({
@@ -225,6 +237,11 @@ describe('SqliteAutopilotStore', () => {
         generation: 7,
         nextEvaluationAt: '2026-08-20T00:00:00.000Z',
         lastControlId: 'opaque-control',
+        checkpoints: {
+          completionEpochs: [
+            { target: '["l2","l1","l2"]', epoch: 1, reopened: false, completed: true },
+          ],
+        },
       });
       expect(restored.findControl('s', 'opaque-control')).toMatchObject({ status: 'issued' });
       reopened.close();

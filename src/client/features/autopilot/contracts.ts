@@ -21,6 +21,7 @@ export type AutopilotSnapshot = Readonly<{
       | 'needsYou'
       | 'safetyPaused'
       | 'complete'
+      | 'checkpointRecovery'
       | 'degraded';
     supervision:
       | 'active'
@@ -134,6 +135,7 @@ function validHealth(value: unknown): boolean {
       'needsYou',
       'safetyPaused',
       'complete',
+      'checkpointRecovery',
       'degraded',
     ].includes(health.phase) &&
     [

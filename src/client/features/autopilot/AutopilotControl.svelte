@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import AppControl from '../../components/AppControl.svelte';
+  import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
   import type { AutopilotSnapshot } from './contracts.js';
 
   let {
@@ -41,6 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     needsYou: 'Paused · needs you',
     safetyPaused: 'Safety paused',
     complete: 'Complete',
+    checkpointRecovery: 'Recovering checkpoint handoff',
     degraded: 'On · continuation unavailable',
   };
   const reason: Record<string, string> = {
@@ -60,6 +62,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     manualDisabled: 'Autopilot is off.',
     safetyPaused:
       'Autopilot paused after a repeated or invalid automatic continuation. Resume manually when ready.',
+    checkpointHandoffFailed: checkpointHandoffRecoveryMessage,
   };
   let status = $derived(
     autopilot

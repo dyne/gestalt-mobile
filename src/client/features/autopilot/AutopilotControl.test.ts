@@ -7,6 +7,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
 import AutopilotControl from './AutopilotControl.svelte';
 
 afterEach(cleanup);
@@ -91,6 +92,25 @@ describe('AutopilotControl', () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/until the attention request is resolved/i)).toBeNull();
+  });
+  it('truthfully presents bounded checkpoint handoff recovery without sensitive details', () => {
+    render(AutopilotControl, {
+      autopilot: {
+        ...snapshot('monitoring'),
+        health: {
+          healthy: false,
+          phase: 'checkpointRecovery',
+          supervision: 'active',
+          wait: { present: false, wakeCategories: [] },
+          observedAt: '2026-08-20T00:00:00.000Z',
+          lastTransitionAt: '2026-08-20T00:00:00.000Z',
+          nextExpectedAction: checkpointHandoffRecoveryMessage,
+        },
+      },
+    });
+    expect(screen.getByText('Autopilot: Recovering checkpoint handoff')).toBeTruthy();
+    expect(screen.getByText(checkpointHandoffRecoveryMessage)).toBeTruthy();
+    expect(screen.queryByText(/\.org|prompt|summary/i)).toBeNull();
   });
   it('explains the automatic-action safety window', () => {
     render(AutopilotControl, {

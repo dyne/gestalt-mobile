@@ -98,6 +98,7 @@ describe('supervised Org Plan lifecycle', () => {
       checkpoints: {
         protocolVersion: 1,
         planIdentity: 'plan',
+        completionEpochs: [{ target: '["l1","l1"]', epoch: 0, reopened: false, completed: true }],
         reportedL2Ids: [],
         reportedL1Ids: ['l1'],
         acceptedKeys: ['key'],
@@ -106,6 +107,160 @@ describe('supervised Org Plan lifecycle', () => {
         terminalReviewAccepted: false,
       },
     });
+  });
+
+  it('round-trips reconstructed target-local completion epochs', () => {
+    expect(
+      parsePersistedSupervisedLifecycle({
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          completionEpochs: [
+            { target: '["l1","l1"]', epoch: 1, reopened: false, completed: true },
+            { target: '["l2","l1","l2"]', epoch: 2, reopened: true, completed: false },
+          ],
+          reportedL1Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: null,
+          terminalReviewAccepted: false,
+        },
+      })?.checkpoints?.completionEpochs,
+    ).toEqual([
+      { target: '["l1","l1"]', epoch: 1, reopened: false, completed: true },
+      { target: '["l2","l1","l2"]', epoch: 2, reopened: true, completed: false },
+    ]);
+  });
+
+  it('keeps colon-bearing L1 and L2 IDs collision-safe', () => {
+    const parsed = parsePersistedSupervisedLifecycle({
+      checkpoints: {
+        protocolVersion: 1,
+        planIdentity: 'plan',
+        completionEpochs: [
+          {
+            target: JSON.stringify(['l2', 'a:b', 'c']),
+            epoch: 0,
+            reopened: false,
+            completed: true,
+          },
+          {
+            target: JSON.stringify(['l2', 'a', 'b:c']),
+            epoch: 0,
+            reopened: false,
+            completed: true,
+          },
+        ],
+        reportedL1Ids: [],
+        reportedL2Ids: [],
+        acceptedKeys: [],
+        pendingTurnId: null,
+        terminalReviewAccepted: false,
+      },
+    });
+    expect(parsed?.checkpoints?.completionEpochs).toHaveLength(2);
+  });
+
+  it('round-trips the bounded checkpoint handoff failure flag', () => {
+    expect(
+      parsePersistedSupervisedLifecycle({
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          reportedL1Ids: [],
+          reportedL2Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: 'turn-1',
+          checkpointHandoffFailed: true,
+          terminalReviewAccepted: false,
+        },
+      })?.checkpoints,
+    ).toMatchObject({ pendingTurnId: 'turn-1', checkpointHandoffFailed: true });
+  });
+
+  it.each([
+    [[{ target: 'l1:l1', epoch: -1, reopened: false, completed: true }], 'negative epoch'],
+    [
+      Array.from({ length: 641 }, (_, epoch) => ({
+        target: `l1:${epoch}`,
+        epoch,
+        reopened: false,
+        completed: true,
+      })),
+      'oversized history',
+    ],
+    [[{ target: 'l1:other', epoch: 0, reopened: false, completed: true }], 'partial migration'],
+  ])('rejects %s checkpoint epoch persistence', (completionEpochs) => {
+    expect(
+      parsePersistedSupervisedLifecycle({
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          completionEpochs,
+          reportedL1Ids: ['l1'],
+          reportedL2Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: null,
+          terminalReviewAccepted: false,
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('reparses deterministic cap-edge checkpoint mirrors', () => {
+    const l1 = Array.from({ length: 128 }, (_, index) => `l1-${index}`);
+    const l2 = Array.from({ length: 512 }, (_, index) => `l2-${index}`);
+    const parsed = parsePersistedSupervisedLifecycle({
+      checkpoints: {
+        protocolVersion: 1,
+        planIdentity: 'plan',
+        completionEpochs: [
+          ...l1.map((id) => ({
+            target: JSON.stringify(['l1', id]),
+            epoch: 0,
+            reopened: false,
+            completed: true,
+          })),
+          ...l2.map((id) => ({
+            target: JSON.stringify(['l2', 'l1-0', id]),
+            epoch: 0,
+            reopened: false,
+            completed: true,
+          })),
+        ].sort((left, right) => left.target.localeCompare(right.target)),
+        reportedL1Ids: l1,
+        reportedL2Ids: l2.map((id) => JSON.stringify(['l1-0', id])),
+        acceptedKeys: Array.from({ length: 768 }, (_, index) => `key-${index}`),
+        pendingTurnId: null,
+        terminalReviewAccepted: false,
+      },
+    });
+    expect(parsed?.checkpoints?.completionEpochs).toHaveLength(640);
+    expect(parsed?.checkpoints?.acceptedKeys).toHaveLength(768);
+    expect(parsed?.checkpoints?.completionEpochs?.map((epoch) => epoch.target)).toEqual(
+      parsed?.checkpoints?.completionEpochs?.map((epoch) => epoch.target).toSorted(),
+    );
+  });
+
+  it.each([
+    JSON.stringify(['l1', '']),
+    JSON.stringify(['l2', 'l1', 'x'.repeat(513)]),
+    'l1:',
+    `l2:a:${'x'.repeat(513)}`,
+  ])('rejects malformed bounded checkpoint target', (target) => {
+    expect(
+      parsePersistedSupervisedLifecycle({
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          completionEpochs: [{ target, epoch: 0, reopened: false, completed: true }],
+          reportedL1Ids: [],
+          reportedL2Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: null,
+          terminalReviewAccepted: false,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it('treats an incomplete FINAL_ANSWER as partial and rejects the root final', () => {

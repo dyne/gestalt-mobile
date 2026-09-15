@@ -45,6 +45,12 @@ export type AppServer = {
     onServerRequest(
       listener: (request: { id: number; method: string; params: unknown }) => Promise<unknown>,
     ): () => void;
+    onServerResponseSettled?(
+      listener: (settlement: {
+        id: number;
+        outcome: 'resultWritten' | 'errorWritten' | 'writeFailed';
+      }) => void,
+    ): () => void;
   };
   close(): void;
   onExit?(listener: () => void): () => void;
@@ -64,6 +70,7 @@ export type RestoreSessionResult =
 type PendingRequest = {
   resolve(result: unknown): void;
   reject(reason: Error): void;
+  settling?: boolean;
 };
 
 export type DirectChildThread = Readonly<{
@@ -160,6 +167,13 @@ class SessionResource {
 }
 
 export class CodexSessionRuntime {
+  private readonly serverResponseListeners = new Set<
+    (
+      sessionId: string,
+      requestId: string,
+      outcome: 'resultWritten' | 'errorWritten' | 'writeFailed',
+    ) => void
+  >();
   constructor(
     private readonly launch: (input: AppServerLaunchInput) => AppServer,
     // Kept as an ignored compatibility slot while callers migrate from the old
@@ -268,10 +282,36 @@ export class CodexSessionRuntime {
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingRequests.get(requestId);
-    if (!resource || !pending) return false;
-    resource.pendingRequests.delete(requestId);
+    if (!resource || !pending || pending.settling) return false;
+    pending.settling = true;
     pending.resolve(result);
     return true;
+  }
+  rejectServerRequest(sessionId: string, requestId: string, error: Error): boolean {
+    const resource = this.sessions.get(sessionId);
+    const pending = resource?.pendingRequests.get(requestId);
+    if (!pending || pending.settling) return false;
+    pending.settling = true;
+    pending.reject(error);
+    return true;
+  }
+  /**
+   * A response may already be queued in a blocked writable stream.  Release
+   * the local holder without accepting any eventual late write as success.
+   */
+  abandonServerRequest(sessionId: string, requestId: string): boolean {
+    const resource = this.sessions.get(sessionId);
+    return resource?.pendingRequests.delete(requestId) === true;
+  }
+  onServerResponseSettled(
+    listener: (
+      sessionId: string,
+      requestId: string,
+      outcome: 'resultWritten' | 'errorWritten' | 'writeFailed',
+    ) => void,
+  ): () => void {
+    this.serverResponseListeners.add(listener);
+    return () => this.serverResponseListeners.delete(listener);
   }
 
   /** Distinguishes an offline relay writer from a live writer that cleared a request. */
@@ -281,7 +321,8 @@ export class CodexSessionRuntime {
   ): 'available' | 'cleared' | 'unavailable' {
     const resource = this.sessions.get(sessionId);
     if (!resource || !resource.active) return 'unavailable';
-    return resource.pendingRequests.has(requestId) ? 'available' : 'cleared';
+    const pending = resource.pendingRequests.get(requestId);
+    return pending && !pending.settling ? 'available' : 'cleared';
   }
 
   async startTurn(
@@ -300,6 +341,7 @@ export class CodexSessionRuntime {
         ...(session.model ? { model: session.model } : {}),
       }),
     );
+    resource.turnThreads.set(result, session.threadId);
     return RelaySession.rehydrate(session).startTurn(result, now).snapshot;
   }
 
@@ -311,7 +353,7 @@ export class CodexSessionRuntime {
   ): Promise<string> {
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    return decodeTurnStart(
+    const result = decodeTurnStart(
       await resource.process.rpc.request('turn/start', {
         threadId: childThreadId,
         input: [{ type: 'text', text, text_elements: [] }],
@@ -319,6 +361,9 @@ export class CodexSessionRuntime {
         ...(session.model ? { model: session.model } : {}),
       }),
     );
+    if (resource.turnThreads.has(result) || resource.turnThreads.size < 256)
+      resource.turnThreads.set(result, childThreadId);
+    return result;
   }
 
   /** The sole authoritative in-process ownership probe.  It never launches a child. */
@@ -919,13 +964,26 @@ export class CodexSessionRuntime {
       const requestUnsubscribe = process.rpc.onServerRequest((request) =>
         this.holdServerRequest(resource, request),
       );
+      const responseUnsubscribe = process.rpc.onServerResponseSettled?.((settlement) => {
+        const requestId = String(settlement.id);
+        if (!resource.pendingRequests.delete(requestId)) return;
+        this.serverResponseListeners.forEach((listener) =>
+          listener(resource.sessionId, requestId, settlement.outcome),
+        );
+      });
       if (!resource.active) {
         notificationUnsubscribe();
         requestUnsubscribe();
+        responseUnsubscribe?.();
         throw new Error('CODEX_SESSION_PROCESS_EXITED');
       }
       // The resource's private unsubscribe list is populated before it is published.
-      resource.attach([notificationUnsubscribe, requestUnsubscribe, exitUnsubscribe]);
+      resource.attach([
+        notificationUnsubscribe,
+        requestUnsubscribe,
+        ...(responseUnsubscribe ? [responseUnsubscribe] : []),
+        exitUnsubscribe,
+      ]);
       return resource;
     } catch (error) {
       lease?.close();

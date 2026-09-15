@@ -70,6 +70,9 @@ export class JsonRpcClient {
   private readonly serverRequests = new Set<
     (request: { id: number; method: string; params: unknown }) => Promise<unknown> | unknown
   >();
+  private readonly serverResponseSettlements = new Set<
+    (settlement: { id: number; outcome: 'resultWritten' | 'errorWritten' | 'writeFailed' }) => void
+  >();
   private failure: unknown = null;
   constructor(
     input: Readable,
@@ -105,6 +108,32 @@ export class JsonRpcClient {
     this.serverRequests.add(listener);
     return () => this.serverRequests.delete(listener);
   }
+  onServerResponseSettled(
+    listener: (settlement: {
+      id: number;
+      outcome: 'resultWritten' | 'errorWritten' | 'writeFailed';
+    }) => void,
+  ): () => void {
+    this.serverResponseSettlements.add(listener);
+    return () => this.serverResponseSettlements.delete(listener);
+  }
+  private writeServerResponse(
+    id: number,
+    response: Readonly<{ result?: unknown; error?: unknown }>,
+    outcome: 'resultWritten' | 'errorWritten',
+  ): void {
+    const line = `${JSON.stringify({ jsonrpc: '2.0', id, ...response })}\n`;
+    try {
+      this.output.write(line, (error) => {
+        const settled = error ? 'writeFailed' : outcome;
+        this.serverResponseSettlements.forEach((listener) => listener({ id, outcome: settled }));
+      });
+    } catch {
+      this.serverResponseSettlements.forEach((listener) =>
+        listener({ id, outcome: 'writeFailed' }),
+      );
+    }
+  }
   private receive(line: string): void {
     try {
       const message = JSON.parse(line) as {
@@ -133,12 +162,12 @@ export class JsonRpcClient {
         void Promise.resolve(
           listener({ id: message.id, method: message.method, params: message.params }),
         )
-          .then((result) =>
-            this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`),
-          )
+          .then((result) => this.writeServerResponse(message.id!, { result }, 'resultWritten'))
           .catch((error: unknown) =>
-            this.output.write(
-              `${JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { message: error instanceof Error ? error.message : 'REQUEST_FAILED' } })}\n`,
+            this.writeServerResponse(
+              message.id!,
+              { error: { message: error instanceof Error ? error.message : 'REQUEST_FAILED' } },
+              'errorWritten',
             ),
           );
         return;

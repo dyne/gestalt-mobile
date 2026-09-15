@@ -28,6 +28,7 @@ import {
   type StructuredBlock,
   type SupervisedLifecycleEvent,
   validStructuredBlock,
+  checkpointTarget,
 } from '../domain/supervised-lifecycle.js';
 import {
   classifyAgentActivity,
@@ -649,7 +650,15 @@ export class AutopilotCoordinator {
       this.persist(
         {
           ...state,
-          checkpoints: { ...state.checkpoints, pendingTurnId: null, pendingKind: null },
+          // The failure audit is durable history, but it is not a permanent
+          // health condition. A matching final or reconstructed runtime has
+          // completed the bounded recovery, so clear the live indicator.
+          checkpoints: {
+            ...state.checkpoints,
+            pendingTurnId: null,
+            pendingKind: null,
+            checkpointHandoffFailed: false,
+          },
           updatedAt: occurredAt,
         },
         undefined,
@@ -705,33 +714,41 @@ export class AutopilotCoordinator {
     const reportedL2Ids = previous?.reportedL2Ids ?? [];
     const canonicalPosition =
       checkpoint.kind === 'terminalReviewAccepted' ? 'terminal' : checkpoint.position;
+    const target =
+      checkpoint.kind === 'l2Completed'
+        ? checkpointTarget('l2', checkpoint.l1Id, checkpoint.l2Id)
+        : checkpoint.kind === 'l1Accepted'
+          ? checkpointTarget('l1', checkpoint.l1Id)
+          : checkpointTarget('terminal');
+    const completionEpoch = previous?.completionEpochs?.find((entry) => entry.target === target);
+    const epoch = completionEpoch?.epoch ?? 0;
     const key = createHash('sha256')
-      .update(
-        JSON.stringify([
-          retained.identity,
-          fingerprint(retained.plan),
-          checkpoint.kind,
-          canonicalPosition,
-        ]),
-      )
+      .update(JSON.stringify([retained.identity, checkpoint.kind, canonicalPosition, epoch]))
       .digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
     if (acceptedKeys.includes(key)) return true;
     const l2Key =
       checkpoint.kind === 'l2Completed' ? JSON.stringify([checkpoint.l1Id, checkpoint.l2Id]) : null;
-    if (l2Key && reportedL2Ids.includes(l2Key)) return false;
-    if (checkpoint.kind === 'l1Accepted' && reportedL1Ids.includes(checkpoint.l1Id)) return false;
     if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
       return false;
+    if (completionEpoch?.completed && !completionEpoch.reopened) return true;
+    const completionEpochs = [
+      ...(previous?.completionEpochs ?? []).filter((entry) => entry.target !== target),
+      { target, epoch, reopened: false, completed: true },
+    ];
     const checkpoints = {
       protocolVersion: 1 as const,
       planIdentity: retained.identity,
-      reportedL2Ids: l2Key ? [...reportedL2Ids, l2Key] : reportedL2Ids,
+      completionEpochs: boundEpochs(completionEpochs, target),
+      reportedL2Ids: l2Key ? boundedUnique([...reportedL2Ids, l2Key], 512) : reportedL2Ids,
       reportedL1Ids:
-        checkpoint.kind === 'l1Accepted' ? [...reportedL1Ids, checkpoint.l1Id] : reportedL1Ids,
-      acceptedKeys: [...acceptedKeys, key],
+        checkpoint.kind === 'l1Accepted'
+          ? boundedUnique([...reportedL1Ids, checkpoint.l1Id], 128)
+          : reportedL1Ids,
+      acceptedKeys: boundedUnique([...acceptedKeys, key], 768),
       pendingTurnId: turnId,
       pendingKind: checkpoint.kind,
+      checkpointHandoffFailed: false,
       terminalReviewAccepted:
         checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
     };
@@ -779,6 +796,33 @@ export class AutopilotCoordinator {
     this.cancelTimer(sessionId);
     return true;
   }
+  /**
+   * Records a failed checkpoint transport handoff without releasing its root
+   * boundary. The matching final (or a runtime recovery) remains the only
+   * authority allowed to schedule the next root continuation.
+   */
+  checkpointHandoffFailed(sessionId: string, requestTurnId: string | null): boolean {
+    const prior = this.deps.store.find(sessionId);
+    if (
+      !prior?.checkpoints?.pendingTurnId ||
+      prior.checkpoints.pendingTurnId !== requestTurnId ||
+      prior.checkpoints.checkpointHandoffFailed
+    )
+      return false;
+    this.persist({
+      ...prior,
+      checkpoints: { ...prior.checkpoints, checkpointHandoffFailed: true },
+      updatedAt: this.deps.now(),
+    });
+    return true;
+  }
+  /** A replacement runtime is the explicit substitute for the lost root final. */
+  recoverCheckpointHandoff(sessionId: string): boolean {
+    const pendingTurnId = this.deps.store.find(sessionId)?.checkpoints?.pendingTurnId;
+    if (!pendingTurnId) return false;
+    this.checkpointHandoffFailed(sessionId, pendingTurnId);
+    return this.turnCompleted(sessionId);
+  }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
@@ -792,6 +836,13 @@ export class AutopilotCoordinator {
       this.cancel(sessionId, 'planReplaced');
       return;
     }
+    const checkpointEpochs = this.reopenCheckpointEpochs(prior, plan.plan);
+    if (checkpointEpochs !== prior.checkpoints?.completionEpochs)
+      this.persist({
+        ...prior,
+        checkpoints: { ...prior.checkpoints!, completionEpochs: checkpointEpochs },
+        updatedAt: this.deps.now(),
+      });
     if (
       this.semanticEvent(sessionId, 'planChanged') ||
       this.semanticEvent(sessionId, 'reviewChanged')
@@ -805,6 +856,37 @@ export class AutopilotCoordinator {
     if (this.planEventKeys.get(sessionId) === eventKey) return;
     this.planEventKeys.set(sessionId, eventKey);
     this.evaluate(sessionId);
+  }
+
+  /**
+   * Plan refinements are not a new completion.  Only a completed target that
+   * becomes ineligible opens its next reportable epoch.
+   */
+  private reopenCheckpointEpochs(
+    state: AutopilotSession,
+    plan: SupervisedPlan,
+  ):
+    | readonly Readonly<{ target: string; epoch: number; reopened: boolean; completed: boolean }>[]
+    | undefined {
+    const epochs = state.checkpoints?.completionEpochs;
+    if (!epochs?.length) return epochs;
+    let changed = false;
+    const next = epochs.map((entry) => {
+      const [kind, l1Id, l2Id] = JSON.parse(entry.target) as string[];
+      const l1 = plan.steps.find((step) => step.id === l1Id);
+      const eligible =
+        kind === 'l2'
+          ? Boolean(l1?.children.some((child) => child.id === l2Id && child.state === 'DONE'))
+          : kind === 'l1'
+            ? l1?.state === 'DONE' && l1.reviewStatus === 'REVIEWED'
+            : plan.executionComplete === true;
+      if (!eligible && !entry.reopened) {
+        changed = true;
+        return { ...entry, epoch: entry.epoch + 1, reopened: true, completed: false };
+      }
+      return entry;
+    });
+    return changed ? next : epochs;
   }
   /**
    * Records a validated, session-private supervision request.  It intentionally
@@ -1994,6 +2076,28 @@ function fingerprint(plan: SupervisedPlan): string {
       step.reviewStatus,
       step.children.map((child) => [child.id, child.state]),
     ]),
+  );
+}
+
+function boundedUnique(values: readonly string[], limit: number): readonly string[] {
+  return [...new Set(values)].slice(-limit);
+}
+
+function boundEpochs(
+  epochs: readonly Readonly<{
+    target: string;
+    epoch: number;
+    reopened: boolean;
+    completed: boolean;
+  }>[],
+  currentTarget: string,
+): readonly Readonly<{ target: string; epoch: number; reopened: boolean; completed: boolean }>[] {
+  const current = epochs.find((entry) => entry.target === currentTarget);
+  const retained = epochs
+    .filter((entry) => entry.target !== currentTarget)
+    .sort((left, right) => left.target.localeCompare(right.target));
+  return [...retained.slice(0, current ? 639 : 640), ...(current ? [current] : [])].sort(
+    (left, right) => left.target.localeCompare(right.target),
   );
 }
 
