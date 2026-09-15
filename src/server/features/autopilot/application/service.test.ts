@@ -931,6 +931,161 @@ describe('AutopilotCoordinator', () => {
     expect(coordinator.semanticEvent('s', 'planChanged')).toBe(false);
     expect(scheduled).toBe(parkedScheduleCount + 1);
   });
+
+  it('parks a proactive wait immediately and restores normal policy at its one-shot deadline', () => {
+    let currentTime = now;
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p1',
+      planFingerprint: 'f1',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      supervision: startSupervisionProtocol('progress'),
+      updatedAt: now,
+    };
+    const timers: Array<{
+      callback: () => void;
+      delayMs: number;
+      cancel: ReturnType<typeof vi.fn>;
+    }> = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => currentTime,
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => ({
+        ...createAgentActivitySnapshot('s', currentTime),
+        confidence: 'fresh',
+        root: { ...createAgentActivitySnapshot('s', currentTime).root, state: 'idle' },
+      }),
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: (callback, delayMs) => {
+        const cancel = vi.fn();
+        timers.push({ callback, delayMs, cancel });
+        return cancel;
+      },
+      nextControlId: () => 'deadline-control',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+
+    expect(
+      coordinator.registerProactiveWait('s', {
+        id: 'invalid-report',
+        leaseId: 'invalid-lease',
+        wakeConditions: ['processExited'],
+        maxWaitMs: 59_999,
+      }),
+    ).toBe(false);
+    expect(timers).toHaveLength(0);
+    expect(
+      coordinator.registerProactiveWait('s', {
+        id: 'long-wait-report',
+        leaseId: 'long-wait-lease',
+        wakeConditions: ['processExited'],
+        maxWaitMs: 3_600_000,
+      }),
+    ).toBe(true);
+    expect(state?.supervision).toMatchObject({
+      outcome: 'parked',
+      waitLease: {
+        id: 'long-wait-lease',
+        resumeAt: '2026-08-20T13:00:00.000Z',
+      },
+    });
+    expect(timers[0]?.delayMs).toBe(3_600_000);
+    expect(
+      coordinator.registerProactiveWait('s', {
+        id: 'long-wait-report',
+        leaseId: 'long-wait-lease',
+        wakeConditions: ['processExited'],
+        maxWaitMs: 3_600_000,
+      }),
+    ).toBe(false);
+
+    currentTime = '2026-08-20T13:00:00.000Z';
+    timers[0]!.callback();
+
+    expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
+    expect(state?.supervision?.lastReportId).toBe('long-wait-report');
+    expect(timers).toHaveLength(2);
+  });
+
+  it('cancels a proactive deadline when its root-owned process completes first', () => {
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p1',
+      planFingerprint: 'f1',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      supervision: startSupervisionProtocol('before-change'),
+      updatedAt: now,
+    };
+    const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => null,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => {
+        const cancel = vi.fn();
+        cancels.push(cancel);
+        return cancel;
+      },
+      nextControlId: () => 'event-control',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+
+    expect(
+      coordinator.registerProactiveWait('s', {
+        id: 'event-report',
+        leaseId: 'event-lease',
+        wakeConditions: ['processExited', 'processResultAvailable'],
+        maxWaitMs: 7_200_000,
+      }),
+    ).toBe(true);
+    const waitTimerCancel = cancels[0]!;
+
+    expect(coordinator.rootProcessCompleted('s', 'gh-watch-item')).toBe(true);
+    expect(waitTimerCancel).toHaveBeenCalledTimes(1);
+    expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
+    expect(coordinator.rootProcessCompleted('s', 'gh-watch-item')).toBe(false);
+  });
   it.each(['none', 'parked'] as const)(
     'evaluates an accepted checkpoint exactly once with a %s lease and replays idempotently',
     (lease) => {

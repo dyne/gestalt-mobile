@@ -10,6 +10,10 @@ import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
 import {
+  AUTOPILOT_WAIT_MAX_MS,
+  AUTOPILOT_WAIT_MIN_MS,
+} from '../../../../shared/contracts/autopilot-wait-lease.js';
+import {
   autopilotSnapshot,
   disabledAutopilot,
   type AutopilotSession,
@@ -33,8 +37,10 @@ import {
 } from './policy.js';
 import {
   consumeObservableWake,
+  consumeWaitDeadline,
   recordAutomaticContinuation,
   recoverSafetyPause,
+  registerProactiveWait as registerProtocolWait,
   reportProbe,
   semanticProgressKey,
   startSupervisionProtocol,
@@ -80,6 +86,7 @@ export class AutopilotCoordinator {
   private readonly timers = new Map<string, () => void>();
   private readonly completionTimers = new Map<string, () => void>();
   private readonly executorTimers = new Map<string, () => void>();
+  private readonly waitTimers = new Map<string, () => void>();
   private readonly publishedSnapshots = new Map<string, string>();
   private readonly planEventKeys = new Map<string, string>();
   private readonly activityEventKeys = new Map<string, string>();
@@ -141,6 +148,12 @@ export class AutopilotCoordinator {
       });
       if (state.supervision.waitLease && validated.health.wait.wakeCategories.length > 0) {
         this.parkedSubscriptions.set(sessionId, state.supervision.waitLease.id);
+        if (state.supervision.waitLease.resumeAt)
+          this.armWaitDeadline(
+            sessionId,
+            state.supervision.waitLease.id,
+            state.supervision.waitLease.resumeAt,
+          );
         return;
       }
       this.parkedSubscriptions.delete(sessionId);
@@ -186,6 +199,7 @@ export class AutopilotCoordinator {
   }
   dispose(sessionId: string): void {
     this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
     this.planEventKeys.delete(sessionId);
     this.activityEventKeys.delete(sessionId);
     this.reconciling.delete(sessionId);
@@ -195,11 +209,9 @@ export class AutopilotCoordinator {
   reportProbe(sessionId: string, report: ProbeReport): boolean {
     const state = this.deps.store.find(sessionId);
     if (!state?.requestedEnabled) return false;
-    const nextProtocol = reportProbe(
-      state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-      report,
-    );
-    if (nextProtocol === state.supervision) return false;
+    const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
+    const nextProtocol = reportProbe(protocol, report);
+    if (nextProtocol === protocol) return false;
     if (nextProtocol.outcome === 'parked' && nextProtocol.waitLease)
       this.parkedSubscriptions.set(sessionId, nextProtocol.waitLease.id);
     else this.parkedSubscriptions.delete(sessionId);
@@ -218,6 +230,51 @@ export class AutopilotCoordinator {
     });
     if (nextProtocol.outcome === 'parked' || nextProtocol.outcome === 'attentionRequired')
       this.cancelTimer(sessionId);
+    return true;
+  }
+  /** Parks one explicitly requested long wait without changing future pulse policy. */
+  registerProactiveWait(
+    sessionId: string,
+    report: Readonly<{
+      id: string;
+      leaseId: string;
+      wakeConditions: readonly ObservableWakeCondition[];
+      maxWaitMs: number;
+    }>,
+  ): boolean {
+    const state = this.deps.store.find(sessionId);
+    if (
+      !state?.requestedEnabled ||
+      !Number.isSafeInteger(report.maxWaitMs) ||
+      report.maxWaitMs < AUTOPILOT_WAIT_MIN_MS ||
+      report.maxWaitMs > AUTOPILOT_WAIT_MAX_MS
+    )
+      return false;
+    const now = this.deps.now();
+    const resumeAt = new Date(Date.parse(now) + report.maxWaitMs).toISOString();
+    const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
+    const nextProtocol = registerProtocolWait(protocol, { ...report, resumeAt });
+    if (nextProtocol === protocol) return false;
+
+    const cancelled = this.cancelScheduledControl(state, now);
+    this.timers.get(sessionId)?.();
+    this.timers.delete(sessionId);
+    this.completionTimers.get(sessionId)?.();
+    this.completionTimers.delete(sessionId);
+    this.parkedSubscriptions.set(sessionId, report.leaseId);
+    this.persist(
+      {
+        ...state,
+        state: 'monitoring',
+        generation: state.generation + (cancelled ? 1 : 0),
+        nextEvaluationAt: null,
+        ...(cancelled ? { lastControlId: null } : {}),
+        supervision: nextProtocol,
+        updatedAt: now,
+      },
+      cancelled,
+    );
+    this.armWaitDeadline(sessionId, report.leaseId, resumeAt);
     return true;
   }
   /** Fails closed only for the currently active bounded probe. */
@@ -261,6 +318,7 @@ export class AutopilotCoordinator {
     if (!state?.requestedEnabled || !state.supervision) return false;
     const nextProtocol = consumeObservableWake(state.supervision, wake);
     if (nextProtocol === state.supervision) return false;
+    this.cancelWaitTimer(sessionId);
     this.parkedSubscriptions.delete(sessionId);
     this.persist({ ...state, supervision: nextProtocol, updatedAt: this.deps.now() });
     this.evaluate(sessionId);
@@ -276,6 +334,21 @@ export class AutopilotCoordinator {
       progressKey: this.progressKey(sessionId),
     });
   }
+  /** Bridges a completed root-owned background command into its one active wait episode. */
+  rootProcessCompleted(sessionId: string, processId: string): boolean {
+    const lease = this.deps.store.find(sessionId)?.supervision?.waitLease;
+    if (!lease || !processId || processId.length > 256) return false;
+    const condition = lease.wakeConditions.includes('processResultAvailable')
+      ? 'processResultAvailable'
+      : lease.wakeConditions.includes('processExited')
+        ? 'processExited'
+        : null;
+    if (!condition) return false;
+    const progressKey = createHash('sha256')
+      .update(`${this.progressKey(sessionId)}\0root-process\0${processId}`)
+      .digest('hex');
+    return this.observableWake(sessionId, { leaseId: lease.id, condition, progressKey });
+  }
   enable(sessionId: string): AutopilotSnapshot | { code: string } {
     const session = this.deps.session(sessionId);
     if (!session || !session.threadId || !['ready', 'turnActive'].includes(session.state))
@@ -287,6 +360,7 @@ export class AutopilotCoordinator {
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
     const nextFingerprint = fingerprint(currentPlan.plan);
     const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
+    if (replacing) this.cancelWaitTimer(sessionId);
     if (
       prior.requestedEnabled &&
       prior.planIdentity === currentPlan.identity &&
@@ -354,6 +428,7 @@ export class AutopilotCoordinator {
     };
     this.persist(next, cancelled);
     this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
     return this.snapshot(sessionId);
   }
   cancel(sessionId: string, reason: 'planRemoved' | 'planReplaced' | 'sessionEnded'): void {
@@ -376,6 +451,7 @@ export class AutopilotCoordinator {
       cancelled,
     );
     this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
     const prior = this.deps.store.find(sessionId);
@@ -712,7 +788,10 @@ export class AutopilotCoordinator {
 
     const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
     const cancelled = replacing ? this.cancelScheduledControl(prior, now) : undefined;
-    if (replacing) this.cancelTimer(sessionId);
+    if (replacing) {
+      this.cancelTimer(sessionId);
+      this.cancelWaitTimer(sessionId);
+    }
     const next: AutopilotSession = {
       ...prior,
       state: 'monitoring',
@@ -1051,6 +1130,34 @@ export class AutopilotCoordinator {
     this.completionTimers.delete(sessionId);
     this.executorTimers.get(sessionId)?.();
     this.executorTimers.delete(sessionId);
+  }
+
+  private cancelWaitTimer(sessionId: string): void {
+    this.waitTimers.get(sessionId)?.();
+    this.waitTimers.delete(sessionId);
+  }
+
+  private armWaitDeadline(sessionId: string, leaseId: string, resumeAt: string): void {
+    this.cancelWaitTimer(sessionId);
+    this.waitTimers.set(
+      sessionId,
+      this.deps.schedule(
+        () => {
+          this.waitTimers.delete(sessionId);
+          const state = this.deps.store.find(sessionId);
+          if (!state?.requestedEnabled || !state.supervision) return;
+          const protocol = consumeWaitDeadline(state.supervision, leaseId, this.deps.now());
+          if (protocol === state.supervision) {
+            this.armWaitDeadline(sessionId, leaseId, resumeAt);
+            return;
+          }
+          this.parkedSubscriptions.delete(sessionId);
+          this.persist({ ...state, supervision: protocol, updatedAt: this.deps.now() });
+          this.evaluate(sessionId);
+        },
+        Math.max(0, Date.parse(resumeAt) - Date.parse(this.deps.now())),
+      ),
+    );
   }
 
   private async enforceSupervisedLifecycle(

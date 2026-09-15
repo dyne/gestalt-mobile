@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   consumeObservableWake,
+  consumeWaitDeadline,
   parseSupervisionProtocolState,
   recordAutomaticContinuation,
   recoverSafetyPause,
+  registerProactiveWait,
   reportProbe,
   semanticProgressKey,
   startSupervisionProtocol,
@@ -182,6 +184,77 @@ describe('bounded probe protocol', () => {
       outcome: 'active',
       unchangedContinuations: 0,
       lastReportId: 'action-1',
+    });
+  });
+});
+
+describe('proactive one-shot wait', () => {
+  const key = semanticProgressKey(facts());
+  const resumeAt = '2026-08-20T13:00:00.000Z';
+
+  it('parks before a probe and preserves an explicit event-or-deadline episode', () => {
+    const parked = registerProactiveWait(startSupervisionProtocol(key), {
+      id: 'long-ci-report',
+      leaseId: 'long-ci-lease',
+      wakeConditions: ['processExited', 'processResultAvailable'],
+      resumeAt,
+    });
+    expect(parked).toMatchObject({
+      outcome: 'parked',
+      lastReportId: 'long-ci-report',
+      waitLease: {
+        id: 'long-ci-lease',
+        probeKey: key,
+        wakeConditions: ['processExited', 'processResultAvailable'],
+        resumeAt,
+      },
+    });
+    expect(parseSupervisionProtocolState(JSON.parse(JSON.stringify(parked)))).toEqual(parked);
+  });
+
+  it('ignores early or mismatched deadlines and consumes the matching deadline once', () => {
+    const parked = registerProactiveWait(startSupervisionProtocol(key), {
+      id: 'long-l2-report',
+      leaseId: 'long-l2-lease',
+      wakeConditions: ['executorChanged'],
+      resumeAt,
+    });
+    expect(consumeWaitDeadline(parked, 'other', resumeAt)).toEqual(parked);
+    expect(consumeWaitDeadline(parked, 'long-l2-lease', 'not-a-timestamp')).toEqual(parked);
+    expect(consumeWaitDeadline(parked, 'long-l2-lease', '2026-08-20T12:59:59.999Z')).toEqual(
+      parked,
+    );
+    const resumed = consumeWaitDeadline(parked, 'long-l2-lease', resumeAt);
+    expect(resumed).toMatchObject({
+      outcome: 'active',
+      unchangedContinuations: 0,
+      waitLease: null,
+      lastReportId: 'long-l2-report',
+    });
+    expect(consumeWaitDeadline(resumed, 'long-l2-lease', resumeAt)).toEqual(resumed);
+  });
+
+  it('restores normal policy when an observable event consumes the episode', () => {
+    const parked = registerProactiveWait(startSupervisionProtocol(key), {
+      id: 'event-report',
+      leaseId: 'event-lease',
+      wakeConditions: ['processResultAvailable'],
+      resumeAt,
+    });
+    const progressed = semanticProgressKey(
+      facts({ ownedProcesses: [{ id: 'process-1', state: 'exited', ownerGeneration: 1 }] }),
+    );
+    expect(
+      consumeObservableWake(parked, {
+        leaseId: 'event-lease',
+        condition: 'processResultAvailable',
+        progressKey: progressed,
+      }),
+    ).toMatchObject({
+      outcome: 'active',
+      progressKey: progressed,
+      waitLease: null,
+      lastReportId: 'event-report',
     });
   });
 });

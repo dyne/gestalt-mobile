@@ -77,6 +77,16 @@ export function resolvedServerRequestId(input: {
   return String(requestId);
 }
 
+/** Returns only the bounded identity of a completed command item. Ownership is checked by caller. */
+export function completedCommandId(input: { method?: string; params?: unknown }): string | null {
+  if (input.method !== 'item/completed' || !isRecord(input.params)) return null;
+  const item = input.params.item;
+  if (!isRecord(item) || item.type !== 'commandExecution') return null;
+  return typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 256
+    ? item.id
+    : null;
+}
+
 export function isAutopilotWaitLeaseCall(input: {
   id: number;
   method: string;
