@@ -85,11 +85,18 @@ export type PersistedSupervisedLifecycle = Readonly<{
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
+    completionEpochs?: readonly Readonly<{
+      target: string;
+      epoch: number;
+      reopened: boolean;
+      completed: boolean;
+    }>[];
     reportedL2Ids?: readonly string[];
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
     pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
+    checkpointHandoffFailed?: boolean;
     terminalReviewAccepted: boolean;
   }>;
 }>;
@@ -100,6 +107,51 @@ export type ExecutorIdentity = Readonly<{
   generation: number;
   taskName: string;
 }>;
+
+export function checkpointTarget(
+  kind: 'l1' | 'l2' | 'terminal',
+  l1Id?: string,
+  l2Id?: string,
+): string {
+  return kind === 'l2'
+    ? JSON.stringify([kind, l1Id, l2Id])
+    : kind === 'l1'
+      ? JSON.stringify([kind, l1Id])
+      : JSON.stringify([kind]);
+}
+
+function canonicalCheckpointTarget(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const target = JSON.parse(value);
+    if (
+      !Array.isArray(target) ||
+      !['l1', 'l2', 'terminal'].includes(target[0]) ||
+      !target.every((part) => typeof part === 'string')
+    )
+      return undefined;
+    if (
+      (target[0] === 'l1' && target.length !== 2) ||
+      (target[0] === 'l2' && target.length !== 3) ||
+      (target[0] === 'terminal' && target.length !== 1)
+    )
+      return undefined;
+    if (!target.slice(1).every((part) => boundedText(part))) return undefined;
+    return JSON.stringify(target);
+  } catch {
+    const legacy = value.split(':');
+    return legacy[0] === 'l1' && legacy.length === 2 && boundedText(legacy[1])
+      ? checkpointTarget('l1', legacy[1])
+      : legacy[0] === 'l2' &&
+          legacy.length === 3 &&
+          boundedText(legacy[1]) &&
+          boundedText(legacy[2])
+        ? checkpointTarget('l2', legacy[1], legacy[2])
+        : value === 'terminal'
+          ? checkpointTarget('terminal')
+          : undefined;
+  }
+}
 
 export type SupervisedLifecycleEvent =
   | 'executorTurnEnded'
@@ -297,6 +349,32 @@ function parseCheckpoints(
 ): PersistedSupervisedLifecycle['checkpoints'] | undefined {
   const planIdentity = boundedText(value.planIdentity);
   if (value.protocolVersion !== 1 || !planIdentity) return undefined;
+  const rawCompletionEpochs = value.completionEpochs ?? [];
+  if (!Array.isArray(rawCompletionEpochs) || rawCompletionEpochs.length > 640) return undefined;
+  const completionEpochs = rawCompletionEpochs.flatMap((candidate) => {
+    const epoch = record(candidate);
+    const target = epoch && canonicalCheckpointTarget(epoch.target);
+    return target &&
+      typeof epoch.epoch === 'number' &&
+      Number.isSafeInteger(epoch.epoch) &&
+      epoch.epoch >= 0 &&
+      typeof epoch.reopened === 'boolean' &&
+      (epoch.completed === undefined || typeof epoch.completed === 'boolean')
+      ? [
+          {
+            target,
+            epoch: epoch.epoch,
+            reopened: epoch.reopened,
+            completed: epoch.completed ?? true,
+          },
+        ]
+      : [];
+  });
+  if (
+    completionEpochs.length !== rawCompletionEpochs.length ||
+    new Set(completionEpochs.map((epoch) => epoch.target)).size !== completionEpochs.length
+  )
+    return undefined;
   const rawReportedL2Ids = value.reportedL2Ids ?? [];
   if (!Array.isArray(rawReportedL2Ids) || rawReportedL2Ids.length > 512) return undefined;
   const reportedL2Ids = rawReportedL2Ids.map((id) => boundedText(id)).filter(Boolean) as string[];
@@ -325,6 +403,11 @@ function parseCheckpoints(
     return undefined;
   const pendingTurnId = value.pendingTurnId === null ? null : boundedText(value.pendingTurnId);
   if (pendingTurnId === undefined) return undefined;
+  if (
+    value.checkpointHandoffFailed !== undefined &&
+    typeof value.checkpointHandoffFailed !== 'boolean'
+  )
+    return undefined;
   if (typeof value.terminalReviewAccepted !== 'boolean') return undefined;
   const pendingKind =
     value.pendingKind === undefined
@@ -339,14 +422,43 @@ function parseCheckpoints(
     !['l2Completed', 'l1Accepted', 'terminalReviewAccepted'].includes(String(pendingKind))
   )
     return undefined;
+  const legacyTargets = [
+    ...reportedL1Ids.map((id) => checkpointTarget('l1', id)),
+    ...reportedL2Ids.flatMap((id) => {
+      try {
+        const parsed = JSON.parse(id);
+        return Array.isArray(parsed) &&
+          parsed.length === 2 &&
+          parsed.every((part) => typeof part === 'string')
+          ? [checkpointTarget('l2', parsed[0], parsed[1])]
+          : [];
+      } catch {
+        return [];
+      }
+    }),
+  ];
+  if (legacyTargets.length !== reportedL1Ids.length + reportedL2Ids.length) return undefined;
+  const legacyEpochs =
+    value.completionEpochs === undefined
+      ? legacyTargets.map((target) => ({ target, epoch: 0, reopened: false, completed: true }))
+      : completionEpochs;
+  if (
+    value.completionEpochs !== undefined &&
+    !legacyTargets.every((target) => completionEpochs.some((epoch) => epoch.target === target))
+  )
+    return undefined;
   return {
     protocolVersion: 1,
     planIdentity,
+    completionEpochs: legacyEpochs,
     reportedL2Ids,
     reportedL1Ids,
     acceptedKeys,
     pendingTurnId,
     pendingKind: pendingKind as 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null,
+    ...(value.checkpointHandoffFailed === undefined
+      ? {}
+      : { checkpointHandoffFailed: value.checkpointHandoffFailed }),
     terminalReviewAccepted: value.terminalReviewAccepted,
   };
 }

@@ -116,6 +116,8 @@ export type ComposeRelayAppOptions = {
   activitySchedule?: (callback: () => void, delayMs: number) => () => void;
   /** Test-only deterministic seam around the production coordinator timer. */
   autopilotSchedule?: (callback: () => void, delayMs: number) => () => void;
+  /** Test-only bounded checkpoint response-write deadline. */
+  checkpointHandoffDeadlineMs?: number;
   /** Test-only deterministic seam for the runtime activity reconciliation boundary. */
   autopilotReconcile?: (sessionId: string) => Promise<{ compatible: boolean }>;
   /** Test-only activity projection seam for deterministic stale reconciliation. */
@@ -207,6 +209,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         }
     >
   >();
+  const checkpointHandoffTimers = new Map<
+    string,
+    { handle: ReturnType<typeof setTimeout>; token: symbol }
+  >();
+  const checkpointHandoffRecoveries = new Set<string>();
   const supervisedPlans = new SupervisedPlanRegistry();
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const planMeasurementHelperPath =
@@ -569,6 +576,97 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
   };
+  const checkpointTimerKey = (sessionId: string, requestId: string) => `${sessionId}:${requestId}`;
+  const cancelCheckpointHandoffTimer = (sessionId: string, requestId: string) => {
+    const key = checkpointTimerKey(sessionId, requestId);
+    const timer = checkpointHandoffTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer.handle);
+    checkpointHandoffTimers.delete(key);
+  };
+  /** Fail a held checkpoint exactly once and retain its durable root boundary. */
+  const failCheckpointHandoff = (sessionId: string, requestId: string, turnId: string | null) => {
+    cancelCheckpointHandoffTimer(sessionId, requestId);
+    const occurredAt = new Date().toISOString();
+    if (!interactions.resolve(sessionId, requestId, occurredAt, 'failed')) return false;
+    autopilot.checkpointHandoffFailed(sessionId, turnId);
+    events.publish(
+      journal.append(
+        sessionId,
+        'org-plan.checkpoint-handoff-failed',
+        { requestId, reason: 'checkpointHandoffFailed' },
+        occurredAt,
+      ),
+    );
+    publishAttentionSettlement(sessionId, requestId, occurredAt, 'failed');
+    // Neither this timeout nor a failed transport may schedule continuation.
+    // If a successful response is already blocked in the writable stream, drop
+    // its local ownership so any late write cannot be mistaken for an ack.
+    const rejected = runtime?.rejectServerRequest(
+      sessionId,
+      requestId,
+      new Error('CHECKPOINT_HANDOFF_FAILED'),
+    );
+    if (rejected === false) {
+      const recoveryKey = checkpointTimerKey(sessionId, requestId);
+      const ownedRuntime = runtime;
+      const session = sessions.find(sessionId);
+      if (
+        ownedRuntime &&
+        session?.activeTurnId === turnId &&
+        !checkpointHandoffRecoveries.has(recoveryKey)
+      ) {
+        checkpointHandoffRecoveries.add(recoveryKey);
+        void (async () => {
+          try {
+            // Recycle only the session-local writer.  Its close cancels the
+            // blocked output, and only successful reconstruction releases the
+            // durable checkpoint through the runtime-recovery boundary.
+            if (runtime !== ownedRuntime || sessions.find(sessionId)?.activeTurnId !== turnId)
+              return;
+            const rebuilt = await ownedRuntime.recycle(session, new Date().toISOString());
+            if (runtime !== ownedRuntime) return;
+            const recovered =
+              turnId && rebuilt.activeTurnId === turnId
+                ? RelaySession.rehydrate(rebuilt).completeTurn(turnId, new Date().toISOString())
+                    .snapshot
+                : rebuilt;
+            saveSession(recovered);
+            activity.observe({
+              sessionId,
+              occurredAt: new Date().toISOString(),
+              kind: 'turnCompleted',
+            });
+            autopilot.recoverCheckpointHandoff(sessionId);
+          } catch {
+            // The durable failure remains visible; a later normal recovery can retry.
+          } finally {
+            checkpointHandoffRecoveries.delete(recoveryKey);
+          }
+        })();
+      }
+    }
+    return true;
+  };
+  const armCheckpointHandoffDeadline = (sessionId: string, requestId: string, turnId: string) => {
+    cancelCheckpointHandoffTimer(sessionId, requestId);
+    const key = checkpointTimerKey(sessionId, requestId);
+    const token = Symbol(key);
+    const handle = setTimeout(() => {
+      if (checkpointHandoffTimers.get(key)?.token !== token) return;
+      checkpointHandoffTimers.delete(key);
+      failCheckpointHandoff(sessionId, requestId, turnId);
+    }, options.checkpointHandoffDeadlineMs ?? 5_000);
+    handle.unref?.();
+    checkpointHandoffTimers.set(key, { handle, token });
+  };
+  const failPendingCheckpointHandoffs = (sessionId: string, recoverBoundary: boolean) => {
+    for (const interaction of interactions.list(sessionId)) {
+      if (interaction.kind !== 'orgPlanCheckpoint') continue;
+      failCheckpointHandoff(sessionId, interaction.requestId, interaction.turnId ?? null);
+    }
+    if (recoverBoundary) autopilot.recoverCheckpointHandoff(sessionId);
+  };
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
   const acceptPlanUpdate = (sessionId: string, update: PlanStatusUpdate): void => {
@@ -772,22 +870,46 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 hasActiveL1Writer(activity.snapshot(sessionId, new Date().toISOString()), position),
             });
             if (!valid) return false;
-            if (
-              !autopilot.checkpointAccepted(
+            if (!session.activeTurnId) return false;
+            let accepted = false;
+            try {
+              accepted = autopilot.checkpointAccepted(
                 sessionId,
                 checkpoint,
                 session.activeTurnId,
                 new Date().toISOString(),
-              )
-            )
-              return false;
-            return (
+              );
+            } catch {
+              if (!autopilot.checkpointHandoffFailed(sessionId, session.activeTurnId)) return false;
+              const interaction = {
+                ...rawInteraction,
+                turnId: session.activeTurnId,
+                requestedAt: new Date().toISOString(),
+              };
+              interactions.add(sessionId, interaction);
+              failCheckpointHandoff(sessionId, rawInteraction.requestId, session.activeTurnId);
+              return true;
+            }
+            if (!accepted) return false;
+            const interaction = {
+              ...rawInteraction,
+              turnId: session.activeTurnId,
+              requestedAt: new Date().toISOString(),
+            };
+            interactions.add(sessionId, interaction);
+            armCheckpointHandoffDeadline(sessionId, rawInteraction.requestId, session.activeTurnId);
+            try {
               runtime?.resolveServerRequest(
                 sessionId,
                 rawInteraction.requestId,
                 toOrgPlanCheckpointToolResponse(),
-              ) === true
-            );
+              );
+            } catch {
+              // The accepted hold remains owned by the bounded deadline.
+            }
+            // `true` retains the checkpoint-specific held request. Its timer
+            // is cancelled solely by the JSON-RPC write-settlement callback.
+            return true;
           }
           const interaction = {
             ...rawInteraction,
@@ -826,6 +948,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         (sessionId) => {
           activity.disconnected(sessionId, new Date().toISOString());
+          failPendingCheckpointHandoffs(sessionId, false);
           dismissPendingInteractions(sessionId, new Date().toISOString(), 'failed');
           recoverExitedSession(sessionId);
         },
@@ -838,6 +961,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         root,
       )
     : null;
+  runtime?.onServerResponseSettled((sessionId, requestId, outcome) => {
+    const interaction = interactions.find(sessionId, requestId);
+    if (interaction?.kind !== 'orgPlanCheckpoint') return;
+    if (outcome !== 'resultWritten') {
+      failCheckpointHandoff(sessionId, requestId, interaction.turnId ?? null);
+      return;
+    }
+    cancelCheckpointHandoffTimer(sessionId, requestId);
+    const occurredAt = new Date().toISOString();
+    if (interactions.resolve(sessionId, requestId, occurredAt, 'answered'))
+      publishAttentionSettlement(sessionId, requestId, occurredAt, 'answered');
+  });
   if (runtime && planMeasurementHelperPath) {
     planMeasurementRefresh = new PlanMeasurementRefresh(
       async (sessionId) => {
@@ -1393,6 +1528,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         }
         await runtime?.watchPlanStatus(session);
         autopilot.restore(session.id);
+        // A prior process cannot resolve its original JSON-RPC request.  Turn
+        // that bounded handoff into one durable failure and release the
+        // checkpoint only through the explicit runtime-recovery boundary.
+        failPendingCheckpointHandoffs(session.id, true);
       },
     );
   };
@@ -1407,11 +1546,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     for (const session of sessions.list()) {
       autopilot.dispose(session.id);
       activity.dispose(session.id);
+      for (const key of [...checkpointHandoffTimers.keys()]) {
+        if (key.startsWith(`${session.id}:`)) {
+          const timer = checkpointHandoffTimers.get(key);
+          if (timer) clearTimeout(timer.handle);
+          checkpointHandoffTimers.delete(key);
+        }
+      }
       // Relay shutdown only releases this process's writer.  A typed attention
       // request remains a durable human-visible blocker for the next relay
       // instance; only an app-server-cleared request is a failed audit outcome.
       for (const interaction of interactions.list(session.id)) {
-        if (interaction.kind === 'orgPlanAttention') continue;
+        // Checkpoints are recovered by the next relay: their original root
+        // boundary is durable and must not be replaced by a shutdown dismissal.
+        if (interaction.kind === 'orgPlanAttention' || interaction.kind === 'orgPlanCheckpoint')
+          continue;
         const occurredAt = new Date().toISOString();
         if (interactions.resolve(session.id, interaction.requestId, occurredAt, 'dismissed'))
           publishInteractionResolved(session.id, interaction.requestId, occurredAt, 'dismissed');

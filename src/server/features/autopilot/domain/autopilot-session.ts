@@ -5,6 +5,7 @@
  */
 
 import type { ExecutorLifecycle, StructuredBlock } from './supervised-lifecycle.js';
+import { checkpointHandoffRecoveryMessage } from '../../../../shared/contracts/autopilot-recovery.js';
 import {
   observableWakeConditions,
   type ObservableWakeCondition,
@@ -47,11 +48,20 @@ export type AutopilotSession = Readonly<{
   checkpoints?: Readonly<{
     protocolVersion: 1;
     planIdentity: string;
+    /** A completion may be reported again only after its own durable reopen. */
+    completionEpochs?: readonly Readonly<{
+      target: string;
+      epoch: number;
+      reopened: boolean;
+      completed: boolean;
+    }>[];
     reportedL2Ids?: readonly string[];
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
     pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
+    /** A checkpoint transport response was not acknowledged within its bounded deadline. */
+    checkpointHandoffFailed?: boolean;
     terminalReviewAccepted: boolean;
   }>;
   updatedAt: string;
@@ -72,6 +82,7 @@ export type AutopilotSnapshot = Readonly<{
       | 'needsYou'
       | 'safetyPaused'
       | 'complete'
+      | 'checkpointRecovery'
       | 'degraded';
     supervision:
       | 'active'
@@ -172,12 +183,14 @@ export function autopilotSnapshot(
     parkedWait || scheduled || rootWorking || facts.executorActive || facts.reconciling;
   const healthy =
     state.requestedEnabled &&
+    !state.checkpoints?.checkpointHandoffFailed &&
     facts.planMatches &&
     !['attentionRequired', 'safetyPaused'].includes(supervision) &&
     !['attentionRequired', 'safetyPaused', 'completed', 'disabled'].includes(state.state) &&
     liveContinuation;
-  const phase =
-    state.state === 'disabled'
+  const phase = state.checkpoints?.checkpointHandoffFailed
+    ? 'checkpointRecovery'
+    : state.state === 'disabled'
       ? 'off'
       : state.state === 'completed'
         ? 'complete'
@@ -195,25 +208,27 @@ export function autopilotSnapshot(
                     ? 'rootWorking'
                     : 'degraded';
   const nextExpectedAction =
-    phase === 'rootWorking'
-      ? 'Wait for the root turn to settle.'
-      : phase === 'continuationScheduled'
-        ? 'Run the scheduled continuation.'
-        : phase === 'waitingForAgentEvent'
-          ? parkedWait
-            ? 'Wait for a subscribed agent or process event.'
-            : 'Wait for the active executor or owned process to settle.'
-          : phase === 'checkingState'
-            ? 'Reconcile supervised execution state.'
-            : phase === 'needsYou'
-              ? 'Respond to the pending attention request.'
-              : phase === 'complete'
-                ? 'No further plan action is required.'
-                : phase === 'off'
-                  ? 'Enable Autopilot to supervise an incomplete plan.'
-                  : phase === 'safetyPaused'
-                    ? 'Resume manually after reviewing the safety pause.'
-                    : 'Restore a valid continuation before relying on Autopilot.';
+    phase === 'checkpointRecovery'
+      ? checkpointHandoffRecoveryMessage
+      : phase === 'rootWorking'
+        ? 'Wait for the root turn to settle.'
+        : phase === 'continuationScheduled'
+          ? 'Run the scheduled continuation.'
+          : phase === 'waitingForAgentEvent'
+            ? parkedWait
+              ? 'Wait for a subscribed agent or process event.'
+              : 'Wait for the active executor or owned process to settle.'
+            : phase === 'checkingState'
+              ? 'Reconcile supervised execution state.'
+              : phase === 'needsYou'
+                ? 'Respond to the pending attention request.'
+                : phase === 'complete'
+                  ? 'No further plan action is required.'
+                  : phase === 'off'
+                    ? 'Enable Autopilot to supervise an incomplete plan.'
+                    : phase === 'safetyPaused'
+                      ? 'Resume manually after reviewing the safety pause.'
+                      : 'Restore a valid continuation before relying on Autopilot.';
   return {
     state: state.state,
     enabled: state.requestedEnabled,

@@ -58,11 +58,17 @@ type LiveServerHandle = {
   respond?: (method: string, params: unknown) => unknown | Promise<unknown>;
   notify?: (notification: { method: string; params: unknown }) => void;
   request?: (request: { id: number; method: string; params: unknown }) => Promise<unknown>;
+  responseSettled?: (settlement: {
+    id: number;
+    outcome: 'resultWritten' | 'errorWritten' | 'writeFailed';
+  }) => void;
+  deferResponseSettlement?: boolean;
+  pendingResponses: Map<number, { resolve(): void; reject(error: Error): void }>;
 };
 
 function liveAppServer(handles: LiveServerHandle[]) {
   return () => {
-    const handle: LiveServerHandle = { calls: [], requests: [] };
+    const handle: LiveServerHandle = { calls: [], requests: [], pendingResponses: new Map() };
     handles.push(handle);
     return {
       rpc: {
@@ -86,11 +92,43 @@ function liveAppServer(handles: LiveServerHandle[]) {
           return () => {};
         },
         onServerRequest: (listener: LiveServerHandle['request']) => {
-          handle.request = listener;
+          handle.request = async (request) => {
+            try {
+              const result = await listener!(request);
+              if (!handle.deferResponseSettlement)
+                handle.responseSettled?.({ id: request.id, outcome: 'resultWritten' });
+              else
+                await new Promise<void>((resolve, reject) =>
+                  handle.pendingResponses.set(request.id, { resolve, reject }),
+                );
+              return result;
+            } catch (error) {
+              if (!handle.deferResponseSettlement)
+                handle.responseSettled?.({ id: request.id, outcome: 'errorWritten' });
+              throw error;
+            }
+          };
           return () => {};
         },
+        onServerResponseSettled: (listener: NonNullable<LiveServerHandle['responseSettled']>) => {
+          handle.responseSettled = (settlement) => {
+            listener(settlement);
+            const pending = handle.pendingResponses.get(settlement.id);
+            if (!pending) return;
+            handle.pendingResponses.delete(settlement.id);
+            if (settlement.outcome === 'resultWritten') pending.resolve();
+            else pending.reject(new Error('CODEX_SERVER_REQUEST_WRITE_FAILED'));
+          };
+          return () => {
+            handle.responseSettled = undefined;
+          };
+        },
       },
-      close: () => {},
+      close: () => {
+        for (const pending of handle.pendingResponses.values())
+          pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
+        handle.pendingResponses.clear();
+      },
       onExit: () => () => {},
     };
   };
@@ -191,6 +229,52 @@ async function createProductionAutopilotFixture(overrides: Partial<ComposeRelayA
   );
   await installAutopilotPlan(app, sessionId, workspacePath, 'autopilot');
   return { app, dataDir, handles, root, sessionId, workspacePath };
+}
+
+async function holdCheckpointRequest(
+  fixture: Awaited<ReturnType<typeof createProductionAutopilotFixture>>,
+  timers: Array<{ callback: () => void; cancelled: boolean }>,
+  requestId: number,
+  expectHeld = true,
+) {
+  timers.find((timer) => !timer.cancelled)!.callback();
+  await vi.waitFor(() =>
+    expect(
+      fixture.handles.flatMap((candidate) =>
+        candidate.requests.filter((request) => request.method === 'turn/start'),
+      ),
+    ).toHaveLength(1),
+  );
+  const handle = fixture.handles.find((candidate) =>
+    candidate.requests.some((request) => request.method === 'turn/start'),
+  )!;
+  await vi.waitFor(() => expect(handle.request).toBeDefined());
+  const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+  const threadId = session.threadId as string;
+  const turnId = session.activeTurnId as string;
+  handle.notify!({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+  await writeFile(join(fixture.workspacePath, 'autopilot.org'), autopilotPlanText('DONE'));
+  await expect
+    .poll(
+      async () =>
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json().steps[0]
+          .children[0].state,
+    )
+    .toBe('DONE');
+  handle.deferResponseSettlement = true;
+  const planIdentity = createHash('sha256')
+    .update(join(fixture.workspacePath, 'autopilot.org'))
+    .digest('hex');
+  const writersBefore = fixture.handles.length;
+  const startsBefore = fixture.handles
+    .flatMap((candidate) => candidate.requests)
+    .filter((request) => request.method === 'turn/start').length;
+  const response = handle.request!(l2CheckpointCall(requestId, threadId, turnId, planIdentity));
+  // The caller can be synchronously rejected by a coordinator exception.
+  // Mark it observed immediately; callers still assert its exact outcome.
+  void response.catch(() => {});
+  if (expectHeld) await vi.waitFor(() => expect(handle.pendingResponses.has(requestId)).toBe(true));
+  return { handle, response, startsBefore, threadId, turnId, writersBefore };
 }
 
 function attentionCall(id: number, reason: 'hardBlock' | 'permissionRequired' = 'hardBlock') {
@@ -891,9 +975,29 @@ describe('production composition', () => {
       const planIdentity = createHash('sha256')
         .update(join(fixture.workspacePath, 'autopilot.org'))
         .digest('hex');
-      await expect(
-        handle.request!(l2CheckpointCall(811, threadId, active.active_turn_id, planIdentity)),
-      ).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      handle.deferResponseSettlement = true;
+      const checkpointResponse = handle.request!(
+        l2CheckpointCall(811, threadId, active.active_turn_id, planIdentity),
+      );
+      await vi.waitFor(() => expect(handle.pendingResponses.has(811)).toBe(true));
+      const beforeWriteDatabase = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const beforeWrite = beforeWriteDatabase
+        .prepare(
+          'SELECT resolved_at FROM pending_interactions WHERE session_id = ? AND request_id = ?',
+        )
+        .get(fixture.sessionId, '811') as { resolved_at: string | null };
+      beforeWriteDatabase.close();
+      expect(beforeWrite.resolved_at).toBeNull();
+      handle.responseSettled!({ id: 811, outcome: 'resultWritten' });
+      await expect(checkpointResponse).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      const afterWriteDatabase = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const afterWrite = afterWriteDatabase
+        .prepare(
+          'SELECT resolved_at FROM pending_interactions WHERE session_id = ? AND request_id = ?',
+        )
+        .get(fixture.sessionId, '811') as { resolved_at: string | null };
+      afterWriteDatabase.close();
+      expect(afterWrite.resolved_at).toEqual(expect.any(String));
       expect(timers).toHaveLength(schedulesBeforeCheckpoint);
       expect(coordinator!.snapshot(fixture.sessionId).health).not.toMatchObject({
         phase: 'waitingForAgentEvent',
@@ -952,6 +1056,525 @@ describe('production composition', () => {
       expect(rebuiltCoordinator!.turnCompleted(fixture.sessionId)).toBe(true);
       await vi.waitFor(() => expect(rebuiltTimers.length).toBe(1));
       await rebuilt.close();
+    });
+
+    it('recycles a stuck checkpoint writer at the acknowledgement deadline and recovers once', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        checkpointHandoffDeadlineMs: 100,
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles.flatMap((candidate) =>
+            candidate.requests.filter((request) => request.method === 'turn/start'),
+          ),
+        ).toHaveLength(1),
+      );
+      await vi.waitFor(() =>
+        expect(fixture.handles.some((candidate) => candidate.request)).toBe(true),
+      );
+      const handle = fixture.handles.find((candidate) =>
+        candidate.requests.some((request) => request.method === 'turn/start'),
+      )!;
+      const threadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId as string;
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const active = database
+        .prepare('SELECT active_turn_id FROM relay_sessions WHERE id = ?')
+        .get(fixture.sessionId) as { active_turn_id: string };
+      database.close();
+      await writeFile(join(fixture.workspacePath, 'autopilot.org'), autopilotPlanText('DONE'));
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json().steps[0]
+              .children[0].state,
+        )
+        .toBe('DONE');
+      handle.notify!({
+        method: 'turn/started',
+        params: { threadId, turn: { id: active.active_turn_id } },
+      });
+      handle.deferResponseSettlement = true;
+      const identity = createHash('sha256')
+        .update(join(fixture.workspacePath, 'autopilot.org'))
+        .digest('hex');
+      const checkpointResponse = handle.request!(
+        l2CheckpointCall(991, threadId, active.active_turn_id, identity),
+      );
+      const rejectedCheckpoint = expect(checkpointResponse).rejects.toThrow(
+        'CODEX_SERVER_REQUEST_CANCELLED',
+      );
+      await vi.waitFor(() => expect(handle.pendingResponses.has(991)).toBe(true));
+      const timersBeforeRecovery = timers.length;
+      await rejectedCheckpoint;
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(1);
+      await vi.waitFor(() => expect(fixture.handles.length).toBeGreaterThan(1), { timeout: 1_000 });
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(1);
+      await expect
+        .poll(() => {
+          const audit = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          const count = audit
+            .prepare(
+              "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+            )
+            .get() as { count: number };
+          audit.close();
+          return count.count;
+        })
+        .toBe(1);
+      await expect
+        .poll(() => {
+          const recoveredState = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          const lifecycle = recoveredState
+            .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+            .get(fixture.sessionId) as { lifecycle_json: string };
+          recoveredState.close();
+          return JSON.parse(lifecycle.lifecycle_json).checkpoints;
+        })
+        .toMatchObject({ pendingTurnId: null, checkpointHandoffFailed: false });
+      await vi.waitFor(() => expect(timers.length).toBeGreaterThan(timersBeforeRecovery));
+      const recoveryTimer = timers.at(-1)!;
+      recoveryTimer.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles
+            .flatMap((candidate) => candidate.requests)
+            .filter((request) => request.method === 'turn/start'),
+        ).toHaveLength(2),
+      );
+      await fixture.app.close();
+    });
+
+    it('leaves an unsupported checkpoint exception before persistence inert', async () => {
+      let coordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      const original = coordinator!.checkpointAccepted.bind(coordinator);
+      vi.spyOn(coordinator!, 'checkpointAccepted').mockImplementation(() => {
+        throw new Error('injected-before-checkpoint-persistence');
+      });
+      const { response, startsBefore, writersBefore } = await holdCheckpointRequest(
+        fixture,
+        timers,
+        995,
+        false,
+      );
+      await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+      expect(coordinator!.checkpointAccepted).not.toBe(original);
+      expect(fixture.handles).toHaveLength(writersBefore);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(startsBefore);
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const events = database
+        .prepare(
+          "SELECT type FROM session_events WHERE type IN ('org-plan.step-checkpointed', 'org-plan.checkpoint-handoff-failed')",
+        )
+        .all() as Array<{ type: string }>;
+      const lifecycle = database
+        .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+        .get(fixture.sessionId) as { lifecycle_json: string };
+      database.close();
+      expect(events).toEqual([]);
+      expect(JSON.parse(lifecycle.lifecycle_json).checkpoints).toBeUndefined();
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/history`)).json()
+          .interactions,
+      ).not.toEqual(expect.arrayContaining([expect.objectContaining({ requestId: '995' })]));
+      await fixture.app.close();
+    });
+
+    it('turns a post-persistence checkpoint exception into one explicit failed handoff', async () => {
+      let coordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      const original = coordinator!.checkpointAccepted.bind(coordinator);
+      vi.spyOn(coordinator!, 'checkpointAccepted').mockImplementation((...input) => {
+        original(...input);
+        throw new Error('injected-after-checkpoint-persistence');
+      });
+      const { response, startsBefore, writersBefore } = await holdCheckpointRequest(
+        fixture,
+        timers,
+        996,
+        false,
+      );
+      await expect(response).rejects.toThrow('CHECKPOINT_HANDOFF_FAILED');
+      await vi.waitFor(async () => {
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        const failures = database
+          .prepare(
+            "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+          )
+          .get() as { count: number };
+        database.close();
+        expect(failures.count).toBe(1);
+      });
+      const history = (
+        await fixture.app.inject(`/api/sessions/${fixture.sessionId}/history`)
+      ).json();
+      expect(history.interactions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requestId: '996',
+            kind: 'orgPlanCheckpoint',
+            outcome: 'failed',
+          }),
+        ]),
+      );
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const lifecycle = database
+        .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+        .get(fixture.sessionId) as { lifecycle_json: string };
+      database.close();
+      expect(JSON.parse(lifecycle.lifecycle_json).checkpoints).toMatchObject({
+        pendingTurnId: expect.any(String),
+        checkpointHandoffFailed: true,
+      });
+      expect(fixture.handles).toHaveLength(writersBefore);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(startsBefore);
+      await fixture.app.close();
+    });
+
+    it('restores a pending checkpoint handoff once from the same database', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const { response } = await holdCheckpointRequest(fixture, timers, 997);
+      await fixture.app.close();
+      await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+
+      const rebuiltHandles: LiveServerHandle[] = [];
+      const rebuiltTimers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      let rebuiltCoordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const rebuilt = await composeAuthorizedApp({
+        root: fixture.root,
+        dataDir: fixture.dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(rebuiltHandles),
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          rebuiltTimers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          rebuiltCoordinator = value;
+        },
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      await rebuilt.listen({ port: 0 });
+      await vi.waitFor(() => expect(rebuiltCoordinator).toBeDefined());
+      await vi.waitFor(() => expect(rebuiltTimers.some((timer) => !timer.cancelled)).toBe(true));
+      rebuiltTimers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(
+          rebuiltHandles
+            .flatMap((candidate) => candidate.requests)
+            .filter((request) => request.method === 'turn/start'),
+        ).toHaveLength(1),
+      );
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const failures = database
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+        )
+        .get() as { count: number };
+      const interaction = database
+        .prepare('SELECT outcome FROM pending_interactions WHERE session_id = ? AND request_id = ?')
+        .get(fixture.sessionId, '997') as { outcome: string | null };
+      database.close();
+      expect(failures.count).toBe(1);
+      expect(interaction.outcome).toBe('failed');
+      expect(rebuiltCoordinator!.snapshot(fixture.sessionId).health).toMatchObject({
+        phase: expect.not.stringMatching('checkpointRecovery'),
+      });
+      await rebuilt.close();
+    });
+
+    it.each([
+      'resultWritten-before-timeout',
+      'timeout-before-late-resultWritten',
+      'writeFailed',
+      'duplicate-settlement',
+    ])('settles checkpoint write/deadline races exactly once: %s', async (scenario) => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        checkpointHandoffDeadlineMs: 200,
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const { handle, response, startsBefore, writersBefore } = await holdCheckpointRequest(
+        fixture,
+        timers,
+        992,
+      );
+      const starts = () =>
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start').length;
+      const failures = () => {
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        const count = database
+          .prepare(
+            "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+          )
+          .get() as { count: number };
+        database.close();
+        return count.count;
+      };
+      if (scenario === 'resultWritten-before-timeout') {
+        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(fixture.handles).toHaveLength(writersBefore);
+        expect(failures()).toBe(0);
+      } else if (scenario === 'duplicate-settlement') {
+        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+        handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
+        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(fixture.handles).toHaveLength(writersBefore);
+        expect(failures()).toBe(0);
+      } else {
+        if (scenario === 'writeFailed')
+          handle.responseSettled!({ id: 992, outcome: 'writeFailed' });
+        const lateSettlement = handle.responseSettled;
+        await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+        await vi.waitFor(() => expect(fixture.handles.length).toBeGreaterThan(writersBefore), {
+          timeout: 1_000,
+        });
+        if (scenario === 'timeout-before-late-resultWritten')
+          lateSettlement!({ id: 992, outcome: 'resultWritten' });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(failures()).toBe(1);
+      }
+      expect(starts()).toBe(startsBefore);
+      await fixture.app.close();
+    });
+
+    it('does not apply checkpoint deadlines to quiz or approval requests', async () => {
+      const checkpointFailures = (dataDir: string) => {
+        const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+        const count = database
+          .prepare(
+            "SELECT count(*) AS count FROM session_events WHERE type = 'org-plan.checkpoint-handoff-failed'",
+          )
+          .get() as { count: number };
+        database.close();
+        return count.count;
+      };
+      const fixture = await createProductionAutopilotFixture({ checkpointHandoffDeadlineMs: 1 });
+      const handle = fixture.handles.find((candidate) => candidate.request)!;
+      const started = await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/turns`,
+        payload: { text: 'request user input' },
+      });
+      expect(started.statusCode).toBe(202);
+      await vi.waitFor(() => expect(handle.request).toBeDefined());
+      handle.notify!({
+        method: 'turn/started',
+        params: {
+          threadId: (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+            .threadId,
+          turn: { id: started.json().activeTurnId },
+        },
+      });
+      handle.deferResponseSettlement = true;
+      const quizWriters = fixture.handles.length;
+      const quiz = handle.request!({
+        id: 993,
+        method: 'item/tool/call',
+        params: {
+          tool: 'gestalt_quiz',
+          arguments: {
+            questions: [
+              {
+                id: 'mode',
+                header: 'Mode',
+                question: 'Choose a mode.',
+                choices: [
+                  { label: 'Solo', description: 'Use one agent.' },
+                  { label: 'Team', description: 'Use several agents.' },
+                ],
+                allowCustom: false,
+              },
+            ],
+          },
+        },
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/history`)).json()
+            .interactions,
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ requestId: '993', kind: 'quiz', resolvedAt: null }),
+          ]),
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(fixture.handles).toHaveLength(quizWriters);
+      expect(checkpointFailures(fixture.dataDir)).toBe(0);
+      expect(handle.pendingResponses).toHaveLength(0);
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/history`)).json()
+          .interactions,
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ requestId: '993', resolvedAt: null })]),
+      );
+      const quizSubmission = fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/interactions/993`,
+        payload: {
+          success: true,
+          contentItems: [{ type: 'inputText', text: '{"answers":{"mode":"Solo"}}' }],
+        },
+      });
+      await vi.waitFor(() => {
+        expect(handle.pendingResponses.has(993)).toBe(true);
+      });
+      handle.responseSettled!({ id: 993, outcome: 'resultWritten' });
+      expect((await quizSubmission).statusCode).toBe(202);
+      await expect(quiz).resolves.toEqual(expect.anything());
+      expect(fixture.handles).toHaveLength(quizWriters);
+      await fixture.app.close();
+
+      const approvalFixture = await createProductionAutopilotFixture({
+        checkpointHandoffDeadlineMs: 1,
+      });
+      const approvalHandle = approvalFixture.handles.find((candidate) => candidate.request)!;
+      const approvalTurn = await approvalFixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${approvalFixture.sessionId}/turns`,
+        payload: { text: 'approve' },
+      });
+      await vi.waitFor(() => expect(approvalHandle.request).toBeDefined());
+      approvalHandle.notify!({
+        method: 'turn/started',
+        params: {
+          threadId: (
+            await approvalFixture.app.inject(`/api/sessions/${approvalFixture.sessionId}`)
+          ).json().threadId,
+          turn: { id: approvalTurn.json().activeTurnId },
+        },
+      });
+      approvalHandle.deferResponseSettlement = true;
+      const approvalWriters = approvalFixture.handles.length;
+      const approval = approvalHandle.request!({
+        id: 994,
+        method: 'item/commandExecution/requestApproval',
+        params: { command: 'git status' },
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (
+            await approvalFixture.app.inject(`/api/sessions/${approvalFixture.sessionId}/history`)
+          ).json().interactions,
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              requestId: '994',
+              kind: 'commandApproval',
+              resolvedAt: null,
+            }),
+          ]),
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(approvalFixture.handles).toHaveLength(approvalWriters);
+      expect(checkpointFailures(approvalFixture.dataDir)).toBe(0);
+      expect(
+        (
+          await approvalFixture.app.inject(`/api/sessions/${approvalFixture.sessionId}/history`)
+        ).json().interactions,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ requestId: '994', kind: 'commandApproval', resolvedAt: null }),
+        ]),
+      );
+      const approvalSubmission = approvalFixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${approvalFixture.sessionId}/interactions/994`,
+        payload: { decision: 'accept' },
+      });
+      await vi.waitFor(() => expect(approvalHandle.pendingResponses.has(994)).toBe(true));
+      approvalHandle.responseSettled!({ id: 994, outcome: 'resultWritten' });
+      expect((await approvalSubmission).statusCode).toBe(202);
+      await expect(approval).resolves.toEqual(expect.anything());
+      expect(approvalTurn.statusCode).toBe(202);
+      await approvalFixture.app.close();
     });
 
     it('rejects a checkpoint delivered after its owning root final has closed', async () => {

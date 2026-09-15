@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
 import { AutopilotController, type AutopilotClientState } from './autopilot-controller.js';
 
 const snapshot = (state = 'monitoring') => ({
@@ -14,6 +15,18 @@ const snapshot = (state = 'monitoring') => ({
   enabled: !['disabled', 'attentionRequired', 'completed'].includes(state),
   retry: { position: 0, limit: 3 },
   updatedAt: '2026-08-20T00:00:00.000Z',
+});
+const checkpointRecoverySnapshot = () => ({
+  ...snapshot(),
+  health: {
+    healthy: false,
+    phase: 'checkpointRecovery' as const,
+    supervision: 'active' as const,
+    wait: { present: false, wakeCategories: [] },
+    observedAt: '2026-08-20T00:00:00.000Z',
+    lastTransitionAt: '2026-08-20T00:00:00.000Z',
+    nextExpectedAction: checkpointHandoffRecoveryMessage,
+  },
 });
 const attention = {
   requestId: 'attention-1',
@@ -33,6 +46,30 @@ const deferred = <T>() => {
 };
 
 describe('AutopilotController', () => {
+  it('announces persisted checkpoint recovery through shared notifications and clears it on recovery', () => {
+    let published = capture();
+    const controller = new AutopilotController(
+      {
+        getSession: async () => ({}),
+        setAutopilot: async () => ({ autopilot: snapshot() }),
+        resolveAttention: async () => ({}),
+      },
+      (state) => (published = capture(state)),
+    );
+    // Bootstrap represents a restart: the persisted health state must still
+    // be surfaced, without exposing any checkpoint contents.
+    controller.bootstrap([
+      { id: 'a', autopilot: checkpointRecoverySnapshot(), currentSequence: 1 },
+    ]);
+    expect(published.errors.get('a')).toBe(checkpointHandoffRecoveryMessage);
+    controller.observe('a', {
+      sequence: 2,
+      type: 'autopilot.updated',
+      payload: snapshot('backoff'),
+    });
+    expect(published.errors.has('a')).toBe(false);
+  });
+
   it('converges bootstrap and sequenced replay for every open session', async () => {
     let published: ReturnType<typeof capture>;
     const controller = new AutopilotController(

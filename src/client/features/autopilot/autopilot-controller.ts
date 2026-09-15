@@ -5,6 +5,7 @@
  */
 
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
+import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
 import {
   isAutopilotSnapshot,
   isOrgPlanAttention,
@@ -53,6 +54,8 @@ export class AutopilotController {
   #attention = new Map<string, OrgPlanAttention>();
   #pending = new Set<string>();
   #errors = new Map<string, string>();
+  /** Durable recovery health is announced through the shared toast pipeline. */
+  #checkpointRecoveryErrors = new Map<string, string>();
   #versions = new Map<string, number>();
   /** Increments for every accepted source, including non-autopilot journal events. */
   #revisions = new Map<string, number>();
@@ -175,6 +178,7 @@ export class AutopilotController {
     this.#mutationEpochs.set(id, (this.#mutationEpochs.get(id) ?? 0) + 1);
     this.#pending.add(id);
     this.#errors.delete(id);
+    this.#checkpointRecoveryErrors.delete(id);
     this.#publish();
     try {
       const result = await this.relay.setAutopilot(id, enabled, this.createKey());
@@ -267,6 +271,7 @@ export class AutopilotController {
     this.#attention.clear();
     this.#pending.clear();
     this.#errors.clear();
+    this.#checkpointRecoveryErrors.clear();
     this.#hydrateEpochs.clear();
     this.#revisions.clear();
     this.#requestRevisions.clear();
@@ -280,6 +285,9 @@ export class AutopilotController {
   #applySnapshot(id: string, candidate: unknown): void {
     if (!isAutopilotSnapshot(candidate)) return;
     this.#snapshots.set(id, candidate);
+    if (candidate.health?.phase === 'checkpointRecovery')
+      this.#checkpointRecoveryErrors.set(id, checkpointHandoffRecoveryMessage);
+    else this.#checkpointRecoveryErrors.delete(id);
   }
   #applyAttention(id: string, candidate: unknown): void {
     if (isOrgPlanAttention(candidate)) {
@@ -323,7 +331,7 @@ export class AutopilotController {
       snapshots: new Map(this.#snapshots),
       attention: new Map(this.#attention),
       pending: new Set(this.#pending),
-      errors: new Map(this.#errors),
+      errors: new Map([...this.#errors, ...this.#checkpointRecoveryErrors]),
     });
   }
 }

@@ -109,6 +109,22 @@ function autopilot(
   };
 }
 
+function checkpointRecoveryAutopilot() {
+  return {
+    ...autopilot('monitoring'),
+    health: {
+      healthy: false,
+      phase: 'checkpointRecovery',
+      supervision: 'active',
+      wait: { present: false, wakeCategories: [] },
+      nextExpectedAction:
+        'Checkpoint handoff failed. Autopilot is reconnecting this session automatically. If it cannot recover, restore or reopen the session.',
+      observedAt: '2026-08-20T00:00:00.000Z',
+      lastTransitionAt: '2026-08-20T00:00:00.000Z',
+    },
+  };
+}
+
 const attention = {
   requestId: 'attention-1',
   kind: 'orgPlanAttention',
@@ -132,6 +148,7 @@ async function install(
   continuationPhase?: ContinuationPhase,
   includePlan = false,
   healthyController = false,
+  checkpointRecovery = false,
 ) {
   const session = {
     id: 'session-1',
@@ -169,7 +186,9 @@ async function install(
           },
         }
       : {}),
-    autopilot: autopilot(state, reason, continuationPhase, healthyController),
+    autopilot: checkpointRecovery
+      ? checkpointRecoveryAutopilot()
+      : autopilot(state, reason, continuationPhase, healthyController),
     pendingInteractions: hasAttention ? [attention] : [],
     ...(includePlan
       ? {
@@ -229,7 +248,9 @@ async function install(
     route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        autopilot: autopilot(state, reason, continuationPhase, healthyController),
+        autopilot: checkpointRecovery
+          ? checkpointRecoveryAutopilot()
+          : autopilot(state, reason, continuationPhase, healthyController),
       }),
     }),
   );
@@ -849,6 +870,69 @@ test('selected Chat receives live autopilot and attention journal events without
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
 });
+
+for (const viewport of [
+  { name: 'mobile', width: 320, height: 568 },
+  { name: 'desktop', width: 1440, height: 900 },
+]) {
+  test(`checkpoint handoff recovery is truthful and clears after automatic recovery on ${viewport.name}`, async ({
+    page,
+  }) => {
+    let socket: { send(message: string): void } | undefined;
+    // The initial bootstrap is the same durable snapshot a restarted relay
+    // exposes. It must not be misrepresented as an agent-event wait.
+    await install(
+      page,
+      'monitoring',
+      undefined,
+      false,
+      (connection) => (socket = connection),
+      false,
+      undefined,
+      false,
+      false,
+      true,
+    );
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Chat' }).click();
+    await expect.poll(() => socket).toBeDefined();
+    const region = page.getByRole('region', { name: 'Autopilot' });
+    await expect(region).toContainText('Recovering checkpoint handoff');
+    await expect(region).toContainText('If it cannot recover, restore or reopen the session.');
+    await expect(region).not.toContainText('waiting for agent event');
+    // A live failure publication uses the same persisted snapshot shape and
+    // enters the shared notification queue exactly once.
+    socket!.send(
+      JSON.stringify({
+        type: 'relay.event',
+        event: {
+          sequence: 1,
+          type: 'autopilot.updated',
+          occurredAt: '2026-08-20T00:00:01.000Z',
+          payload: checkpointRecoveryAutopilot(),
+        },
+      }),
+    );
+    await expect(page.getByRole('alert')).toContainText(
+      'Checkpoint handoff failed. Autopilot is reconnecting this session automatically.',
+    );
+    socket!.send(
+      JSON.stringify({
+        type: 'relay.event',
+        event: {
+          sequence: 2,
+          type: 'autopilot.updated',
+          occurredAt: '2026-08-20T00:00:01.000Z',
+          payload: autopilot('monitoring'),
+        },
+      }),
+    );
+    await expect(region).toContainText('Autopilot: Monitoring');
+    await expect(region).not.toContainText('Recovering checkpoint handoff');
+    await expectNoHorizontalOverflow(page);
+  });
+}
 
 test('a sequenced plan update merges into its owning Session card without a page reload', async ({
   page,

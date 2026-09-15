@@ -98,6 +98,42 @@ describe('autopilotSnapshot controller health', () => {
     expect(snapshot.health).toMatchObject({ healthy: false, phase: 'degraded' });
   });
 
+  it('keeps a checkpoint handoff failure unhealthy even while its root is still active', () => {
+    const snapshot = autopilotSnapshot(
+      {
+        ...disabledAutopilot('s', '2026-09-13T12:00:00.000Z'),
+        state: 'monitoring',
+        requestedEnabled: true,
+        stopReason: null,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'plan',
+          completionEpochs: [],
+          reportedL1Ids: [],
+          reportedL2Ids: [],
+          acceptedKeys: [],
+          pendingTurnId: 'turn-1',
+          pendingKind: 'l2Completed',
+          checkpointHandoffFailed: true,
+          terminalReviewAccepted: false,
+        },
+      },
+      3,
+      {
+        activeTurn: true,
+        executorActive: false,
+        control: 'none',
+        timerArmed: false,
+        reconciling: false,
+        planMatches: true,
+        parkedSubscriptionActive: false,
+        transitionFresh: true,
+        observedAt: '2026-09-13T12:00:00.000Z',
+      },
+    );
+    expect(snapshot.health).toMatchObject({ healthy: false, phase: 'checkpointRecovery' });
+  });
+
   it('fails closed for an overdue schedule or a mismatched retained plan', () => {
     const state = {
       ...disabledAutopilot('s', '2026-09-13T12:00:00.000Z'),
