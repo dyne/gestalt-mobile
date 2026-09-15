@@ -783,6 +783,7 @@ describe('AutopilotCoordinator', () => {
       pendingInteractions: [],
       executor: { generation: 0, state: null },
       ownedProcesses: [],
+      childActivity: [],
       agentActivity: [{ agentId: 'root', sequence: 0, state: 'idle' }],
     });
     let supervision = startSupervisionProtocol(progressKey);
@@ -1027,6 +1028,344 @@ describe('AutopilotCoordinator', () => {
     expect(timers).toHaveLength(2);
   });
 
+  it('consumes an agent-activity lease exactly once for child-only semantic progress', () => {
+    const planFingerprint = JSON.stringify([['l1', 'WIP', 'UNREVIEWED', []]]);
+    const child = {
+      id: 'child-1',
+      threadId: 'child-thread',
+      taskPath: '/root/l1',
+      canonicalTaskName: 'l1',
+      canonicalPosition: 'L1',
+      continuationGeneration: 1,
+      outcome: 'partial' as const,
+      ownedProcesses: [
+        { processId: 'child-process', state: 'running' as const, ownership: 'executor' as const },
+      ],
+      state: 'working' as const,
+      reason: 'turnActive' as const,
+      observedAt: now,
+      lastActivityAt: now,
+    };
+    const activity = (children: Array<Record<string, unknown>> = [child]) =>
+      ({
+        sessionId: 's',
+        rootThreadId: 'root-thread',
+        root: {
+          state: 'idle' as const,
+          reason: 'turnCompleted' as const,
+          observedAt: now,
+          lastActivityAt: now,
+        },
+        subagents: children,
+        aggregateSubagents: 'working' as const,
+        confidence: 'fresh' as const,
+      }) as unknown as ReturnType<typeof createAgentActivitySnapshot>;
+    const initialKey = semanticProgressKey({
+      plan: { identity: 'p1', fingerprint: planFingerprint, currentPosition: 'l1' },
+      review: { status: null },
+      checkpoint: { pendingTurnId: null, terminalReviewAccepted: false },
+      pendingInteractions: [],
+      executor: { generation: 0, state: null },
+      ownedProcesses: [],
+      childActivity: [
+        {
+          id: child.id,
+          threadId: child.threadId,
+          taskName: child.canonicalTaskName,
+          position: child.canonicalPosition,
+          generation: child.continuationGeneration,
+          state: child.state,
+          outcome: child.outcome,
+          ownedProcesses: [{ id: 'child-process', state: 'running', ownership: 'executor' }],
+        },
+      ],
+      agentActivity: [{ agentId: 'root', sequence: 0, state: 'idle' }],
+    });
+    let currentActivity = activity();
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p1',
+      planFingerprint,
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      supervision: {
+        ...startSupervisionProtocol(initialKey),
+        outcome: 'parked',
+        waitLease: {
+          id: 'child-lease',
+          probeKey: initialKey,
+          wakeConditions: ['agentActivityChanged'],
+        },
+      },
+      updatedAt: now,
+    };
+    let saves = 0;
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          saves += 1;
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+      plan: () => ({ plan, identity: 'p1' }),
+      session: () => ({ state: 'ready', threadId: 'root-thread', activeTurnId: null }),
+      activity: () => currentActivity,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: () => () => {},
+      nextControlId: () => 'control',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    currentActivity = activity([
+      { ...child, state: 'idle', outcome: 'partial', observedAt: 'later', lastActivityAt: 'later' },
+    ]);
+    coordinator.activityChanged('s');
+    coordinator.activityChanged('s');
+    expect(state?.supervision).toMatchObject({ outcome: 'retrying', waitLease: null });
+    expect(saves).toBe(1);
+    currentActivity = activity([
+      { ...currentActivity.subagents[0]!, observedAt: 'newer', lastActivityAt: 'newer' },
+    ]);
+    coordinator.activityChanged('s');
+    expect(saves).toBe(1);
+  });
+
+  it.each([
+    ['proactive', '2026-08-20T13:00:00.000Z'],
+    ['probe', undefined],
+  ] as const)(
+    'consumes a persisted %s lease through Off, restart, and explicit On',
+    (_kind, resumeAt) => {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p1',
+        planFingerprint: 'f1',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        supervision: {
+          ...startSupervisionProtocol('stale-wait'),
+          outcome: 'parked',
+          waitLease: {
+            id: `${_kind}-lease`,
+            probeKey: 'stale-wait',
+            wakeConditions: ['executorChanged'],
+            ...(resumeAt ? { resumeAt } : {}),
+          },
+        },
+        updatedAt: now,
+      };
+      const cancellations: ReturnType<typeof vi.fn>[] = [];
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity: 'p1' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => {
+          const cancel = vi.fn();
+          cancellations.push(cancel);
+          return cancel;
+        },
+        nextControlId: () => 'control',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+
+      coordinator.restore('s');
+      coordinator.disable('s');
+      expect(state).toMatchObject({
+        requestedEnabled: false,
+        supervision: { outcome: 'active', waitLease: null },
+      });
+      expect(cancellations).toHaveLength(resumeAt ? 1 : 0);
+      expect(cancellations.every((cancel) => cancel.mock.calls.length === 1)).toBe(true);
+
+      // A new coordinator observes only the persisted disabled state; it must
+      // not resurrect the old lease before the explicit On transition.
+      const restarted = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity: 'p1' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => () => {},
+        nextControlId: () => 'control',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+      restarted.restore('s');
+      restarted.enable('s');
+      expect(state).toMatchObject({
+        requestedEnabled: true,
+        supervision: { outcome: 'active', waitLease: null },
+      });
+      restarted.disable('s');
+      expect(state?.supervision?.waitLease).toBeNull();
+    },
+  );
+
+  it('cancels a replacement lease and makes its late deadline callback a no-op', () => {
+    let identity = 'p1';
+    let state: AutopilotSession | null = {
+      sessionId: 's',
+      state: 'monitoring',
+      requestedEnabled: true,
+      planIdentity: 'p1',
+      planFingerprint: 'f1',
+      generation: 1,
+      consecutiveNoProgress: 0,
+      nextEvaluationAt: null,
+      lastControlId: null,
+      stopReason: null,
+      supervision: {
+        ...startSupervisionProtocol('stale-wait'),
+        outcome: 'parked',
+        waitLease: {
+          id: 'replacement-lease',
+          probeKey: 'stale-wait',
+          wakeConditions: ['executorChanged'],
+          resumeAt: '2026-08-20T13:00:00.000Z',
+        },
+      },
+      updatedAt: now,
+    };
+    const timers: Array<{ callback: () => void; cancel: ReturnType<typeof vi.fn> }> = [];
+    const coordinator = new AutopilotCoordinator({
+      store: {
+        find: () => state,
+        save: (next) => {
+          state = next;
+        },
+        remove: () => {},
+        findControl: () => null,
+        saveControl: () => {},
+        controlIds: () => new Set(),
+      },
+      now: () => now,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({ plan, identity }),
+      session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+      activity: () => null,
+      pendingInteraction: () => false,
+      reconcile: async () => ({ compatible: true }),
+      schedule: (callback) => {
+        const cancel = vi.fn();
+        timers.push({ callback, cancel });
+        return cancel;
+      },
+      nextControlId: () => 'control',
+      turnStarter: { start: async () => {} },
+      publish: () => {},
+    });
+    coordinator.restore('s');
+    identity = 'p2';
+    coordinator.enable('s');
+    expect(timers).toHaveLength(1);
+    expect(timers[0]!.cancel).toHaveBeenCalledTimes(1);
+    const schedulesBeforeLateCallback = timers.length;
+    timers[0]!.callback();
+    expect(timers).toHaveLength(schedulesBeforeLateCallback);
+    expect(state).toMatchObject({ planIdentity: 'p2', supervision: { waitLease: null } });
+  });
+
+  it.each(['attentionRequired', 'safetyPaused'] as const)(
+    'keeps the %s stop while explicit recovery removes stale wait ownership',
+    (outcome) => {
+      let state: AutopilotSession | null = {
+        sessionId: 's',
+        state: outcome,
+        requestedEnabled: false,
+        planIdentity: 'p1',
+        planFingerprint: 'f1',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: outcome === 'attentionRequired' ? 'attentionRequired' : null,
+        supervision: {
+          ...startSupervisionProtocol('stale-wait'),
+          outcome,
+          waitLease: {
+            id: `${outcome}-lease`,
+            probeKey: 'stale-wait',
+            wakeConditions: ['executorChanged'],
+          },
+        },
+        updatedAt: now,
+      };
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: defaultAutopilotPolicy,
+        plan: () => ({ plan, identity: 'p1' }),
+        session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
+        activity: () => null,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: () => () => {},
+        nextControlId: () => 'control',
+        turnStarter: { start: async () => {} },
+        publish: () => {},
+      });
+      coordinator.enable('s');
+      expect(state?.supervision).toMatchObject({
+        outcome: outcome === 'safetyPaused' ? 'active' : 'attentionRequired',
+        waitLease: null,
+      });
+    },
+  );
+
   it('cancels a proactive deadline when its root-owned process completes first', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',
@@ -1086,8 +1425,8 @@ describe('AutopilotCoordinator', () => {
     expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
     expect(coordinator.rootProcessCompleted('s', 'gh-watch-item')).toBe(false);
   });
-  it.each(['none', 'parked'] as const)(
-    'evaluates an accepted checkpoint exactly once with a %s lease and replays idempotently',
+  it.each(['none', 'checkpoint', 'executor'] as const)(
+    'acknowledges a checkpoint without scheduling, cancels a %s lease, and continues after the root final',
     (lease) => {
       let state: AutopilotSession | null = {
         sessionId: 's',
@@ -1102,7 +1441,7 @@ describe('AutopilotCoordinator', () => {
         stopReason: null,
         updatedAt: now,
         supervision:
-          lease === 'parked'
+          lease !== 'none'
             ? {
                 ...startSupervisionProtocol('progress'),
                 outcome: 'parked',
@@ -1110,7 +1449,8 @@ describe('AutopilotCoordinator', () => {
                 waitLease: {
                   id: 'lease',
                   probeKey: 'progress',
-                  wakeConditions: ['checkpointChanged'],
+                  wakeConditions:
+                    lease === 'checkpoint' ? ['checkpointChanged'] : ['executorChanged'],
                 },
               }
             : startSupervisionProtocol('progress'),
@@ -1160,9 +1500,10 @@ describe('AutopilotCoordinator', () => {
         tests: 'Focused tests passed.',
       };
       expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
-      expect(schedules).toBe(1);
+      expect(schedules).toBe(0);
+      expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
       expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
-      expect(schedules).toBe(1);
+      expect(schedules).toBe(0);
       expect(
         coordinator.checkpointAccepted(
           's',
@@ -1170,15 +1511,15 @@ describe('AutopilotCoordinator', () => {
           'turn-1',
           now,
         ),
-      ).toBe(false);
+      ).toBe(true);
       expect(state?.checkpoints).toMatchObject({
         reportedL2Ids: ['["l1","l2"]'],
         pendingTurnId: 'turn-1',
         pendingKind: 'l2Completed',
       });
       expect(coordinator.turnCompleted('s')).toBe(true);
+      expect(schedules).toBe(1);
       expect(state?.checkpoints).toMatchObject({ pendingTurnId: null, pendingKind: null });
-      if (lease === 'parked') expect(state?.supervision?.outcome).toBe('retrying');
     },
   );
   it('does not replay an issued command after a restart boundary', () => {
@@ -1417,6 +1758,15 @@ describe('AutopilotCoordinator', () => {
       nextEvaluationAt: '2026-08-20T12:01:00.000Z',
       lastControlId: 'control',
       stopReason: null,
+      supervision: {
+        ...startSupervisionProtocol('stale-wait'),
+        outcome: 'parked',
+        waitLease: {
+          id: 'manual-send-lease',
+          probeKey: 'stale-wait',
+          wakeConditions: ['executorChanged'],
+        },
+      },
       updatedAt: now,
     };
     let control: import('./ports.js').AutopilotControl = {
@@ -1458,6 +1808,7 @@ describe('AutopilotCoordinator', () => {
       generation: 3,
       nextEvaluationAt: null,
       lastControlId: null,
+      supervision: { outcome: 'active', waitLease: null },
     });
     expect(control.status).toBe('cancelled');
   });
@@ -1930,8 +2281,32 @@ describe('AutopilotCoordinator', () => {
       const consumeProcess = vi.fn();
       const terminateProcess = vi.fn(async () => true);
       const rootStart = vi.fn(async () => undefined);
+      const published: string[] = [];
       const controls = new Map<string, import('./ports.js').AutopilotControl>();
-      const activity = {
+      let planIdentity = 'p';
+      let currentPlan = {
+        ...plan,
+        steps: [
+          {
+            ...plan.steps[0]!,
+            children: [
+              {
+                id: 'l1-1',
+                title: 'child',
+                level: 2 as const,
+                state: childState,
+                priority: 'A' as const,
+                description: {},
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+      let session = { state: 'ready', threadId: 'root', activeTurnId: null as string | null };
+      let pending = false;
+      let attention: import('../domain/supervised-lifecycle.js').StructuredBlock | null = null;
+      let activity = {
         ...createAgentActivitySnapshot('s', now),
         confidence: 'fresh' as const,
         root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
@@ -1975,31 +2350,11 @@ describe('AutopilotCoordinator', () => {
           processMaxElapsedMs: 60_000,
           processMaxRssBytes: 12 * 1024 * 1024 * 1024,
         },
-        plan: () => ({
-          plan: {
-            ...plan,
-            steps: [
-              {
-                ...plan.steps[0]!,
-                children: [
-                  {
-                    id: 'l1-1',
-                    title: 'child',
-                    level: 2 as const,
-                    state: childState,
-                    priority: 'A' as const,
-                    description: {},
-                    children: [],
-                  },
-                ],
-              },
-            ],
-          },
-          identity: 'p',
-        }),
-        session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+        plan: () => ({ plan: currentPlan, identity: planIdentity }),
+        session: () => session,
         activity: () => activity,
-        pendingInteraction: () => false,
+        pendingInteraction: () => pending,
+        attention: () => attention,
         reconcile: async () => ({ compatible: true }),
         schedule: (callback) => {
           const timer = { callback, cancelled: false, fired: false };
@@ -2017,7 +2372,7 @@ describe('AutopilotCoordinator', () => {
           consumeProcess,
           terminateProcess,
         },
-        publish: () => {},
+        publish: (_sessionId, type) => published.push(type),
       });
       const runNext = async () => {
         const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
@@ -2029,6 +2384,7 @@ describe('AutopilotCoordinator', () => {
         );
         await Promise.resolve();
         await Promise.resolve();
+        return timer!;
       };
       return {
         coordinator,
@@ -2039,8 +2395,37 @@ describe('AutopilotCoordinator', () => {
         consumeProcess,
         terminateProcess,
         rootStart,
+        timers,
+        published,
         get state() {
           return state;
+        },
+        set state(value: AutopilotSession | null) {
+          state = value;
+        },
+        get plan() {
+          return currentPlan;
+        },
+        set plan(value: typeof currentPlan) {
+          currentPlan = value;
+        },
+        set planIdentity(value: string) {
+          planIdentity = value;
+        },
+        get activity() {
+          return activity;
+        },
+        set activity(value: typeof activity) {
+          activity = value;
+        },
+        set session(value: typeof session) {
+          session = value;
+        },
+        set pending(value: boolean) {
+          pending = value;
+        },
+        set attention(value: import('../domain/supervised-lifecycle.js').StructuredBlock | null) {
+          attention = value;
         },
       };
     }
@@ -2059,6 +2444,237 @@ describe('AutopilotCoordinator', () => {
         expect(fixture.state).toMatchObject({ requestedEnabled: true, state: 'monitoring' });
       },
     );
+
+    it.each(['disable', 'manualSend'] as const)(
+      'makes a duplicate continuation delivery stale after %s',
+      async (boundary) => {
+        const fixture = subject();
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        const armed = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+        if (boundary === 'disable') fixture.coordinator.disable('s');
+        else fixture.coordinator.manualSend('s');
+        armed.callback();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(fixture.resume).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['arm', 'delivery'] as const)(
+      'never resumes an executor while the root is active at %s',
+      async (phase) => {
+        const fixture = subject();
+        if (phase === 'arm')
+          fixture.session = { state: 'ready', threadId: 'root', activeTurnId: 'active-root-turn' };
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        if (phase === 'delivery') {
+          const armed = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+          fixture.session = { state: 'ready', threadId: 'root', activeTurnId: 'active-root-turn' };
+          armed.callback();
+          await vi.waitFor(() =>
+            expect(
+              fixture.published.filter((type) => type === 'autopilot.executor-continuation-stale'),
+            ).toHaveLength(1),
+          );
+        }
+        expect(fixture.resume).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      {
+        name: 'checkpoint persistence',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          expect(
+            fixture.coordinator.checkpointAccepted(
+              's',
+              {
+                version: 1,
+                kind: 'l2Completed',
+                planIdentity: 'p',
+                l1Id: 'l1',
+                l2Id: 'l1-1',
+                position: 'L1.1',
+                status: 'DONE',
+                changes: 'Persisted checkpoint.',
+                files: 'src/checkpoint.ts',
+                tests: 'Focused tests passed.',
+              },
+              'turn-checkpoint',
+              now,
+            ),
+          ).toBe(true);
+          fixture.coordinator.turnCompleted('s');
+        },
+      },
+      {
+        name: 'proactive wait registration',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) =>
+          expect(
+            fixture.coordinator.registerProactiveWait('s', {
+              id: 'wait-report',
+              leaseId: 'wait-lease',
+              wakeConditions: ['executorChanged'],
+              maxWaitMs: 60_000,
+            }),
+          ).toBe(true),
+      },
+      {
+        name: 'plan fingerprint advance and reopen',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.plan = {
+            ...fixture.plan,
+            steps: [{ ...fixture.plan.steps[0]!, state: 'TODO' as never }],
+            currentStepId: undefined as never,
+          };
+          fixture.coordinator.planStatusChanged('s');
+        },
+      },
+      {
+        name: 'plan identity replacement',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.planIdentity = 'replacement';
+          fixture.coordinator.planStatusChanged('s');
+        },
+      },
+      {
+        name: 'structured attention',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.attention = {
+            reason: 'permissionRequired',
+            resumeCondition: 'permissionGranted',
+          };
+          fixture.coordinator.evaluate('s');
+        },
+      },
+      {
+        name: 'terminal completion',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.plan = { ...fixture.plan, allDone: true, executionComplete: true, doneSteps: 1 };
+          fixture.coordinator.planStatusChanged('s');
+        },
+      },
+      {
+        name: 'an active root turn',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.session = { state: 'ready', threadId: 'root', activeTurnId: 'active-root-turn' };
+        },
+      },
+      {
+        name: 'a pending interaction',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.pending = true;
+        },
+      },
+      {
+        name: 'a session generation change',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.state = { ...fixture.state!, generation: fixture.state!.generation + 1 };
+        },
+      },
+      {
+        name: 'a child thread or generation change',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => {
+          fixture.activity = {
+            ...fixture.activity,
+            subagents: [
+              {
+                ...fixture.activity.subagents[0]!,
+                threadId: 'replacement-thread',
+                continuationGeneration: 2,
+              },
+            ],
+          };
+          fixture.coordinator.activityChanged('s');
+        },
+      },
+    ])('fences stale $name callbacks', async ({ kinds, apply }) => {
+      for (const kind of kinds) {
+        const fixture = subject(
+          kind === 'refresh'
+            ? [
+                {
+                  processId: 'process-1',
+                  itemId: 'item-1',
+                  ownerThreadId: 'thread-l1',
+                  ownerTaskPath: '/root/l1',
+                  ownership: 'executor',
+                  state: 'running',
+                  observedAt: now,
+                  elapsedMs: 1_000,
+                  cpuPercent: 1,
+                  rssBytes: 1,
+                },
+              ]
+            : [],
+        );
+        if (kind === 'refresh') {
+          fixture.coordinator.turnCompleted('s');
+          await fixture.runNext();
+        } else {
+          fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+          await fixture.runNext();
+        }
+        const armed = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+        apply(fixture);
+        armed.callback();
+        await vi.waitFor(() =>
+          expect(
+            fixture.published.filter((type) => type === `autopilot.executor-${kind}-stale`),
+          ).toHaveLength(1),
+        );
+        expect(fixture.resume).not.toHaveBeenCalled();
+        expect(fixture.refresh).not.toHaveBeenCalled();
+        expect(
+          fixture.published.filter((type) => type === `autopilot.executor-${kind}-stale`),
+        ).toHaveLength(1);
+      }
+    });
+
+    it('delivers each armed callback once, then audits duplicate delivery without another external call', async () => {
+      for (const kind of ['continuation', 'refresh'] as const) {
+        const fixture = subject(
+          kind === 'refresh'
+            ? [
+                {
+                  processId: 'process-1',
+                  itemId: 'item-1',
+                  ownerThreadId: 'thread-l1',
+                  ownerTaskPath: '/root/l1',
+                  ownership: 'executor',
+                  state: 'running',
+                  observedAt: now,
+                  elapsedMs: 1_000,
+                  cpuPercent: 1,
+                  rssBytes: 1,
+                },
+              ]
+            : [],
+        );
+        if (kind === 'refresh') fixture.coordinator.turnCompleted('s');
+        else fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        const armed = await fixture.runNext();
+        expect(kind === 'continuation' ? fixture.resume : fixture.refresh).toHaveBeenCalledTimes(1);
+        armed.callback();
+        expect(kind === 'continuation' ? fixture.resume : fixture.refresh).toHaveBeenCalledTimes(1);
+        expect(
+          fixture.published.filter((type) => type === `autopilot.executor-${kind}-stale`),
+        ).toHaveLength(1);
+      }
+    });
 
     it('continues after an L2 checkpoint reaches DONE while its L1 remains WIP', async () => {
       const fixture = subject([], 'partial', 'DONE');

@@ -19,6 +19,69 @@ export const observableWakeConditions = [
 
 export type ObservableWakeCondition = (typeof observableWakeConditions)[number];
 
+/**
+ * The durable protocol owns wait state, while the coordinator owns the live
+ * timer/subscription handles.  Keeping this matrix here makes every lifecycle
+ * boundary explicit before either owner mutates its half of a continuation.
+ */
+export const lifecycleBoundaries = [
+  'checkpointPersisted',
+  'matchingRootFinal',
+  'proactiveWaitRegistered',
+  'waitDeadline',
+  'manualOff',
+  'manualInterruption',
+  'explicitRecovery',
+  'planReplacement',
+  'attention',
+  'terminal',
+] as const;
+
+export type LifecycleBoundary = (typeof lifecycleBoundaries)[number];
+export type LifecycleWork =
+  'rootTimer' | 'executorTimer' | 'waitLease' | 'pendingCheckpoint' | 'manualAction';
+export type LifecycleDisposition = 'cancel' | 'consume' | 'preserve' | 'arm';
+
+const cancelledAtEveryBoundary = new Set<LifecycleBoundary>([
+  'checkpointPersisted',
+  'matchingRootFinal',
+  'proactiveWaitRegistered',
+  'waitDeadline',
+  'manualOff',
+  'manualInterruption',
+  'explicitRecovery',
+  'planReplacement',
+  'attention',
+  'terminal',
+]);
+
+/**
+ * Resolves ownership of work that existed immediately before a boundary.
+ * `arm` is intentionally limited to the root-final handoff: it never revives
+ * the timer which was cancelled at checkpoint persistence.
+ */
+export function lifecycleBoundaryDisposition(
+  boundary: LifecycleBoundary,
+  work: LifecycleWork,
+): LifecycleDisposition {
+  if (work === 'rootTimer')
+    return boundary === 'matchingRootFinal'
+      ? 'arm'
+      : cancelledAtEveryBoundary.has(boundary)
+        ? 'cancel'
+        : 'preserve';
+  if (work === 'executorTimer')
+    return cancelledAtEveryBoundary.has(boundary) ? 'cancel' : 'preserve';
+  if (work === 'waitLease') return boundary === 'proactiveWaitRegistered' ? 'preserve' : 'consume';
+  if (work === 'pendingCheckpoint')
+    return boundary === 'checkpointPersisted' || boundary === 'matchingRootFinal'
+      ? 'preserve'
+      : 'cancel';
+  return boundary === 'manualInterruption' || boundary === 'explicitRecovery'
+    ? 'preserve'
+    : 'cancel';
+}
+
 export type SemanticProgressFacts = Readonly<{
   plan: Readonly<{ identity: string; fingerprint: string; currentPosition: string | null }>;
   review: Readonly<{ status: 'UNREVIEWED' | 'REVIEWED' | null }>;
@@ -26,6 +89,17 @@ export type SemanticProgressFacts = Readonly<{
   pendingInteractions: readonly Readonly<{ id: string; kind: string; state: string }>[];
   executor: Readonly<{ generation: number; state: string | null }>;
   ownedProcesses: readonly Readonly<{ id: string; state: string; ownerGeneration: number }>[];
+  /** Canonical child facts only; timestamps, names, and transcript prose are excluded. */
+  childActivity: readonly Readonly<{
+    id: string;
+    threadId: string | null;
+    taskName: string | null;
+    position: string | null;
+    generation: number;
+    state: string;
+    outcome: string | null;
+    ownedProcesses: readonly Readonly<{ id: string; state: string; ownership: string }>[];
+  }>[];
   /** Sequenced facts only: timestamps and agent prose are deliberately absent. */
   agentActivity: readonly Readonly<{ agentId: string; sequence: number; state: string }>[];
 }>;
@@ -46,8 +120,43 @@ export function semanticProgressKey(facts: SemanticProgressFacts): string {
     ownedProcesses: [...facts.ownedProcesses]
       .map(({ id, state, ownerGeneration }) => ({ id, state, ownerGeneration }))
       .sort(compareBy('id')),
+    childActivity: canonicalChildActivity(facts.childActivity),
     agentActivity: latestAgentActivity(facts.agentActivity),
   });
+}
+
+function canonicalChildActivity(
+  children: SemanticProgressFacts['childActivity'],
+): readonly Readonly<{
+  id: string;
+  threadId: string | null;
+  taskName: string | null;
+  position: string | null;
+  generation: number;
+  state: string;
+  outcome: string | null;
+  ownedProcesses: readonly Readonly<{ id: string; state: string; ownership: string }>[];
+}>[] {
+  return [...children]
+    .map((child) => ({
+      id: child.id,
+      threadId: child.threadId,
+      taskName: child.taskName,
+      position: child.position,
+      generation: child.generation,
+      state: child.state,
+      outcome: child.outcome,
+      ownedProcesses: [...child.ownedProcesses]
+        .map(({ id, state, ownership }) => ({ id, state, ownership }))
+        .sort((left, right) => canonicalCompare(left, right))
+        .slice(0, 32),
+    }))
+    .sort((left, right) => canonicalCompare(left, right))
+    .slice(0, 64);
+}
+
+function canonicalCompare(left: object, right: object): number {
+  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 function latestAgentActivity(
@@ -254,6 +363,37 @@ export function consumeWaitDeadline(
     return state;
   return {
     ...startSupervisionProtocol(state.progressKey),
+    lastReportId: state.lastReportId,
+  };
+}
+
+/**
+ * A persisted Org checkpoint supersedes every pre-boundary wait episode.
+ * Checkpoint delivery is authoritative progress even when the old lease was
+ * waiting for a different executor or process event.
+ */
+export function consumeCheckpointBoundary(
+  state: SupervisionProtocolState,
+  progressKey: string,
+): SupervisionProtocolState {
+  return consumeObsoleteWait(state, progressKey);
+}
+
+/** Consumes a stale wait durably, without allowing it to outlive its owner. */
+export function consumeObsoleteWait(
+  state: SupervisionProtocolState,
+  progressKey: string,
+): SupervisionProtocolState {
+  if (state.outcome === 'attentionRequired' || state.outcome === 'safetyPaused')
+    return {
+      ...state,
+      progressKey,
+      probeKey: null,
+      waitLease: null,
+      retryKey: null,
+    };
+  return {
+    ...startSupervisionProtocol(progressKey),
     lastReportId: state.lastReportId,
   };
 }
