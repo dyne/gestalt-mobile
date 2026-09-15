@@ -43,6 +43,7 @@ export type AutopilotSnapshot = Readonly<{
         | 'processLimitBreached'
         | 'agentActivityChanged'
       )[];
+      resumeAt?: string;
     }>;
     observedAt: string;
     lastTransitionAt: string;
@@ -161,6 +162,7 @@ function validHealth(value: unknown): boolean {
         'agentActivityChanged',
       ].includes(item as string),
     ) &&
+    (wait.resumeAt === undefined || timestamp(wait.resumeAt)) &&
     timestamp(health.observedAt) &&
     timestamp(health.lastTransitionAt) &&
     text(health.nextExpectedAction) &&

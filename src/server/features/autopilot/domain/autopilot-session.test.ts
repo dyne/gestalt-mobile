@@ -43,6 +43,7 @@ describe('autopilotSnapshot controller health', () => {
             id: 'private',
             probeKey: 'opaque',
             wakeConditions: ['agentActivityChanged', 'processExited'],
+            resumeAt: '2026-09-13T13:00:00.000Z',
           },
         },
       },
@@ -63,7 +64,11 @@ describe('autopilotSnapshot controller health', () => {
       expect.objectContaining({
         healthy: true,
         phase: 'waitingForAgentEvent',
-        wait: { present: true, wakeCategories: ['agentActivityChanged', 'processExited'] },
+        wait: {
+          present: true,
+          wakeCategories: ['agentActivityChanged', 'processExited'],
+          resumeAt: '2026-09-13T13:00:00.000Z',
+        },
       }),
     );
     expect(JSON.stringify(snapshot.health)).not.toContain('private');

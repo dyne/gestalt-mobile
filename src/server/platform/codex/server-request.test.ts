@@ -11,12 +11,34 @@ import { GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME } from '../../../shared/contracts/
 import { GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME } from '../../../shared/contracts/agent-capacity-recovery.js';
 import {
+  completedCommandId,
   isAgentCapacityRecoveryCall,
   resolvedServerRequestId,
   toPendingInteraction,
 } from './server-request.js';
 
 describe('Codex server request mapping', () => {
+  it('recognizes only a bounded completed command item', () => {
+    expect(
+      completedCommandId({
+        method: 'item/completed',
+        params: { item: { id: 'gh-watch-item', type: 'commandExecution' } },
+      }),
+    ).toBe('gh-watch-item');
+    expect(
+      completedCommandId({
+        method: 'item/started',
+        params: { item: { id: 'gh-watch-item', type: 'commandExecution' } },
+      }),
+    ).toBeNull();
+    expect(
+      completedCommandId({
+        method: 'item/completed',
+        params: { item: { id: 'x'.repeat(257), type: 'commandExecution' } },
+      }),
+    ).toBeNull();
+  });
+
   it('maps a command approval to the relay interaction vocabulary', () => {
     expect(
       toPendingInteraction({
@@ -137,6 +159,26 @@ describe('Codex server request mapping', () => {
     expect(
       toPendingInteraction({
         id: 15,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
+          arguments: {
+            version: 2,
+            reportId: 'report-2',
+            leaseId: 'lease-2',
+            wakeConditions: ['processExited', 'processResultAvailable'],
+            maxWaitMs: 3_600_000,
+          },
+        },
+      }),
+    ).toMatchObject({
+      requestId: '15',
+      kind: 'autopilotWaitLease',
+      payload: { version: 2, maxWaitMs: 3_600_000 },
+    });
+    expect(
+      toPendingInteraction({
+        id: 16,
         method: 'item/tool/call',
         params: { tool: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME, arguments: { version: 1 } },
       }),
