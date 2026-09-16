@@ -727,12 +727,13 @@ export class AutopilotCoordinator {
       .update(JSON.stringify([retained.identity, checkpoint.kind, canonicalPosition, epoch]))
       .digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
-    if (acceptedKeys.includes(key)) return true;
+    if (acceptedKeys.includes(key))
+      return previous?.pendingTurnId === turnId && previous.pendingKind === checkpoint.kind;
     const l2Key =
       checkpoint.kind === 'l2Completed' ? JSON.stringify([checkpoint.l1Id, checkpoint.l2Id]) : null;
     if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
       return false;
-    if (completionEpoch?.completed && !completionEpoch.reopened) return true;
+    if (completionEpoch?.completed && !completionEpoch.reopened) return false;
     const completionEpochs = [
       ...(previous?.completionEpochs ?? []).filter((entry) => entry.target !== target),
       { target, epoch, reopened: false, completed: true },
@@ -839,11 +840,14 @@ export class AutopilotCoordinator {
       return;
     }
     this.supersedeExecutorCommands(sessionId, plan.identity, plan.plan);
-    const checkpointEpochs = this.reopenCheckpointEpochs(prior, plan.plan);
-    if (checkpointEpochs !== prior.checkpoints?.completionEpochs)
+    // Supersession persists independently. Re-read before reopening epochs so
+    // this update cannot restore commands from the stale pre-supersession row.
+    const current = this.deps.store.find(sessionId) ?? prior;
+    const checkpointEpochs = this.reopenCheckpointEpochs(current, plan.plan);
+    if (checkpointEpochs !== current.checkpoints?.completionEpochs)
       this.persist({
-        ...prior,
-        checkpoints: { ...prior.checkpoints!, completionEpochs: checkpointEpochs },
+        ...current,
+        checkpoints: { ...current.checkpoints!, completionEpochs: checkpointEpochs },
         updatedAt: this.deps.now(),
       });
     if (
@@ -1012,9 +1016,9 @@ export class AutopilotCoordinator {
       sessionId,
       this.deps.schedule(() => {
         this.completionTimers.delete(sessionId);
-        const current = this.deps.store.find(sessionId);
-        if (!current?.requestedEnabled || current.state !== 'monitoring') return;
         this.enqueue(sessionId, async () => {
+          const current = this.deps.store.find(sessionId);
+          if (!current?.requestedEnabled || current.state !== 'monitoring') return;
           if (!(await this.enforceSupervisedLifecycle(sessionId, event))) this.evaluate(sessionId);
         });
       }, this.deps.policy.quiescenceMs),
@@ -1504,13 +1508,7 @@ export class AutopilotCoordinator {
           Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt) ||
           (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
       )[0];
-    if (
-      !child?.taskPath ||
-      !child.canonicalTaskName ||
-      child.state === 'disconnected' ||
-      child.outcome === 'cancelled' ||
-      child.outcome === 'failed'
-    ) {
+    if (!child) {
       if (
         persisted?.canonicalPosition !== canonicalPosition ||
         persisted.outcome === 'cancelled' ||
@@ -1524,6 +1522,11 @@ export class AutopilotCoordinator {
         ownedProcesses: refreshPersistedProcesses(persisted.ownedProcesses, [], this.deps.now()),
       };
     }
+    // A roster entry for a newer generation is authoritative even when that
+    // generation is disconnected. Never fall back to an older persisted
+    // writer; incomplete owner metadata instead fences all continuation.
+    if (!child.taskPath || !child.canonicalTaskName) return undefined;
+    if (child.outcome === 'cancelled' || child.outcome === 'failed') return undefined;
     const activeL2 = step.children.find((candidate) => candidate.state === 'WIP');
     const outcome = classifyExecutorOutcome({
       objectiveComplete: step.state === 'DONE',
@@ -1606,8 +1609,14 @@ export class AutopilotCoordinator {
             (process) => process.state === 'running' || process.state === 'detached-active',
           ),
       );
-    if (!obsolete.length) return false;
     const controller = this.deps.executorController;
+    const ownerUnavailable =
+      owner.state === 'disconnected' || owner.outcome === 'cancelled' || owner.outcome === 'failed';
+    if (!obsolete.length) {
+      if (!ownerUnavailable) return false;
+      if (controller) await controller.refresh(sessionId);
+      return true;
+    }
     if (!controller) return true;
     for (const child of obsolete) {
       try {
@@ -1786,7 +1795,7 @@ export class AutopilotCoordinator {
     try {
       const accepted =
         kind === 'transfer'
-          ? (controller.transferProcess(
+          ? (await controller.transferProcess(
               sessionId,
               current.process.ownerThreadId,
               current.process.processId,
@@ -1794,7 +1803,7 @@ export class AutopilotCoordinator {
             ),
             true)
           : kind === 'consume'
-            ? (controller.consumeProcess(
+            ? (await controller.consumeProcess(
                 sessionId,
                 current.process.ownerThreadId,
                 current.process.processId,
@@ -1815,8 +1824,9 @@ export class AutopilotCoordinator {
         this.executorCommandTransition(sessionId, issued.commandId, 'failed');
         return false;
       }
-    } catch {
+    } catch (error) {
       // The command remains issued: the same idempotency key is the only retry.
+      this.containOperationFailure(sessionId, error);
       return false;
     }
     const latest = this.processActionCurrent(sessionId, issued);
@@ -2117,6 +2127,27 @@ export class AutopilotCoordinator {
     );
   }
 
+  /**
+   * A store read can fail after the timer that exposed it has already fired.
+   * This retry deliberately needs no lifecycle read to arm; once the store is
+   * available again, normal evaluation re-establishes a fully fenced timer.
+   */
+  private armStoreRecovery(sessionId: string): void {
+    if (this.executorTimers.has(sessionId)) return;
+    let delivered = false;
+    const cancel = this.deps.schedule(() => {
+      this.executorTimers.delete(sessionId);
+      if (delivered) return;
+      delivered = true;
+      this.enqueue(sessionId, async () => {
+        const current = this.deps.store.find(sessionId);
+        if (!current?.requestedEnabled) return;
+        this.evaluate(sessionId);
+      });
+    }, this.deps.policy.executorContinuationMaxMs);
+    this.executorTimers.set(sessionId, cancel);
+  }
+
   private armExecutorContinuation(
     sessionId: string,
     delayMs: number,
@@ -2241,6 +2272,7 @@ export class AutopilotCoordinator {
             // Only an explicit app-server rejection is safe to retry. A lost
             // response may conceal accepted work, so retain its issued fence.
             if (!explicitExecutorRejection(error)) {
+              this.containOperationFailure(sessionId, error);
               this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
               return;
             }
@@ -2590,14 +2622,128 @@ export class AutopilotCoordinator {
   }
   private enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
     const previous = this.operations.get(sessionId);
-    // Start the first operation synchronously through its pre-await safety
-    // checks; later operations serialize behind it for this session.
-    const next = previous ? previous.catch(() => undefined).then(operation) : operation();
+    // Every asynchronous boundary settles locally. In particular, do not
+    // discard the promise returned by finally(): that would turn a rejected
+    // controller, store, or publisher call into an unhandled rejection and
+    // poison the next serial operation.
+    const run = async () => {
+      try {
+        await operation();
+      } catch (error) {
+        this.containOperationFailure(sessionId, error);
+      }
+    };
+    const next = previous ? previous.then(run, run) : run();
     this.operations.set(sessionId, next);
-    void next.finally(() => {
-      if (this.operations.get(sessionId) === next) this.operations.delete(sessionId);
-    });
+    void next.then(
+      () => {
+        if (this.operations.get(sessionId) === next) this.operations.delete(sessionId);
+      },
+      () => {
+        // run() contains failures, but retain a rejection observer as a final
+        // guard if a future containment change itself becomes asynchronous.
+        if (this.operations.get(sessionId) === next) this.operations.delete(sessionId);
+      },
+    );
     return next;
+  }
+
+  /**
+   * Converts an unexpected queued-operation failure into one opaque durable
+   * recovery outcome. The recovery path deliberately avoids publish(): an
+   * outbox publication failure must not recursively manufacture another
+   * rejected promise before a later journal flush can replay the event.
+   */
+  private containOperationFailure(sessionId: string, error: unknown): void {
+    const code = operationFailureCode(error);
+    try {
+      this.deps.diagnostic?.(sessionId, `operationFailed:${code}`);
+    } catch {
+      // Diagnostics are advisory and cannot compromise queue liveness.
+    }
+    let current: AutopilotSession | null = null;
+    try {
+      current = this.deps.store.find(sessionId);
+    } catch {
+      try {
+        this.armStoreRecovery(sessionId);
+      } catch {
+        try {
+          this.deps.diagnostic?.(sessionId, `operationRecoveryUnavailable:${code}`);
+        } catch {
+          // A later external lifecycle input may retry after both dependencies recover.
+        }
+      }
+      return;
+    }
+    if (!current?.requestedEnabled) return;
+    const now = this.deps.now();
+    const recovery: AutopilotSession = {
+      ...current,
+      state: 'monitoring',
+      generation: current.generation + 1,
+      nextEvaluationAt: null,
+      stopReason: 'reconcileFailed',
+      updatedAt: now,
+    };
+    try {
+      this.commit({
+        state: recovery,
+        events: [
+          {
+            sessionId,
+            type: 'autopilot.operation-failed',
+            payload: { code },
+            occurredAt: now,
+          },
+        ],
+      });
+    } catch {
+      // A failing persistence adapter has no durable surface available in this
+      // process. Its observable diagnostic is deliberately independent of
+      // that adapter; retain one bounded runtime recovery rather than treating
+      // a failed write as if the operation had safely settled.
+      try {
+        this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+      } catch {
+        try {
+          this.deps.diagnostic?.(sessionId, `operationRecoveryUnavailable:${code}`);
+        } catch {
+          // The queue itself remains settled for a future external event.
+        }
+      }
+      return;
+    }
+    try {
+      this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+    } catch {
+      // Scheduling is the last recovery capability. If it is unavailable,
+      // leave a safe terminal state rather than claim enabled supervision with
+      // no reachable continuation.
+      try {
+        this.commit({
+          state: {
+            ...recovery,
+            state: 'safetyPaused',
+            requestedEnabled: false,
+            stopReason: 'safetyPaused',
+            updatedAt: this.deps.now(),
+          },
+          events: [
+            {
+              sessionId,
+              type: 'autopilot.operation-recovery-unavailable',
+              payload: { code },
+              occurredAt: this.deps.now(),
+            },
+          ],
+        });
+      } catch {
+        // There is no additional in-process action that can safely restore a
+        // failed store and scheduler; importantly the serial queue remains
+        // settled for a future external recovery event.
+      }
+    }
   }
 }
 
@@ -2618,6 +2764,19 @@ function startFailureCode(error: unknown): AutopilotControl['failureCode'] {
   return /(?:UNAVAILABLE|PERMISSION|DEPENDENCY|CODEX_SESSION_NOT_RUNNING|WRITER_)/.test(code)
     ? 'START_UNAVAILABLE'
     : 'START_FAILED';
+}
+
+/** Keep failure telemetry bounded and free of prompts, paths, and error prose. */
+function operationFailureCode(error: unknown): 'PERSISTENCE' | 'PUBLICATION' | 'OPERATION' {
+  const code =
+    error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : error instanceof Error
+        ? error.message
+        : '';
+  if (/PERSIST|SQLITE|DATABASE|STORE/i.test(code)) return 'PERSISTENCE';
+  if (/PUBLISH|OUTBOX|JOURNAL/i.test(code)) return 'PUBLICATION';
+  return 'OPERATION';
 }
 
 function fingerprint(plan: SupervisedPlan): string {

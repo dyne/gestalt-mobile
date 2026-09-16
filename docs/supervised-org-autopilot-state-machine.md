@@ -35,6 +35,60 @@ be idle while its owned command is still running.
 | Valid Org attention request exists                    | Cancel queued continuation, persist it, and stop nudging   |
 | Every L1 is DONE and REVIEWED and final review passes | Allow successful termination                               |
 
+## Checkpoint handoff
+
+A root-owned checkpoint is a short persist-and-ack operation. It records a
+completion epoch and cancels obsolete root/executor wait ownership, but it
+does not start another turn. Only the matching root final releases that durable
+boundary. The resulting `checkpointChanged` lifecycle input schedules the next
+fenced continuation; executor idleness is never used as the handoff trigger.
+
+Checkpoint delivery is idempotent within its plan identity, canonical position,
+and completion epoch. A DONE-to-WIP-to-DONE cycle opens a new epoch only after
+the authoritative plan has durably reopened that target. A duplicate, late, or
+mismatched final cannot emit another milestone report or release another writer.
+
+The checkpoint response has a bounded acknowledgement deadline. A lost response
+becomes the explicit `checkpointHandoffFailed` recovery state, consumes stale
+leases, and is recovered once through the root/runtime boundary. It is not
+presented as an ordinary executor wait. An unsupported checkpoint protocol or a
+checkpoint arriving after its owning root final fails closed before persistence.
+
+## Executor ownership and recovery
+
+Each canonical L1 has exactly one durable physical owner. The visible name is
+always `l<a>`; a replacement is a bounded physical generation such as
+`l<a>_g2`. Every executor resume, process action, and replacement handoff carries
+the plan identity/fingerprint, canonical position, task path, thread, and
+generation fence.
+
+Commands persist as scheduled, issued, accepted, failed, cancelled, or
+superseded. An issued command is ambiguous across process loss and is never
+blindly replayed. Conflicting live generations are reconciled deterministically;
+the selected owner is persisted before an obsolete writer is interrupted, and
+no continuation starts until fresh single-owner evidence is available.
+
+Repeated explicit executor rejection supersedes the exhausted physical owner
+and schedules one L0-owned replacement. A replacement is invalidated if the
+plan identity, fingerprint, or active L1 changes. Process transfer, result
+consumption, and termination use the same durable command identity, so retries
+cannot consume twice, target a reused process ID, or revive a superseded owner.
+
+## Failure containment
+
+Serialized Autopilot operations have a local failure boundary. A controller,
+refresh, process action, persistence, or publication failure records a bounded,
+sanitized diagnostic and either arms one fenced reconciliation or enters the
+safe `safetyPaused` state when scheduling recovery is unavailable. The queue
+then remains usable for later lifecycle inputs; failures cannot create an
+unhandled rejection or a hot loop.
+
+When durable persistence is unavailable, the independent diagnostic and one
+bounded runtime reconciliation remain observable until the store recovers.
+Publication failure is retained in the durable outbox and retried by its normal
+journal path. Human attention is still reserved for a validated decision-table
+blocker; operational uncertainty is recovered mechanically or safety-paused.
+
 Continuation delay grows exponentially from one second and is capped at one
 minute. This prevents an accidental hot spin without converting delay or
 silence into a blocker. Process defaults are a one-second poll interval, two
