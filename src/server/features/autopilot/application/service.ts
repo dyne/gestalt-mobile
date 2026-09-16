@@ -23,6 +23,7 @@ import {
   classifyExecutorOutcome,
   decideSupervisedLifecycle,
   executorIdentity,
+  type ExecutorCommand,
   type ExecutorLifecycle,
   type OwnedExecutorProcess,
   type StructuredBlock,
@@ -833,9 +834,11 @@ export class AutopilotCoordinator {
       return;
     }
     if (prior.planIdentity && prior.planIdentity !== plan.identity) {
+      this.supersedeExecutorCommands(sessionId, plan.identity, plan.plan);
       this.cancel(sessionId, 'planReplaced');
       return;
     }
+    this.supersedeExecutorCommands(sessionId, plan.identity, plan.plan);
     const checkpointEpochs = this.reopenCheckpointEpochs(prior, plan.plan);
     if (checkpointEpochs !== prior.checkpoints?.completionEpochs)
       this.persist({
@@ -1103,6 +1106,35 @@ export class AutopilotCoordinator {
     this.timers.delete(sessionId);
     const current = this.deps.store.find(sessionId);
     if (!current || current.generation !== generation || !current.requestedEnabled) return;
+    if (
+      current.executor?.replacement &&
+      !this.validReplacement(sessionId, current.executor.replacement)
+    ) {
+      const now = this.deps.now();
+      const cancelled = this.cancelScheduledControl(current, now);
+      this.persist(
+        {
+          ...current,
+          state: 'monitoring',
+          executor: {
+            ...current.executor,
+            replacement: undefined,
+            commands: current.executor.commands?.map((command) =>
+              ['scheduled', 'issued'].includes(command.status)
+                ? { ...command, status: 'superseded' as const, updatedAt: now }
+                : command,
+            ),
+          },
+          ...(cancelled ? { generation: current.generation + 1, lastControlId: null } : {}),
+          nextEvaluationAt: null,
+          updatedAt: now,
+        },
+        cancelled,
+      );
+      this.audit(sessionId, 'autopilot.executor-replacement-superseded', {});
+      this.evaluate(sessionId);
+      return;
+    }
     const session = this.deps.session(sessionId);
     if (
       session?.activeTurnId ||
@@ -1128,6 +1160,7 @@ export class AutopilotCoordinator {
     if (
       this.deps.executorController &&
       retained &&
+      !current.executor?.replacement &&
       this.currentExecutor(
         sessionId,
         retained.plan,
@@ -1253,6 +1286,21 @@ export class AutopilotCoordinator {
     this.completionTimers.delete(sessionId);
     this.executorTimers.get(sessionId)?.();
     this.executorTimers.delete(sessionId);
+    const state = this.deps.store.find(sessionId);
+    const executor = state?.executor;
+    if (state && executor?.commands?.some((command) => command.status === 'scheduled'))
+      this.persist({
+        ...state,
+        executor: {
+          ...executor,
+          commands: executor.commands.map((command) =>
+            command.status === 'scheduled'
+              ? { ...command, status: 'cancelled' as const, updatedAt: this.deps.now() }
+              : command,
+          ),
+        },
+        updatedAt: this.deps.now(),
+      });
   }
 
   private cancelWaitTimer(sessionId: string): void {
@@ -1312,6 +1360,9 @@ export class AutopilotCoordinator {
       state.executor,
     );
     const executorChanged = executor ? this.persistExecutor(sessionId, executor) : false;
+    if (executor && (await this.reconcileSplitBrain(sessionId, executor))) return true;
+    if (executor)
+      this.supersedeExecutorCommands(sessionId, retained.identity, retained.plan, executor);
     if (executorChanged && this.wakeForExecutorChange(sessionId, executor!)) return true;
     const decision = decideSupervisedLifecycle({
       plan: retained.plan,
@@ -1349,18 +1400,16 @@ export class AutopilotCoordinator {
             process.ownership === 'supervisor' &&
             process.state === 'detached-active',
         );
-        if (!alreadyMonitoring)
-          controller.transferProcess(sessionId, decision.action.process.ownerThreadId, processId);
-        if (executor)
-          this.persistExecutor(sessionId, {
-            ...executor,
-            ownedProcesses: executor.ownedProcesses.map((process) =>
-              process.processId === processId
-                ? { ...process, ownership: 'supervisor', state: 'detached-active' }
-                : process,
-            ),
-          });
-        if (!alreadyMonitoring)
+        const transferred =
+          alreadyMonitoring || !executor
+            ? alreadyMonitoring
+            : await this.performProcessAction(
+                sessionId,
+                executor,
+                decision.action.process,
+                'transfer',
+              );
+        if (transferred && !alreadyMonitoring)
           this.audit(sessionId, 'autopilot.process-monitoring', {
             threadId: decision.action.process.ownerThreadId,
             processId,
@@ -1369,21 +1418,25 @@ export class AutopilotCoordinator {
         return true;
       }
       case 'consumeProcessResult': {
-        const processId = decision.action.processId;
-        controller.consumeProcess(sessionId, decision.action.threadId, processId);
-        if (executor)
-          this.persistExecutor(sessionId, {
-            ...executor,
-            ownedProcesses: executor.ownedProcesses.map((process) =>
-              process.processId === processId ? { ...process, state: 'result-consumed' } : process,
-            ),
+        const processAction = decision.action;
+        const processId = processAction.processId;
+        const process = executor?.ownedProcesses.find(
+          (candidate) =>
+            candidate.processId === processId &&
+            candidate.ownerThreadId === processAction.threadId &&
+            candidate.state === 'exited-awaiting-result',
+        );
+        const consumed =
+          process && executor
+            ? await this.performProcessAction(sessionId, executor, process, 'consume')
+            : false;
+        if (consumed)
+          this.audit(sessionId, 'autopilot.process-result-consumed', {
+            threadId: processAction.threadId,
+            processId,
+            resultArtifact: processAction.resultArtifact,
           });
-        this.audit(sessionId, 'autopilot.process-result-consumed', {
-          threadId: decision.action.threadId,
-          processId,
-          resultArtifact: decision.action.resultArtifact,
-        });
-        if (executor)
+        if (consumed && executor)
           this.armExecutorContinuation(
             sessionId,
             this.deps.policy.executorContinuationBaseMs,
@@ -1392,32 +1445,27 @@ export class AutopilotCoordinator {
             {
               kind: 'processExited',
               processId,
-              resultArtifact: decision.action.resultArtifact,
+              resultArtifact: processAction.resultArtifact,
             },
           );
         return true;
       }
       case 'terminateProcess': {
-        const processId = decision.action.processId;
-        const terminated = await controller.terminateProcess(
-          sessionId,
-          decision.action.threadId,
-          processId,
+        const processAction = decision.action;
+        const processId = processAction.processId;
+        const process = executor?.ownedProcesses.find(
+          (candidate) =>
+            candidate.processId === processId && candidate.ownerThreadId === processAction.threadId,
         );
+        const terminated =
+          process && executor
+            ? await this.performProcessAction(sessionId, executor, process, 'terminate')
+            : false;
         if (terminated)
           this.audit(sessionId, 'autopilot.process-terminated', {
-            threadId: decision.action.threadId,
+            threadId: processAction.threadId,
             processId,
             reason: 'resourceBudget',
-          });
-        if (terminated && executor)
-          this.persistExecutor(sessionId, {
-            ...executor,
-            ownedProcesses: executor.ownedProcesses.map((process) =>
-              process.processId === processId
-                ? { ...process, state: 'terminated-for-budget' }
-                : process,
-            ),
           });
         if (terminated && executor)
           this.armExecutorContinuation(
@@ -1453,7 +1501,8 @@ export class AutopilotCoordinator {
       .sort(
         (left, right) =>
           (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1) ||
-          Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt),
+          Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt) ||
+          (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
       )[0];
     if (
       !child?.taskPath ||
@@ -1503,13 +1552,392 @@ export class AutopilotCoordinator {
         persisted?.canonicalPosition === canonicalPosition
           ? persisted.continuationCount
           : continuationCount,
+      ...(persisted?.replacement &&
+      (child.continuationGeneration ?? 1) < persisted.replacement.generation
+        ? { replacement: persisted.replacement }
+        : {}),
+      ...(persisted?.replacement &&
+      (child.continuationGeneration ?? 1) >= persisted.replacement.generation
+        ? { resumeFailures: 0 }
+        : persisted?.resumeFailures
+          ? { resumeFailures: persisted.resumeFailures }
+          : {}),
+      ...(persisted?.commands ? { commands: persisted.commands } : {}),
     };
+  }
+
+  /** A fresh roster may expose two physical writers for one canonical L1. */
+  private async reconcileSplitBrain(
+    sessionId: string,
+    executor: ExecutorLifecycle,
+  ): Promise<boolean> {
+    const activity = this.deps.activity(sessionId);
+    if (activity?.confidence !== 'fresh') return true;
+    const candidates = activity.subagents.filter(
+      (child) => child.canonicalPosition === executor.canonicalPosition,
+    );
+    if (candidates.length < 2) return false;
+    if (
+      candidates.some(
+        (child) =>
+          !child.threadId ||
+          !child.taskPath ||
+          child.canonicalTaskName !== executor.canonicalTaskName ||
+          child.continuationGeneration === undefined,
+      )
+    ) {
+      this.audit(sessionId, 'autopilot.executor-reconciliation-incomplete', {});
+      return true;
+    }
+    const ordered = [...candidates].sort(
+      (left, right) =>
+        (right.continuationGeneration ?? 0) - (left.continuationGeneration ?? 0) ||
+        Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt) ||
+        (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
+    );
+    const owner = ordered[0]!;
+    const obsolete = ordered
+      .slice(1)
+      .filter(
+        (child) =>
+          child.state === 'working' ||
+          child.state === 'awaitingAgent' ||
+          child.ownedProcesses?.some(
+            (process) => process.state === 'running' || process.state === 'detached-active',
+          ),
+      );
+    if (!obsolete.length) return false;
+    const controller = this.deps.executorController;
+    if (!controller) return true;
+    for (const child of obsolete) {
+      try {
+        const interrupted = await controller.interrupt(sessionId, child.threadId!);
+        this.audit(
+          sessionId,
+          interrupted ? 'autopilot.executor-superseded' : 'autopilot.executor-interrupt-failed',
+          {
+            ownerThreadId: owner.threadId,
+            obsoleteThreadId: child.threadId,
+          },
+        );
+      } catch {
+        this.audit(sessionId, 'autopilot.executor-interrupt-failed', {
+          ownerThreadId: owner.threadId,
+          obsoleteThreadId: child.threadId,
+        });
+      }
+    }
+    await controller.refresh(sessionId);
+    return true;
+  }
+
+  private executorCommand(
+    fence: Readonly<{
+      planIdentity: string;
+      planFingerprint: string;
+      canonicalPosition: string | null;
+      executorThreadId: string;
+      executorGeneration: number;
+    }>,
+    executor: ExecutorLifecycle,
+    generation: number,
+    trigger: Parameters<NonNullable<AutopilotDependencies['executorController']>['resume']>[3],
+  ): ExecutorCommand {
+    const commandId = createHash('sha256')
+      .update(
+        JSON.stringify([
+          fence.planIdentity,
+          fence.planFingerprint,
+          fence.canonicalPosition,
+          executor.canonicalTaskName,
+          executor.taskPath,
+          fence.executorThreadId,
+          generation,
+          ...(executor.resumeFailures ? [executor.resumeFailures] : []),
+          trigger.kind,
+        ]),
+      )
+      .digest('hex');
+    const now = this.deps.now();
+    return {
+      commandId,
+      status: 'scheduled',
+      planIdentity: fence.planIdentity,
+      planFingerprint: fence.planFingerprint,
+      canonicalPosition: fence.canonicalPosition ?? executor.canonicalPosition,
+      canonicalTaskName: executor.canonicalTaskName,
+      taskPath: executor.taskPath,
+      threadId: fence.executorThreadId,
+      generation,
+      ...(executor.resumeFailures ? { attempt: executor.resumeFailures } : {}),
+      trigger: trigger.kind,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  /** Process actions share the durable executor-command journal but carry a process-instance key. */
+  private processActionCommand(
+    sessionId: string,
+    executor: ExecutorLifecycle,
+    process: OwnedExecutorProcess,
+    kind: 'transfer' | 'consume' | 'terminate',
+  ): ExecutorCommand {
+    const retained = this.deps.plan(sessionId);
+    const processKey = executorProcessKey(process);
+    const now = this.deps.now();
+    return {
+      commandId: createHash('sha256')
+        .update(
+          JSON.stringify([
+            retained?.identity ?? 'none',
+            retained ? fingerprint(retained.plan) : 'none',
+            executor.canonicalPosition,
+            executor.canonicalTaskName,
+            executor.taskPath,
+            executor.threadId,
+            executor.continuationGeneration,
+            kind,
+            processKey,
+          ]),
+        )
+        .digest('hex'),
+      status: 'scheduled',
+      planIdentity: retained?.identity ?? 'none',
+      planFingerprint: retained ? fingerprint(retained.plan) : 'none',
+      canonicalPosition: executor.canonicalPosition,
+      canonicalTaskName: executor.canonicalTaskName,
+      taskPath: executor.taskPath,
+      threadId: executor.threadId,
+      generation: executor.continuationGeneration,
+      // Process work never launches a writer itself; this preserves the command
+      // envelope without conflating it with a continuation prompt.
+      trigger: 'partial',
+      processAction: { kind, processKey },
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  private processActionCurrent(
+    sessionId: string,
+    command: ExecutorCommand,
+  ): {
+    state: AutopilotSession;
+    executor: ExecutorLifecycle;
+    process: OwnedExecutorProcess;
+  } | null {
+    const state = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    const executor = state?.executor;
+    const child = this.deps
+      .activity(sessionId)
+      ?.subagents.find((candidate) => (candidate.threadId ?? candidate.id) === command.threadId);
+    if (
+      !state?.requestedEnabled ||
+      !retained ||
+      !executor ||
+      !command.processAction ||
+      retained.identity !== command.planIdentity ||
+      fingerprint(retained.plan) !== command.planFingerprint ||
+      executor.canonicalPosition !== command.canonicalPosition ||
+      executor.canonicalTaskName !== command.canonicalTaskName ||
+      executor.taskPath !== command.taskPath ||
+      executor.threadId !== command.threadId ||
+      executor.continuationGeneration !== command.generation ||
+      child?.canonicalPosition !== command.canonicalPosition ||
+      child?.canonicalTaskName !== command.canonicalTaskName ||
+      (child.continuationGeneration ?? 1) !== command.generation
+    )
+      return null;
+    const process = executor.ownedProcesses.find(
+      (candidate) => executorProcessKey(candidate) === command.processAction!.processKey,
+    );
+    return process ? { state, executor, process } : null;
+  }
+
+  /**
+   * Records issued before crossing the external boundary. Repeating an issued
+   * action passes the same command id to an idempotent adapter, so a process
+   * loss after the external effect cannot duplicate ownership or consumption.
+   */
+  private async performProcessAction(
+    sessionId: string,
+    executor: ExecutorLifecycle,
+    process: OwnedExecutorProcess,
+    kind: 'transfer' | 'consume' | 'terminate',
+  ): Promise<boolean> {
+    const controller = this.deps.executorController;
+    if (!controller) return false;
+    const requested = this.processActionCommand(sessionId, executor, process, kind);
+    const command = this.scheduleExecutorCommand(sessionId, requested);
+    if (!command || ['cancelled', 'superseded'].includes(command.status)) return false;
+    if (command.status === 'accepted') return true;
+    const current = this.processActionCurrent(sessionId, command);
+    if (!current) {
+      this.executorCommandTransition(sessionId, command.commandId, 'superseded');
+      return false;
+    }
+    const issued =
+      command.status === 'issued'
+        ? command
+        : this.executorCommandTransition(sessionId, command.commandId, 'issued');
+    if (!issued || issued.status !== 'issued') return false;
+    try {
+      const accepted =
+        kind === 'transfer'
+          ? (controller.transferProcess(
+              sessionId,
+              current.process.ownerThreadId,
+              current.process.processId,
+              issued.commandId,
+            ),
+            true)
+          : kind === 'consume'
+            ? (controller.consumeProcess(
+                sessionId,
+                current.process.ownerThreadId,
+                current.process.processId,
+                issued.commandId,
+              ),
+              true)
+            : await controller.terminateProcess(
+                sessionId,
+                current.process.ownerThreadId,
+                current.process.processId,
+                issued.commandId,
+                {
+                  itemId: current.process.itemId,
+                  ...(current.process.osPid === undefined ? {} : { osPid: current.process.osPid }),
+                },
+              );
+      if (!accepted) {
+        this.executorCommandTransition(sessionId, issued.commandId, 'failed');
+        return false;
+      }
+    } catch {
+      // The command remains issued: the same idempotency key is the only retry.
+      return false;
+    }
+    const latest = this.processActionCurrent(sessionId, issued);
+    if (!latest) {
+      this.executorCommandTransition(sessionId, issued.commandId, 'superseded');
+      return false;
+    }
+    this.persist({
+      ...latest.state,
+      executor: {
+        ...latest.executor,
+        commands: latest.executor.commands!.map((candidate) =>
+          candidate.commandId === issued.commandId
+            ? { ...candidate, status: 'accepted' as const, updatedAt: this.deps.now() }
+            : candidate,
+        ),
+        ownedProcesses: latest.executor.ownedProcesses.map((candidate) =>
+          executorProcessKey(candidate) !== issued.processAction!.processKey
+            ? candidate
+            : kind === 'transfer'
+              ? {
+                  ...candidate,
+                  ownership: 'supervisor' as const,
+                  state: 'detached-active' as const,
+                }
+              : kind === 'consume'
+                ? { ...candidate, state: 'result-consumed' as const }
+                : { ...candidate, state: 'terminated-for-budget' as const },
+        ),
+      },
+      updatedAt: this.deps.now(),
+    });
+    return true;
+  }
+
+  private executorCommandTransition(
+    sessionId: string,
+    commandId: string,
+    status: ExecutorCommand['status'],
+  ): ExecutorCommand | undefined {
+    const state = this.deps.store.find(sessionId);
+    const executor = state?.executor;
+    const command = executor?.commands?.find((candidate) => candidate.commandId === commandId);
+    if (!state || !executor || !command || command.status === status) return command;
+    const next = { ...command, status, updatedAt: this.deps.now() };
+    this.persist({
+      ...state,
+      executor: {
+        ...executor,
+        commands: executor.commands!.map((candidate) =>
+          candidate.commandId === commandId ? next : candidate,
+        ),
+      },
+      updatedAt: this.deps.now(),
+    });
+    return next;
+  }
+
+  private scheduleExecutorCommand(
+    sessionId: string,
+    command: ExecutorCommand,
+  ): ExecutorCommand | undefined {
+    const state = this.deps.store.find(sessionId);
+    const executor = state?.executor;
+    if (!state || !executor) return undefined;
+    const existing = executor.commands?.find(
+      (candidate) => candidate.commandId === command.commandId,
+    );
+    if (existing) return existing;
+    const commands = [...(executor.commands ?? []), command].slice(-32);
+    this.persist({
+      ...state,
+      executor: { ...executor, commands },
+      updatedAt: this.deps.now(),
+    });
+    return command;
   }
 
   private persistExecutor(sessionId: string, executor: ExecutorLifecycle): boolean {
     const current = this.deps.store.find(sessionId);
     if (!current || JSON.stringify(current.executor) === JSON.stringify(executor)) return false;
     this.persist({ ...current, executor, updatedAt: this.deps.now() });
+    return true;
+  }
+
+  /** Retain stale commands as evidence; they can never regain writer authority. */
+  private supersedeExecutorCommands(
+    sessionId: string,
+    planIdentity: string,
+    plan: SupervisedPlan,
+    current?: ExecutorLifecycle,
+  ): boolean {
+    const state = this.deps.store.find(sessionId);
+    const executor = state?.executor;
+    if (!state || !executor?.commands?.length) return false;
+    const planFingerprint = fingerprint(plan);
+    let changed = false;
+    const commands = executor.commands.map((command) => {
+      const ownershipMismatch =
+        Boolean(current) &&
+        (command.canonicalPosition !== current!.canonicalPosition ||
+          command.canonicalTaskName !== current!.canonicalTaskName ||
+          command.taskPath !== current!.taskPath ||
+          command.threadId !== current!.threadId);
+      const stale =
+        command.planIdentity !== planIdentity ||
+        command.planFingerprint !== planFingerprint ||
+        ownershipMismatch;
+      if (!stale || !['scheduled', 'issued'].includes(command.status)) return command;
+      changed = true;
+      return { ...command, status: 'superseded' as const, updatedAt: this.deps.now() };
+    });
+    if (!changed) return false;
+    this.persist({
+      ...state,
+      executor: { ...executor, commands },
+      updatedAt: this.deps.now(),
+    });
+    this.audit(sessionId, 'autopilot.executor-command-superseded', {
+      count: commands.filter((command) => command.status === 'superseded').length,
+    });
     return true;
   }
 
@@ -1528,6 +1956,8 @@ export class AutopilotCoordinator {
   }
 
   private freshExecutorIdentity(sessionId: string) {
+    const replacement = this.deps.store.find(sessionId)?.executor?.replacement;
+    if (replacement && this.validReplacement(sessionId, replacement)) return replacement;
     const plan = this.deps.plan(sessionId)?.plan;
     if (!plan) return undefined;
     const stepIndex = plan.steps.findIndex(
@@ -1543,6 +1973,81 @@ export class AutopilotCoordinator {
         ?.subagents.filter((child) => child.canonicalTaskName === canonicalTaskName)
         .map((child) => child.continuationGeneration ?? 1) ?? [];
     return executorIdentity(canonicalTaskName, Math.max(0, ...generations) + 1);
+  }
+
+  private validReplacement(
+    sessionId: string,
+    replacement: NonNullable<ExecutorLifecycle['replacement']>,
+  ): boolean {
+    const retained = this.deps.plan(sessionId);
+    if (
+      !retained ||
+      retained.identity !== replacement.planIdentity ||
+      fingerprint(retained.plan) !== replacement.planFingerprint
+    )
+      return false;
+    const index = retained.plan.steps.findIndex(
+      (step) => step.id === retained.plan.currentStepId || step.state === 'WIP',
+    );
+    return index >= 0 && replacement.canonicalPosition === `L${index + 1}`;
+  }
+
+  /** Converts an exhausted physical executor into one durable root-owned handoff. */
+  private scheduleExecutorReplacement(sessionId: string, executor: ExecutorLifecycle): void {
+    const current = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    if (!current?.requestedEnabled || !retained || current.executor?.replacement) return;
+    const identity = executorIdentity(
+      executor.canonicalTaskName,
+      executor.continuationGeneration + 1,
+    );
+    const now = this.deps.now();
+    const controlId = this.deps.nextControlId(sessionId, current.generation);
+    const replacement: ExecutorLifecycle = {
+      ...executor,
+      outcome: 'failed',
+      replacement: {
+        ...identity,
+        planIdentity: retained.identity,
+        planFingerprint: fingerprint(retained.plan),
+      },
+      commands: executor.commands?.map((command) =>
+        ['scheduled', 'issued'].includes(command.status)
+          ? { ...command, status: 'superseded' as const, updatedAt: now }
+          : command,
+      ),
+    };
+    this.arm(sessionId, current.generation, now);
+    this.persist(
+      {
+        ...current,
+        state: 'backoff',
+        executor: replacement,
+        nextEvaluationAt: now,
+        lastControlId: controlId,
+        updatedAt: now,
+      },
+      {
+        sessionId,
+        controlId,
+        status: 'scheduled',
+        createdAt: now,
+        updatedAt: now,
+        failureCode: null,
+      },
+      [
+        {
+          sessionId,
+          type: 'autopilot.executor-replacement-scheduled',
+          payload: {
+            canonicalPosition: identity.canonicalPosition,
+            taskName: identity.taskName,
+            generation: identity.generation,
+          },
+          occurredAt: now,
+        },
+      ],
+    );
   }
 
   private armExecutorRefresh(sessionId: string, delayMs: number): void {
@@ -1641,6 +2146,13 @@ export class AutopilotCoordinator {
           }
         : null;
     if (!fence || this.deps.session(sessionId)?.activeTurnId) return;
+    const commandExecutor = state?.executor;
+    if (!commandExecutor) return;
+    const requested = this.executorCommand(fence, commandExecutor, generation, trigger);
+    const command = this.scheduleExecutorCommand(sessionId, requested);
+    // A command that crossed the durable issue boundary is deliberately not
+    // replayed: app-server acceptance may have happened before a crash.
+    if (!command || command.status !== 'scheduled') return;
     let delivered = false;
     this.executorTimers.set(
       sessionId,
@@ -1676,6 +2188,17 @@ export class AutopilotCoordinator {
             currentChild?.canonicalPosition === fence.canonicalPosition &&
             (currentChild.continuationGeneration ?? 1) === fence.executorGeneration;
           if (!valid) {
+            const ownershipChanged =
+              latestPlan?.identity !== fence.planIdentity ||
+              !latestPlan ||
+              fingerprint(latestPlan.plan) !== fence.planFingerprint ||
+              currentChild?.canonicalPosition !== fence.canonicalPosition ||
+              (currentChild.continuationGeneration ?? 1) !== fence.executorGeneration;
+            this.executorCommandTransition(
+              sessionId,
+              command.commandId,
+              ownershipChanged ? 'superseded' : 'cancelled',
+            );
             this.audit(sessionId, 'autopilot.executor-continuation-stale', {
               threadId,
               generation,
@@ -1684,8 +2207,11 @@ export class AutopilotCoordinator {
             });
             return;
           }
+          const issued = this.executorCommandTransition(sessionId, command.commandId, 'issued');
+          if (issued?.status !== 'issued') return;
           try {
             await this.deps.executorController?.resume(sessionId, threadId, generation, trigger);
+            this.executorCommandTransition(sessionId, command.commandId, 'accepted');
             this.audit(sessionId, 'autopilot.executor-resumed', {
               threadId,
               generation,
@@ -1711,8 +2237,27 @@ export class AutopilotCoordinator {
                 nextEvaluationAt: null,
                 updatedAt: this.deps.now(),
               });
-          } catch {
-            this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+          } catch (error) {
+            // Only an explicit app-server rejection is safe to retry. A lost
+            // response may conceal accepted work, so retain its issued fence.
+            if (!explicitExecutorRejection(error)) {
+              this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+              return;
+            }
+            this.executorCommandTransition(sessionId, command.commandId, 'failed');
+            const latest = this.deps.store.find(sessionId);
+            const failedExecutor = latest?.executor;
+            if (!latest?.requestedEnabled || !failedExecutor) return;
+            const resumeFailures = (failedExecutor.resumeFailures ?? 0) + 1;
+            const next = {
+              ...latest,
+              executor: { ...failedExecutor, resumeFailures },
+              updatedAt: this.deps.now(),
+            };
+            this.persist(next);
+            if (resumeFailures >= this.deps.policy.retryLimit)
+              this.scheduleExecutorReplacement(sessionId, next.executor);
+            else this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
           }
         });
       }, delayMs),
@@ -2056,6 +2601,13 @@ export class AutopilotCoordinator {
   }
 }
 
+function explicitExecutorRejection(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ['AUTOPILOT_EXECUTOR_UNAVAILABLE', 'AUTOPILOT_EXECUTOR_REJECTED'].includes(error.message)
+  );
+}
+
 function startFailureCode(error: unknown): AutopilotControl['failureCode'] {
   const code =
     error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
@@ -2107,9 +2659,9 @@ function refreshPersistedProcesses(
   now: string,
 ): readonly OwnedExecutorProcess[] {
   if (!observed.length) return persisted;
-  const priorById = new Map(persisted.map((process) => [process.processId, process]));
+  const priorById = new Map(persisted.map((process) => [executorProcessKey(process), process]));
   return observed.map((process) => {
-    const prior = priorById.get(process.processId);
+    const prior = priorById.get(executorProcessKey(process));
     if (!prior) return process;
     const observedAt = prior.observedAt;
     return {
@@ -2118,9 +2670,22 @@ function refreshPersistedProcesses(
       elapsedMs: Math.max(process.elapsedMs, Date.parse(now) - Date.parse(observedAt)),
       ownership: prior.ownership === 'supervisor' ? 'supervisor' : process.ownership,
       state:
-        prior.ownership === 'supervisor' && process.state === 'running'
-          ? 'detached-active'
-          : process.state,
+        prior.state === 'result-consumed' || prior.state === 'terminated-for-budget'
+          ? prior.state
+          : prior.ownership === 'supervisor' && process.state === 'running'
+            ? 'detached-active'
+            : process.state,
     };
   });
+}
+
+/** A numeric OS PID or process id alone can be reused by a later child operation. */
+function executorProcessKey(process: OwnedExecutorProcess): string {
+  return JSON.stringify([
+    process.ownerThreadId,
+    process.ownerTaskPath,
+    process.processId,
+    process.itemId,
+    process.osPid ?? null,
+  ]);
 }

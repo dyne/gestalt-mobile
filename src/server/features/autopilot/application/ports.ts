@@ -5,7 +5,7 @@
  */
 
 import type { AutopilotSession } from '../domain/autopilot-session.js';
-import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
+import type { ExecutorIdentity, OwnedExecutorProcess } from '../domain/supervised-lifecycle.js';
 
 export type AutopilotControlStatus = 'scheduled' | 'issued' | 'started' | 'failed' | 'cancelled';
 
@@ -54,10 +54,20 @@ export interface SupervisedExecutorController {
     generation: number,
     trigger: ExecutorContinuationTrigger,
   ): Promise<void>;
+  /** Stops an obsolete physical writer; callers must reconcile before resuming. */
+  interrupt(sessionId: string, threadId: string): Promise<boolean>;
   refresh(sessionId: string): Promise<void>;
-  transferProcess(sessionId: string, threadId: string, processId: string): void;
-  consumeProcess(sessionId: string, threadId: string, processId: string): void;
-  terminateProcess(sessionId: string, threadId: string, processId: string): Promise<boolean>;
+  /** actionId makes external process operations safe to repeat after a durable issued boundary. */
+  transferProcess(sessionId: string, threadId: string, processId: string, actionId: string): void;
+  consumeProcess(sessionId: string, threadId: string, processId: string, actionId: string): void;
+  terminateProcess(
+    sessionId: string,
+    threadId: string,
+    processId: string,
+    actionId: string,
+    /** The processId is reusable; terminate only this observed command instance. */
+    processInstance: Pick<OwnedExecutorProcess, 'itemId' | 'osPid'>,
+  ): Promise<boolean>;
 }
 
 export interface AutopilotStore {

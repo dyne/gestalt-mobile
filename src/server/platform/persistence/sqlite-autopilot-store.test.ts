@@ -56,6 +56,22 @@ describe('SqliteAutopilotStore', () => {
         outcome: 'partial',
         continuationGeneration: 2,
         continuationCount: 1,
+        commands: [
+          {
+            commandId: 'executor-command-2',
+            status: 'issued',
+            planIdentity: 'i',
+            planFingerprint: 'f',
+            canonicalPosition: 'L4',
+            canonicalTaskName: 'l4',
+            taskPath: '/root/l4_g2',
+            threadId: 'executor-thread',
+            generation: 3,
+            trigger: 'partial',
+            createdAt: '2026-08-20T00:00:00.000Z',
+            updatedAt: '2026-08-20T00:00:00.000Z',
+          },
+        ],
       },
       updatedAt: '2026-08-20T00:00:00.000Z',
     });
@@ -66,6 +82,7 @@ describe('SqliteAutopilotStore', () => {
         canonicalPosition: 'L4',
         taskPath: '/root/l4_g2',
         ownedProcesses: [{ processId: 'process-1', ownership: 'supervisor' }],
+        commands: [{ commandId: 'executor-command-2', status: 'issued', generation: 3 }],
       },
     });
     store.save({
@@ -205,6 +222,18 @@ describe('SqliteAutopilotStore', () => {
         nextEvaluationAt: '2026-08-20T00:00:00.000Z',
         lastControlId: 'opaque-control',
         stopReason: null,
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1_g2',
+          threadId: 'durable-owner',
+          l1State: 'WIP',
+          lastActivityAt: '2026-08-20T00:00:00.000Z',
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 2,
+          continuationCount: 0,
+        },
         checkpoints: {
           protocolVersion: 1,
           planIdentity: 'identity',
@@ -237,6 +266,7 @@ describe('SqliteAutopilotStore', () => {
         generation: 7,
         nextEvaluationAt: '2026-08-20T00:00:00.000Z',
         lastControlId: 'opaque-control',
+        executor: { threadId: 'durable-owner', taskPath: '/root/l1_g2', continuationGeneration: 2 },
         checkpoints: {
           completionEpochs: [
             { target: '["l2","l1","l2"]', epoch: 1, reopened: false, completed: true },

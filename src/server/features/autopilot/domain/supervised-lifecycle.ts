@@ -76,6 +76,37 @@ export type ExecutorLifecycle = Readonly<{
   blocking?: StructuredBlock;
   continuationGeneration: number;
   continuationCount: number;
+  /** Consecutive, bounded failures for this physical executor only. */
+  resumeFailures?: number;
+  /** A durable root-owned replacement handoff; cleared only by its new roster owner. */
+  replacement?: ExecutorIdentity & Readonly<{ planIdentity: string; planFingerprint: string }>;
+  /** Bounded durable command history.  An issued command is never blindly replayed. */
+  commands?: readonly ExecutorCommand[];
+}>;
+
+export type ExecutorCommandStatus =
+  'scheduled' | 'issued' | 'accepted' | 'failed' | 'cancelled' | 'superseded';
+
+export type ExecutorCommand = Readonly<{
+  commandId: string;
+  status: ExecutorCommandStatus;
+  planIdentity: string;
+  planFingerprint: string;
+  canonicalPosition: string;
+  canonicalTaskName: string;
+  taskPath: string;
+  threadId: string;
+  generation: number;
+  /** Explicitly rejected logical attempt; omitted for the legacy initial attempt. */
+  attempt?: number;
+  trigger: 'partial' | 'processExited' | 'processResourceLimit';
+  /** An external process mutation; its opaque key fences PID/process-id reuse. */
+  processAction?: Readonly<{
+    kind: 'transfer' | 'consume' | 'terminate';
+    processKey: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
 }>;
 
 export type PersistedSupervisedLifecycle = Readonly<{
@@ -306,6 +337,21 @@ export function parsePersistedSupervisedLifecycle(
   ]);
   const continuationGeneration = nonNegativeInteger(executorValue.continuationGeneration);
   const continuationCount = nonNegativeInteger(executorValue.continuationCount);
+  const resumeFailures =
+    executorValue.resumeFailures === undefined
+      ? 0
+      : nonNegativeInteger(executorValue.resumeFailures);
+  const replacementValue =
+    executorValue.replacement === undefined ? undefined : record(executorValue.replacement);
+  const replacementGeneration = replacementValue && nonNegativeInteger(replacementValue.generation);
+  const replacementTaskName = replacementValue && boundedText(replacementValue.taskName);
+  const replacementCanonicalTaskName =
+    replacementValue && boundedText(replacementValue.canonicalTaskName);
+  const replacementCanonicalPosition =
+    replacementValue && boundedText(replacementValue.canonicalPosition);
+  const replacementPlanIdentity = replacementValue && boundedText(replacementValue.planIdentity);
+  const replacementPlanFingerprint =
+    replacementValue && boundedText(replacementValue.planFingerprint);
   if (
     !canonicalPosition ||
     !canonicalTaskName ||
@@ -315,7 +361,90 @@ export function parsePersistedSupervisedLifecycle(
     !lastActivityAt ||
     !outcome ||
     continuationGeneration === null ||
-    continuationCount === null
+    continuationCount === null ||
+    resumeFailures === null ||
+    (replacementValue &&
+      (!replacementGeneration ||
+        !replacementTaskName ||
+        !replacementCanonicalTaskName ||
+        !replacementCanonicalPosition ||
+        !replacementPlanIdentity ||
+        !replacementPlanFingerprint))
+  )
+    return undefined;
+  const commandsValue = executorValue.commands;
+  if (commandsValue !== undefined && (!Array.isArray(commandsValue) || commandsValue.length > 32))
+    return undefined;
+  const commands = (commandsValue ?? []).flatMap((candidate) => {
+    const command = record(candidate);
+    const commandId = command && boundedText(command.commandId);
+    const status =
+      command &&
+      stringValue(command.status, [
+        'scheduled',
+        'issued',
+        'accepted',
+        'failed',
+        'cancelled',
+        'superseded',
+      ]);
+    const planIdentity = command && boundedText(command.planIdentity);
+    const planFingerprint = command && boundedText(command.planFingerprint);
+    const commandPosition = command && boundedText(command.canonicalPosition);
+    const commandTaskName = command && boundedText(command.canonicalTaskName);
+    const commandTaskPath = command && boundedText(command.taskPath);
+    const commandThreadId = command && boundedText(command.threadId);
+    const generation = command && nonNegativeInteger(command.generation);
+    const attempt =
+      command?.attempt === undefined ? 0 : command && nonNegativeInteger(command.attempt);
+    const trigger =
+      command && stringValue(command.trigger, ['partial', 'processExited', 'processResourceLimit']);
+    const processActionValue = command && record(command.processAction);
+    const processActionKind =
+      processActionValue &&
+      stringValue(processActionValue.kind, ['transfer', 'consume', 'terminate']);
+    const processActionKey = processActionValue && boundedText(processActionValue.processKey);
+    const createdAt = command && boundedText(command.createdAt);
+    const updatedAt = command && boundedText(command.updatedAt);
+    return commandId &&
+      status &&
+      planIdentity &&
+      planFingerprint &&
+      commandPosition &&
+      commandTaskName &&
+      commandTaskPath &&
+      commandThreadId &&
+      typeof generation === 'number' &&
+      typeof attempt === 'number' &&
+      trigger &&
+      createdAt &&
+      updatedAt &&
+      (!processActionValue || (processActionKind && processActionKey))
+      ? [
+          {
+            commandId,
+            status,
+            planIdentity,
+            planFingerprint,
+            canonicalPosition: commandPosition,
+            canonicalTaskName: commandTaskName,
+            taskPath: commandTaskPath,
+            threadId: commandThreadId,
+            generation,
+            ...(attempt ? { attempt } : {}),
+            trigger,
+            ...(processActionValue && processActionKind && processActionKey
+              ? { processAction: { kind: processActionKind, processKey: processActionKey } }
+              : {}),
+            createdAt,
+            updatedAt,
+          } satisfies ExecutorCommand,
+        ]
+      : [];
+  });
+  if (
+    commands.length !== (commandsValue ?? []).length ||
+    new Set(commands.map((command) => command.commandId)).size !== commands.length
   )
     return undefined;
   const executorBlockingValue = record(executorValue.blocking);
@@ -337,6 +466,20 @@ export function parsePersistedSupervisedLifecycle(
       ...(executorBlocking ? { blocking: executorBlocking } : {}),
       continuationGeneration,
       continuationCount,
+      ...(resumeFailures ? { resumeFailures } : {}),
+      ...(replacementValue
+        ? {
+            replacement: {
+              generation: replacementGeneration!,
+              taskName: replacementTaskName!,
+              canonicalTaskName: replacementCanonicalTaskName!,
+              canonicalPosition: replacementCanonicalPosition!,
+              planIdentity: replacementPlanIdentity!,
+              planFingerprint: replacementPlanFingerprint!,
+            },
+          }
+        : {}),
+      ...(commands.length ? { commands } : {}),
     },
     ...(blocking ? { blocking } : {}),
     ...(supervision ? { supervision } : {}),

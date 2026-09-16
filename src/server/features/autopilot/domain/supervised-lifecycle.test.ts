@@ -177,6 +177,41 @@ describe('supervised Org Plan lifecycle', () => {
     ).toMatchObject({ pendingTurnId: 'turn-1', checkpointHandoffFailed: true });
   });
 
+  it('round-trips bounded durable executor command fences and rejects duplicate command IDs', () => {
+    const persisted = {
+      executor: {
+        ...executor(),
+        commands: [
+          {
+            commandId: 'executor-command-1',
+            status: 'issued',
+            planIdentity: 'plan',
+            planFingerprint: 'fingerprint',
+            canonicalPosition: 'L4',
+            canonicalTaskName: 'l4',
+            taskPath: '/root/l4',
+            threadId: 'thread-l4',
+            generation: 2,
+            trigger: 'partial',
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      },
+    };
+    expect(parsePersistedSupervisedLifecycle(persisted)?.executor?.commands).toEqual(
+      persisted.executor.commands,
+    );
+    expect(
+      parsePersistedSupervisedLifecycle({
+        executor: {
+          ...persisted.executor,
+          commands: [...persisted.executor.commands, ...persisted.executor.commands],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it.each([
     [[{ target: 'l1:l1', epoch: -1, reopened: false, completed: true }], 'negative epoch'],
     [

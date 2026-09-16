@@ -21,6 +21,49 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it.each([
+    ['interrupts an active executor', [{ id: 'turn', status: 'inProgress', items: [] }], false],
+    ['does nothing for an idle executor', [], false],
+    ['propagates interrupt RPC failure', [{ id: 'turn', status: 'inProgress', items: [] }], true],
+  ])('%s', async (_name, turns, failInterrupt) => {
+    const calls: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          calls.push(method);
+          if (method === 'initialize') return {};
+          if (method === 'thread/read') return { thread: { turns } };
+          if (method === 'turn/interrupt' && failInterrupt) throw new Error('rpc lost');
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = {
+      id: 'interrupt',
+      workspaceId: 'w',
+      workspacePath: '/w',
+      profile: 'p',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 't',
+      updatedAt: 't',
+    };
+    await runtime.restore(session, 't');
+    if (failInterrupt)
+      await expect(runtime.interruptExecutor(session, 'child')).rejects.toThrow('rpc lost');
+    else expect(await runtime.interruptExecutor(session, 'child')).toBe(turns.length > 0);
+    expect(calls.filter((call) => call === 'turn/interrupt')).toHaveLength(
+      failInterrupt || turns.length ? 1 : 0,
+    );
+  });
   it('keeps the latest duplicate across pages and permits exactly 64 unique children', async () => {
     let page = 0;
     const runtime = new CodexSessionRuntime(() => ({
@@ -465,6 +508,88 @@ describe('CodexSessionRuntime', () => {
       params: { threadId: 'child-1', processId: 'process-1' },
     });
   });
+  it('reconciles a lost terminate acknowledgement after runtime restart without killing a reused process id', async () => {
+    let current: { itemId: string; processId: string; osPid: number } | null = {
+      itemId: 'old-command',
+      processId: 'reused-id',
+      osPid: 101,
+    };
+    let terminateCalls = 0;
+    const launch = () => ({
+      rpc: {
+        request: async (method: string) => {
+          if (method === 'initialize') return {};
+          if (method === 'thread/backgroundTerminals/list')
+            return {
+              data: current
+                ? [
+                    {
+                      ...current,
+                      command: 'opaque',
+                      cwd: '/workspace',
+                      cpuPercent: 1,
+                      rssKb: 1,
+                    },
+                  ]
+                : [],
+              nextCursor: null,
+            };
+          if (method === 'thread/backgroundTerminals/terminate') {
+            terminateCalls += 1;
+            // The remote side performed the termination, then a new command
+            // reused its process id before the transport acknowledgement died.
+            current = { itemId: 'new-command', processId: 'reused-id', osPid: 202 };
+            throw new Error('transport lost after terminate');
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    });
+    const session = {
+      id: 'restart-process-action',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    const first = new CodexSessionRuntime(launch);
+    await first.restore(session, 'after');
+    await expect(
+      first.terminateChildProcess(session, 'child', 'reused-id', 'stable-action', {
+        itemId: 'old-command',
+        osPid: 101,
+      }),
+    ).rejects.toThrow('transport lost after terminate');
+    first.stop(session.id);
+
+    const restarted = new CodexSessionRuntime(launch);
+    await restarted.restore(session, 'after');
+    await expect(
+      restarted.terminateChildProcess(session, 'child', 'reused-id', 'stable-action', {
+        itemId: 'old-command',
+        osPid: 101,
+      }),
+    ).resolves.toBe(true);
+    expect(terminateCalls).toBe(1);
+    expect(current).toEqual({ itemId: 'new-command', processId: 'reused-id', osPid: 202 });
+    await expect(
+      restarted.inspectChildProcesses(session, { id: 'child', taskPath: '/root/l1' }),
+    ).resolves.toMatchObject([
+      { itemId: 'new-command', processId: 'reused-id', osPid: 202, state: 'running' },
+    ]);
+  });
+
   it('fails closed on a looping child cursor', async () => {
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {

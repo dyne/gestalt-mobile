@@ -19,6 +19,7 @@ import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
+import { isMissingCodexThreadRollout } from './platform/codex/json-rpc-client.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
@@ -413,12 +414,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           .update(`${sessionId}:${threadId}:${generation}:${randomUUID()}`)
           .digest('hex')
           .slice(0, 16)}`;
-        const turnId = await runtime.startExecutorTurn(
-          writer.session,
-          threadId,
-          `${AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT}${context}`,
-          clientId,
-        );
+        let turnId: string;
+        try {
+          turnId = await runtime.startExecutorTurn(
+            writer.session,
+            threadId,
+            `${AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT}${context}`,
+            clientId,
+          );
+        } catch (error) {
+          // A confirmed app-server missing-rollout response is a rejection;
+          // transport loss remains ambiguous and must retain the issued fence.
+          if (isMissingCodexThreadRollout(error)) throw new Error('AUTOPILOT_EXECUTOR_REJECTED');
+          throw error;
+        }
         activity.observe({
           sessionId,
           occurredAt: new Date().toISOString(),
@@ -428,16 +437,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         });
       },
       refresh: (sessionId) => activity.refresh(sessionId),
-      transferProcess: (sessionId, threadId, processId) => {
+      interrupt: async (sessionId, threadId) => {
+        const session = sessions.find(sessionId);
+        return session && runtime ? runtime.interruptExecutor(session, threadId) : false;
+      },
+      transferProcess: (sessionId, threadId, processId, actionId) => {
+        void actionId;
         activity.transferProcessOwnership(sessionId, threadId, processId, new Date().toISOString());
       },
-      consumeProcess: (sessionId, threadId, processId) => {
-        runtime?.consumeChildProcessResult(sessionId, threadId, processId);
+      consumeProcess: (sessionId, threadId, processId, _actionId) => {
+        runtime?.consumeChildProcessResult(sessionId, threadId, processId, _actionId);
       },
-      terminateProcess: async (sessionId, threadId, processId) => {
+      terminateProcess: async (sessionId, threadId, processId, actionId, processInstance) => {
         const session = sessions.find(sessionId);
         return session && runtime
-          ? runtime.terminateChildProcess(session, threadId, processId)
+          ? runtime.terminateChildProcess(session, threadId, processId, actionId, processInstance)
           : false;
       },
     },
