@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2577,6 +2578,7 @@ describe('AutopilotCoordinator', () => {
       > = [],
       outcome: 'partial' | 'cancelled' | 'failed' = 'partial',
       childState: 'TODO' | 'WIP' | 'DONE' = 'WIP',
+      retryLimit = defaultAutopilotPolicy.retryLimit,
     ) {
       let state: AutopilotSession | null = {
         sessionId: 's',
@@ -2594,6 +2596,7 @@ describe('AutopilotCoordinator', () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const resume = vi.fn(async () => undefined);
       const refresh = vi.fn(async () => undefined);
+      const interrupt = vi.fn(async () => true);
       const transferProcess = vi.fn();
       const consumeProcess = vi.fn();
       const terminateProcess = vi.fn(async () => true);
@@ -2666,6 +2669,7 @@ describe('AutopilotCoordinator', () => {
           processPollMs: 0,
           processMaxElapsedMs: 60_000,
           processMaxRssBytes: 12 * 1024 * 1024 * 1024,
+          retryLimit,
         },
         plan: () => ({ plan: currentPlan, identity: planIdentity }),
         session: () => session,
@@ -2685,6 +2689,7 @@ describe('AutopilotCoordinator', () => {
         executorController: {
           resume,
           refresh,
+          interrupt,
           transferProcess,
           consumeProcess,
           terminateProcess,
@@ -2708,6 +2713,7 @@ describe('AutopilotCoordinator', () => {
         runNext,
         resume,
         refresh,
+        interrupt,
         transferProcess,
         consumeProcess,
         terminateProcess,
@@ -2762,6 +2768,875 @@ describe('AutopilotCoordinator', () => {
       },
     );
 
+    it('durably records an executor command before its callback can start work', async () => {
+      const fixture = subject();
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+
+      expect(fixture.state?.executor?.commands).toEqual([
+        expect.objectContaining({
+          status: 'accepted',
+          planIdentity: 'p',
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          threadId: 'thread-l1',
+          generation: 2,
+          trigger: 'partial',
+        }),
+      ]);
+      expect(fixture.resume).toHaveBeenCalledTimes(1);
+    });
+
+    it('interrupts the older working generation and requires a fresh reconciliation', async () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          { ...fixture.activity.subagents[0]!, state: 'working', continuationGeneration: 1 },
+          {
+            ...fixture.activity.subagents[0]!,
+            id: 'thread-l1-g2',
+            threadId: 'thread-l1-g2',
+            taskPath: '/root/l1_g2',
+            state: 'idle',
+            continuationGeneration: 2,
+          },
+        ],
+      } as never;
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.interrupt).toHaveBeenCalledWith('s', 'thread-l1'));
+      expect(fixture.state?.executor).toMatchObject({
+        threadId: 'thread-l1-g2',
+        taskPath: '/root/l1_g2',
+      });
+      expect(fixture.refresh).toHaveBeenCalledWith('s');
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it.each(['stale roster', 'incomplete competing metadata'])(
+      'fences continuation for %s',
+      async (kind) => {
+        const fixture = subject();
+        fixture.activity = {
+          ...fixture.activity,
+          ...(kind === 'stale roster'
+            ? { confidence: 'stale' }
+            : {
+                subagents: [
+                  fixture.activity.subagents[0]!,
+                  { ...fixture.activity.subagents[0]!, id: 'unknown-peer', threadId: undefined },
+                ],
+              }),
+        } as never;
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        expect(fixture.resume).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['two working', 'old owned process', 'reordered activity'])(
+      'chooses the newest durable generation deterministically for %s',
+      async (kind) => {
+        const fixture = subject();
+        const old = {
+          ...fixture.activity.subagents[0]!,
+          state: kind === 'old owned process' ? 'idle' : 'working',
+          continuationGeneration: 1,
+          ...(kind === 'old owned process'
+            ? {
+                ownedProcesses: [
+                  {
+                    processId: 'p',
+                    itemId: 'i',
+                    ownerThreadId: 'thread-l1',
+                    ownerTaskPath: '/root/l1',
+                    ownership: 'executor' as const,
+                    state: 'running' as const,
+                    observedAt: now,
+                    elapsedMs: 0,
+                    cpuPercent: 0,
+                    rssBytes: 0,
+                  },
+                ],
+              }
+            : {}),
+        };
+        const newest = {
+          ...old,
+          id: 'new',
+          threadId: 'new',
+          taskPath: '/root/l1_g2',
+          state: 'working' as const,
+          continuationGeneration: 2,
+          ownedProcesses: [],
+        };
+        fixture.activity = {
+          ...fixture.activity,
+          subagents: kind === 'reordered activity' ? [newest, old] : [old, newest],
+        } as never;
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await vi.waitFor(() => expect(fixture.interrupt).toHaveBeenCalledWith('s', 'thread-l1'));
+        expect(fixture.resume).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([false, true])(
+      'persists the same owner when equal-generation activity is reordered: %s',
+      async (reversed) => {
+        const fixture = subject();
+        const a = {
+          ...fixture.activity.subagents[0]!,
+          id: 'a',
+          threadId: 'a',
+          continuationGeneration: 1,
+        };
+        const b = {
+          ...fixture.activity.subagents[0]!,
+          id: 'b',
+          threadId: 'b',
+          taskPath: '/root/l1-peer',
+          continuationGeneration: 1,
+        };
+        fixture.activity = { ...fixture.activity, subagents: reversed ? [b, a] : [a, b] } as never;
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        expect(fixture.state?.executor?.threadId).toBe('a');
+      },
+    );
+
+    it('resumes only after a fresh roster converges to the durable owner', async () => {
+      const fixture = subject();
+      const old = { ...fixture.activity.subagents[0]!, state: 'working' as const };
+      const owner = {
+        ...old,
+        id: 'new',
+        threadId: 'new',
+        taskPath: '/root/l1_g2',
+        state: 'idle' as const,
+        continuationGeneration: 2,
+      };
+      fixture.activity = { ...fixture.activity, subagents: [old, owner] } as never;
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      expect(fixture.resume).not.toHaveBeenCalled();
+      fixture.activity = { ...fixture.activity, subagents: [owner] } as never;
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'new', 3, { kind: 'partial' });
+    });
+
+    it('recovers a transiently unloaded executor without replacing its physical generation', async () => {
+      const fixture = subject([], 'partial', 'WIP', 2);
+      fixture.resume.mockRejectedValueOnce(new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE'));
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.state?.executor).toMatchObject({ threadId: 'thread-l1', resumeFailures: 1 });
+      expect(fixture.state?.executor?.replacement).toBeUndefined();
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledTimes(2);
+      expect(fixture.state?.executor?.resumeFailures).toBe(1);
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+    });
+
+    it('schedules one fenced root-owned replacement after an exhausted missing executor', async () => {
+      const fixture = subject([], 'partial', 'WIP', 1);
+      fixture.resume.mockRejectedValue(new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE'));
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.state?.executor).toMatchObject({
+        outcome: 'failed',
+        replacement: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          generation: 2,
+          taskName: 'l1_g2',
+          planIdentity: 'p',
+        },
+      });
+      expect(fixture.resume).toHaveBeenCalledOnce();
+      await fixture.runNext();
+      expect(fixture.rootStart).toHaveBeenCalledWith(
+        's',
+        'root-control',
+        1,
+        expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
+      );
+      expect(fixture.resume).toHaveBeenCalledOnce();
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          {
+            ...fixture.activity.subagents[0]!,
+            id: 'thread-l1-g2',
+            threadId: 'thread-l1-g2',
+            taskPath: '/root/l1_g2',
+            continuationGeneration: 2,
+          },
+        ],
+      } as never;
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      expect(fixture.state?.executor).toMatchObject({
+        threadId: 'thread-l1-g2',
+        continuationGeneration: 2,
+      });
+      expect(fixture.state?.executor?.replacement).toBeUndefined();
+      expect(fixture.rootStart).toHaveBeenCalledOnce();
+    });
+
+    it('supersedes a pending replacement when its plan advances before root start', async () => {
+      const fixture = subject([], 'partial', 'WIP', 1);
+      fixture.resume.mockRejectedValue(new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE'));
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await fixture.runNext();
+      fixture.planIdentity = 'advanced';
+      await fixture.runNext();
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+      expect(fixture.state?.executor?.replacement).toBeUndefined();
+      expect(fixture.state?.lastControlId).toBeNull();
+    });
+
+    it('retains the reconciled owner across SQLite restart until the roster converges', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'gestalt-split-brain-restart-'));
+      const path = join(directory, 'relay.sqlite');
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const resume = vi.fn(async () => undefined);
+      const interrupt = vi.fn(async () => true);
+      const refresh = vi.fn(async () => undefined);
+      const old = {
+        id: 'old',
+        threadId: 'old',
+        taskPath: '/root/l1',
+        canonicalTaskName: 'l1',
+        canonicalPosition: 'L1',
+        continuationGeneration: 1,
+        outcome: 'partial' as const,
+        ownedProcesses: [],
+        state: 'working' as const,
+        reason: 'turnCompleted' as const,
+        observedAt: now,
+        lastActivityAt: now,
+      };
+      const owner = {
+        ...old,
+        id: 'new',
+        threadId: 'new',
+        taskPath: '/root/l1_g2',
+        continuationGeneration: 2,
+        state: 'idle' as const,
+      };
+      let activity: import('../../agent-activity/model.js').AgentActivitySnapshot = {
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh' as const,
+        root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
+        aggregateSubagents: 'working' as const,
+        subagents: [old, owner],
+      };
+      const coordinator = (database: DatabaseSync) =>
+        new AutopilotCoordinator({
+          store: new SqliteAutopilotStore(database),
+          now: () => now,
+          policy: {
+            ...defaultAutopilotPolicy,
+            quiescenceMs: 0,
+            executorContinuationBaseMs: 0,
+            executorContinuationMaxMs: 0,
+          },
+          plan: () => ({ plan, identity: 'p' }),
+          session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+          activity: () => activity,
+          pendingInteraction: () => false,
+          reconcile: async () => ({ compatible: true }),
+          schedule: (callback) => {
+            const timer = { callback, cancelled: false, fired: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+          nextControlId: () => 'unused',
+          turnStarter: { start: async () => {} },
+          executorController: {
+            resume,
+            refresh,
+            interrupt,
+            transferProcess: () => {},
+            consumeProcess: () => {},
+            terminateProcess: async () => false,
+          },
+          publish: () => {},
+        });
+      const fireNext = async () => {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await Promise.resolve();
+        await Promise.resolve();
+      };
+      const persisted: AutopilotSession = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'f',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        updatedAt: now,
+      };
+      try {
+        const first = new DatabaseSync(path);
+        migrate(first);
+        first
+          .prepare(
+            "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+          )
+          .run();
+        new SqliteAutopilotStore(first).save(persisted);
+        const initial = coordinator(first);
+        initial.activitySettled('s', 'rootFinalAttempt');
+        await fireNext();
+        await vi.waitFor(() => expect(interrupt).toHaveBeenCalledWith('s', 'old'));
+        expect(new SqliteAutopilotStore(first).find('s')?.executor).toMatchObject({
+          threadId: 'new',
+          taskPath: '/root/l1_g2',
+          continuationGeneration: 2,
+        });
+        expect(resume).not.toHaveBeenCalled();
+        first.close();
+
+        timers.length = 0;
+        activity = { ...activity, subagents: [owner, old] };
+        const reopened = new DatabaseSync(path);
+        migrate(reopened);
+        const restored = coordinator(reopened);
+        restored.restore('s');
+        restored.activitySettled('s', 'rootFinalAttempt');
+        await fireNext();
+        await vi.waitFor(() => expect(interrupt).toHaveBeenCalledTimes(2));
+        expect(new SqliteAutopilotStore(reopened).find('s')?.executor).toMatchObject({
+          threadId: 'new',
+          taskPath: '/root/l1_g2',
+          continuationGeneration: 2,
+        });
+        expect(resume).not.toHaveBeenCalled();
+
+        activity = { ...activity, aggregateSubagents: 'idle', subagents: [owner] };
+        restored.activitySettled('s', 'rootFinalAttempt');
+        await fireNext();
+        await fireNext();
+        await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+        expect(resume).toHaveBeenCalledWith('s', 'new', 3, { kind: 'partial' });
+        expect(refresh).toHaveBeenCalledTimes(2);
+        reopened.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['false', 'throw'] as const)(
+      'keeps reconciliation fenced when interrupt returns %s',
+      async (outcome) => {
+        const fixture = subject();
+        fixture.interrupt.mockImplementation(async () => {
+          if (outcome === 'throw') throw new Error('lost writer');
+          return false;
+        });
+        fixture.activity = {
+          ...fixture.activity,
+          subagents: [
+            { ...fixture.activity.subagents[0]!, state: 'working' },
+            {
+              ...fixture.activity.subagents[0]!,
+              id: 'new',
+              threadId: 'new',
+              taskPath: '/root/l1_g2',
+              continuationGeneration: 2,
+            },
+          ],
+        } as never;
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await vi.waitFor(() => expect(fixture.refresh).toHaveBeenCalled());
+        expect(fixture.resume).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rearms scheduled executor commands once after SQLite restart but never replays issued ambiguity', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'gestalt-executor-command-restart-'));
+      const path = join(directory, 'relay.sqlite');
+      const executorPlan = {
+        ...plan,
+        steps: [
+          {
+            ...plan.steps[0]!,
+            children: [
+              {
+                id: 'l1-1',
+                title: 'child',
+                level: 2 as const,
+                state: 'WIP' as const,
+                priority: 'A' as const,
+                description: {},
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+      const planFingerprint = '[["l1","WIP","UNREVIEWED",[["l1-1","WIP"]]]]';
+      const commandId = createHash('sha256')
+        .update(
+          JSON.stringify(['p', planFingerprint, 'L1', 'l1', '/root/l1', 'thread-l1', 2, 'partial']),
+        )
+        .digest('hex');
+      const stateFor = (status: 'scheduled' | 'issued'): AutopilotSession => ({
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint,
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          threadId: 'thread-l1',
+          l1State: 'WIP',
+          l2State: 'WIP',
+          lastActivityAt: now,
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+          commands: [
+            {
+              commandId,
+              status,
+              planIdentity: 'p',
+              planFingerprint,
+              canonicalPosition: 'L1',
+              canonicalTaskName: 'l1',
+              taskPath: '/root/l1',
+              threadId: 'thread-l1',
+              generation: 2,
+              trigger: 'partial',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        },
+        updatedAt: now,
+      });
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const resume = vi.fn(async () => undefined);
+      const coordinator = (database: DatabaseSync) =>
+        new AutopilotCoordinator({
+          store: new SqliteAutopilotStore(database),
+          now: () => now,
+          policy: { ...defaultAutopilotPolicy, executorContinuationBaseMs: 0 },
+          plan: () => ({ plan: executorPlan, identity: 'p' }),
+          session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+          activity: () => ({
+            ...createAgentActivitySnapshot('s', now),
+            confidence: 'fresh',
+            root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+            subagents: [
+              {
+                id: 'thread-l1',
+                threadId: 'thread-l1',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                outcome: 'partial',
+                ownedProcesses: [],
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt: now,
+                lastActivityAt: now,
+              },
+            ],
+          }),
+          pendingInteraction: () => false,
+          reconcile: async () => ({ compatible: true }),
+          schedule: (callback) => {
+            const timer = { callback, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+          nextControlId: () => 'unused',
+          turnStarter: { start: async () => {} },
+          executorController: {
+            resume,
+            refresh: async () => {},
+            interrupt: async () => false,
+            transferProcess: () => {},
+            consumeProcess: () => {},
+            terminateProcess: async () => false,
+          },
+          publish: () => {},
+        });
+      try {
+        const first = new DatabaseSync(path);
+        migrate(first);
+        first
+          .prepare(
+            "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+          )
+          .run();
+        new SqliteAutopilotStore(first).save(stateFor('scheduled'));
+        first.close();
+
+        const reopened = new DatabaseSync(path);
+        migrate(reopened);
+        const restored = coordinator(reopened);
+        restored.restore('s');
+        restored.restore('s');
+        await vi.waitFor(() => expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1));
+        const scheduledTimer = timers.find((timer) => !timer.cancelled)!;
+        scheduledTimer.callback();
+        scheduledTimer.callback();
+        await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+        expect(new SqliteAutopilotStore(reopened).find('s')?.executor?.commands?.[0]).toMatchObject(
+          { status: 'accepted' },
+        );
+        reopened.close();
+
+        const issue = new DatabaseSync(path);
+        migrate(issue);
+        new SqliteAutopilotStore(issue).save(stateFor('issued'));
+        issue.close();
+        timers.length = 0;
+        const ambiguous = new DatabaseSync(path);
+        migrate(ambiguous);
+        coordinator(ambiguous).restore('s');
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(0);
+        expect(resume).toHaveBeenCalledTimes(1);
+        expect(
+          new SqliteAutopilotStore(ambiguous).find('s')?.executor?.commands?.[0],
+        ).toMatchObject({ status: 'issued' });
+        ambiguous.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
+    it.each(['scheduled', 'issued', 'started'] as const)(
+      'keeps replacement root control %s fenced across a SQLite reopen',
+      async (status) => {
+        const directory = await mkdtemp(join(tmpdir(), 'gestalt-replacement-control-'));
+        const path = join(directory, 'relay.sqlite');
+        const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+        const rootStart = vi.fn(async () => undefined);
+        const replacement = {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskName: 'l1_g2',
+          generation: 2,
+          planIdentity: 'p',
+          planFingerprint: '[["l1","WIP","UNREVIEWED",[]]]',
+        };
+        const settledActivity = {
+          ...createAgentActivitySnapshot('s', now),
+          confidence: 'fresh' as const,
+          root: {
+            ...createAgentActivitySnapshot('s', now).root,
+            state: 'idle' as const,
+            reason: 'turnCompleted' as const,
+          },
+        };
+        const state: AutopilotSession = {
+          sessionId: 's',
+          state: status === 'scheduled' ? 'backoff' : 'monitoring',
+          requestedEnabled: true,
+          planIdentity: 'p',
+          planFingerprint: replacement.planFingerprint,
+          generation: 1,
+          consecutiveNoProgress: 0,
+          nextEvaluationAt: status === 'scheduled' ? now : null,
+          lastControlId: 'replacement-control',
+          stopReason: null,
+          updatedAt: now,
+          executor: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            threadId: 'old',
+            l1State: 'WIP',
+            l2State: 'WIP',
+            lastActivityAt: now,
+            ownedProcesses: [],
+            outcome: 'failed',
+            continuationGeneration: 1,
+            continuationCount: 0,
+            replacement,
+          },
+        };
+        try {
+          const first = new DatabaseSync(path);
+          migrate(first);
+          first
+            .prepare(
+              "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+            )
+            .run();
+          const store = new SqliteAutopilotStore(first);
+          store.save(state);
+          store.saveControl({
+            sessionId: 's',
+            controlId: 'replacement-control',
+            status,
+            createdAt: now,
+            updatedAt: now,
+            failureCode: null,
+            ...(status === 'started' ? { turnId: 'turn-1' } : {}),
+          });
+          first.close();
+          const reopened = new DatabaseSync(path);
+          migrate(reopened);
+          const coordinator = new AutopilotCoordinator({
+            store: new SqliteAutopilotStore(reopened),
+            now: () => now,
+            policy: { ...defaultAutopilotPolicy, executorContinuationMaxMs: 0 },
+            plan: () => ({ plan, identity: 'p' }),
+            session: () => ({
+              state: 'ready',
+              threadId: 'root',
+              activeTurnId: status === 'started' ? 'turn-1' : null,
+            }),
+            activity: () => settledActivity,
+            pendingInteraction: () => false,
+            reconcile: async () => ({ compatible: true }),
+            schedule: (callback) => {
+              const timer = { callback, cancelled: false };
+              timers.push(timer);
+              return () => {
+                timer.cancelled = true;
+              };
+            },
+            nextControlId: () => 'unexpected',
+            turnStarter: { start: rootStart },
+            publish: () => {},
+          });
+          coordinator.restore('s');
+          coordinator.restore('s');
+          if (status === 'scheduled') {
+            const timer = timers.find((candidate) => !candidate.cancelled)!;
+            timer.callback();
+            timer.callback();
+            await Promise.resolve();
+            await Promise.resolve();
+            await vi.waitFor(() => expect(rootStart).toHaveBeenCalledTimes(1));
+            expect(rootStart).toHaveBeenCalledWith(
+              's',
+              'replacement-control',
+              1,
+              expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
+            );
+          } else {
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(rootStart).not.toHaveBeenCalled();
+          }
+          reopened.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it('keeps an adopted replacement owner durable across a SQLite reopen', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'gestalt-replacement-adopted-'));
+      const path = join(directory, 'relay.sqlite');
+      const rootStart = vi.fn(async () => undefined);
+      const resume = vi.fn(async () => undefined);
+      const schedule = vi.fn();
+      const adopted = {
+        canonicalPosition: 'L1',
+        canonicalTaskName: 'l1',
+        taskPath: '/root/l1_g2',
+        threadId: 'thread-l1-g2',
+        l1State: 'WIP' as const,
+        l2State: 'WIP' as const,
+        lastActivityAt: now,
+        ownedProcesses: [],
+        outcome: 'partial' as const,
+        continuationGeneration: 2,
+        continuationCount: 0,
+      };
+      const state: AutopilotSession = {
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: '[["l1","WIP","UNREVIEWED",[]]]',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: 'replacement-control',
+        stopReason: null,
+        updatedAt: now,
+        executor: adopted,
+      };
+      const adoptedActivity = {
+        ...createAgentActivitySnapshot('s', now),
+        confidence: 'fresh' as const,
+        root: {
+          ...createAgentActivitySnapshot('s', now).root,
+          state: 'idle' as const,
+          reason: 'turnCompleted' as const,
+        },
+        subagents: [
+          {
+            id: adopted.threadId,
+            threadId: adopted.threadId,
+            taskPath: adopted.taskPath,
+            canonicalTaskName: 'l1',
+            canonicalPosition: 'L1',
+            continuationGeneration: 2,
+            outcome: 'partial' as const,
+            ownedProcesses: [],
+            state: 'idle' as const,
+            reason: 'turnCompleted' as const,
+            observedAt: now,
+            lastActivityAt: now,
+          },
+        ],
+        aggregateSubagents: 'idle' as const,
+      };
+      try {
+        const first = new DatabaseSync(path);
+        migrate(first);
+        first
+          .prepare(
+            "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+          )
+          .run();
+        const store = new SqliteAutopilotStore(first);
+        store.save(state);
+        store.saveControl({
+          sessionId: 's',
+          controlId: 'replacement-control',
+          status: 'started',
+          createdAt: now,
+          updatedAt: now,
+          failureCode: null,
+          turnId: 'turn-1',
+        });
+        first.close();
+
+        const reopened = new DatabaseSync(path);
+        migrate(reopened);
+        const coordinator = new AutopilotCoordinator({
+          store: new SqliteAutopilotStore(reopened),
+          now: () => now,
+          policy: { ...defaultAutopilotPolicy, executorContinuationMaxMs: 0 },
+          plan: () => ({ plan, identity: 'p' }),
+          session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+          activity: () => adoptedActivity,
+          pendingInteraction: () => false,
+          reconcile: async () => ({ compatible: true }),
+          schedule: () => {
+            schedule();
+            return () => {};
+          },
+          nextControlId: () => 'unexpected',
+          turnStarter: { start: rootStart },
+          executorController: {
+            resume,
+            refresh: async () => {},
+            interrupt: async () => false,
+            transferProcess: () => {},
+            consumeProcess: () => {},
+            terminateProcess: async () => false,
+          },
+          publish: () => {},
+        });
+        coordinator.restore('s');
+        coordinator.restore('s');
+        await vi.waitFor(() => expect(schedule).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() =>
+          expect(new SqliteAutopilotStore(reopened).find('s')?.executor).toMatchObject({
+            threadId: adopted.threadId,
+            taskPath: adopted.taskPath,
+            continuationGeneration: 2,
+          }),
+        );
+        const restored = new SqliteAutopilotStore(reopened).find('s')!;
+        expect(restored.executor?.replacement).toBeUndefined();
+        expect(rootStart).not.toHaveBeenCalled();
+        expect(resume).not.toHaveBeenCalled();
+        reopened.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
+    it('supersedes a durable executor command when its plan fence goes stale', async () => {
+      const fixture = subject();
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      fixture.planIdentity = 'replacement';
+      const armed = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+      armed.fired = true;
+      armed.callback();
+      await vi.waitFor(() =>
+        expect(fixture.state?.executor?.commands?.[0]).toMatchObject({ status: 'superseded' }),
+      );
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('supersedes a scheduled command before a plan revision cancels its timer', async () => {
+      const fixture = subject();
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      fixture.plan = {
+        ...fixture.plan,
+        steps: [
+          {
+            ...fixture.plan.steps[0]!,
+            children: [{ ...fixture.plan.steps[0]!.children[0]!, state: 'TODO' as const }],
+          },
+        ],
+      };
+      fixture.coordinator.planStatusChanged('s');
+      expect(fixture.state?.executor?.commands?.[0]).toMatchObject({ status: 'superseded' });
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('supersedes scheduled ownership before a plan-identity replacement cancels its timer', async () => {
+      const fixture = subject();
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      fixture.planIdentity = 'replacement';
+      fixture.coordinator.planStatusChanged('s');
+      expect(fixture.state?.executor?.commands?.[0]).toMatchObject({ status: 'superseded' });
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
     it.each(['disable', 'manualSend'] as const)(
       'makes a duplicate continuation delivery stale after %s',
       async (boundary) => {
@@ -2775,6 +3650,7 @@ describe('AutopilotCoordinator', () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(fixture.resume).not.toHaveBeenCalled();
+        expect(fixture.state?.executor?.commands?.[0]).toMatchObject({ status: 'cancelled' });
       },
     );
 
@@ -3022,7 +3898,12 @@ describe('AutopilotCoordinator', () => {
       ]);
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();
-      expect(fixture.transferProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-1');
+      expect(fixture.transferProcess).toHaveBeenCalledWith(
+        's',
+        'thread-l1',
+        'process-1',
+        expect.any(String),
+      );
       expect(fixture.resume).not.toHaveBeenCalled();
       await fixture.runNext();
       expect(fixture.refresh).toHaveBeenCalledWith('s');
@@ -3047,12 +3928,62 @@ describe('AutopilotCoordinator', () => {
       ]);
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();
-      expect(fixture.consumeProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-1');
+      expect(fixture.consumeProcess).toHaveBeenCalledWith(
+        's',
+        'thread-l1',
+        'process-1',
+        expect.any(String),
+      );
       await fixture.runNext();
       expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, {
         kind: 'processExited',
         processId: 'process-1',
         resultArtifact: 'thread-l1:item-1',
+      });
+    });
+
+    it('consumes a result from the adopted replacement generation before resuming it', async () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          {
+            ...fixture.activity.subagents[0]!,
+            id: 'thread-l1-g2',
+            threadId: 'thread-l1-g2',
+            taskPath: '/root/l1_g2',
+            continuationGeneration: 2,
+            ownedProcesses: [
+              {
+                processId: 'replacement-result',
+                itemId: 'item-1',
+                ownerThreadId: 'thread-l1-g2',
+                ownerTaskPath: '/root/l1_g2',
+                ownership: 'supervisor',
+                state: 'exited-awaiting-result',
+                observedAt: now,
+                elapsedMs: 1,
+                cpuPercent: 0,
+                rssBytes: 0,
+                resultArtifact: 'thread-l1-g2:item-1',
+              },
+            ],
+          },
+        ],
+      } as never;
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.consumeProcess).toHaveBeenCalledWith(
+        's',
+        'thread-l1-g2',
+        'replacement-result',
+        expect.any(String),
+      );
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1-g2', 3, {
+        kind: 'processExited',
+        processId: 'replacement-result',
+        resultArtifact: 'thread-l1-g2:item-1',
       });
     });
 
@@ -3073,12 +4004,425 @@ describe('AutopilotCoordinator', () => {
       ]);
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();
-      expect(fixture.terminateProcess).toHaveBeenCalledWith('s', 'thread-l1', 'process-large');
+      expect(fixture.terminateProcess).toHaveBeenCalledWith(
+        's',
+        'thread-l1',
+        'process-large',
+        expect.any(String),
+        { itemId: 'item-large' },
+      );
       await fixture.runNext();
       expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, {
         kind: 'processResourceLimit',
         processId: 'process-large',
       });
+    });
+
+    it('keeps a resource-limited process terminal through a duplicate stale observation', async () => {
+      const fixture = subject([
+        {
+          processId: 'process-large',
+          itemId: 'item-large',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'detached-active',
+          observedAt: now,
+          elapsedMs: 60_001,
+          cpuPercent: 100,
+          rssBytes: 13 * 1024 * 1024 * 1024,
+        },
+      ]);
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      await vi.waitFor(() =>
+        expect(fixture.state?.executor?.ownedProcesses[0]?.state).toBe('terminated-for-budget'),
+      );
+      fixture.coordinator.activitySettled('s', 'processObserved');
+      const staleObservation = fixture.timers.at(-1)!;
+      staleObservation.fired = true;
+      staleObservation.callback();
+      await vi.waitFor(() =>
+        expect(fixture.state?.executor?.ownedProcesses[0]?.state).toBe('terminated-for-budget'),
+      );
+      expect(fixture.terminateProcess).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      {
+        kind: 'transfer',
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'executor' as const,
+          state: 'running' as const,
+          observedAt: now,
+          elapsedMs: 1_000,
+          cpuPercent: 1,
+          rssBytes: 1,
+        },
+      },
+      {
+        kind: 'consume',
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor' as const,
+          state: 'exited-awaiting-result' as const,
+          observedAt: now,
+          elapsedMs: 1_000,
+          cpuPercent: 0,
+          rssBytes: 0,
+          resultArtifact: 'thread-l1:item-1',
+        },
+      },
+      {
+        kind: 'terminate',
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor' as const,
+          state: 'detached-active' as const,
+          observedAt: now,
+          elapsedMs: 60_001,
+          cpuPercent: 1,
+          rssBytes: 13 * 1024 * 1024 * 1024,
+        },
+      },
+    ] as const)(
+      'replays an issued $kind action with its same durable idempotency key after an external fault',
+      async ({ kind, process }) => {
+        const fixture = subject([process]);
+        const action =
+          kind === 'transfer'
+            ? fixture.transferProcess
+            : kind === 'consume'
+              ? fixture.consumeProcess
+              : fixture.terminateProcess;
+        if (kind === 'terminate')
+          fixture.terminateProcess
+            .mockRejectedValueOnce(new Error('lost'))
+            .mockResolvedValueOnce(true);
+        else
+          action.mockImplementationOnce(() => {
+            throw new Error('lost');
+          });
+
+        fixture.coordinator.turnCompleted('s');
+        await fixture.runNext();
+        expect(action).toHaveBeenCalledTimes(1);
+        expect(fixture.state?.executor?.commands?.at(-1)).toMatchObject({
+          status: 'issued',
+          processAction: { kind, processKey: expect.any(String) },
+        });
+
+        fixture.coordinator.turnCompleted('s');
+        await fixture.runNext();
+        expect(action).toHaveBeenCalledTimes(2);
+        const actionIds = action.mock.calls.map((call) => call[3]);
+        expect(new Set(actionIds).size).toBe(1);
+        await vi.waitFor(() =>
+          expect(
+            fixture.state?.executor?.commands?.find(
+              (command) => command.processAction?.kind === kind,
+            )?.status,
+          ).toBe('accepted'),
+        );
+      },
+    );
+
+    it.each([
+      {
+        kind: 'transfer' as const,
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'executor' as const,
+          state: 'running' as const,
+          observedAt: now,
+          elapsedMs: 1,
+          cpuPercent: 1,
+          rssBytes: 1,
+        },
+      },
+      {
+        kind: 'consume' as const,
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor' as const,
+          state: 'exited-awaiting-result' as const,
+          observedAt: now,
+          elapsedMs: 1,
+          cpuPercent: 0,
+          rssBytes: 0,
+          resultArtifact: 'thread-l1:item-1',
+        },
+      },
+      {
+        kind: 'terminate' as const,
+        process: {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor' as const,
+          state: 'detached-active' as const,
+          observedAt: now,
+          elapsedMs: 60_001,
+          cpuPercent: 1,
+          rssBytes: 13 * 1024 * 1024 * 1024,
+        },
+      },
+    ] as const)(
+      'replays an issued $kind process action exactly once with its stable id after a SQLite reopen',
+      async ({ kind, process }) => {
+        const directory = await mkdtemp(join(tmpdir(), 'gestalt-process-action-restart-'));
+        const path = join(directory, 'relay.sqlite');
+        const processKey = JSON.stringify([
+          process.ownerThreadId,
+          process.ownerTaskPath,
+          process.processId,
+          process.itemId,
+          null,
+        ]);
+        const planFingerprint = '[["l1","WIP","UNREVIEWED",[["l1-1","WIP"]]]]';
+        const commandId = createHash('sha256')
+          .update(
+            JSON.stringify([
+              'p',
+              planFingerprint,
+              'L1',
+              'l1',
+              '/root/l1',
+              'thread-l1',
+              1,
+              kind,
+              processKey,
+            ]),
+          )
+          .digest('hex');
+        const action = vi.fn(async (actionId: string) => {
+          void actionId;
+          return true;
+        });
+        const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+        const executorPlan = {
+          ...plan,
+          steps: [
+            {
+              ...plan.steps[0]!,
+              children: [
+                {
+                  id: 'l1-1',
+                  title: 'child',
+                  level: 2 as const,
+                  state: 'WIP' as const,
+                  priority: 'A' as const,
+                  description: {},
+                  children: [],
+                },
+              ],
+            },
+          ],
+        };
+        const state: AutopilotSession = {
+          sessionId: 's',
+          state: 'monitoring',
+          requestedEnabled: true,
+          planIdentity: 'p',
+          planFingerprint,
+          generation: 1,
+          consecutiveNoProgress: 0,
+          nextEvaluationAt: null,
+          lastControlId: null,
+          stopReason: null,
+          updatedAt: now,
+          executor: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskPath: '/root/l1',
+            threadId: 'thread-l1',
+            l1State: 'WIP',
+            l2State: 'WIP',
+            lastActivityAt: now,
+            ownedProcesses: [process],
+            outcome: 'partial',
+            continuationGeneration: 1,
+            continuationCount: 0,
+            commands: [
+              {
+                commandId,
+                status: 'issued',
+                planIdentity: 'p',
+                planFingerprint,
+                canonicalPosition: 'L1',
+                canonicalTaskName: 'l1',
+                taskPath: '/root/l1',
+                threadId: 'thread-l1',
+                generation: 1,
+                trigger: 'partial',
+                processAction: { kind, processKey },
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+          },
+        };
+        try {
+          const first = new DatabaseSync(path);
+          migrate(first);
+          first
+            .prepare(
+              "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+            )
+            .run();
+          new SqliteAutopilotStore(first).save(state);
+          first.close();
+
+          const reopened = new DatabaseSync(path);
+          migrate(reopened);
+          const coordinator = new AutopilotCoordinator({
+            store: new SqliteAutopilotStore(reopened),
+            now: () => now,
+            policy: {
+              ...defaultAutopilotPolicy,
+              quiescenceMs: 0,
+              processPollMs: 0,
+              processMaxElapsedMs: 60_000,
+              processMaxRssBytes: 12 * 1024 * 1024 * 1024,
+            },
+            plan: () => ({ plan: executorPlan, identity: 'p' }),
+            session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+            activity: () => ({
+              ...createAgentActivitySnapshot('s', now),
+              confidence: 'fresh',
+              root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' },
+              aggregateSubagents: 'idle',
+              subagents: [
+                {
+                  id: 'thread-l1',
+                  threadId: 'thread-l1',
+                  taskPath: '/root/l1',
+                  canonicalTaskName: 'l1',
+                  canonicalPosition: 'L1',
+                  continuationGeneration: 1,
+                  outcome: 'partial',
+                  ownedProcesses: [process],
+                  state: 'idle',
+                  reason: 'turnCompleted',
+                  observedAt: now,
+                  lastActivityAt: now,
+                },
+              ],
+            }),
+            pendingInteraction: () => false,
+            reconcile: async () => ({ compatible: true }),
+            schedule: (callback) => {
+              const timer = { callback, cancelled: false };
+              timers.push(timer);
+              return () => {
+                timer.cancelled = true;
+              };
+            },
+            nextControlId: () => 'unused',
+            turnStarter: { start: async () => {} },
+            executorController: {
+              resume: async () => {},
+              refresh: async () => {},
+              interrupt: async () => false,
+              transferProcess: (_sessionId, _threadId, _processId, actionId) => {
+                action(actionId);
+              },
+              consumeProcess: (_sessionId, _threadId, _processId, actionId) => {
+                action(actionId);
+              },
+              terminateProcess: async (_sessionId, _threadId, _processId, actionId) => {
+                action(actionId);
+                return true;
+              },
+            },
+            publish: () => {},
+          });
+          coordinator.restore('s');
+          coordinator.turnCompleted('s');
+          const timer = timers.find((candidate) => !candidate.cancelled)!;
+          timer.callback();
+          await vi.waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+          expect(action).toHaveBeenCalledWith(commandId);
+          await vi.waitFor(() =>
+            expect(
+              new SqliteAutopilotStore(reopened)
+                .find('s')
+                ?.executor?.commands?.find((command) => command.commandId === commandId)?.status,
+            ).toBe('accepted'),
+          );
+          reopened.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it('does not apply a late process action to a replacement generation with a reused process id', async () => {
+      const fixture = subject([
+        {
+          processId: 'reused',
+          itemId: 'old-item',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'exited-awaiting-result',
+          observedAt: now,
+          elapsedMs: 1,
+          cpuPercent: 0,
+          rssBytes: 0,
+          resultArtifact: 'thread-l1:old-item',
+        },
+      ]);
+      fixture.consumeProcess.mockImplementationOnce(() => {
+        fixture.activity = {
+          ...fixture.activity,
+          subagents: [
+            {
+              ...fixture.activity.subagents[0]!,
+              threadId: 'thread-l1-g2',
+              taskPath: '/root/l1_g2',
+              continuationGeneration: 2,
+              ownedProcesses: [
+                {
+                  processId: 'reused',
+                  itemId: 'new-item',
+                  ownerThreadId: 'thread-l1-g2',
+                  ownerTaskPath: '/root/l1_g2',
+                  ownership: 'supervisor',
+                  state: 'exited-awaiting-result',
+                  observedAt: now,
+                  elapsedMs: 1,
+                  cpuPercent: 0,
+                  rssBytes: 0,
+                  resultArtifact: 'thread-l1-g2:new-item',
+                },
+              ],
+            },
+          ],
+        } as never;
+      });
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.state?.executor?.commands?.at(-1)).toMatchObject({ status: 'superseded' });
+      expect(fixture.state?.executor?.continuationGeneration).toBe(1);
+      expect(fixture.resume).not.toHaveBeenCalled();
     });
 
     it('launches a fresh physical generation for a failed historical canonical executor', async () => {
@@ -3098,6 +4442,28 @@ describe('AutopilotCoordinator', () => {
         }),
       );
       expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('rearms an interrupted replacement root turn with the same physical generation', async () => {
+      const fixture = subject([], 'failed');
+      fixture.rootStart.mockRejectedValueOnce(new Error('root writer interrupted'));
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.rootStart).toHaveBeenCalledOnce());
+      // The failed root start never adopted an owner, so retrying must retain
+      // the durable g2 identity rather than manufacturing g3.
+      fixture.coordinator.evaluate('s');
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.rootStart).toHaveBeenCalledTimes(2));
+      expect(
+        fixture.rootStart.mock.calls.map(
+          (call) => (call as unknown as [string, string, number, unknown])[3],
+        ),
+      ).toEqual([
+        expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
+        expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
+      ]);
     });
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {

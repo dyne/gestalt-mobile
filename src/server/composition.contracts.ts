@@ -15,6 +15,7 @@ import WebSocket from 'ws';
 
 import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
 import { AUTOPILOT_CONTINUATION_PROMPT } from './features/autopilot/application/policy.js';
+import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import {
   authorizationSessionId,
@@ -1971,6 +1972,259 @@ describe('production composition', () => {
           candidate.requests.filter((call) => call.method === 'turn/start'),
         )[0]?.params,
       ).toMatchObject({ threadId: 'child-1' });
+      await fixture.app.close();
+    });
+
+    it('production treats only a confirmed missing rollout as an executor rejection and starts one fenced replacement', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotActivity: (sessionId) => {
+          const observedAt = new Date().toISOString();
+          return {
+            sessionId,
+            rootThreadId: 'thread-1',
+            root: {
+              state: 'idle',
+              reason: 'turnCompleted',
+              observedAt,
+              lastActivityAt: observedAt,
+            },
+            subagents: [
+              {
+                id: 'child-1',
+                threadId: 'child-1',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                outcome: 'partial',
+                ownedProcesses: [],
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+            ],
+            aggregateSubagents: 'idle',
+            confidence: 'fresh',
+          };
+        },
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      // Session setup may have used a retired writer; apply the failure seam to
+      // every live writer that can own the executor continuation.
+      for (const handle of fixture.handles)
+        handle.respond = (method, params) => {
+          if (method === 'turn/start' && (params as { threadId?: string }).threadId === 'child-1')
+            throw new CodexJsonRpcError(-32600, 'no rollout found for thread id child-1');
+          return undefined;
+        };
+      const fireNext = async () => {
+        await vi.waitFor(() =>
+          expect(timers.some((candidate) => !candidate.cancelled && !candidate.fired)).toBe(true),
+        );
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await Promise.resolve();
+        await Promise.resolve();
+      };
+
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: true },
+          })
+        ).statusCode,
+      ).toBe(200);
+      // Three confirmed rejections consume the bounded executor retry budget;
+      // the fourth scheduled control is the root-owned physical g2 handoff.
+      await fireNext();
+      await fireNext();
+      await fireNext();
+      await fireNext();
+      await fireNext();
+      await fireNext();
+      await fireNext();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles.flatMap((candidate) =>
+            candidate.requests.filter((request) => request.method === 'turn/start'),
+          ),
+        ).toHaveLength(4),
+      );
+      const starts = fixture.handles.flatMap((candidate) =>
+        candidate.requests.filter((request) => request.method === 'turn/start'),
+      );
+      expect(starts.slice(0, 3).map((request) => request.params)).toEqual(
+        Array.from({ length: 3 }, () => expect.objectContaining({ threadId: 'child-1' })),
+      );
+      // The root control may reacquire a new app-server writer after the
+      // rejected child continuation; it must never target the dead child.
+      expect((starts[3]?.params as { threadId?: string }).threadId).not.toBe('child-1');
+      expect(
+        (starts[3]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text,
+      ).toContain('Launch task_name l1_g2 for canonical L1');
+      expect(
+        (starts[3]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text,
+      ).toContain('explicit model selected by the supervisor');
+      // Capacity recovery is allowed only for the active root control. It
+      // recycles that writer but must retain the one durable g2 handoff.
+      const rootHandle = fixture.handles.find((candidate) =>
+        candidate.requests.some(
+          (request) =>
+            request.method === 'turn/start' &&
+            (request.params as { threadId?: string }).threadId !== 'child-1',
+        ),
+      )!;
+      const active = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const writersBeforeRecovery = fixture.handles.length;
+      await expect(
+        rootHandle.request!({
+          id: 992,
+          method: 'item/tool/call',
+          params: {
+            threadId: active.threadId,
+            turnId: active.activeTurnId,
+            tool: 'gestalt_agent_capacity_recovery',
+            arguments: { version: 1, reason: 'agentThreadLimit' },
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await expect.poll(() => fixture.handles.length).toBeGreaterThan(writersBeforeRecovery);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start')
+          .map(
+            (request) => (request.params as { input?: Array<{ text?: string }> }).input?.[0]?.text,
+          ),
+      ).not.toContain(expect.stringContaining('l1_g3'));
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const lifecycle = database
+        .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+        .get(fixture.sessionId) as { lifecycle_json: string };
+      const replacements = database
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.executor-replacement-scheduled'",
+        )
+        .get(fixture.sessionId) as { count: number };
+      database.close();
+      expect(JSON.parse(lifecycle.lifecycle_json)).toMatchObject({
+        executor: {
+          replacement: { taskName: 'l1_g2', canonicalTaskName: 'l1', generation: 2 },
+          commands: expect.arrayContaining([
+            expect.objectContaining({ status: 'failed', threadId: 'child-1' }),
+          ]),
+        },
+      });
+      expect(replacements.count).toBe(1);
+      await fixture.app.close();
+    });
+
+    it('production leaves a transport-lost executor command issued and never replays it as a replacement', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotActivity: (sessionId) => {
+          const observedAt = new Date().toISOString();
+          return {
+            sessionId,
+            rootThreadId: 'thread-1',
+            root: {
+              state: 'idle',
+              reason: 'turnCompleted',
+              observedAt,
+              lastActivityAt: observedAt,
+            },
+            subagents: [
+              {
+                id: 'child-1',
+                threadId: 'child-1',
+                taskPath: '/root/l1',
+                canonicalTaskName: 'l1',
+                canonicalPosition: 'L1',
+                continuationGeneration: 1,
+                outcome: 'partial',
+                ownedProcesses: [],
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+            ],
+            aggregateSubagents: 'idle',
+            confidence: 'fresh',
+          };
+        },
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      for (const handle of fixture.handles)
+        handle.respond = (method, params) => {
+          if (method === 'turn/start' && (params as { threadId?: string }).threadId === 'child-1')
+            throw new Error('transport dropped after request write');
+          return undefined;
+        };
+      expect(
+        (
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: true },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
+      timer.fired = true;
+      timer.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles
+            .flatMap((candidate) => candidate.requests)
+            .filter((request) => request.method === 'turn/start'),
+        ).toHaveLength(1),
+      );
+      // Drive the bounded reinspection once: the durable issued command blocks replay.
+      const refresh = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
+      refresh.fired = true;
+      refresh.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const lifecycle = database
+        .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+        .get(fixture.sessionId) as { lifecycle_json: string };
+      const replacements = database
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.executor-replacement-scheduled'",
+        )
+        .get(fixture.sessionId) as { count: number };
+      database.close();
+      expect(JSON.parse(lifecycle.lifecycle_json)).toMatchObject({
+        executor: {
+          commands: [expect.objectContaining({ status: 'issued', threadId: 'child-1' })],
+        },
+      });
+      expect(replacements.count).toBe(0);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(1);
       await fixture.app.close();
     });
 

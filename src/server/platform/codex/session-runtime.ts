@@ -124,6 +124,8 @@ class SessionResource {
   readonly spawnedAgentModels = new Map<string, string>();
   readonly attemptedAgentModelRecovery = new Set<string>();
   readonly ownedChildProcesses = new Map<string, OwnedChildProcess>();
+  /** Retries from a durable Autopilot issued command reuse this opaque action id. */
+  readonly completedProcessActions = new Map<string, boolean>();
   readonly turnThreads = new Map<string, string>();
   readonly childThreads = new Set<string>();
 
@@ -403,6 +405,18 @@ export class CodexSessionRuntime {
     await resource.process.rpc.request('turn/interrupt', { threadId: session.threadId, turnId });
   }
 
+  async interruptExecutor(session: RelaySessionSnapshot, threadId: string): Promise<boolean> {
+    const resource = this.sessions.get(session.id);
+    if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
+    const history = await this.decodeHistory(resource.process, threadId, resource);
+    if (!history.activeTurnId) return false;
+    await resource.process.rpc.request('turn/interrupt', {
+      threadId,
+      turnId: history.activeTurnId,
+    });
+    return true;
+  }
+
   async queueTurnInput(
     session: RelaySessionSnapshot,
     turnId: string,
@@ -600,19 +614,47 @@ export class CodexSessionRuntime {
     );
   }
 
-  consumeChildProcessResult(sessionId: string, childThreadId: string, processId: string): void {
-    this.sessions
-      .get(sessionId)
-      ?.ownedChildProcesses.delete(childProcessKey(childThreadId, processId));
+  consumeChildProcessResult(
+    sessionId: string,
+    childThreadId: string,
+    processId: string,
+    actionId?: string,
+  ): void {
+    const owned = this.sessions.get(sessionId);
+    if (!owned || (actionId && owned.completedProcessActions.has(actionId))) return;
+    owned.ownedChildProcesses.delete(childProcessKey(childThreadId, processId));
+    if (actionId) owned.completedProcessActions.set(actionId, true);
   }
 
   async terminateChildProcess(
     session: RelaySessionSnapshot,
     childThreadId: string,
     processId: string,
+    actionId?: string,
+    expected?: Pick<OwnedChildProcess, 'itemId' | 'osPid'>,
   ): Promise<boolean> {
     const owned = this.sessions.get(session.id);
     if (!owned) return false;
+    if (actionId && owned.completedProcessActions.has(actionId))
+      return owned.completedProcessActions.get(actionId)!;
+    // The action journal is deliberately runtime-local.  After an app-server
+    // restart, reconcile the live terminal list before repeating termination:
+    // a process id (and OS pid) can already name a later command instance.
+    // Absence of this exact instance means the target has already converged;
+    // never send a second terminate RPC merely to rediscover that fact.
+    if (expected) {
+      const active = await this.listChildBackgroundTerminals(owned, { id: childThreadId });
+      const current = active.find(
+        (candidate) =>
+          candidate.processId === processId &&
+          candidate.itemId === expected.itemId &&
+          (expected.osPid === undefined || candidate.osPid === expected.osPid),
+      );
+      if (!current) {
+        if (actionId) owned.completedProcessActions.set(actionId, true);
+        return true;
+      }
+    }
     const result = await owned.process.rpc.request('thread/backgroundTerminals/terminate', {
       threadId: childThreadId,
       processId,
@@ -624,6 +666,7 @@ export class CodexSessionRuntime {
       if (process)
         owned.ownedChildProcesses.set(key, { ...process, state: 'terminated-for-budget' });
     }
+    if (actionId) owned.completedProcessActions.set(actionId, terminated);
     return terminated;
   }
 
