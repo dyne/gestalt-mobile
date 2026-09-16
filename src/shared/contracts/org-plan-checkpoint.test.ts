@@ -69,6 +69,9 @@ describe('Org Plan checkpoint contract', () => {
     expect(parseOrgPlanCheckpoint({ ...completed, verdict: 'ACCEPT' })).toBeNull();
     expect(parseOrgPlanCheckpoint({ ...completed, status: 'WIP' })).toBeNull();
     expect(parseOrgPlanCheckpoint({ ...completed, files: undefined })).toBeNull();
+    // An unknown protocol revision must fail closed so composition can retain
+    // the active root boundary rather than releasing a speculative handoff.
+    expect(parseOrgPlanCheckpoint({ ...completed, version: 2 })).toBeNull();
   });
 
   it('directs the root to publish the accepted boundary before any more tools', () => {

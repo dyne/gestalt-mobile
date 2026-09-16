@@ -58,8 +58,18 @@ export interface SupervisedExecutorController {
   interrupt(sessionId: string, threadId: string): Promise<boolean>;
   refresh(sessionId: string): Promise<void>;
   /** actionId makes external process operations safe to repeat after a durable issued boundary. */
-  transferProcess(sessionId: string, threadId: string, processId: string, actionId: string): void;
-  consumeProcess(sessionId: string, threadId: string, processId: string, actionId: string): void;
+  transferProcess(
+    sessionId: string,
+    threadId: string,
+    processId: string,
+    actionId: string,
+  ): void | Promise<void>;
+  consumeProcess(
+    sessionId: string,
+    threadId: string,
+    processId: string,
+    actionId: string,
+  ): void | Promise<void>;
   terminateProcess(
     sessionId: string,
     threadId: string,

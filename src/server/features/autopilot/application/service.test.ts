@@ -1621,13 +1621,13 @@ describe('AutopilotCoordinator', () => {
       completed: true,
     });
     // A parent review/reopen cycle is not a child completion epoch.
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1-replay', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1-replay', now)).toBe(false);
     planState = {
       ...planState,
       steps: [...planState.steps, { ...planState.steps[0]!, id: 'append', children: [] }],
     };
     coordinator.planStatusChanged('s');
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(false);
     planState = {
       ...planState,
       steps: [
@@ -1832,9 +1832,156 @@ describe('AutopilotCoordinator', () => {
         ],
         reportedL2Ids: ['["l1","l2"]'],
       });
-      expect(coordinator(reopened).checkpointAccepted('s', checkpoint, 'replay', now)).toBe(true);
+      expect(coordinator(reopened).checkpointAccepted('s', checkpoint, 'replay', now)).toBe(false);
       await Promise.resolve();
       await Promise.resolve();
+      reopened.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('restores a checkpointed root boundary without a duplicate report, then resumes one executor', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-checkpoint-executor-restart-'));
+    const path = join(directory, 'relay.sqlite');
+    const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+    const resume = vi.fn(async () => undefined);
+    const published: string[] = [];
+    let session = {
+      state: 'ready',
+      threadId: 'root',
+      activeTurnId: 'turn-checkpoint' as string | null,
+    };
+    const checkpointPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
+      ...plan,
+      steps: [
+        {
+          ...plan.steps[0]!,
+          children: [
+            {
+              id: 'l2',
+              title: 'l2',
+              level: 2,
+              state: 'DONE',
+              priority: 'A',
+              description: {},
+              children: [],
+            },
+          ],
+        },
+      ],
+    };
+    const checkpoint = {
+      version: 1 as const,
+      kind: 'l2Completed' as const,
+      planIdentity: 'p',
+      l1Id: 'l1',
+      l2Id: 'l2',
+      position: 'L1.1',
+      status: 'DONE' as const,
+      changes: 'x',
+      files: 'x',
+      tests: 'x',
+    };
+    const activity = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh' as const,
+      root: {
+        ...createAgentActivitySnapshot('s', now).root,
+        state: 'idle' as const,
+        reason: 'turnCompleted' as const,
+      },
+      aggregateSubagents: 'idle' as const,
+      subagents: [
+        {
+          id: 'thread-l1',
+          threadId: 'thread-l1',
+          taskPath: '/root/l1',
+          canonicalTaskName: 'l1',
+          canonicalPosition: 'L1',
+          continuationGeneration: 1,
+          outcome: 'partial' as const,
+          ownedProcesses: [],
+          state: 'idle' as const,
+          reason: 'turnCompleted' as const,
+          observedAt: now,
+          lastActivityAt: now,
+        },
+      ],
+    };
+    const coordinator = (database: DatabaseSync) =>
+      new AutopilotCoordinator({
+        store: new SqliteAutopilotStore(database),
+        now: () => now,
+        policy: {
+          ...defaultAutopilotPolicy,
+          quiescenceMs: 0,
+          executorContinuationBaseMs: 0,
+          executorContinuationMaxMs: 0,
+        },
+        plan: () => ({ plan: checkpointPlan, identity: 'p' }),
+        session: () => session,
+        activity: () => activity,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        nextControlId: () => 'unexpected-root-control',
+        turnStarter: { start: async () => {} },
+        executorController: {
+          resume,
+          refresh: async () => {},
+          interrupt: async () => false,
+          transferProcess: () => {},
+          consumeProcess: () => {},
+          terminateProcess: async () => false,
+        },
+        publish: (_sessionId, type) => published.push(type),
+      });
+    try {
+      const first = new DatabaseSync(path);
+      migrate(first);
+      first
+        .prepare(
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+        )
+        .run();
+      const active = coordinator(first);
+      active.supervisionStarted('s');
+      expect(active.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(true);
+      expect(published.filter((type) => type === 'org-plan.step-checkpointed')).toHaveLength(1);
+      first.close();
+
+      const reopened = new DatabaseSync(path);
+      migrate(reopened);
+      const restored = coordinator(reopened);
+      restored.restore('s');
+      // Replayed delivery is accepted idempotently, but cannot report or start
+      // the child while the durable owning root turn remains active.
+      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(true);
+      expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(0);
+      expect(resume).not.toHaveBeenCalled();
+      expect(published.filter((type) => type === 'org-plan.step-checkpointed')).toHaveLength(1);
+
+      session = { ...session, activeTurnId: null };
+      expect(restored.turnCompleted('s')).toBe(true);
+      await vi.waitFor(() => expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(1));
+      const continuation = timers.find((timer) => !timer.cancelled)!;
+      continuation.callback();
+      continuation.callback();
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+      expect(resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(new SqliteAutopilotStore(reopened).find('s')?.checkpoints).toMatchObject({
+        pendingTurnId: null,
+        pendingKind: null,
+        reportedL2Ids: ['["l1","l2"]'],
+      });
+      expect(published.filter((type) => type === 'org-plan.step-reported')).toHaveLength(1);
+      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(false);
       reopened.close();
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -2602,6 +2749,7 @@ describe('AutopilotCoordinator', () => {
       const terminateProcess = vi.fn(async () => true);
       const rootStart = vi.fn(async () => undefined);
       const published: string[] = [];
+      const diagnostic = vi.fn();
       const controls = new Map<string, import('./ports.js').AutopilotControl>();
       let planIdentity = 'p';
       let currentPlan = {
@@ -2695,6 +2843,7 @@ describe('AutopilotCoordinator', () => {
           terminateProcess,
         },
         publish: (_sessionId, type) => published.push(type),
+        diagnostic,
       });
       const runNext = async () => {
         const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
@@ -2720,6 +2869,7 @@ describe('AutopilotCoordinator', () => {
         rootStart,
         timers,
         published,
+        diagnostic,
         get state() {
           return state;
         },
@@ -2789,6 +2939,204 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.resume).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['synchronous', 'asynchronous'] as const)(
+      'contains an ambiguous %s resume failure and keeps the serial queue live',
+      async (delivery) => {
+        const fixture = subject();
+        if (delivery === 'synchronous')
+          fixture.resume.mockImplementationOnce(() => {
+            throw new Error('transport lost');
+          });
+        else fixture.resume.mockRejectedValueOnce(new Error('transport lost'));
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await fixture.runNext();
+        await vi.waitFor(() =>
+          expect(
+            fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+          ).toHaveLength(1),
+        );
+        expect(fixture.state).toMatchObject({
+          requestedEnabled: true,
+          state: 'monitoring',
+          stopReason: 'reconcileFailed',
+        });
+        await fixture.runNext();
+        expect(fixture.refresh).toHaveBeenCalledOnce();
+        expect(
+          fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+        ).toHaveLength(1);
+      },
+    );
+
+    it.each(['synchronous', 'asynchronous'] as const)(
+      'contains an %s refresh failure and retries through a later queued operation',
+      async (delivery) => {
+        const fixture = subject([
+          {
+            processId: 'process-1',
+            itemId: 'item-1',
+            ownerThreadId: 'thread-l1',
+            ownerTaskPath: '/root/l1',
+            ownership: 'executor',
+            state: 'running',
+            observedAt: now,
+            elapsedMs: 1,
+            cpuPercent: 1,
+            rssBytes: 1,
+          },
+        ]);
+        if (delivery === 'synchronous')
+          fixture.refresh.mockImplementationOnce(() => {
+            throw new Error('refresh lost');
+          });
+        else fixture.refresh.mockRejectedValueOnce(new Error('refresh lost'));
+        fixture.coordinator.turnCompleted('s');
+        await fixture.runNext();
+        await fixture.runNext();
+        await vi.waitFor(() =>
+          expect(
+            fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+          ).toHaveLength(1),
+        );
+        expect(fixture.state).toMatchObject({
+          requestedEnabled: true,
+          stopReason: 'reconcileFailed',
+        });
+        await fixture.runNext();
+        expect(fixture.refresh).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it.each(['persistence', 'publication'] as const)(
+      'contains a %s failure without poisoning later queued work',
+      async (failure) => {
+        const fixture = subject();
+        const internal = fixture.coordinator as unknown as {
+          deps: {
+            store: { save(state: AutopilotSession): void };
+            publish(sessionId: string, type: string, payload: unknown, occurredAt: string): void;
+          };
+        };
+        if (failure === 'persistence') {
+          const store = internal.deps.store;
+          let failed = false;
+          internal.deps.store = {
+            ...store,
+            save(state) {
+              if (!failed) {
+                failed = true;
+                throw new Error('PERSISTENCE_UNAVAILABLE');
+              }
+              store.save(state);
+            },
+          };
+        } else {
+          const publish = internal.deps.publish;
+          let failed = false;
+          internal.deps.publish = (sessionId, type, payload, occurredAt) => {
+            if (!failed) {
+              failed = true;
+              throw new Error('OUTBOX_PUBLICATION_LOST');
+            }
+            publish(sessionId, type, payload, occurredAt);
+          };
+        }
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await vi.waitFor(() =>
+          expect(
+            fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+          ).toHaveLength(1),
+        );
+        expect(fixture.state).toMatchObject({
+          requestedEnabled: true,
+          stopReason: 'reconcileFailed',
+        });
+        expect(fixture.diagnostic).toHaveBeenCalledWith(
+          's',
+          failure === 'persistence' ? 'operationFailed:PERSISTENCE' : 'operationFailed:PUBLICATION',
+        );
+        await fixture.runNext();
+        expect(fixture.refresh).toHaveBeenCalledOnce();
+      },
+    );
+
+    it('keeps a persistent store outage observable and re-enters work once persistence returns', async () => {
+      const fixture = subject();
+      const internal = fixture.coordinator as unknown as {
+        deps: { store: { save(state: AutopilotSession): void } };
+      };
+      const store = internal.deps.store;
+      internal.deps.store = {
+        ...store,
+        save: () => {
+          throw new Error('PERSISTENCE_UNAVAILABLE');
+        },
+      };
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      expect(fixture.diagnostic).toHaveBeenCalledWith('s', 'operationFailed:PERSISTENCE');
+      expect(
+        fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+      ).toHaveLength(0);
+      expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true);
+
+      internal.deps.store = store;
+      await fixture.runNext();
+      expect(fixture.refresh).toHaveBeenCalledOnce();
+    });
+
+    it('arms a store-independent retry when a lifecycle read fails after timer delivery', async () => {
+      const fixture = subject();
+      const internal = fixture.coordinator as unknown as {
+        deps: { store: import('./ports.js').AutopilotStore };
+      };
+      const store = internal.deps.store;
+      let readsFail = false;
+      internal.deps.store = {
+        ...store,
+        find(sessionId) {
+          if (readsFail) throw new Error('PERSISTENCE_UNAVAILABLE');
+          return store.find(sessionId);
+        },
+      };
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      readsFail = true;
+      await fixture.runNext();
+      expect(fixture.diagnostic).toHaveBeenCalledWith('s', 'operationFailed:PERSISTENCE');
+      expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true);
+
+      readsFail = false;
+      await fixture.runNext();
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.resume).toHaveBeenCalledOnce());
+    });
+
+    it('uses a safe terminal state when recovery scheduling fails', async () => {
+      const fixture = subject();
+      const internal = fixture.coordinator as unknown as {
+        deps: { schedule(callback: () => void, delayMs: number): () => void };
+      };
+      fixture.resume.mockRejectedValueOnce(new Error('transport lost'));
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      internal.deps.schedule = () => {
+        throw new Error('SCHEDULER_UNAVAILABLE');
+      };
+      await fixture.runNext();
+      await vi.waitFor(() =>
+        expect(fixture.state).toMatchObject({
+          state: 'safetyPaused',
+          requestedEnabled: false,
+          stopReason: 'safetyPaused',
+        }),
+      );
+      expect(
+        fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+      ).toHaveLength(1);
+    });
+
     it('interrupts the older working generation and requires a fresh reconciliation', async () => {
       const fixture = subject();
       fixture.activity = {
@@ -2813,6 +3161,33 @@ describe('AutopilotCoordinator', () => {
         taskPath: '/root/l1_g2',
       });
       expect(fixture.refresh).toHaveBeenCalledWith('s');
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('persists a disconnected newest generation and never resumes the idle old owner', async () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          { ...fixture.activity.subagents[0]!, state: 'idle', continuationGeneration: 1 },
+          {
+            ...fixture.activity.subagents[0]!,
+            id: 'thread-l1-g2',
+            threadId: 'thread-l1-g2',
+            taskPath: '/root/l1_g2',
+            state: 'disconnected',
+            continuationGeneration: 2,
+          },
+        ],
+      } as never;
+      fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.refresh).toHaveBeenCalledWith('s'));
+      expect(fixture.state?.executor).toMatchObject({
+        threadId: 'thread-l1-g2',
+        taskPath: '/root/l1_g2',
+        continuationGeneration: 2,
+      });
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
@@ -3613,6 +3988,27 @@ describe('AutopilotCoordinator', () => {
       const fixture = subject();
       fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
       await fixture.runNext();
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          completionEpochs: [
+            {
+              target: '["l2","l1","l1-1"]',
+              epoch: 0,
+              reopened: false,
+              completed: true,
+            },
+          ],
+          reportedL2Ids: ['["l1","l1-1"]'],
+          reportedL1Ids: [],
+          acceptedKeys: ['accepted'],
+          pendingTurnId: null,
+          pendingKind: null,
+          terminalReviewAccepted: false,
+        },
+      };
       fixture.plan = {
         ...fixture.plan,
         steps: [
@@ -3624,6 +4020,12 @@ describe('AutopilotCoordinator', () => {
       };
       fixture.coordinator.planStatusChanged('s');
       expect(fixture.state?.executor?.commands?.[0]).toMatchObject({ status: 'superseded' });
+      expect(fixture.state?.checkpoints?.completionEpochs).toContainEqual({
+        target: '["l2","l1","l1-1"]',
+        epoch: 1,
+        reopened: true,
+        completed: false,
+      });
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
@@ -3717,6 +4119,11 @@ describe('AutopilotCoordinator', () => {
           ).toBe(true),
       },
       {
+        name: 'manual intervention before a duplicate timer delivery',
+        kinds: ['continuation', 'refresh'] as const,
+        apply: (fixture: ReturnType<typeof subject>) => fixture.coordinator.manualSend('s'),
+      },
+      {
         name: 'plan fingerprint advance and reopen',
         kinds: ['continuation', 'refresh'] as const,
         apply: (fixture: ReturnType<typeof subject>) => {
@@ -3793,7 +4200,7 @@ describe('AutopilotCoordinator', () => {
           fixture.coordinator.activityChanged('s');
         },
       },
-    ])('fences stale $name callbacks', async ({ kinds, apply }) => {
+    ])('L0/L# ordering matrix fences stale $name callbacks', async ({ kinds, apply }) => {
       for (const kind of kinds) {
         const fixture = subject(
           kind === 'refresh'
@@ -4121,6 +4528,9 @@ describe('AutopilotCoordinator', () => {
           status: 'issued',
           processAction: { kind, processKey: expect.any(String) },
         });
+        expect(
+          fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+        ).toHaveLength(1);
 
         fixture.coordinator.turnCompleted('s');
         await fixture.runNext();
@@ -4136,6 +4546,82 @@ describe('AutopilotCoordinator', () => {
         );
       },
     );
+
+    it.each(['transfer', 'consume'] as const)(
+      'contains an asynchronously rejected %s action with the same durable fence',
+      async (kind) => {
+        const process =
+          kind === 'transfer'
+            ? {
+                processId: 'process-1',
+                itemId: 'item-1',
+                ownerThreadId: 'thread-l1',
+                ownerTaskPath: '/root/l1',
+                ownership: 'executor' as const,
+                state: 'running' as const,
+                observedAt: now,
+                elapsedMs: 1,
+                cpuPercent: 1,
+                rssBytes: 1,
+              }
+            : {
+                processId: 'process-1',
+                itemId: 'item-1',
+                ownerThreadId: 'thread-l1',
+                ownerTaskPath: '/root/l1',
+                ownership: 'supervisor' as const,
+                state: 'exited-awaiting-result' as const,
+                observedAt: now,
+                elapsedMs: 1,
+                cpuPercent: 0,
+                rssBytes: 0,
+                resultArtifact: 'thread-l1:item-1',
+              };
+        const fixture = subject([process]);
+        const action = kind === 'transfer' ? fixture.transferProcess : fixture.consumeProcess;
+        action.mockRejectedValueOnce(new Error('async action lost'));
+        fixture.coordinator.turnCompleted('s');
+        await fixture.runNext();
+        expect(action).toHaveBeenCalledOnce();
+        expect(
+          fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+        ).toHaveLength(1);
+        expect(fixture.state?.executor?.commands?.at(-1)).toMatchObject({
+          status: 'issued',
+          processAction: { kind },
+        });
+      },
+    );
+
+    it('contains a synchronously rejected terminate action', async () => {
+      const fixture = subject([
+        {
+          processId: 'process-1',
+          itemId: 'item-1',
+          ownerThreadId: 'thread-l1',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'detached-active',
+          observedAt: now,
+          elapsedMs: 60_001,
+          cpuPercent: 1,
+          rssBytes: 13 * 1024 * 1024 * 1024,
+        },
+      ]);
+      fixture.terminateProcess.mockImplementationOnce(() => {
+        throw new Error('terminate lost');
+      });
+      fixture.coordinator.turnCompleted('s');
+      await fixture.runNext();
+      expect(fixture.terminateProcess).toHaveBeenCalledOnce();
+      expect(
+        fixture.published.filter((type) => type === 'autopilot.operation-failed'),
+      ).toHaveLength(1);
+      expect(fixture.state?.executor?.commands?.at(-1)).toMatchObject({
+        status: 'issued',
+        processAction: { kind: 'terminate' },
+      });
+    });
 
     it.each([
       {
