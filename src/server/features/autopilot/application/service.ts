@@ -245,7 +245,7 @@ export class AutopilotCoordinator {
       wakeConditions: readonly ObservableWakeCondition[];
       maxWaitMs: number;
     }>,
-  ): boolean {
+  ): boolean | 'wakeAlreadySatisfied' {
     const state = this.deps.store.find(sessionId);
     if (
       !state?.requestedEnabled ||
@@ -255,6 +255,27 @@ export class AutopilotCoordinator {
     )
       return false;
     const now = this.deps.now();
+    if (this.executorWakeAlreadySatisfied(sessionId, state, report.wakeConditions)) {
+      // The executor edge is already visible. Fence every pending automatic
+      // callback before returning control to the still-active root; otherwise
+      // a scheduled executor resume could race same-turn supervision.
+      const cancelled = this.cancelScheduledControl(state, now);
+      this.persist(
+        {
+          ...state,
+          generation: state.generation + 1,
+          ...(cancelled ? { lastControlId: null } : {}),
+          nextEvaluationAt: null,
+          updatedAt: now,
+        },
+        cancelled,
+      );
+      this.timers.get(sessionId)?.();
+      this.timers.delete(sessionId);
+      this.completionTimers.get(sessionId)?.();
+      this.completionTimers.delete(sessionId);
+      return 'wakeAlreadySatisfied';
+    }
     const resumeAt = new Date(Date.parse(now) + report.maxWaitMs).toISOString();
     const protocol = state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
     const nextProtocol = registerProtocolWait(protocol, { ...report, resumeAt });
@@ -280,6 +301,26 @@ export class AutopilotCoordinator {
     );
     this.armWaitDeadline(sessionId, report.leaseId, resumeAt);
     return true;
+  }
+
+  /** Prevents an edge-triggered executor lease from parking after its edge. */
+  private executorWakeAlreadySatisfied(
+    sessionId: string,
+    state: AutopilotSession,
+    wakeConditions: readonly ObservableWakeCondition[],
+  ): boolean {
+    if (!wakeConditions.includes('executorChanged')) return false;
+    if (this.completionTimers.has(sessionId)) return true;
+    const retained = this.deps.plan(sessionId);
+    const activity = this.deps.activity(sessionId);
+    if (!retained || activity?.confidence !== 'fresh') return false;
+    const executor = this.currentExecutor(
+      sessionId,
+      retained.plan,
+      state.consecutiveNoProgress,
+      state.executor,
+    );
+    return Boolean(executor && !this.authoritativeExecutorActive(state, retained.plan, activity));
   }
   /** Fails closed only for the currently active bounded probe. */
   rejectProbe(sessionId: string): boolean {
@@ -1290,6 +1331,11 @@ export class AutopilotCoordinator {
     this.completionTimers.delete(sessionId);
     this.executorTimers.get(sessionId)?.();
     this.executorTimers.delete(sessionId);
+    this.cancelScheduledExecutorCommands(sessionId);
+  }
+
+  /** Cancels executor authority while allowing a delivered stale callback to audit itself. */
+  private cancelScheduledExecutorCommands(sessionId: string): void {
     const state = this.deps.store.find(sessionId);
     const executor = state?.executor;
     if (state && executor?.commands?.some((command) => command.status === 'scheduled'))

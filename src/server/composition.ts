@@ -828,7 +828,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const lease = rawInteraction.payload as AutopilotWaitLease;
             const rootOwned =
               origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;
-            const accepted =
+            const registration =
               rootOwned &&
               (lease.version === 2
                 ? autopilot.registerProactiveWait(sessionId, {
@@ -843,13 +843,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     leaseId: lease.leaseId,
                     wakeConditions: lease.wakeConditions,
                   }));
-            if (!accepted) {
-              if (rootOwned) autopilot.rejectProbe(sessionId);
+            if (registration !== true) {
+              if (rootOwned && registration === false) autopilot.rejectProbe(sessionId);
               return (
                 runtime?.resolveServerRequest(
                   sessionId,
                   rawInteraction.requestId,
-                  autopilotWaitLeaseToolResponse(false),
+                  autopilotWaitLeaseToolResponse(
+                    false,
+                    registration === 'wakeAlreadySatisfied'
+                      ? 'wakeAlreadySatisfied'
+                      : 'automaticContinuationUnavailable',
+                  ),
                 ) === true
               );
             }

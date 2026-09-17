@@ -121,6 +121,12 @@ supervisor to yield. When automatic continuation is unavailable, Mobile returns
 the supervisor can immediately resume the executor or take the next lifecycle
 action.
 
+An `executorChanged` lease is accepted only while the canonical executor is
+still observably working. If its completion is already settled or queued for
+reconciliation, Mobile fences pending automatic callbacks and returns
+`accepted:false` with `reason:wakeAlreadySatisfied`; the supervisor continues
+in the same root turn instead of parking after the completion edge.
+
 Long GitHub checks use the same generic process boundary. The supervisor owns a
 running `gh pr checks <PR> --watch --interval 30` command and requests
 `processExited` and `processResultAvailable`; Mobile observes its process state
