@@ -232,8 +232,9 @@ function measurementFor(heading: ParsedHeading): PlanStepMeasurement | null | un
     const value = heading.properties.get(property);
     if (value === undefined) continue;
     if (property.endsWith('_AT')) {
-      if (!isUtcIsoInstant(value)) return null;
-      measurement[field] = value;
+      const instant = normalizeUtcIsoInstant(value);
+      if (!instant) return null;
+      measurement[field] = instant;
       continue;
     }
     if (!/^\d+$/.test(value)) return null;
@@ -245,12 +246,41 @@ function measurementFor(heading: ParsedHeading): PlanStepMeasurement | null | un
   return Object.keys(measurement).length === 0 ? undefined : (measurement as PlanStepMeasurement);
 }
 
-function isUtcIsoInstant(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+function normalizeUtcIsoInstant(value: string): string | null {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z|[+-]\d{2}:\d{2})$/.exec(
+      value,
+    );
+  if (!match) return null;
+  const [, yearValue, monthValue, dayValue, hourValue, minuteValue, secondValue, , zone] = match;
+  const [year, month, day, hour, minute, second] = [
+    yearValue,
+    monthValue,
+    dayValue,
+    hourValue,
+    minuteValue,
+    secondValue,
+  ].map(Number);
+  const offset = zone === 'Z' ? null : zone.slice(1).split(':').map(Number);
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > new Date(Date.UTC(year, month, 0)).getUTCDate() ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    (offset && (offset[0]! > 23 || offset[1]! > 59))
+  )
+    return null;
   const instant = new Date(value);
-  if (Number.isNaN(instant.getTime())) return false;
-  const canonical = instant.toISOString();
-  return value === canonical || value === canonical.replace('.000Z', 'Z');
+  if (Number.isNaN(instant.getTime())) return null;
+  if (zone === 'Z') {
+    const canonical = instant.toISOString();
+    return value === canonical || value === canonical.replace('.000Z', 'Z') ? value : null;
+  }
+  return instant.toISOString().replace('.000Z', 'Z');
 }
 
 function descriptionFor(heading: ParsedHeading): PlanStepDescription | null {
