@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
+  autopilotWaitLeaseToolResponse,
   gestaltAutopilotWaitLeaseDynamicTool,
   parseAutopilotWaitLease,
 } from './autopilot-wait-lease.js';
@@ -47,5 +48,17 @@ describe('Autopilot wait lease contract', () => {
     expect(parseAutopilotWaitLease({ ...proactive, maxWaitMs: 60_000.5 })).toBeNull();
     expect(parseAutopilotWaitLease({ ...lease, version: 2 })).toBeNull();
     expect(parseAutopilotWaitLease({ ...lease, maxWaitMs: 60_000 })).toBeNull();
+  });
+
+  it('tells the supervisor to continue in the same turn when no lease was registered', () => {
+    expect(autopilotWaitLeaseToolResponse(false)).toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: 'inputText',
+          text: '{"accepted":false,"reason":"automaticContinuationUnavailable","next":"continueSameTurn"}',
+        },
+      ],
+    });
   });
 });

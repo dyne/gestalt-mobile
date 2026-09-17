@@ -115,6 +115,12 @@ changes that policy permanently: another long wait requires a new explicit
 lease in a later supervisor turn. Version 1 remains backward-compatible with
 the probe-gated, event-only wait.
 
+The dynamic-tool response is authoritative: only `accepted:true` permits the
+supervisor to yield. When automatic continuation is unavailable, Mobile returns
+`accepted:false` with `next:continueSameTurn` and leaves the root turn active so
+the supervisor can immediately resume the executor or take the next lifecycle
+action.
+
 Long GitHub checks use the same generic process boundary. The supervisor owns a
 running `gh pr checks <PR> --watch --interval 30` command and requests
 `processExited` and `processResultAvailable`; Mobile observes its process state

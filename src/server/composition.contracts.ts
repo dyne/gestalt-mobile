@@ -2858,6 +2858,69 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('rejects a wait lease when automatic continuation is unavailable', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+      const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'continue supervised work' },
+      });
+      const turnId = started.json().activeTurnId as string;
+      const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+      handle.notify?.({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+
+      await expect(
+        handle.request!({
+          id: 89,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_autopilot_wait_lease',
+            arguments: {
+              version: 2,
+              reportId: 'unavailable-report',
+              leaseId: 'unavailable-lease',
+              wakeConditions: ['executorChanged'],
+              maxWaitMs: 60_000,
+            },
+          },
+        }),
+      ).resolves.toEqual({
+        success: true,
+        contentItems: [
+          {
+            type: 'inputText',
+            text: '{"accepted":false,"reason":"automaticContinuationUnavailable","next":"continueSameTurn"}',
+          },
+        ],
+      });
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json().activeTurnId).toBe(turnId);
+      await app.close();
+    });
+
     it('acknowledges root-owned capacity recovery before recycling only its app-server', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

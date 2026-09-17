@@ -819,7 +819,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               runtime?.resolveServerRequest(
                 sessionId,
                 String(request.id),
-                autopilotWaitLeaseToolResponse(),
+                autopilotWaitLeaseToolResponse(false),
               ) === true
             );
           }
@@ -849,7 +849,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 runtime?.resolveServerRequest(
                   sessionId,
                   rawInteraction.requestId,
-                  autopilotWaitLeaseToolResponse(),
+                  autopilotWaitLeaseToolResponse(false),
                 ) === true
               );
             }
