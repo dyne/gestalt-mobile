@@ -34,7 +34,7 @@ export const gestaltAutopilotWaitLeaseDynamicTool = {
   type: 'function',
   name: GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
   description:
-    'Register one non-persistent Autopilot wait episode for the current supervised session. Version 2 may be called proactively for known long work and resumes on the first requested event or bounded maxWaitMs deadline; call it again in a later turn only if another long wait is justified. This cannot request human authority and never accepts transcript prose.',
+    'Register one non-persistent Autopilot wait episode for the current supervised session. Version 2 may be called proactively for known long work and resumes on the first requested event or bounded maxWaitMs deadline; call it again in a later turn only if another long wait is justified. Yield only when the response has accepted:true; accepted:false requires same-turn supervision. This cannot request human authority and never accepts transcript prose.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -96,11 +96,21 @@ export function parseAutopilotWaitLease(value: unknown): AutopilotWaitLease | nu
   };
 }
 
-export function autopilotWaitLeaseToolResponse(): {
+export function autopilotWaitLeaseToolResponse(accepted = true): {
   success: true;
   contentItems: Array<{ type: 'inputText'; text: string }>;
 } {
-  return { success: true, contentItems: [{ type: 'inputText', text: '{"accepted":true}' }] };
+  return {
+    success: true,
+    contentItems: [
+      {
+        type: 'inputText',
+        text: accepted
+          ? '{"accepted":true}'
+          : '{"accepted":false,"reason":"automaticContinuationUnavailable","next":"continueSameTurn"}',
+      },
+    ],
+  };
 }
 
 function record(value: unknown): value is Record<string, unknown> {
