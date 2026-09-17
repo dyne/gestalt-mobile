@@ -60,5 +60,14 @@ describe('Autopilot wait lease contract', () => {
         },
       ],
     });
+    expect(autopilotWaitLeaseToolResponse(false, 'wakeAlreadySatisfied')).toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: 'inputText',
+          text: '{"accepted":false,"reason":"wakeAlreadySatisfied","next":"continueSameTurn"}',
+        },
+      ],
+    });
   });
 });

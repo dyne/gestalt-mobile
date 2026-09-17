@@ -2774,7 +2774,7 @@ describe('AutopilotCoordinator', () => {
       let session = { state: 'ready', threadId: 'root', activeTurnId: null as string | null };
       let pending = false;
       let attention: import('../domain/supervised-lifecycle.js').StructuredBlock | null = null;
-      let activity = {
+      let activity: ReturnType<typeof createAgentActivitySnapshot> = {
         ...createAgentActivitySnapshot('s', now),
         confidence: 'fresh' as const,
         root: { ...createAgentActivitySnapshot('s', now).root, state: 'idle' as const },
@@ -2917,6 +2917,50 @@ describe('AutopilotCoordinator', () => {
         expect(fixture.state).toMatchObject({ requestedEnabled: true, state: 'monitoring' });
       },
     );
+
+    it('rejects an executor wait when its completion is already settled or pending', () => {
+      const fixture = subject();
+      fixture.coordinator.activitySettled('s', 'stateChanged');
+      const settlement = fixture.timers[0]!;
+
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'late-wait-report',
+          leaseId: 'late-wait-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe('wakeAlreadySatisfied');
+
+      expect(settlement.cancelled).toBe(true);
+      expect(fixture.state?.supervision?.waitLease).toBeFalsy();
+      expect(fixture.timers).toHaveLength(1);
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('accepts an executor wait while the canonical executor is still working', () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'working',
+        subagents: [{ ...fixture.activity.subagents[0]!, state: 'working' }],
+      };
+
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'active-wait-report',
+          leaseId: 'active-wait-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+
+      expect(fixture.state?.supervision).toMatchObject({
+        outcome: 'parked',
+        waitLease: { id: 'active-wait-lease' },
+      });
+      expect(fixture.timers).toHaveLength(1);
+    });
 
     it('durably records an executor command before its callback can start work', async () => {
       const fixture = subject();
@@ -4108,7 +4152,10 @@ describe('AutopilotCoordinator', () => {
       {
         name: 'proactive wait registration',
         kinds: ['continuation', 'refresh'] as const,
-        apply: (fixture: ReturnType<typeof subject>) =>
+        apply: (fixture: ReturnType<typeof subject>) => {
+          const executorStillWorking = fixture.activity.subagents[0]?.ownedProcesses?.some(
+            (process) => process.state === 'running' || process.state === 'detached-active',
+          );
           expect(
             fixture.coordinator.registerProactiveWait('s', {
               id: 'wait-report',
@@ -4116,7 +4163,8 @@ describe('AutopilotCoordinator', () => {
               wakeConditions: ['executorChanged'],
               maxWaitMs: 60_000,
             }),
-          ).toBe(true),
+          ).toBe(executorStillWorking ? true : 'wakeAlreadySatisfied');
+        },
       },
       {
         name: 'manual intervention before a duplicate timer delivery',

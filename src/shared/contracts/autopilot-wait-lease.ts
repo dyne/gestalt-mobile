@@ -96,7 +96,13 @@ export function parseAutopilotWaitLease(value: unknown): AutopilotWaitLease | nu
   };
 }
 
-export function autopilotWaitLeaseToolResponse(accepted = true): {
+export type AutopilotWaitLeaseRejectionReason =
+  'automaticContinuationUnavailable' | 'wakeAlreadySatisfied';
+
+export function autopilotWaitLeaseToolResponse(
+  accepted = true,
+  reason: AutopilotWaitLeaseRejectionReason = 'automaticContinuationUnavailable',
+): {
   success: true;
   contentItems: Array<{ type: 'inputText'; text: string }>;
 } {
@@ -107,7 +113,7 @@ export function autopilotWaitLeaseToolResponse(accepted = true): {
         type: 'inputText',
         text: accepted
           ? '{"accepted":true}'
-          : '{"accepted":false,"reason":"automaticContinuationUnavailable","next":"continueSameTurn"}',
+          : JSON.stringify({ accepted: false, reason, next: 'continueSameTurn' }),
       },
     ],
   };
