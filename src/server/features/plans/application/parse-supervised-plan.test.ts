@@ -85,6 +85,21 @@ describe('parseSupervisedPlan', () => {
     });
   });
 
+  it('accepts RFC 3339 offset measurements and normalizes them to UTC', () => {
+    const result = parse(
+      plan().replace(
+        ':REVIEW_STATUS: UNREVIEWED',
+        ':REVIEW_STATUS: UNREVIEWED\n:STARTED_AT: 2026-08-01T12:00:00+02:00\n:UPDATED_AT: 2026-08-01T12:01:00+02:00',
+      ),
+    );
+    expect(result.kind).toBe('available');
+    if (result.kind !== 'available') return;
+    expect(result.plan.steps[0]?.measurement).toEqual({
+      startedAt: '2026-08-01T10:00:00Z',
+      updatedAt: '2026-08-01T10:01:00Z',
+    });
+  });
+
   it('rejects invalid measurement values while allowing fresh and reset quota states', () => {
     expect(parse()).toEqual(expect.objectContaining({ kind: 'available' }));
     expect(parse()).not.toHaveProperty('plan.steps.0.measurement');
@@ -101,6 +116,14 @@ describe('parseSupervisedPlan', () => {
         plan().replace(
           ':REVIEW_STATUS: UNREVIEWED',
           ':REVIEW_STATUS: UNREVIEWED\n:ELAPSED_SECONDS: -1',
+        ),
+      ),
+    ).toEqual({ kind: 'unavailable', reason: 'MISSING_REQUIRED_FIELD' });
+    expect(
+      parse(
+        plan().replace(
+          ':REVIEW_STATUS: UNREVIEWED',
+          ':REVIEW_STATUS: UNREVIEWED\n:STARTED_AT: 2026-02-30T12:00:00+02:00',
         ),
       ),
     ).toEqual({ kind: 'unavailable', reason: 'MISSING_REQUIRED_FIELD' });
