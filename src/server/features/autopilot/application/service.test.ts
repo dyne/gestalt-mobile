@@ -1029,120 +1029,150 @@ describe('AutopilotCoordinator', () => {
     expect(timers).toHaveLength(2);
   });
 
-  it('consumes an agent-activity lease exactly once for child-only semantic progress', () => {
-    const planFingerprint = JSON.stringify([['l1', 'WIP', 'UNREVIEWED', []]]);
-    const child = {
-      id: 'child-1',
-      threadId: 'child-thread',
-      taskPath: '/root/l1',
-      canonicalTaskName: 'l1',
-      canonicalPosition: 'L1',
-      continuationGeneration: 1,
-      outcome: 'partial' as const,
-      ownedProcesses: [
-        { processId: 'child-process', state: 'running' as const, ownership: 'executor' as const },
-      ],
-      state: 'working' as const,
-      reason: 'turnActive' as const,
-      observedAt: now,
-      lastActivityAt: now,
-    };
-    const activity = (children: Array<Record<string, unknown>> = [child]) =>
-      ({
+  it.each(['agentActivityChanged', 'executorChanged'] as const)(
+    'consumes a %s lease exactly once when a child becomes idle',
+    async (wakeCondition) => {
+      const planFingerprint = JSON.stringify([['l1', 'WIP', 'UNREVIEWED', []]]);
+      const child = {
+        id: 'child-1',
+        threadId: 'child-thread',
+        taskPath: '/root/l1',
+        canonicalTaskName: 'l1',
+        canonicalPosition: 'L1',
+        continuationGeneration: 1,
+        outcome: 'partial' as const,
+        ownedProcesses: [
+          { processId: 'child-process', state: 'running' as const, ownership: 'executor' as const },
+        ],
+        state: 'working' as const,
+        reason: 'turnActive' as const,
+        observedAt: now,
+        lastActivityAt: now,
+      };
+      const activity = (children: Array<Record<string, unknown>> = [child]) =>
+        ({
+          sessionId: 's',
+          rootThreadId: 'root-thread',
+          root: {
+            state: 'idle' as const,
+            reason: 'turnCompleted' as const,
+            observedAt: now,
+            lastActivityAt: now,
+          },
+          subagents: children,
+          aggregateSubagents: children.some((candidate) => candidate.state === 'working')
+            ? ('working' as const)
+            : ('idle' as const),
+          confidence: 'fresh' as const,
+        }) as unknown as ReturnType<typeof createAgentActivitySnapshot>;
+      const initialKey = semanticProgressKey({
+        plan: { identity: 'p1', fingerprint: planFingerprint, currentPosition: 'l1' },
+        review: { status: null },
+        checkpoint: { pendingTurnId: null, terminalReviewAccepted: false },
+        pendingInteractions: [],
+        executor: { generation: 0, state: null },
+        ownedProcesses: [],
+        childActivity: [
+          {
+            id: child.id,
+            threadId: child.threadId,
+            taskName: child.canonicalTaskName,
+            position: child.canonicalPosition,
+            generation: child.continuationGeneration,
+            state: child.state,
+            outcome: child.outcome,
+            ownedProcesses: [{ id: 'child-process', state: 'running', ownership: 'executor' }],
+          },
+        ],
+        agentActivity: [{ agentId: 'root', sequence: 0, state: 'idle' }],
+      });
+      let currentActivity = activity();
+      let state: AutopilotSession | null = {
         sessionId: 's',
-        rootThreadId: 'root-thread',
-        root: {
-          state: 'idle' as const,
-          reason: 'turnCompleted' as const,
-          observedAt: now,
-          lastActivityAt: now,
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p1',
+        planFingerprint,
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: null,
+        supervision: {
+          ...startSupervisionProtocol(initialKey),
+          outcome: 'parked',
+          waitLease: {
+            id: 'child-lease',
+            probeKey: initialKey,
+            wakeConditions: [wakeCondition],
+            resumeAt: '2026-08-20T13:00:00.000Z',
+          },
         },
-        subagents: children,
-        aggregateSubagents: 'working' as const,
-        confidence: 'fresh' as const,
-      }) as unknown as ReturnType<typeof createAgentActivitySnapshot>;
-    const initialKey = semanticProgressKey({
-      plan: { identity: 'p1', fingerprint: planFingerprint, currentPosition: 'l1' },
-      review: { status: null },
-      checkpoint: { pendingTurnId: null, terminalReviewAccepted: false },
-      pendingInteractions: [],
-      executor: { generation: 0, state: null },
-      ownedProcesses: [],
-      childActivity: [
+        updatedAt: now,
+      };
+      let saves = 0;
+      const scheduled: Array<() => void> = [];
+      const coordinator = new AutopilotCoordinator({
+        store: {
+          find: () => state,
+          save: (next) => {
+            saves += 1;
+            state = next;
+          },
+          remove: () => {},
+          findControl: () => null,
+          saveControl: () => {},
+          controlIds: () => new Set(),
+        },
+        now: () => now,
+        policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
+        plan: () => ({ plan, identity: 'p1' }),
+        session: () => ({ state: 'ready', threadId: 'root-thread', activeTurnId: null }),
+        activity: () => currentActivity,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: (callback) => {
+          scheduled.push(callback);
+          return () => {};
+        },
+        nextControlId: () => 'control',
+        turnStarter: { start: async () => {} },
+        executorController: {
+          resume: async () => {},
+          refresh: async () => {},
+          interrupt: async () => false,
+          transferProcess: () => {},
+          consumeProcess: () => {},
+          terminateProcess: async () => false,
+        },
+        publish: () => {},
+      });
+      currentActivity = activity([
         {
-          id: child.id,
-          threadId: child.threadId,
-          taskName: child.canonicalTaskName,
-          position: child.canonicalPosition,
-          generation: child.continuationGeneration,
-          state: child.state,
-          outcome: child.outcome,
-          ownedProcesses: [{ id: 'child-process', state: 'running', ownership: 'executor' }],
+          ...child,
+          state: 'idle',
+          outcome: 'partial',
+          observedAt: 'later',
+          lastActivityAt: 'later',
         },
-      ],
-      agentActivity: [{ agentId: 'root', sequence: 0, state: 'idle' }],
-    });
-    let currentActivity = activity();
-    let state: AutopilotSession | null = {
-      sessionId: 's',
-      state: 'monitoring',
-      requestedEnabled: true,
-      planIdentity: 'p1',
-      planFingerprint,
-      generation: 1,
-      consecutiveNoProgress: 0,
-      nextEvaluationAt: null,
-      lastControlId: null,
-      stopReason: null,
-      supervision: {
-        ...startSupervisionProtocol(initialKey),
-        outcome: 'parked',
-        waitLease: {
-          id: 'child-lease',
-          probeKey: initialKey,
-          wakeConditions: ['agentActivityChanged'],
-        },
-      },
-      updatedAt: now,
-    };
-    let saves = 0;
-    const coordinator = new AutopilotCoordinator({
-      store: {
-        find: () => state,
-        save: (next) => {
-          saves += 1;
-          state = next;
-        },
-        remove: () => {},
-        findControl: () => null,
-        saveControl: () => {},
-        controlIds: () => new Set(),
-      },
-      now: () => now,
-      policy: { ...defaultAutopilotPolicy, backoffMs: () => 0 },
-      plan: () => ({ plan, identity: 'p1' }),
-      session: () => ({ state: 'ready', threadId: 'root-thread', activeTurnId: null }),
-      activity: () => currentActivity,
-      pendingInteraction: () => false,
-      reconcile: async () => ({ compatible: true }),
-      schedule: () => () => {},
-      nextControlId: () => 'control',
-      turnStarter: { start: async () => {} },
-      publish: () => {},
-    });
-    currentActivity = activity([
-      { ...child, state: 'idle', outcome: 'partial', observedAt: 'later', lastActivityAt: 'later' },
-    ]);
-    coordinator.activityChanged('s');
-    coordinator.activityChanged('s');
-    expect(state?.supervision).toMatchObject({ outcome: 'retrying', waitLease: null });
-    expect(saves).toBe(1);
-    currentActivity = activity([
-      { ...currentActivity.subagents[0]!, observedAt: 'newer', lastActivityAt: 'newer' },
-    ]);
-    coordinator.activityChanged('s');
-    expect(saves).toBe(1);
-  });
+      ]);
+      coordinator.activityChanged('s');
+      coordinator.activityChanged('s');
+      if (wakeCondition === 'executorChanged') {
+        expect(scheduled).toHaveLength(1);
+        scheduled.shift()!();
+        await vi.waitFor(() => expect(state?.supervision?.waitLease).toBeNull());
+      }
+      expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
+      const savesAfterWake = saves;
+      expect(savesAfterWake).toBeGreaterThan(0);
+      currentActivity = activity([
+        { ...currentActivity.subagents[0]!, observedAt: 'newer', lastActivityAt: 'newer' },
+      ]);
+      coordinator.activityChanged('s');
+      expect(saves).toBe(savesAfterWake);
+    },
+  );
 
   it.each([
     ['proactive', '2026-08-20T13:00:00.000Z'],

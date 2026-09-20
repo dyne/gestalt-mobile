@@ -4,6 +4,11 @@ Gestalt treats an executor turn ending as an observation, not as completion of
 the executor's objective. The durable Org Plan remains authoritative for L1 and
 L2 completion and review.
 
+Plan visibility and supervision authority are separate. An `authoring-start`
+signal retains and displays the plan but never enables Autopilot. Only an
+explicit `supervision-start` signal or manual On action authorizes automatic
+execution.
+
 ## State
 
 Each active supervised session records the canonical Org position, physical
