@@ -127,7 +127,9 @@ for (const { viewport, theme, fontScale: scale } of evidenceConfigurations()) {
       const diagnostics = await open(page, theme, scale, state);
       if (state === 'profile-manager') {
         const skillToggle = page.getByRole('checkbox', { name: /Long Skill/ });
-        await skillToggle.uncheck();
+        await expect(skillToggle).toBeChecked();
+        await skillToggle.click();
+        await expect(skillToggle).not.toBeChecked();
         await page.getByRole('button', { name: 'Sessions', pressed: true }).click();
         await expect(page.getByRole('button', { name: 'Manage skill profiles' })).toBeVisible();
         await page.getByRole('button', { name: 'Manage skill profiles' }).press('Enter');
