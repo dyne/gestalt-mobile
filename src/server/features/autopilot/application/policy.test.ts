@@ -128,7 +128,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v9');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v10');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -148,6 +148,12 @@ describe('autopilot policy', () => {
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gestalt_autopilot_wait_lease');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('version 2');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'accepted:false means no continuation was registered',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'all later milestone activity belongs to a new root turn',
+    );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gh pr checks --watch');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('one episode');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('never rely on blocker prose as the signal');

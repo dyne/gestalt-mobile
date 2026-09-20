@@ -180,6 +180,7 @@ async function installAutopilotPlan(
   workspacePath: string,
   name: string,
   childState: 'TODO' | 'DONE' = 'TODO',
+  reason = 'supervision-start',
 ) {
   const planPath = join(workspacePath, `${name}.org`);
   await writeFile(planPath, autopilotPlanText(childState));
@@ -188,7 +189,7 @@ async function installAutopilotPlan(
     JSON.stringify({
       schemaVersion: 1,
       planPath,
-      reason: 'supervision-start',
+      reason,
       updatedAt: new Date().toISOString(),
     }),
   );
@@ -2858,6 +2859,51 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('lifecycle', () => {
+    it('retains an authored plan without starting supervision', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      const workspacePath = join(root, 'workspace');
+      await mkdir(workspacePath);
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+
+      await installAutopilotPlan(
+        app,
+        sessionId,
+        workspacePath,
+        'authored-only',
+        'TODO',
+        'authoring-start',
+      );
+
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        autopilot: { enabled: false, state: 'disabled' },
+      });
+      expect(
+        handles.flatMap((handle) =>
+          handle.requests.filter((request) => request.method === 'turn/start'),
+        ),
+      ).toHaveLength(0);
+      await app.close();
+    });
+
     it('rejects a wait lease when automatic continuation is unavailable', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
