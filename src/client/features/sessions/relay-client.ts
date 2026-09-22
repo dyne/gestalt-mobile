@@ -104,7 +104,10 @@ export type RecentSession = {
   id: string;
   cwd: string;
   recencyAt: number | null;
-  resumeCommand: string;
+  /** Owning llm service; absent denotes a codex thread from before providers. */
+  provider?: LlmProvider;
+  /** CLI resume command; absent for providers without one (e.g. kimi). */
+  resumeCommand?: string;
   model?: string;
   skillProfile?: string;
   orgPlanFilename?: string;

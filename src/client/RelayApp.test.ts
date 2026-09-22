@@ -731,3 +731,120 @@ describe('RelayApp chat controller composition', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+describe('RelayApp provider selection', () => {
+  afterEach(() => {
+    cleanup();
+    fakeController = null;
+    controllerOptions = null;
+    window.localStorage.removeItem(NOTIFICATION_HISTORY_STORAGE_KEY);
+    vi.unstubAllGlobals();
+    window.history.replaceState({}, '', '/');
+    if (originalScrollIntoView) Element.prototype.scrollIntoView = originalScrollIntoView;
+    else delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  function stubBrowserGlobals() {
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('scrollTo', vi.fn());
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+  }
+
+  type RecordedRequest = { url: string; method: string; body: unknown };
+  const recordedRequests: RecordedRequest[] = [];
+
+  function bootstrapPayload(providers?: unknown) {
+    return {
+      workspaces: [
+        { id: 'ws1', name: 'repo', relativePath: 'repo', isGitRepository: true, children: [] },
+      ],
+      profiles: [],
+      models: { codex: ['gpt-5.6-terra'], kimi: ['k2-thinking'] },
+      sessions: [],
+      capabilities: {
+        approvals: true,
+        userInput: true,
+        git: true,
+        protocolCompatible: true,
+        ...(providers ? { providers } : {}),
+      },
+    };
+  }
+
+  function renderWithBootstrap(providers?: unknown) {
+    recordedRequests.length = 0;
+    const authorizedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/bootstrap')
+        return new Response(JSON.stringify(bootstrapPayload(providers)));
+      recordedRequests.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      if (url === '/api/sessions' && init?.method === 'POST')
+        return new Response(
+          JSON.stringify({
+            id: 'k1',
+            state: 'ready',
+            workspacePath: '/repo',
+            provider: 'kimi',
+            model: 'k2-thinking',
+          }),
+        );
+      if (url === '/api/skill-profiles') return new Response(JSON.stringify({ profiles: [] }));
+      return new Response(JSON.stringify([]));
+    });
+    render(RelayApp, {
+      authorizedFetch,
+      passkeyAuthEnabled: false,
+      theme: 'minimal-dark',
+      onlock: vi.fn(),
+    });
+  }
+
+  const kimiProviders = {
+    codex: { available: true, version: '1.0' },
+    kimi: { available: true, version: '2.0.2' },
+  };
+
+  it('starts a kimi session with a kimi model when the provider picker selects kimi', async () => {
+    stubBrowserGlobals();
+    renderWithBootstrap(kimiProviders);
+
+    const picker = (await screen.findByLabelText('Provider')) as HTMLSelectElement;
+    expect(picker.value).toBe('codex');
+    await fireEvent.change(picker, { target: { value: 'kimi' } });
+    expect(screen.queryByLabelText('Sandbox')).toBeNull();
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('k2-thinking');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
+    await vi.waitFor(() =>
+      expect(recordedRequests.some((request) => request.url === '/api/sessions')).toBe(true),
+    );
+    const start = recordedRequests.find((request) => request.url === '/api/sessions');
+    expect(start?.body).toMatchObject({
+      workspaceId: 'ws1',
+      provider: 'kimi',
+      model: 'k2-thinking',
+    });
+  });
+
+  it('keeps codex as the only offered provider when kimi is unavailable', async () => {
+    stubBrowserGlobals();
+    renderWithBootstrap({
+      codex: { available: true, version: '1.0' },
+      kimi: { available: false },
+    });
+    await screen.findByRole('tree', { name: 'Session base' });
+    expect(screen.queryByLabelText('Provider')).toBeNull();
+    expect(screen.getByLabelText('Sandbox')).toBeTruthy();
+  });
+});

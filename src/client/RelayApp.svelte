@@ -41,7 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import type { ComponentVersion } from '../shared/contracts/component-version.js';
-  import type { LlmProvider } from '../shared/contracts/llm-provider.js';
+  import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
   import { createChatCache } from './features/chat/chat-cache.js';
   import {
     detachedChatUrl,
@@ -147,7 +147,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kimi: [],
   });
   let componentVersions = $state.raw<ComponentVersion[]>([]);
-  let sessionModel = $state(defaultSessionModel);
+  let sessionProvider = $state<LlmProvider>('codex');
+  let selectedSessionModels = $state.raw<Record<LlmProvider, string>>({
+    codex: defaultSessionModel,
+    kimi: '',
+  });
+  let providerCapabilities = $state.raw<ProviderAvailability | null>(null);
+  let kimiAvailable = $derived(providerCapabilities?.kimi.available ?? false);
+  let activeSessionProvider = $derived(kimiAvailable ? sessionProvider : 'codex');
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
   let skillsState = $state<SkillsState | null>(null);
   let skillsLoaded = false;
@@ -209,6 +216,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
   let selectedSessionPath = $derived(displayWorkspacePath(selectedSession?.workspacePath ?? ''));
+  let selectedSessionModelLabel = $derived(
+    selectedSession
+      ? `${selectedSession.provider === 'kimi' ? 'Kimi · ' : ''}${selectedSession.model ?? defaultSessionModel}`
+      : defaultSessionModel,
+  );
   function isWorkspaceOrgPreview(
     value: SupervisedPlan | WorkspaceOrgPreview,
   ): value is WorkspaceOrgPreview {
@@ -434,6 +446,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         codex: [...new Set([defaultSessionModel, ...(bootstrap.models?.codex ?? [])])],
         kimi: bootstrap.models?.kimi ?? [],
       };
+      selectedSessionModels = {
+        ...selectedSessionModels,
+        kimi: selectedSessionModels.kimi || (bootstrap.models?.kimi?.[0] ?? ''),
+      };
+      providerCapabilities = bootstrap.capabilities?.providers ?? null;
       componentVersions = bootstrap.versions ?? [];
       if (!detachedSessionId) await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
@@ -548,8 +565,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     skillsState?.dispose();
   });
 
+  function selectSessionProvider(provider: LlmProvider): void {
+    sessionProvider = provider;
+    const list = sessionModels[provider];
+    if (!selectedSessionModels[provider] && list[0]) {
+      selectedSessionModels = { ...selectedSessionModels, [provider]: list[0] };
+    }
+  }
+
   async function startSession() {
     if (!sessionWorkspaceId || startingSession) return;
+    const provider = kimiAvailable ? sessionProvider : 'codex';
     const errors = validateStartForm({
       workspaceId: sessionWorkspaceId,
       profile: 'default',
@@ -561,10 +587,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     shellStatus = 'Starting session…';
     const session = await sessionStartController.start(sessionWorkspaceId, {
-      provider: 'codex',
+      provider,
       sandbox,
       approvalPolicy,
-      model: sessionModel,
+      model: selectedSessionModels[provider] || undefined,
       skillProfile: selectedSessionSkillProfile || undefined,
     });
     if (!session) {
@@ -1371,9 +1397,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               sessions.find((session) => session.id === sessionId)?.workspacePath ?? '',
             )
           : null}
-        sessionModel={tab === 'chat'
-          ? (sessions.find((session) => session.id === sessionId)?.model ?? defaultSessionModel)
-          : null}
+        sessionModel={tab === 'chat' ? selectedSessionModelLabel : null}
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
         {componentVersions}
         {passkeyAuthEnabled}
@@ -1394,7 +1418,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           >
         </div>
         {#if selectedSession?.model}
-          <span class="detached-chat-model">{selectedSession.model}</span>
+          <span class="detached-chat-model"
+            >{selectedSession.provider === 'kimi' ? 'Kimi · ' : ''}{selectedSession.model}</span
+          >
         {/if}
       </header>
     {/if}
@@ -1470,6 +1496,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               models={sessionModels[
                 sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
               ]}
+              provider={sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'}
               onchange={updateDraft}
               onscrollbottom={() => scheduleTail('explicit')}
               onmodelselect={(model) => void selectSessionModel(model)}
@@ -1480,13 +1507,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               oninterrupt={() => void interruptTurn()}
             />
             <div class="chat-controls" aria-label="Chat controls">
-              <AutopilotControl
-                compact
-                autopilot={autopilotState.snapshots.get(sessionId) ?? null}
-                controlId={`chat-autopilot-${sessionId}`}
-                pending={autopilotState.pending.has(sessionId)}
-                ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
-              />
+              {#if selectedSession?.provider !== 'kimi'}
+                <AutopilotControl
+                  compact
+                  autopilot={autopilotState.snapshots.get(sessionId) ?? null}
+                  controlId={`chat-autopilot-${sessionId}`}
+                  pending={autopilotState.pending.has(sessionId)}
+                  ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+                />
+              {/if}
               <AgentActivityIndicators
                 compact
                 activity={activitySnapshots.get(sessionId) ?? null}
@@ -1501,7 +1530,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <p>
               {detachedSessionId
                 ? shellStatus
-                : 'Start a session from the Sessions tab to chat with Codex.'}
+                : kimiAvailable
+                  ? 'Start a session from the Sessions tab to chat with Codex or Kimi.'
+                  : 'Start a session from the Sessions tab to chat with Codex.'}
             </p>
           {/if}
         </section>
@@ -1575,8 +1606,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             expandedIds={sessionExpandedIds}
             {sandbox}
             {approvalPolicy}
-            models={sessionModels.codex}
-            selectedModel={sessionModel}
+            models={sessionModels[activeSessionProvider]}
+            selectedModel={selectedSessionModels[activeSessionProvider]}
+            provider={activeSessionProvider}
+            {kimiAvailable}
             skillProfiles={sessionSkillProfiles}
             selectedSkillProfile={selectedSessionSkillProfile}
             skillProfileError={sessionSkillProfileError}
@@ -1586,7 +1619,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onexpandedchange={(value) => (sessionExpandedIds = value)}
             onsandboxchange={(value) => (sandbox = value)}
             onapprovalpolicychange={(value) => (approvalPolicy = value)}
-            onmodelchange={(value) => (sessionModel = value)}
+            onmodelchange={(value) =>
+              (selectedSessionModels = {
+                ...selectedSessionModels,
+                [activeSessionProvider]: value,
+              })}
+            onproviderchange={(value) => selectSessionProvider(value)}
             onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
             onmanageprofiles={(trigger) => void openProfileManager(trigger)}
             onopen={openSession}

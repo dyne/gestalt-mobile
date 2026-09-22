@@ -475,3 +475,75 @@ describe('SessionsView session base tree', () => {
     }
   });
 });
+
+describe('SessionsView provider selection', () => {
+  it('hides the provider picker unless kimi is available', () => {
+    renderView();
+    expect(screen.queryByLabelText('Provider')).toBeNull();
+    expect(screen.getByText(/Codex should use as its working directory/)).toBeTruthy();
+  });
+
+  it('shows the provider picker and emits changes when kimi is available', async () => {
+    const onproviderchange = vi.fn();
+    renderView({ kimiAvailable: true, onproviderchange });
+    const picker = screen.getByLabelText('Provider') as HTMLSelectElement;
+    expect(picker.value).toBe('codex');
+    await fireEvent.change(picker, { target: { value: 'kimi' } });
+    expect(onproviderchange).toHaveBeenCalledWith('kimi');
+  });
+
+  it('adapts the form to kimi and hides codex-only controls', () => {
+    renderView({
+      provider: 'kimi',
+      kimiAvailable: true,
+      models: ['k2-thinking'],
+      selectedModel: 'k2-thinking',
+    });
+    expect(screen.getByText(/Kimi should use as its working directory/)).toBeTruthy();
+    expect(screen.queryByLabelText('Sandbox')).toBeNull();
+    expect(screen.queryByLabelText('Approval policy')).toBeNull();
+    expect(screen.getByLabelText('Skills profile')).toBeTruthy();
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('k2-thinking');
+  });
+
+  it('disables creating a session while the model list is loaded but unset', () => {
+    renderView({ models: ['k2-thinking'], selectedModel: '' });
+    expect(
+      (screen.getByRole('button', { name: 'Create session' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('badges kimi sessions and hides their autopilot controls', () => {
+    renderView({
+      sessions: [
+        { id: 'kimi-live', state: 'ready', workspacePath: '/kimi', provider: 'kimi' },
+        { id: 'codex-live', state: 'ready', workspacePath: '/codex' },
+      ],
+    });
+    expect(screen.getByText('Kimi')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /^Autopilot/ })).toHaveLength(1);
+  });
+
+  it('hides the resume Copy action for kimi recent threads', () => {
+    renderView({
+      recentSessions: [
+        {
+          id: 'kimi-recent',
+          cwd: '/kimi',
+          recencyAt: 0,
+          provider: 'kimi',
+          model: 'k2-thinking',
+        },
+        {
+          id: 'codex-recent',
+          cwd: '/codex',
+          recencyAt: 0,
+          resumeCommand: 'codex resume codex-recent',
+        },
+      ],
+    });
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy' });
+    expect(copyButtons).toHaveLength(1);
+    expect(screen.getByText('Kimi')).toBeTruthy();
+  });
+});
