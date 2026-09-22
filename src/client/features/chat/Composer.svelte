@@ -11,6 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     matchingCommands,
     sortModelsNewestFirst,
   } from './command-completion.js';
+  import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
   type Props = {
     status: string;
     message: string;
@@ -20,6 +21,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     retryMessage?: string | null;
     retryable?: boolean;
     models?: string[];
+    /** Owning provider; used only for provider-aware copy. */
+    provider?: LlmProvider;
     onchange(value: string): void;
     onscrollbottom?(): void;
     onmodelselect?(model: string): void;
@@ -38,6 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     retryMessage = null,
     retryable = false,
     models = [],
+    provider = 'codex',
     onchange,
     onscrollbottom = () => {},
     onmodelselect = () => {},
@@ -134,7 +138,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </p>
   {#if detached}
     <p id="writer-hint" class="writer-hint">
-      You can read this conversation. Sending will connect to Codex.
+      You can read this conversation. Sending will connect to {provider === 'kimi'
+        ? 'Kimi'
+        : 'Codex'}.
     </p>
   {/if}
   {#if retryMessage}
