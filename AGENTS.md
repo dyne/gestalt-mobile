@@ -10,9 +10,33 @@ Domain and application code must not import Fastify, SQLite, filesystem, child-p
 
 Route every user-facing operation failure through the shared notification toast pipeline. Inline text may describe durable state or recovery guidance, but must not be the sole error channel and must not introduce a feature-local red error treatment.
 
+## LLM providers
+
+Each relay session belongs to exactly one provider (`codex` or `kimi`, see
+`src/shared/contracts/llm-provider.ts`). Provider+model are chosen at session
+start; `/model` switching in a chat is restricted to the session's own provider
+catalog and must never cross providers. Codex sessions drive a shared
+`codex app-server --stdio` child. Kimi sessions drive dedicated `kimi web`
+processes that Gestalt spawns and owns (`src/server/platform/kimi/`); because
+`kimi web` has no `--skills-dir`, per skill profile availability is enforced by
+one isolated `kimi web` state directory (and process) per profile selection,
+keyed under `~/.codex-gestalt/gestalt-mobile/kimi/`, with authentication
+symlinked from `~/.kimi-code`. Kimi keeps core chat parity only: org-plan and
+autopilot tooling stay Codex-only, and the server rejects autopilot toggles for
+kimi sessions. Extend the kimi integration only through the platform package
+plus composition wiring, never through feature-slice imports of child processes
+or filesystem state.
+
 ## Codex compatibility
 
 The relay uses a narrow handwritten Codex app-server adapter rather than checked-in generated protocol bindings. Runtime startup reports incompatible Codex CLI versions.
+
+## Kimi compatibility
+
+The kimi integration targets the kimi web REST + WebSocket Server API as
+implemented by the installed `kimi` CLI. Startup probes `kimi --version` and
+offers the provider only when the CLI is present; incompatible versions are
+reported at runtime like Codex protocol mismatches.
 
 ## Gestalt context-mode ownership
 

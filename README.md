@@ -9,6 +9,8 @@ development with durable Codex sessions.
 - The `codex` CLI installed, available on `PATH`, and authenticated. Gestalt's
   launcher establishes the environment and Mobile starts `codex app-server --stdio`
   directly within it.
+- Optionally, the `kimi` CLI installed and available on `PATH` to offer Kimi
+  as a second chat provider (see "Kimi provider" below).
 
 ## Install and run
 
@@ -57,6 +59,38 @@ always enables and advertises every freshly discovered one, including skills
 added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
+
+## Kimi provider
+
+When the `kimi` CLI is found on `PATH`, the Session tab shows a **Provider**
+picker next to the model selector, and the bootstrap catalog advertises Kimi's
+available models next to the Codex ones. Picking **Kimi** adapts the form:
+Codex-only controls (sandbox modes and approval policy) are hidden, since kimi
+web governs permissions itself.
+
+A Kimi session runs inside a dedicated `kimi web` process that Gestalt Mobile
+spawns and owns (`kimi web --no-open` on a private loopback port). The session
+workspace is matched against kimi web's workspace registry; chat turns,
+steering while a turn is busy, interrupts, approvals, and questions all flow
+through kimi web's REST and WebSocket API. Chat parity is exact: once a
+session starts, `/model` in the composer offers only that session's own
+provider models — a Codex chat switches between Codex models only, and a Kimi
+chat between Kimi models only. The model cannot be switched across providers
+inside a chat.
+
+Skill profiles apply to Kimi sessions too. Because `kimi web` has no
+`--skills-dir` flag, Gestalt Mobile materializes each skill profile as an
+isolated kimi web state directory (a separate `kimi web` process per active
+profile, keyed by the profile's skill selection) under
+`~/.codex-gestalt/gestalt-mobile/kimi/`, so profiles with different skills
+enabled never share a runtime. Authentication is shared by symlinking it from
+`~/.kimi-code`; Gestalt never copies or rewrites kimi credentials.
+
+Kimi sessions stay on core chat: org-plan/autopilot tooling (the Plan tab,
+autopilot controls) remains Codex-only and is hidden for Kimi sessions.
+
+Kimi threads have no CLI resume command, so recent Kimi threads offer **Open**
+but no **Copy**, and the session card carries a **Kimi** badge instead.
 
 ## Themes
 
@@ -159,6 +193,11 @@ keep it accessible only to the local relay user. Back up `auth.sqlite`
 with `auth.sqlite-wal` and `auth.sqlite-shm` only after **all** instances are
 stopped, or use SQLite backup tooling.
 
+Kimi provider state lives apart from both: gestalt-owned `kimi web` servers
+keep their isolated per-profile state under
+`~/.codex-gestalt/gestalt-mobile/kimi/`, with authentication symlinked from
+`~/.kimi-code`. Relay SQLite state never holds kimi credentials or chat state.
+
 Recovery after losing every passkey is deliberately local and manual: stop every
 instance, make a backup, remove only `auth.sqlite` and its `-wal`/`-shm`
 sidecars, restart into visibly open bootstrap mode, and immediately enroll a new
@@ -183,11 +222,13 @@ visible items; Enter or Space selects the focused directory. The selected path
 remains highlighted when branches are folded or the catalog is refreshed.
 
 At startup, Gestalt Mobile asks the installed Codex app-server for its available
-models. New sessions use `gpt-5.6-terra` by default; choose another discovered
-model from the Session tab before creating the session. The default is defined
+models, and each running kimi web server for the Kimi catalog. New sessions use
+`gpt-5.6-terra` by default for Codex; choose another discovered model from the
+Session tab before creating the session. The default is defined
 centrally as `DEFAULT_SESSION_MODEL` in `src/server/features/sessions/application/start-settings.ts`
 so it can be changed in a future configuration surface. The selected model is
-stored with the relay session and shown in managed session entries.
+stored with the relay session and shown in managed session entries; in chat,
+`/model` lists only models of the session's own provider.
 
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
