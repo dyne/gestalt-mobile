@@ -259,7 +259,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   registerSessionRoutes(app, deps);
-  if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot, deps.sessionRoutes?.idempotency);
+  if (deps.autopilot)
+    registerAutopilotRoutes(
+      app,
+      deps.autopilot,
+      deps.sessionRoutes?.idempotency,
+      deps.sessionRoutes ? (id) => deps.sessionRoutes?.find(id)?.provider : undefined,
+    );
   if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
   registerFileRoutes(app, deps);
