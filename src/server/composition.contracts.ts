@@ -143,7 +143,7 @@ async function createComposedSession(app: Awaited<ReturnType<typeof composeAutho
   const created = await app.inject({
     method: 'POST',
     url: '/api/sessions',
-    payload: { workspaceId: workspace.id, profile: 'default' },
+    payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
   });
   expect(created.statusCode).toBe(202);
   return created.json().id as string;
@@ -3738,7 +3738,7 @@ describe('production composition', () => {
       const created = await app.inject({
         method: 'POST',
         url: '/api/sessions',
-        payload: { workspaceId: workspace!.id, profile: 'default' },
+        payload: { workspaceId: workspace!.id, profile: 'default', provider: 'codex' },
       });
       expect(created.statusCode).toBe(202);
       const restored = await app.inject({
@@ -3792,7 +3792,7 @@ describe('production composition', () => {
       const created = await app.inject({
         method: 'POST',
         url: '/api/sessions',
-        payload: { workspaceId: workspace.id, profile: 'default' },
+        payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
       });
       const sessionId = created.json().id as string;
       await writeFile(
@@ -3944,7 +3944,7 @@ describe('production composition', () => {
       const created = await first.inject({
         method: 'POST',
         url: '/api/sessions',
-        payload: { workspaceId: workspace!.id, profile: 'default' },
+        payload: { workspaceId: workspace!.id, profile: 'default', provider: 'codex' },
       });
       expect(created.statusCode).toBe(202);
       expect(firstCalls).toEqual([
@@ -4027,7 +4027,7 @@ describe('production composition', () => {
       await app.inject({
         method: 'POST',
         url: '/api/sessions',
-        payload: { workspaceId: workspace.id, profile: 'default' },
+        payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
       });
 
       await app.close();
@@ -4103,7 +4103,7 @@ describe('production composition', () => {
       const created = await app.inject({
         method: 'POST',
         url: '/api/sessions',
-        payload: { workspaceId: workspace.id, profile: 'default' },
+        payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
       });
       const sessionId = created.json().id as string;
       const handle = handles.find((candidate) => candidate.calls.includes('thread/start'));

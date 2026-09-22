@@ -48,6 +48,7 @@ describe('SQLite relay persistence', () => {
         workspaceId: 'w',
         workspacePath: '/w',
         profile: 'default',
+        provider: 'codex' as const,
         now: 't',
         effectiveSkillSelection: {
           selectedProfileName: 'focused',
@@ -86,6 +87,7 @@ describe('SQLite relay persistence', () => {
         workspaceId: 'w',
         workspacePath: '/w',
         profile: 'default',
+        provider: 'codex' as const,
         sandbox,
         approvalPolicy,
         effectiveSkillSelection: { skills: [] },
@@ -310,6 +312,7 @@ describe('SQLite relay persistence', () => {
       workspaceId: 'w',
       workspacePath: '/w',
       profile: 'default',
+      provider: 'codex' as const,
       threadId: 'thread',
       state: 'ready',
       desiredState: 'active',
@@ -329,6 +332,29 @@ describe('SQLite relay persistence', () => {
       threadId: 'thread',
       state: 'ready',
     });
+    reopened.close();
+  });
+
+  it('migrates pre-provider rows to codex and round-trips the stored provider', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = openRelayDatabase(path);
+    database.exec(
+      'CREATE TABLE relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+    );
+    database.exec(
+      "INSERT INTO relay_sessions VALUES ('legacy','w','/w','default','thread','ready','active',NULL,NULL,0,'t','t')",
+    );
+    migrate(database);
+    const sessions = new SqliteSessionRepository(database);
+    expect(sessions.find('legacy')?.provider).toBe('codex');
+    sessions.save({ ...sessions.find('legacy')!, provider: 'kimi' });
+    expect(sessions.find('legacy')?.provider).toBe('kimi');
+    database.close();
+    const reopened = openRelayDatabase(path);
+    migrate(reopened);
+    expect(new SqliteSessionRepository(reopened).find('legacy')?.provider).toBe('kimi');
     reopened.close();
   });
 

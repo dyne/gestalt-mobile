@@ -6,6 +6,7 @@
 
 import { DomainError } from './errors.js';
 import type { RelaySessionEvent } from './events.js';
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import {
   createSkillSelection,
   normalizeSkillProfileName,
@@ -118,6 +119,7 @@ export type RelaySessionSnapshot = {
   id: string;
   workspaceId: string;
   workspacePath: string;
+  provider: LlmProvider;
   profile: string;
   model?: string;
   branch?: string;
@@ -148,6 +150,7 @@ export class RelaySession {
     id: string;
     workspaceId: string;
     workspacePath: string;
+    provider: LlmProvider;
     profile: string;
     model?: string;
     branch?: string;
@@ -160,6 +163,7 @@ export class RelaySession {
       id: sessionId(input.id),
       workspaceId: workspaceId(input.workspaceId),
       workspacePath: workspacePath(input.workspacePath),
+      provider: input.provider,
       profile: profileName(input.profile),
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.branch === undefined ? {} : { branch: input.branch }),
@@ -181,6 +185,7 @@ export class RelaySession {
     id: string;
     workspaceId: string;
     workspacePath: string;
+    provider: LlmProvider;
     profile: string;
     threadId: string;
     executionPolicy?: SessionExecutionPolicy;
@@ -190,6 +195,7 @@ export class RelaySession {
       id: sessionId(input.id),
       workspaceId: workspaceId(input.workspaceId),
       workspacePath: workspacePath(input.workspacePath),
+      provider: input.provider,
       profile: profileName(input.profile),
       ...(input.executionPolicy === undefined
         ? {}

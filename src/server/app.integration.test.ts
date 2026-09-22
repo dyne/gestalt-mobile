@@ -16,6 +16,7 @@ describe('relay application composition', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -42,6 +43,7 @@ describe('relay application composition', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -61,6 +63,7 @@ describe('relay application composition', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -83,6 +86,7 @@ describe('relay application composition', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -152,6 +156,7 @@ describe('relay application composition', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: 'test', protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -178,6 +183,10 @@ describe('relay application composition', () => {
         profiles: { list: async () => [{ name: 'default', state: 'ok', status: 'ready' }] },
         sessions: { list: () => sessions },
         protocolCompatible: true,
+        providers: {
+          codex: { available: true, version: 'test' },
+          kimi: { available: false as const },
+        },
       },
       sessionRoutes: {
         createId: () => 'session-1',
@@ -215,7 +224,7 @@ describe('relay application composition', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: 'workspace-1', profile: 'default' },
+      payload: { workspaceId: 'workspace-1', profile: 'default', provider: 'codex' },
     });
     expect(created.statusCode).toBe(202);
     expect(created.json()).toMatchObject({ id: 'session-1', state: 'starting' });

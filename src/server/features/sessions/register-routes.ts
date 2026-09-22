@@ -101,7 +101,7 @@ export function registerSessionRoutes(
     if (sessions.models)
       registerSelectModel(app, {
         find: sessions.find,
-        models: () => sessions.models!.list(),
+        models: (provider) => sessions.models!.list(provider),
         now: sessions.now,
         save: sessions.save,
       });

@@ -6,7 +6,6 @@
 
 import { z } from 'zod';
 
-import type { ModelCatalog } from '../../features/catalog/application/ports.js';
 import { launchCodexAppServer, type CodexProcess } from './codex-process-launcher.js';
 
 type AppServer = Pick<CodexProcess, 'close'> & {
@@ -22,7 +21,7 @@ const resultSchema = z.union([
 ]);
 
 /** Short-lived adapter for the Codex app-server model catalog. */
-export class CodexModelCatalog implements ModelCatalog {
+export class CodexModelCatalog {
   public constructor(
     private readonly cwd: string,
     private readonly launch: Launch = launchCodexAppServer,

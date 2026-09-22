@@ -9,6 +9,7 @@ import type {
   ChatSnapshot,
   SafeInteractionOutcome,
 } from '../../../shared/contracts/chat-snapshot.js';
+import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
 import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 import type { AutopilotSnapshot } from '../autopilot/contracts.js';
 
@@ -49,6 +50,7 @@ export type RelaySession = {
   state: string;
   workspaceId?: string;
   workspacePath?: string;
+  provider?: LlmProvider;
   profile?: string;
   model?: string;
   branch?: string;
@@ -108,6 +110,7 @@ export type RecentSession = {
   orgPlanFilename?: string;
 };
 export type StartSessionSettings = {
+  provider?: LlmProvider;
   model?: string;
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
@@ -383,7 +386,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     startSession: (workspaceId: string, settings: StartSessionSettings = {}, key?: string) =>
       request<RelaySession>(
         '/api/sessions',
-        { workspaceId, profile: 'default', ...settings },
+        { workspaceId, profile: 'default', provider: 'codex', ...settings },
         key ? { 'idempotency-key': key } : {},
       ),
     startTurn: (sessionId: string, text: string, key?: string) =>

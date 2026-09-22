@@ -35,7 +35,7 @@ describe('POST /api/sessions', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: 'w', profile: 'default' },
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
     });
     expect(response.statusCode).toBe(202);
     await app.close();
@@ -58,6 +58,7 @@ describe('POST /api/sessions', () => {
       payload: {
         workspaceId: 'w',
         profile: 'default',
+        provider: 'codex',
         sandbox: 'workspaceWrite',
         approvalPolicy: 'never',
       },
@@ -89,7 +90,7 @@ describe('POST /api/sessions', () => {
       method: 'POST' as const,
       url: '/api/sessions',
       headers: { 'idempotency-key': 'retry-1' },
-      payload: { workspaceId: 'w', profile: 'default' },
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
     };
     const first = await app.inject(options);
     const second = await app.inject(options);
@@ -117,7 +118,7 @@ describe('POST /api/sessions', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: 'w', profile: 'default' },
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
     });
     expect(response.statusCode).toBe(500);
     expect(failures).toEqual(['CODEX_START_FAILED']);
@@ -137,7 +138,7 @@ describe('POST /api/sessions', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/sessions',
-      payload: { workspaceId: 'w', profile: 'default', skillProfile: 'missing' },
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex', skillProfile: 'missing' },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 'UNKNOWN_SKILL_PROFILE' });

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
+
 /**
  * A selectable directory in the catalog rooted at the relay's configured cwd.
  *
@@ -32,7 +34,7 @@ export interface ProfileCatalog {
   require(name: string): Promise<ProfileOption>;
 }
 
-/** Models accepted by the installed Codex app-server for new threads. */
+/** Models accepted by each provider's app-server for new sessions. */
 export interface ModelCatalog {
-  list(): Promise<string[]>;
+  list(provider: LlmProvider): Promise<string[]>;
 }

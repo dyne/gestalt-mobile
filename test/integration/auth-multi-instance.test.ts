@@ -254,6 +254,7 @@ describe('shared authorization across independently composed relays', () => {
       body: JSON.stringify({
         workspaceId: (await workspace).workspaces[0]?.children[0]?.id,
         profile: 'default',
+        provider: 'codex',
       }),
     });
     const socket = new WebSocket(
@@ -328,7 +329,7 @@ describe('shared authorization across independently composed relays', () => {
     const created = await request(baseB, '/api/sessions', sessionA, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspaceId, profile: 'default' }),
+      body: JSON.stringify({ workspaceId, profile: 'default', provider: 'codex' }),
     });
     expect(created.status).toBe(202);
     const sessionId = ((await created.json()) as { id: string }).id;

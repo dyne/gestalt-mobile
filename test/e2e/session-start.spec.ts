@@ -71,6 +71,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
         profile: 'default',
+        provider: 'codex',
         model: 'gpt-5.6-terra',
         sandbox: 'workspace-write',
         approvalPolicy: 'on-request',
@@ -168,6 +169,7 @@ test('sends a selected named skill profile only when creating a new session', as
     .toEqual({
       workspaceId: 'workspace-1',
       profile: 'default',
+      provider: 'codex',
       model: 'gpt-5.6-terra',
       sandbox: 'workspace-write',
       approvalPolicy: 'on-request',
@@ -506,6 +508,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
     expect(route.request().postDataJSON()).toEqual({
       workspaceId: 'workspace-1',
       profile: 'default',
+      provider: 'codex',
       model: 'gpt-5.6-terra',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',

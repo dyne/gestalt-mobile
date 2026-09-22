@@ -262,7 +262,12 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
       const response = await authorizedFetch(`${relayUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId, profile: 'default', model: 'gpt-5.6-terra' }),
+        body: JSON.stringify({
+          workspaceId,
+          profile: 'default',
+          provider: 'codex',
+          model: 'gpt-5.6-terra',
+        }),
       });
       expect(response.status).toBe(202);
       return response.json() as Promise<StartedSession>;

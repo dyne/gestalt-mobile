@@ -6,6 +6,7 @@
 
 import type { RelaySession } from '../sessions/relay-client.js';
 import type { ComponentVersion } from '../../../shared/contracts/component-version.js';
+import type { LlmProvider, ProviderAvailability } from '../../../shared/contracts/llm-provider.js';
 
 export type WorkspaceOption = {
   id: string;
@@ -18,7 +19,7 @@ export type WorkspaceOption = {
 export type Bootstrap = {
   workspaces: WorkspaceOption[];
   profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
-  models?: string[];
+  models?: Record<LlmProvider, string[]>;
   sessions: RelaySession[];
   versions: ComponentVersion[];
   capabilities: {
@@ -26,6 +27,7 @@ export type Bootstrap = {
     userInput: true;
     git: true;
     protocolCompatible: boolean;
+    providers?: ProviderAvailability;
   };
 };
 

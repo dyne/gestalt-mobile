@@ -16,6 +16,7 @@ import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-works
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
+import { ProviderModelCatalog } from './platform/catalog/provider-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
@@ -99,6 +100,7 @@ import {
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
+import type { ProviderAvailability } from '../shared/contracts/llm-provider.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -483,7 +485,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const workspaceFiles = new FilesystemWorkspaceFiles();
-  const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
+  const models = new ProviderModelCatalog({
+    codex: new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
+    // Kimi model discovery lands with the kimi platform adapter in a later stage.
+    kimi: { list: async () => [] },
+  });
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const skillCatalog = (profile: string) =>
     new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
@@ -523,6 +529,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       : session;
   };
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
+  const providerAvailability: ProviderAvailability = {
+    codex: {
+      available: options.installedCodexVersion !== null && protocol.compatible,
+      ...(options.installedCodexVersion === null ? {} : { version: options.installedCodexVersion }),
+    },
+    // Kimi detection lands with the kimi platform adapter in a later stage.
+    kimi: { available: false },
+  };
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
@@ -1138,6 +1152,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               protocolVersion: generatedProtocolVersion,
               compatible: protocol.compatible,
             },
+            providers: providerAvailability,
           };
         },
       },
@@ -1172,6 +1187,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         versions: options.componentVersions,
         protocolCompatible: protocol.compatible,
+        providers: providerAvailability,
       },
       sessionRoutes: {
         createId: randomUUID,

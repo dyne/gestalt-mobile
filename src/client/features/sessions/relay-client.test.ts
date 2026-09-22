@@ -56,7 +56,7 @@ describe('relay client', () => {
     expect(requests).toEqual([
       {
         url: '/api/sessions',
-        body: JSON.stringify({ workspaceId: 'workspace-1', profile: 'default' }),
+        body: JSON.stringify({ workspaceId: 'workspace-1', profile: 'default', provider: 'codex' }),
       },
       { url: '/api/sessions/session-1/turns', body: JSON.stringify({ text: 'hello' }) },
     ]);
@@ -70,7 +70,12 @@ describe('relay client', () => {
     });
     await client.startSession('workspace-1', { skillProfile: 'focused' });
     expect(body).toBe(
-      JSON.stringify({ workspaceId: 'workspace-1', profile: 'default', skillProfile: 'focused' }),
+      JSON.stringify({
+        workspaceId: 'workspace-1',
+        profile: 'default',
+        provider: 'codex',
+        skillProfile: 'focused',
+      }),
     );
   });
 

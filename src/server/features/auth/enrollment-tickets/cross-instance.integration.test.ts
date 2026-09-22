@@ -103,6 +103,7 @@ async function appFor(
         status: 'ok',
         version: 'test',
         codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+        providers: { codex: { available: true }, kimi: { available: false as const } },
       }),
     },
     logger: logger.logger,

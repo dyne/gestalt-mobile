@@ -41,6 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import MessageList from './features/chat/MessageList.svelte';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import type { ComponentVersion } from '../shared/contracts/component-version.js';
+  import type { LlmProvider } from '../shared/contracts/llm-provider.js';
   import { createChatCache } from './features/chat/chat-cache.js';
   import {
     detachedChatUrl,
@@ -141,7 +142,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
   const defaultSessionModel = 'gpt-5.6-terra';
-  let sessionModels = $state.raw<string[]>([defaultSessionModel]);
+  let sessionModels = $state.raw<Record<LlmProvider, string[]>>({
+    codex: [defaultSessionModel],
+    kimi: [],
+  });
   let componentVersions = $state.raw<ComponentVersion[]>([]);
   let sessionModel = $state(defaultSessionModel);
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
@@ -426,7 +430,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ) ?? '';
       workspaceTree = bootstrap.workspaces;
       codexProfiles = bootstrap.profiles;
-      sessionModels = [...new Set([defaultSessionModel, ...(bootstrap.models ?? [])])];
+      sessionModels = {
+        codex: [...new Set([defaultSessionModel, ...(bootstrap.models?.codex ?? [])])],
+        kimi: bootstrap.models?.kimi ?? [],
+      };
       componentVersions = bootstrap.versions ?? [];
       if (!detachedSessionId) await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
@@ -554,6 +561,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     shellStatus = 'Starting session…';
     const session = await sessionStartController.start(sessionWorkspaceId, {
+      provider: 'codex',
       sandbox,
       approvalPolicy,
       model: sessionModel,
@@ -1459,7 +1467,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               )}
               retryMessage={writerFeedback}
               retryable={retryOperationId !== null}
-              models={sessionModels}
+              models={sessionModels[
+                sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
+              ]}
               onchange={updateDraft}
               onscrollbottom={() => scheduleTail('explicit')}
               onmodelselect={(model) => void selectSessionModel(model)}
@@ -1565,7 +1575,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             expandedIds={sessionExpandedIds}
             {sandbox}
             {approvalPolicy}
-            models={sessionModels}
+            models={sessionModels.codex}
             selectedModel={sessionModel}
             skillProfiles={sessionSkillProfiles}
             selectedSkillProfile={selectedSessionSkillProfile}

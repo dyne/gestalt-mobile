@@ -27,7 +27,7 @@ describe('startSession', () => {
   it('creates and persists a starting session', async () => {
     const saved: unknown[] = [];
     const result = await startSession(
-      { workspaceId: 'w', profile: 'default' },
+      { workspaceId: 'w', profile: 'default', provider: 'codex' },
       {
         createId: () => 's',
         now: () => 't',
@@ -55,6 +55,7 @@ describe('startSession', () => {
     const input = {
       workspaceId: 'w',
       profile: 'default',
+      provider: 'codex',
       model: 'gpt-5.4',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
@@ -83,7 +84,7 @@ describe('startSession', () => {
   it('copies a selected global profile into the new session before activation', async () => {
     let activated: unknown;
     const result = await startSession(
-      { workspaceId: 'w', profile: 'default', skillProfile: 'focused' },
+      { workspaceId: 'w', profile: 'default', provider: 'codex', skillProfile: 'focused' },
       {
         createId: () => 's',
         now: () => 't',
@@ -124,7 +125,7 @@ describe('startSession', () => {
   it('keeps a missing saved skill disabled without blocking session activation', async () => {
     let activated: unknown;
     const result = await startSession(
-      { workspaceId: 'w', profile: 'default', skillProfile: 'stale' },
+      { workspaceId: 'w', profile: 'default', provider: 'codex', skillProfile: 'stale' },
       {
         createId: () => 's',
         now: () => 't',
@@ -168,5 +169,53 @@ describe('startSession', () => {
       enabled: false,
     });
     expect(activated).toBeDefined();
+  });
+
+  it('stores the requested provider on the durable session snapshot', async () => {
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'codex' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        ...skills,
+      },
+    );
+    expect(result.provider).toBe('codex');
+  });
+
+  it('rejects a model outside the requested provider catalog', async () => {
+    const deps = {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: {
+        resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+      },
+      profiles: {
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' }),
+      },
+      ...skills,
+      models: {
+        list: async (provider: 'codex' | 'kimi') =>
+          provider === 'codex' ? ['gpt-5.6-terra'] : ['kimi-for-coding'],
+      },
+    };
+    await expect(
+      startSession(
+        { workspaceId: 'w', profile: 'default', provider: 'codex', model: 'kimi-for-coding' },
+        deps,
+      ),
+    ).rejects.toThrow('CODEX_MODEL_UNAVAILABLE');
+    await expect(
+      startSession(
+        { workspaceId: 'w', profile: 'default', provider: 'kimi', model: 'gpt-5.6-terra' },
+        deps,
+      ),
+    ).rejects.toThrow('KIMI_MODEL_UNAVAILABLE');
   });
 });
