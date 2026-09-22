@@ -7,12 +7,13 @@
 import type { FastifyInstance } from 'fastify';
 
 import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 
 export function registerSelectModel(
   app: FastifyInstance,
   deps: {
     find(id: string): RelaySessionSnapshot | null;
-    models(): Promise<string[]>;
+    models(provider: LlmProvider): Promise<string[]>;
     now(): string;
     save(session: RelaySessionSnapshot): void;
   },
@@ -22,7 +23,7 @@ export function registerSelectModel(
     if (!session) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
     const model = (request.body as { model?: string }).model;
     if (typeof model !== 'string') return reply.code(400).send({ code: 'MODEL_REQUIRED' });
-    if (!(await deps.models()).includes(model))
+    if (!(await deps.models(session.provider)).includes(model))
       return reply.code(400).send({ code: 'MODEL_UNAVAILABLE' });
     if (session.state !== 'ready') return reply.code(409).send({ code: 'SESSION_NOT_READY' });
     const selected = RelaySession.rehydrate(session).selectModel(model, deps.now()).snapshot;

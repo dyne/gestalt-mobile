@@ -12,6 +12,7 @@ const session = {
   workspaceId: 'w',
   workspacePath: '/w',
   profile: 'default',
+  provider: 'codex' as const,
   threadId: 't',
   state: 'ready' as const,
   desiredState: 'active' as const,

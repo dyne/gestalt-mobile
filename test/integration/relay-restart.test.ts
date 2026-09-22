@@ -141,6 +141,7 @@ test('keeps a persisted thread detached after an HTTP relay restart', async () =
     body: JSON.stringify({
       workspaceId: workspace?.id,
       profile: 'default',
+      provider: 'codex',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     }),
@@ -246,7 +247,12 @@ test('uses the original snapshot only when a detached session sends after profil
   const created = await first.inject({
     method: 'POST',
     url: '/api/sessions',
-    payload: { workspaceId: workspace.id, profile: 'default', skillProfile: 'focused' },
+    payload: {
+      workspaceId: workspace.id,
+      profile: 'default',
+      provider: 'codex',
+      skillProfile: 'focused',
+    },
   });
   expect(created.statusCode).toBe(202);
   expect(created.json()).toMatchObject({

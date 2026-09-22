@@ -40,8 +40,11 @@ export async function startSession(
     deps.profiles.require(input.profile),
   ]);
   if (deps.models) {
-    const models = await deps.models.list();
-    if (!models.includes(model)) throw new Error('CODEX_MODEL_UNAVAILABLE');
+    const models = await deps.models.list(input.provider);
+    if (!models.includes(model))
+      throw new Error(
+        input.provider === 'codex' ? 'CODEX_MODEL_UNAVAILABLE' : 'KIMI_MODEL_UNAVAILABLE',
+      );
   }
   const selectedProfile = input.skillProfile
     ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
@@ -74,6 +77,7 @@ export async function startSession(
     id: deps.createId(),
     workspaceId: workspace.id,
     workspacePath: workspace.realPath,
+    provider: input.provider,
     profile: input.profile,
     model,
     ...(branch ? { branch } : {}),
@@ -84,7 +88,7 @@ export async function startSession(
   }).snapshot;
   deps.save(session);
   if (!deps.activate) return session;
-  const active = await deps.activate(session, {});
+  const active = await deps.activate(session, { provider: session.provider });
   deps.save(active);
   return active;
 }

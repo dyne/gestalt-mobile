@@ -16,6 +16,7 @@ type Row = {
   id: string;
   workspace_id: string;
   workspace_path: string;
+  provider: string | null;
   profile: string;
   model: string | null;
   branch: string | null;
@@ -39,12 +40,13 @@ export class SqliteSessionRepository {
   save(session: RelaySessionSnapshot): void {
     this.db
       .prepare(
-        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,model,branch,sandbox,approval_policy,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,profile=excluded.profile,model=excluded.model,branch=excluded.branch,sandbox=excluded.sandbox,approval_policy=excluded.approval_policy,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,provider,profile,model,branch,sandbox,approval_policy,thread_id,state,desired_state,active_turn_id,protocol_version,attention_tool_capability,failure_count,effective_skill_selection_json,last_org_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,workspace_path=excluded.workspace_path,provider=excluded.provider,profile=excluded.profile,model=excluded.model,branch=excluded.branch,sandbox=excluded.sandbox,approval_policy=excluded.approval_policy,thread_id=excluded.thread_id,state=excluded.state,desired_state=excluded.desired_state,active_turn_id=excluded.active_turn_id,protocol_version=excluded.protocol_version,attention_tool_capability=excluded.attention_tool_capability,failure_count=excluded.failure_count,effective_skill_selection_json=excluded.effective_skill_selection_json,last_org_plan_json=excluded.last_org_plan_json,updated_at=excluded.updated_at',
       )
       .run(
         session.id,
         session.workspaceId,
         session.workspacePath,
+        session.provider,
         session.profile,
         session.model ?? null,
         session.branch ?? null,
@@ -103,6 +105,7 @@ function map(row: Row): RelaySessionSnapshot {
     id: row.id,
     workspaceId: row.workspace_id,
     workspacePath: row.workspace_path,
+    provider: row.provider === 'kimi' ? 'kimi' : 'codex',
     profile: row.profile,
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.branch === null ? {} : { branch: row.branch }),

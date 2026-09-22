@@ -1,3 +1,5 @@
 dist/
 node_modules/
 .gestalt/
+docs/kimi-web-openapi.json
+docs/kimi-web-asyncapi.json

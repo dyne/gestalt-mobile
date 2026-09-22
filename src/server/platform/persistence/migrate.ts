@@ -29,6 +29,8 @@ export function migrate(database: DatabaseSync): void {
     database.exec('ALTER TABLE relay_sessions ADD COLUMN sandbox TEXT');
   if (!columns.some((column) => column.name === 'approval_policy'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN approval_policy TEXT');
+  if (!columns.some((column) => column.name === 'provider'))
+    database.exec("ALTER TABLE relay_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'codex'");
   const autopilotColumns = database
     .prepare('PRAGMA table_info(autopilot_sessions)')
     .all() as Array<{ name: string }>;

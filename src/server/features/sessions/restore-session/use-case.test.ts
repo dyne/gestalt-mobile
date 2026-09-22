@@ -54,6 +54,7 @@ describe('canRestore', () => {
       workspaceId: 'workspace-1',
       workspacePath: '/workspace',
       profile: 'default',
+      provider: 'codex' as const,
       model: 'gpt-5',
       branch: 'main',
       threadId: 'old-thread',

@@ -191,7 +191,12 @@ async function renderChat(
       new Response(
         JSON.stringify(
           String(input) === '/api/bootstrap'
-            ? { workspaces: [], profiles: [], models: [], sessions: initialSessions }
+            ? {
+                workspaces: [],
+                profiles: [],
+                models: { codex: [], kimi: [] },
+                sessions: initialSessions,
+              }
             : [],
         ),
       ),
@@ -243,7 +248,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [
                     { id: 'a', state: 'ready', workspacePath: '/a' },
                     { id: 'b', state: 'ready', workspacePath: '/b' },
@@ -394,7 +399,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [
                     { id: 'a', state: 'ready', workspacePath: '/work/a' },
                     { id: 'b', state: 'ready', workspacePath: '/work/b', model: 'gpt-5.6-sol' },
@@ -441,7 +446,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [
                     { id: 'a', state: 'ready', workspacePath: '/work/a' },
                     { id: 'b', state: 'ready', workspacePath: '/work/b' },
@@ -499,7 +504,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [{ id: 'a', state: 'ready', workspacePath: '/work/a' }],
                 }
               : String(input) === '/api/skill-profiles'
@@ -546,7 +551,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [
                     { id: 'a', state: 'ready', workspacePath: '/work/a' },
                     { id: 'b', state: 'ready', workspacePath: '/work/b' },
@@ -601,7 +606,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [
                     { id: 'a', state: 'ready', workspacePath: '/a' },
                     { id: 'b', state: 'ready', workspacePath: '/b' },
@@ -671,7 +676,7 @@ describe('RelayApp chat controller composition', () => {
               ? {
                   workspaces: [],
                   profiles: [],
-                  models: [],
+                  models: { codex: [], kimi: [] },
                   sessions: [{ id: 'a', state: 'ready', workspacePath: '/work/a' }],
                 }
               : String(input) === '/api/skill-profiles'

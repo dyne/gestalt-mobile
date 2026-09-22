@@ -167,7 +167,14 @@ async function create(
   const response = await app.inject({
     method: 'POST',
     url: '/api/sessions',
-    payload: { workspaceId, profile, model, sandbox: 'workspace-write', approvalPolicy: 'never' },
+    payload: {
+      workspaceId,
+      profile,
+      provider: 'codex',
+      model,
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    },
   });
   if (response.statusCode !== 202)
     throw new Error(`session creation failed (${response.statusCode})`);
