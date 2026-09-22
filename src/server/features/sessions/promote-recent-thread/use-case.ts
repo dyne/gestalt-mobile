@@ -76,7 +76,7 @@ async function promote(
       id: deps.createId(),
       workspaceId: thread.cwd,
       workspacePath: thread.cwd,
-      provider: 'codex',
+      provider: thread.provider ?? 'codex',
       profile: thread.profile,
       threadId: thread.id,
       ...(executionPolicy === undefined ? {} : { executionPolicy }),

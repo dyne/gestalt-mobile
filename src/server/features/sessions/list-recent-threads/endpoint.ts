@@ -6,6 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import { buildResumeCommand } from '../application/resume-command.js';
 
 export type RecentThread = {
@@ -13,6 +14,8 @@ export type RecentThread = {
   cwd: string;
   profile: string;
   recencyAt: number | null;
+  /** Owning llm service; absent denotes a codex thread from before providers. */
+  provider?: LlmProvider;
 };
 
 type RecentThreadMetadata = {
@@ -30,18 +33,23 @@ export function registerListRecentThreads(
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
-    return threads.map(({ id, cwd, recencyAt }) => {
+    return threads.map(({ id, cwd, recencyAt, provider }) => {
       const metadata = deps.metadata?.(id);
       return {
         id,
         cwd,
         recencyAt,
+        ...(provider ? { provider } : {}),
         ...(metadata?.model === undefined ? {} : { model: metadata.model }),
         ...(metadata?.skillProfile === undefined ? {} : { skillProfile: metadata.skillProfile }),
         ...(metadata?.orgPlanFilename === undefined
           ? {}
           : { orgPlanFilename: metadata.orgPlanFilename }),
-        resumeCommand: buildResumeCommand({ threadId: id, workspacePath: cwd }),
+        // The CLI resume command is codex-specific; kimi threads open in the
+        // relay without one.
+        ...(provider === 'kimi'
+          ? {}
+          : { resumeCommand: buildResumeCommand({ threadId: id, workspacePath: cwd }) }),
       };
     });
   });
