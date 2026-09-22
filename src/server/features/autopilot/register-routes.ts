@@ -15,6 +15,7 @@ export function registerAutopilotRoutes(
     get(scope: string, key: string): { statusCode: number; body: string } | null;
     put(scope: string, key: string, statusCode: number, body: string): void;
   },
+  providerFor?: (sessionId: string) => string | undefined,
 ): void {
-  registerAutopilotToggle(app, coordinator, idempotency);
+  registerAutopilotToggle(app, coordinator, idempotency, providerFor);
 }

@@ -12,5 +12,5 @@ export const llmProviders: readonly LlmProvider[] = ['codex', 'kimi'];
 /** Per-provider availability reported by bootstrap and health. */
 export type ProviderAvailability = {
   codex: { available: boolean; version?: string };
-  kimi: { available: false };
+  kimi: { available: boolean; version?: string };
 };

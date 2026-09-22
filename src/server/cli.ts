@@ -44,6 +44,7 @@ export type CliDependencies = {
   stderr?: Output;
   signalSource?: Pick<NodeJS.Process, 'once' | 'removeListener'>;
   probeCodexVersion?: () => Promise<string | null>;
+  probeKimiVersion?: () => Promise<string | null>;
   runStartupDoctor?: (cwd: string) => Promise<{ ok: boolean; report: string }>;
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
@@ -124,6 +125,13 @@ export async function packageVersion(moduleUrl: string): Promise<string> {
 
 export async function probeCodexVersion(): Promise<string | null> {
   return runFile('codex', ['--version'])
+    .then(({ stdout }) => stdout.trim() || null)
+    .catch(() => null);
+}
+
+/** Detects the kimi CLI exactly like the codex probe; absence is a soft status. */
+export async function probeKimiVersion(): Promise<string | null> {
+  return runFile('kimi', ['--version'])
     .then(({ stdout }) => stdout.trim() || null)
     .catch(() => null);
 }
@@ -254,6 +262,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
       'WARNING: Startup diagnostics reported a problem; Gestalt Mobile will continue so it can show recovery controls.\n',
     );
   const installedCodexVersion = await (dependencies.probeCodexVersion ?? probeCodexVersion)();
+  const installedKimiVersion = await (dependencies.probeKimiVersion ?? probeKimiVersion)();
   const mobileVersion = await packageVersion(moduleUrl);
   const app = await (dependencies.compose ?? composeRelayApp)({
     root: config.root,
@@ -263,6 +272,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     staticDir: packagedClientDir(moduleUrl),
     profiles: new LauncherProfileCatalog(),
     installedCodexVersion,
+    installedKimiVersion,
     componentVersions: componentVersions(
       mobileVersion,
       installedCodexVersion,
