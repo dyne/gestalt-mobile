@@ -23,6 +23,8 @@ import { normalizeCodexNotification } from './platform/codex/normalizer.js';
 import { KimiSessionRuntime } from './platform/kimi/kimi-session-runtime.js';
 import { KimiWebServerManager } from './platform/kimi/kimi-web-server-manager.js';
 import { KimiModelCatalog } from './platform/kimi/kimi-model-catalog.js';
+import { KimiSkillCatalog } from './platform/kimi/kimi-skill-catalog.js';
+import { createKimiRecentSessionLister } from './platform/kimi/kimi-recent-session-lister.js';
 import { kimiStateBase } from './platform/kimi/kimi-share-dir.js';
 import { normalizeKimiEvent } from './platform/kimi/kimi-normalizer.js';
 import { decodeKimiActivityFacts } from './platform/kimi/kimi-activity-facts.js';
@@ -533,14 +535,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
   const skillCatalog = (profile: string) =>
     new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
-  const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
-    skillCatalog(profile).list(workspace),
+  // kimi discovery is workspace-scoped, not profile-scoped: the profile only
+  // decides which discovered skills a session's server materializes.
+  const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
+  const editorSkillCatalog = new CachedSkillCatalog((provider, profile, workspace) =>
+    provider === 'kimi' ? kimiSkillCatalog.list(workspace) : skillCatalog(profile).list(workspace),
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
-    const catalog = await skillCatalog(session.profile).list(session.workspacePath);
+    const catalog =
+      session.provider === 'kimi'
+        ? await kimiSkillCatalog.list(session.workspacePath)
+        : await skillCatalog(session.profile).list(session.workspacePath);
     if (session.effectiveSkillSelection)
       return compileSkillOverride({
         discovered: catalog.skills,
@@ -559,6 +567,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     profiles: options.profiles,
     launch: options.launchAppServer ?? launchCodexAppServer,
   });
+  const kimiRecentSessions = createKimiRecentSessionLister({
+    servers: kimiManager ?? null,
+    available: kimiManager != null,
+  });
+  // The relay's recent list spans both llm services; execution-policy metadata
+  // stays a codex rollout concern, so the codex lister remains the source.
+  const recentThreadsForRelay = {
+    list: async (): Promise<
+      import('./features/sessions/list-recent-threads/endpoint.js').RecentThread[]
+    > => [...(await recentThreads.list()), ...(await kimiRecentSessions.list())],
+  };
   const recoverExecutionPolicy = async (
     session: RelaySessionSnapshot,
   ): Promise<RelaySessionSnapshot> => {
@@ -1299,7 +1318,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       logger: console,
       staticDir: options.staticDir,
-      recentThreads,
+      recentThreads: recentThreadsForRelay,
       bootstrap: {
         workspaces,
         profiles: options.profiles,
@@ -1443,17 +1462,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const owner = session ? ownerRuntime(session) : null;
           return owner ? owner.ownsWriter(id) : false;
         },
-        promoteRecent: runtime
-          ? (thread) =>
-              promoteRecentThread(thread, {
-                createId: randomUUID,
-                now: () => new Date().toISOString(),
-                list: () => sessions.list(),
-                save: saveSession,
-                read: (session) => runtime.readHistory(session),
-                executionPolicy: (candidate) => recentThreads.executionPolicy(candidate.id),
-              })
-          : undefined,
+        promoteRecent:
+          runtime || kimiRuntime
+            ? (thread) =>
+                promoteRecentThread(thread, {
+                  createId: randomUUID,
+                  now: () => new Date().toISOString(),
+                  list: () => sessions.list(),
+                  save: saveSession,
+                  read: (session) => {
+                    const owner = ownerRuntime(session);
+                    if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                    return owner.readHistory(session);
+                  },
+                  executionPolicy: (candidate) =>
+                    candidate.provider === 'kimi'
+                      ? Promise.resolve(undefined)
+                      : recentThreads.executionPolicy(candidate.id),
+                })
+            : undefined,
         release: (session) => {
           autopilot.cancel(session.id, 'sessionEnded');
           return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
@@ -1742,7 +1769,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   app.addHook('onListen', async () => {
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
-    if (profile) await editorSkillCatalog.refresh(profile, root);
+    if (profile) await editorSkillCatalog.refresh('codex', profile, root);
+    await editorSkillCatalog.refresh('kimi', 'default', root);
     await detachActiveSessions();
   });
   app.addHook('onClose', async () => {
