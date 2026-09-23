@@ -13,7 +13,13 @@ import type { KimiWsEvent } from './kimi-ws-client.js';
 const NOW = '2026-09-22T00:00:00.000Z';
 
 function event(payload: unknown, sessionId = 'kimi-thread-1'): KimiWsEvent {
-  return { type: 'session_event', seq: 7, session_id: sessionId, payload };
+  const type =
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { type?: unknown }).type === 'string'
+      ? (payload as { type: string }).type
+      : 'event';
+  return { type, seq: 7, session_id: sessionId, payload };
 }
 
 const context: KimiEventContext = {
@@ -193,6 +199,6 @@ describe('normalizeKimiEvent', () => {
   it('returns null for unknown or malformed events', () => {
     expect(normalizeKimiEvent('s1', 0, NOW, event({ type: 'mystery' }), context)).toBeNull();
     expect(normalizeKimiEvent('s1', 0, NOW, event(null), context)).toBeNull();
-    expect(normalizeKimiEvent('s1', 0, NOW, { type: 'session_event' }, context)).toBeNull();
+    expect(normalizeKimiEvent('s1', 0, NOW, { type: 'assistant.delta' }, context)).toBeNull();
   });
 });

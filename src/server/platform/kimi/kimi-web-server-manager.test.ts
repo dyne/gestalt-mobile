@@ -176,6 +176,28 @@ describe('KimiWebServerManager', () => {
     expect(manager.get('default')).toBeNull();
   });
 
+  it('serializes concurrent ensure calls into a single spawn per profile', async () => {
+    const root = await sandbox();
+    const { stateBase, sourceShareDir } = await fixture(root);
+    stubFetch([]);
+    const spawns: string[][] = [];
+    const manager = new KimiWebServerManager({
+      stateBase,
+      sourceShareDir,
+      spawnImpl: (_command, args) => {
+        spawns.push(args);
+        return fakeChild() as never;
+      },
+    });
+    const [a, b] = await Promise.all([
+      manager.ensure('default', selection(true)),
+      manager.ensure('default', selection(true)),
+    ]);
+    expect(spawns).toHaveLength(1);
+    expect(a).toBe(b);
+    await manager.stopAll();
+  });
+
   it('keeps profile servers isolated from each other', async () => {
     const root = await sandbox();
     const { stateBase, sourceShareDir } = await fixture(root);
@@ -190,6 +212,10 @@ describe('KimiWebServerManager', () => {
     const b = await manager.ensure('work', selection(true));
     expect(a.shareDir).not.toBe(b.shareDir);
     expect(a.skillsDir).not.toBe(b.skillsDir);
+    expect(new Set(manager.list().map((handle) => handle.profileKey))).toEqual(
+      new Set(['default', 'work']),
+    );
     await manager.stopAll();
+    expect(manager.list()).toEqual([]);
   });
 });

@@ -42,6 +42,39 @@ describe('autopilot toggle endpoint', () => {
     await app.close();
   });
 
+  it('rejects kimi session toggles in both directions', async () => {
+    const app = fastify();
+    const enable = vi.fn(() => ({ code: 'AUTOPILOT_PLAN_REQUIRED' }));
+    const disable = vi.fn(() => ({
+      state: 'disabled',
+      enabled: false,
+      retry: { position: 0, limit: 3 },
+      updatedAt: 't',
+    }));
+    registerAutopilotToggle(app, { enable, disable } as never, undefined, (sessionId) =>
+      sessionId === 'kimi-session' ? 'kimi' : undefined,
+    );
+    for (const enabled of [true, false]) {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/api/sessions/kimi-session/autopilot',
+        payload: { enabled },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ code: 'AUTOPILOT_PROVIDER_UNSUPPORTED' });
+    }
+    const codex = await app.inject({
+      method: 'PUT',
+      url: '/api/sessions/codex-session/autopilot',
+      payload: { enabled: true },
+    });
+    expect(codex.statusCode).toBe(409);
+    expect(codex.json()).toEqual({ code: 'AUTOPILOT_PLAN_REQUIRED' });
+    expect(enable).toHaveBeenCalledWith('codex-session');
+    expect(disable).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('replays an idempotent toggle and rejects a stale key with another operation', async () => {
     const app = fastify();
     const entries = new Map<string, { statusCode: number; body: string }>();

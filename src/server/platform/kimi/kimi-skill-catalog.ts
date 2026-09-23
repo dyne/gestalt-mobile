@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 import type { SkillCatalog } from '../../features/skills/application/ports.js';
 import {
@@ -71,12 +71,15 @@ export class KimiSkillCatalog implements SkillCatalog {
       for (const wire of wireSkills) {
         const skill = wire as WireSkill;
         if (!skill || typeof skill !== 'object' || typeof skill.name !== 'string') continue;
+        // The shared catalog contract canonicalizes skill paths as absolute
+        // filesystem paths (profile snapshots and overrides resolve against
+        // them). kimi built-ins report no path and cannot be materialized per
+        // profile, so they are omitted rather than advertised with a
+        // non-filesystem fallback that would fail validation downstream.
+        if (typeof skill.path !== 'string' || !isAbsolute(skill.path)) continue;
         const parsed = availableSkillSchema.safeParse({
           name: skill.name,
-          path:
-            typeof skill.path === 'string' && skill.path.length > 0
-              ? skill.path
-              : `kimi://${typeof skill.source === 'string' ? skill.source : 'workspace'}/${skill.name}`,
+          path: skill.path,
           enabled: true,
           ...(typeof skill.description === 'string' ? { description: skill.description } : {}),
           ...(typeof skill.source === 'string' ? { scope: `kimi:${skill.source}` } : {}),

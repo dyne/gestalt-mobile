@@ -186,13 +186,13 @@ describe('KimiSessionRuntime', () => {
     await runtime.queueTurnInput(first, 'prompt-a', 'again', 'prompt-b');
     // kimi turn numbers resolve back to the gestalt prompt ids, FIFO.
     ws.emit({
-      type: 'session_event',
+      type: 'turn.started',
       seq: 1,
       session_id: 'kimi-thread-1',
       payload: { type: 'turn.started', agentId: 'a1', turnId: 1 },
     });
     ws.emit({
-      type: 'session_event',
+      type: 'turn.started',
       seq: 2,
       session_id: 'kimi-thread-1',
       payload: { type: 'turn.started', agentId: 'a1', turnId: 2 },
@@ -201,7 +201,7 @@ describe('KimiSessionRuntime', () => {
     expect(runtime.eventContext('relay-1').resolveTurnId('a1', 2)).toBe('prompt-b');
     // Child agents never consume main-agent prompt bindings.
     ws.emit({
-      type: 'session_event',
+      type: 'turn.started',
       seq: 3,
       session_id: 'kimi-thread-1',
       payload: { type: 'turn.started', agentId: 'child-1', turnId: 1 },
@@ -219,6 +219,38 @@ describe('KimiSessionRuntime', () => {
       content: [{ type: 'text', text: 'wait, also this' }],
       prompt_id: 'prompt-b',
     });
+  });
+
+  it('steers queued input into the active turn once kimi binds it', async () => {
+    const { runtime, rest, ws } = harness();
+    const started = await runtime.start(snapshot(), NOW);
+    const active = await runtime.startTurn(started, 'hello', 'prompt-a', NOW);
+    ws.emit({
+      type: 'turn.started',
+      seq: 1,
+      session_id: 'kimi-thread-1',
+      payload: { type: 'turn.started', agentId: 'a1', turnId: 1 },
+    });
+    await runtime.queueTurnInput(active, 'prompt-a', 'wait, also this', 'prompt-b');
+    expect(rest.calls.at(-1)).toEqual({
+      method: 'post',
+      path: '/api/v1/sessions/kimi-thread-1/prompts:steer',
+      body: { prompt_ids: ['prompt-b'] },
+    });
+    // Completion clears the active prompt: the next submit is a plain
+    // enqueue with no steer call.
+    ws.emit({
+      type: 'prompt.completed',
+      seq: 2,
+      session_id: 'kimi-thread-1',
+      payload: { type: 'prompt.completed', agentId: 'a1', promptId: 'prompt-a' },
+    });
+    await runtime.queueTurnInput(active, 'prompt-a', 'next', 'prompt-c');
+    expect(rest.calls.at(-1)).toMatchObject({
+      method: 'post',
+      path: '/api/v1/sessions/kimi-thread-1/prompts',
+    });
+    expect(rest.calls.at(-1)?.body).toMatchObject({ prompt_id: 'prompt-c' });
   });
 
   it('interrupts a turn through the abort endpoint', async () => {
@@ -292,7 +324,7 @@ describe('KimiSessionRuntime', () => {
     const { runtime, rest, ws, requests } = harness(routes);
     await runtime.start(snapshot(), NOW);
     ws.emit({
-      type: 'session_event',
+      type: 'agent.status.updated',
       seq: 1,
       session_id: 'kimi-thread-1',
       payload: { type: 'agent.status.updated', agentId: 'a1', status: 'awaiting_approval' },

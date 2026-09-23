@@ -65,14 +65,23 @@ describe('KimiSkillCatalog', () => {
         description: 'Reviews code',
         scope: 'kimi:project',
       },
-      {
-        name: 'builtin-planner',
-        path: 'kimi://builtin/builtin-planner',
-        enabled: true,
-        scope: 'kimi:builtin',
-      },
     ]);
-    expect(result.errors).toEqual([{ message: 'Invalid Kimi skill metadata for "".' }]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('omits kimi built-ins that report no materializable filesystem path', async () => {
+    const catalog = catalogWith(
+      new Map([
+        ['/api/v1/workspaces', { items: [{ id: 'wd_abc', root: '/repo', name: 'repo' }] }],
+        [
+          '/api/v1/workspaces/wd_abc/skills',
+          { skills: [{ name: 'builtin-planner', source: 'builtin' }] },
+        ],
+      ]),
+    );
+    const result = await catalog.list('/repo');
+    expect(result.skills).toEqual([]);
+    expect(result.errors).toEqual([]);
   });
 
   it('reports when kimi has no workspace registered for the path', async () => {

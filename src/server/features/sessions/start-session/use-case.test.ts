@@ -218,4 +218,53 @@ describe('startSession', () => {
       ),
     ).rejects.toThrow('KIMI_MODEL_UNAVAILABLE');
   });
+
+  it('defaults an omitted model to the provider catalog instead of the codex default', async () => {
+    const deps = {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: {
+        resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+      },
+      profiles: {
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' }),
+      },
+      ...skills,
+      models: {
+        list: async (provider: 'codex' | 'kimi') =>
+          provider === 'codex' ? ['gpt-5.6-terra'] : ['kimi-for-coding'],
+      },
+    };
+    const kimi = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'kimi' },
+      deps,
+    );
+    expect(kimi.model).toBe('kimi-for-coding');
+    const codex = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'codex' },
+      deps,
+    );
+    expect(codex.model).toBe('gpt-5.6-terra');
+  });
+
+  it('falls back to the provider first model when the relay default is unavailable', async () => {
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'codex' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: {
+          require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' }),
+        },
+        ...skills,
+        models: { list: async () => ['gpt-5.4', 'gpt-5.6-terra-x'] },
+      },
+    );
+    expect(result.model).toBe('gpt-5.4');
+  });
 });

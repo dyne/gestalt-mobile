@@ -55,6 +55,8 @@ type SessionResource = {
   pendingPrompts: string[];
   /** `${agentId}:${turnNumber}` → prompt id. */
   agentTurns: Map<string, string>;
+  /** Prompt id of the turn kimi is currently running, if any. */
+  activePromptId: string | null;
   childAgents: Set<string>;
   mainAgentId: string | null;
   pendingInteractions: Map<string, PendingInteraction>;
@@ -193,7 +195,8 @@ export class KimiSessionRuntime {
     return RelaySession.rehydrate(session).startTurn(promptId, now).snapshot;
   }
 
-  /** kimi queues prompts server-side while a turn runs; queuing is the steering equivalent. */
+  /** kimi queues prompts server-side while a turn runs; submitPrompt steers
+   * the queued prompt into the active turn, which is the steering equivalent. */
   public async queueTurnInput(
     session: RelaySessionSnapshot,
     _turnId: string,
@@ -383,6 +386,7 @@ export class KimiSessionRuntime {
       cursor: 0,
       pendingPrompts: [],
       agentTurns: new Map(),
+      activePromptId: null,
       childAgents: new Set(),
       mainAgentId: null,
       pendingInteractions: new Map(),
@@ -495,7 +499,20 @@ export class KimiSessionRuntime {
           break;
         }
         const promptId = resource.pendingPrompts.shift();
-        if (promptId) resource.agentTurns.set(`${agentId}:${turnNumber}`, promptId);
+        if (promptId) {
+          resource.agentTurns.set(`${agentId}:${turnNumber}`, promptId);
+          resource.activePromptId = promptId;
+        }
+        break;
+      }
+      case 'prompt.completed':
+      case 'prompt.aborted': {
+        const promptId = typeof payload.promptId === 'string' ? payload.promptId : null;
+        if (!promptId) break;
+        if (resource.activePromptId === promptId) resource.activePromptId = null;
+        for (const [binding, bound] of resource.agentTurns) {
+          if (bound === promptId) resource.agentTurns.delete(binding);
+        }
         break;
       }
       case 'subagent.spawned':
@@ -603,6 +620,13 @@ export class KimiSessionRuntime {
       ...(model ? { model } : {}),
     });
     resource.pendingPrompts.push(promptId);
+    // kimi enqueues prompts submitted while a turn runs; steer pulls the
+    // queued prompt into the active turn instead of deferring it.
+    if (resource.activePromptId) {
+      await handle.client.post(`/api/v1/sessions/${resource.threadId}/prompts:steer`, {
+        prompt_ids: [promptId],
+      });
+    }
   }
 
   private async readHistoryFrom(resource: SessionResource): Promise<{
