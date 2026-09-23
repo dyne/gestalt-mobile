@@ -5,7 +5,7 @@
  */
 
 import type { RecentThread } from '../../features/sessions/list-recent-threads/endpoint.js';
-import type { KimiWebServerManager } from './kimi-web-server-manager.js';
+import type { KimiServerHandle, KimiWebServerManager } from './kimi-web-server-manager.js';
 
 const LIST_PATH = '/api/v2/sessions?page_size=50&sort=meta.updated_at_desc';
 const LIST_TIMEOUT_MS = 5_000;
@@ -17,8 +17,11 @@ type WireSession = {
 };
 
 /**
- * Lists recent kimi web sessions through a gestalt-owned server, for parity
- * with the codex recent-thread lister. kimi timestamps arrive as epoch
+ * Lists recent kimi web sessions across every running gestalt-owned server,
+ * for parity with the codex recent-thread lister. Each skill profile owns an
+ * isolated `kimi web` process and state directory, so a profile's sessions
+ * only exist on that profile's server; only already-running servers are
+ * queried, never spawned just to list. kimi timestamps arrive as epoch
  * seconds (or, defensively, epoch millis), normalized to seconds.
  */
 export function createKimiRecentSessionLister(deps: {
@@ -28,42 +31,45 @@ export function createKimiRecentSessionLister(deps: {
   return {
     async list(): Promise<RecentThread[]> {
       if (!deps.available || !deps.servers) return [];
-      try {
-        const handle = await deps.servers.ensure('default', []);
-        const data = (await withTimeout(
-          handle.client.get(LIST_PATH),
-          LIST_TIMEOUT_MS,
-          'kimi session list timed out',
-        )) as { items?: unknown };
-        const items = Array.isArray(data.items) ? data.items : [];
-        return items.flatMap((item: WireSession) => {
-          if (!item || typeof item !== 'object') return [];
-          const workspace = item.workspace;
-          const cwd =
-            workspace && typeof workspace === 'object'
-              ? (workspace as { cwd?: unknown }).cwd
-              : undefined;
-          if (typeof item.id !== 'string' || typeof cwd !== 'string' || !cwd.startsWith('/'))
-            return [];
-          const updatedAt =
-            item.meta && typeof item.meta === 'object'
-              ? (item.meta as { updated_at?: unknown }).updated_at
-              : undefined;
-          return [
-            {
-              id: item.id,
-              cwd,
-              profile: 'default',
-              recencyAt: toEpochSeconds(updatedAt),
-              provider: 'kimi' as const,
-            },
-          ];
-        });
-      } catch {
-        return [];
-      }
+      const listings = await Promise.all(deps.servers.list().map(listFromServer));
+      return listings.flat().sort((a, b) => (b.recencyAt ?? 0) - (a.recencyAt ?? 0));
     },
   };
+}
+
+async function listFromServer(handle: KimiServerHandle): Promise<RecentThread[]> {
+  try {
+    const data = (await withTimeout(
+      handle.client.get(LIST_PATH),
+      LIST_TIMEOUT_MS,
+      'kimi session list timed out',
+    )) as { items?: unknown };
+    const items = Array.isArray(data.items) ? data.items : [];
+    return items.flatMap((item: WireSession) => {
+      if (!item || typeof item !== 'object') return [];
+      const workspace = item.workspace;
+      const cwd =
+        workspace && typeof workspace === 'object'
+          ? (workspace as { cwd?: unknown }).cwd
+          : undefined;
+      if (typeof item.id !== 'string' || typeof cwd !== 'string' || !cwd.startsWith('/')) return [];
+      const updatedAt =
+        item.meta && typeof item.meta === 'object'
+          ? (item.meta as { updated_at?: unknown }).updated_at
+          : undefined;
+      return [
+        {
+          id: item.id,
+          cwd,
+          profile: handle.profileKey,
+          recencyAt: toEpochSeconds(updatedAt),
+          provider: 'kimi' as const,
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function toEpochSeconds(value: unknown): number | null {

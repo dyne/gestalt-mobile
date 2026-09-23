@@ -25,7 +25,8 @@ export type KimiWsAck = { type: 'ack'; id?: string; code: number; msg?: string }
 /**
  * WebSocket client for the kimi web Server API. Client frames carry a
  * monotonically increasing id and are acknowledged with `{type:'ack'}`;
- * session events arrive as `session_event` frames. Durable missed events are
+ * every other frame is an event whose top-level `type` is the event type
+ * (`assistant.delta`, `turn.started`, ...). Durable missed events are
  * replayed by the server when `subscribe` carries per-session cursors.
  */
 export class KimiWsClient {
@@ -149,8 +150,16 @@ export class KimiWsClient {
       }
       return;
     }
-    if (frame.type === 'session_event') {
-      const event = frame as unknown as KimiWsEvent;
+    // Event frames carry the event type at the top level (for example
+    // `{type:'assistant.delta', payload:{delta}}`). The gestalt event
+    // contract keeps the type inside the payload, so it is folded in here;
+    // any non-hello, non-ack frame is an event.
+    if (typeof frame.type === 'string') {
+      const payload = frame.payload && typeof frame.payload === 'object' ? frame.payload : {};
+      const event = {
+        ...(frame as unknown as KimiWsEvent),
+        payload: { ...(payload as Record<string, unknown>), type: frame.type },
+      };
       for (const listener of this.eventListeners) listener(event);
     }
   }

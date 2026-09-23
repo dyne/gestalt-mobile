@@ -24,8 +24,8 @@ export function registerAutopilotToggle(
     const key = request.headers['idempotency-key'];
     const sessionId = (request.params as { id: string }).id;
     // Autopilot orchestration (executors, plan measurement, wait leases) is
-    // codex-only; kimi sessions must not enable it.
-    if (enabled && providerFor?.(sessionId) === 'kimi')
+    // codex-only; kimi sessions must not toggle it at all, in either direction.
+    if (providerFor?.(sessionId) === 'kimi')
       return reply.code(409).send({ code: 'AUTOPILOT_PROVIDER_UNSUPPORTED' });
     const scope = `autopilot-toggle:${sessionId}`;
     const fingerprint = createHash('sha256').update(String(enabled)).digest('hex');

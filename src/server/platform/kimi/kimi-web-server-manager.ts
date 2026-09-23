@@ -51,6 +51,7 @@ type ManagedServer = {
  */
 export class KimiWebServerManager {
   private readonly servers = new Map<string, ManagedServer>();
+  private readonly ensureInFlight = new Map<string, Promise<KimiServerHandle>>();
 
   public constructor(
     private readonly input: {
@@ -70,13 +71,40 @@ export class KimiWebServerManager {
     if (existing && !existing.exited && existing.fingerprint === fingerprint) {
       return existing.handle;
     }
-    if (existing) await this.stop(profileKey);
-    return this.spawn(profileKey, fingerprint, selection);
+    // Serialize starts per profile key: without this, concurrent callers can
+    // both observe no server, spawn two children, and leave the first handle
+    // pointing at a process stopAll() no longer tracks.
+    const pending = this.ensureInFlight.get(profileKey);
+    if (pending) {
+      await pending.then(
+        () => {},
+        () => {},
+      );
+      return this.ensure(profileKey, selection);
+    }
+    const start = (async (): Promise<KimiServerHandle> => {
+      const current = this.servers.get(profileKey);
+      if (current) await this.stop(profileKey);
+      return this.spawn(profileKey, fingerprint, selection);
+    })();
+    this.ensureInFlight.set(profileKey, start);
+    try {
+      return await start;
+    } finally {
+      if (this.ensureInFlight.get(profileKey) === start) this.ensureInFlight.delete(profileKey);
+    }
   }
 
   public get(profileKey: string): KimiServerHandle | null {
     const server = this.servers.get(profileKey);
     return server && !server.exited ? server.handle : null;
+  }
+
+  /** Returns handles for every currently running profile server, unsorted. */
+  public list(): KimiServerHandle[] {
+    return [...this.servers.values()]
+      .filter((server) => !server.exited)
+      .map((server) => server.handle);
   }
 
   public onServerExit(profileKey: string, listener: () => void): () => void {

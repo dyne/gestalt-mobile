@@ -45,13 +45,14 @@ describe('KimiWsClient', () => {
       }
       if (frame.type === 'subscribe') {
         socket.send(JSON.stringify({ type: 'ack', id: frame.id, code: 0, msg: 'success' }));
+        // Real kimi frames carry the event type at the top level.
         socket.send(
           JSON.stringify({
-            type: 'session_event',
+            type: 'assistant.delta',
             seq: 1,
             session_id: 'session_a',
             timestamp: '2026-09-22T00:00:00Z',
-            payload: { type: 'assistant.delta', agentId: 'agent_1', turnId: 7, delta: 'hi' },
+            payload: { agentId: 'agent_1', turnId: 7, delta: 'hi' },
           }),
         );
       }
@@ -76,7 +77,7 @@ describe('KimiWsClient', () => {
     expect(ack.code).toBe(0);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('session_event');
+    expect(events[0].type).toBe('assistant.delta');
     expect(events[0].payload).toMatchObject({ type: 'assistant.delta', delta: 'hi' });
     expect(seenSubprotocols.some((value) => value.includes('kimi-code.bearer.secret-token'))).toBe(
       true,

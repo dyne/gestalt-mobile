@@ -34,17 +34,25 @@ export async function startSession(
     ): Promise<RelaySessionSnapshot>;
   },
 ): Promise<RelaySessionSnapshot> {
-  const model = input.model ?? DEFAULT_SESSION_MODEL;
   const [workspace] = await Promise.all([
     deps.workspaces.resolve(input.workspaceId),
     deps.profiles.require(input.profile),
   ]);
+  let model = input.model;
   if (deps.models) {
     const models = await deps.models.list(input.provider);
+    // An omitted model resolves to the provider's own default: the relay-wide
+    // default when that provider serves it, otherwise the provider's first
+    // available model, so a kimi request never inherits the codex default.
+    model ??= models.includes(DEFAULT_SESSION_MODEL)
+      ? DEFAULT_SESSION_MODEL
+      : (models[0] ?? DEFAULT_SESSION_MODEL);
     if (!models.includes(model))
       throw new Error(
         input.provider === 'codex' ? 'CODEX_MODEL_UNAVAILABLE' : 'KIMI_MODEL_UNAVAILABLE',
       );
+  } else {
+    model ??= DEFAULT_SESSION_MODEL;
   }
   const selectedProfile = input.skillProfile
     ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)

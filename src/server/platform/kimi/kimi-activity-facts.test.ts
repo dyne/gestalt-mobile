@@ -13,7 +13,13 @@ import type { KimiWsEvent } from './kimi-ws-client.js';
 const NOW = '2026-09-22T00:00:00.000Z';
 
 function event(payload: unknown, sessionId = 'kimi-thread-1'): KimiWsEvent {
-  return { type: 'session_event', seq: 1, session_id: sessionId, payload };
+  const type =
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { type?: unknown }).type === 'string'
+      ? (payload as { type: string }).type
+      : 'event';
+  return { type, seq: 1, session_id: sessionId, payload };
 }
 
 const context: KimiEventContext = {
