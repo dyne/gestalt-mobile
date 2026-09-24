@@ -14,6 +14,7 @@ import {
   type SkillProfile,
 } from '../../skills/model/skill-profile.js';
 import { SkillProfileError } from '../../skills/model/errors.js';
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 
 export async function startSession(
   input: { workspaceId: string; profile: string; skillProfile?: string } & StartSessionSettings,
@@ -24,9 +25,11 @@ export async function startSession(
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
     models?: Pick<ModelCatalog, 'list'>;
+    /** Explicit session setup may resolve a provider catalog that passive bootstrap cannot start. */
+    sessionModels?: Pick<ModelCatalog, 'list'>;
     gitBranch?(workspacePath: string): Promise<string | null>;
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
-    skillCatalog(profile: string): Pick<SkillCatalog, 'list'>;
+    skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
     activate?(
       session: RelaySessionSnapshot,
@@ -34,13 +37,17 @@ export async function startSession(
     ): Promise<RelaySessionSnapshot>;
   },
 ): Promise<RelaySessionSnapshot> {
+  // Codex launcher profiles select the app-server skill directory. Kimi owns
+  // its isolated profile lifecycle, so it must not require a Codex launcher
+  // profile before its own catalog/runtime can be selected.
   const [workspace] = await Promise.all([
     deps.workspaces.resolve(input.workspaceId),
-    deps.profiles.require(input.profile),
+    ...(input.provider === 'codex' ? [deps.profiles.require(input.profile)] : []),
   ]);
   let model = input.model;
-  if (deps.models) {
-    const models = await deps.models.list(input.provider);
+  const modelCatalog = deps.sessionModels ?? deps.models;
+  if (modelCatalog) {
+    const models = await modelCatalog.list(input.provider);
     // An omitted model resolves to the provider's own default: the relay-wide
     // default when that provider serves it, otherwise the provider's first
     // available model, so a kimi request never inherits the codex default.
@@ -64,7 +71,7 @@ export async function startSession(
     );
   const [projectProfile, catalog] = await Promise.all([
     deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
-    deps.skillCatalog(input.profile).list(workspace.realPath),
+    deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
   ]);
   const sourceProfile = selectedProfile ?? projectProfile;
   const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);

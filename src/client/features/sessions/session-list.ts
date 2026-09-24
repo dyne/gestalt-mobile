@@ -27,7 +27,11 @@ export function retainForgottenSession(
     !forgottenSession?.threadId ||
     !forgottenSession.workspacePath ||
     !forgottenSession.resumeCommand ||
-    recentSessions.some((session) => session.id === forgottenSession.threadId)
+    recentSessions.some(
+      (session) =>
+        session.id === forgottenSession.threadId &&
+        (session.provider ?? 'codex') === (forgottenSession.provider ?? 'codex'),
+    )
   ) {
     return recentSessions;
   }
@@ -40,6 +44,7 @@ export function retainForgottenSession(
     cwd: forgottenSession.workspacePath,
     recencyAt: Number.isFinite(updatedAt) ? updatedAt : null,
     resumeCommand: forgottenSession.resumeCommand,
+    ...(forgottenSession.provider === undefined ? {} : { provider: forgottenSession.provider }),
     ...(forgottenSession.model === undefined ? {} : { model: forgottenSession.model }),
     ...(forgottenSession.effectiveSkillSelection?.selectedProfileName === undefined
       ? {}

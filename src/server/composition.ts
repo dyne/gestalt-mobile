@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
-import type { ProfileCatalog } from './features/catalog/application/ports.js';
+import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-workspace-files.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
@@ -156,6 +156,8 @@ export type ComposeRelayAppOptions = {
     skillsConfig?: readonly { path: string; enabled: boolean }[];
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
+  /** Test-only explicit-session model resolver; production uses provider runtimes below. */
+  sessionModelCatalog?: ModelCatalog;
   /** Test seam; production constructs the manager when the kimi CLI is installed. */
   kimiServerManager?: KimiWebServerManager;
   homeDirectory?: string;
@@ -528,18 +530,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           sourceShareDir: join(homeDirectory, '.kimi-code'),
         })
       : undefined);
+  const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
   const models = new ProviderModelCatalog({
     codex: new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
-    kimi: new KimiModelCatalog(kimiManager ?? null, kimiManager != null),
+    kimi: kimiModels,
   });
+  const sessionModels: ModelCatalog = options.sessionModelCatalog ?? {
+    list: (provider) => (provider === 'kimi' ? kimiModels.listForSession() : models.list(provider)),
+  };
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
-  const skillCatalog = (profile: string) =>
-    new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
   // kimi discovery is workspace-scoped, not profile-scoped: the profile only
   // decides which discovered skills a session's server materializes.
   const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
+  const skillCatalog = (provider: LlmProvider, profile: string) =>
+    provider === 'kimi'
+      ? kimiSkillCatalog
+      : new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
   const editorSkillCatalog = new CachedSkillCatalog((provider, profile, workspace) =>
-    provider === 'kimi' ? kimiSkillCatalog.list(workspace) : skillCatalog(profile).list(workspace),
+    skillCatalog(provider, profile).list(workspace),
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const resolveSkills = async (
@@ -548,7 +556,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const catalog =
       session.provider === 'kimi'
         ? await kimiSkillCatalog.list(session.workspacePath)
-        : await skillCatalog(session.profile).list(session.workspacePath);
+        : await skillCatalog('codex', session.profile).list(session.workspacePath);
     if (session.effectiveSkillSelection)
       return compileSkillOverride({
         discovered: catalog.skills,
@@ -1410,6 +1418,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         autopilotAudit: (id, limit) => journal.autopilotAuditTail(id, limit),
         refreshActivity: (id) => activity.refresh(id),
         models,
+        sessionModels,
         readHistory:
           runtime || kimiRuntime
             ? (session) => {

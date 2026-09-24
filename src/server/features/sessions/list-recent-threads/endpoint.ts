@@ -28,13 +28,13 @@ export function registerListRecentThreads(
   app: FastifyInstance,
   deps: {
     list(): Promise<RecentThread[]>;
-    metadata?(threadId: string): RecentThreadMetadata | null;
+    metadata?(threadId: string, provider: LlmProvider): RecentThreadMetadata | null;
   },
 ): void {
   app.get('/api/sessions/recent-threads', async () => {
     const threads = await deps.list();
     return threads.map(({ id, cwd, recencyAt, provider }) => {
-      const metadata = deps.metadata?.(id);
+      const metadata = deps.metadata?.(id, provider ?? 'codex');
       return {
         id,
         cwd,

@@ -254,12 +254,12 @@ describe('relay client', () => {
       return new Response(JSON.stringify({ id: 'session-1' }), { status: 202 });
     });
 
-    await client.openRecentSession('thread-1', '/work/project');
+    await client.openRecentSession('thread-1', '/work/project', 'kimi');
 
     expect(requests).toEqual([
       {
         url: '/api/sessions/recent-threads/open',
-        body: JSON.stringify({ threadId: 'thread-1', cwd: '/work/project' }),
+        body: JSON.stringify({ threadId: 'thread-1', cwd: '/work/project', provider: 'kimi' }),
       },
     ]);
   });

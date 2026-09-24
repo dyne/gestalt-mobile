@@ -127,7 +127,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let otherRecentSessions = $derived(
     recentSessions.filter(
-      (recent) => !openSessions.some((session) => session.threadId === recent.id),
+      (recent) =>
+        !openSessions.some(
+          (session) =>
+            session.threadId === recent.id &&
+            (session.provider ?? 'codex') === (recent.provider ?? 'codex'),
+        ),
     ),
   );
   let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
@@ -447,7 +452,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <h3 id="recent-sessions-title">Recent sessions</h3>
     {#if otherRecentSessions.length}
       <ul class="session-list recent-session-list" aria-label="Recent sessions">
-        {#each otherRecentSessions as session (session.id)}
+        {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
           <li class="recent-session">
             <div class="session-details">
               {#if session.recencyAt !== null}

@@ -182,6 +182,7 @@ test('restricts chat model switching to the session provider and badges kimi ses
 });
 
 test('hides the resume Copy action for kimi recent threads', async ({ page }) => {
+  let recentOpenBody: unknown;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -211,10 +212,47 @@ test('hides the resume Copy action for kimi recent threads', async ({ page }) =>
   await page.route('**/api/sessions', (route) =>
     route.fulfill({ contentType: 'application/json', body: '[]' }),
   );
+  await page.route('**/api/sessions/recent-threads/open', async (route) => {
+    recentOpenBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'kimi-session-1',
+        state: 'ready',
+        workspacePath: '/project',
+        provider: 'kimi',
+        model: 'k2-thinking',
+      }),
+    });
+  });
+  await page.route('**/api/sessions/kimi-session-1/history', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(chatSnapshot()) }),
+  );
+  await page.route('**/api/sessions/kimi-session-1', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'kimi-session-1',
+        state: 'ready',
+        workspacePath: '/project',
+        provider: 'kimi',
+        model: 'k2-thinking',
+      }),
+    }),
+  );
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
   const recent = page.getByLabel('Recent sessions');
   await expect(recent.getByText('Kimi')).toBeVisible();
   await expect(recent.getByRole('button', { name: 'Copy' })).toHaveCount(1);
+  await recent.getByRole('button', { name: 'Open' }).first().click();
+  await expect
+    .poll(() => recentOpenBody)
+    .toEqual({
+      threadId: 'kimi-thread-1',
+      cwd: '/project',
+      provider: 'kimi',
+    });
 });

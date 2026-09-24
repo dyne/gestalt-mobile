@@ -713,7 +713,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   async function openRecentSession(recent: RecentSession) {
     shellStatus = 'Opening recent session…';
     try {
-      const session = await relay.openRecentSession(recent.id, recent.cwd);
+      const session = await relay.openRecentSession(
+        recent.id,
+        recent.cwd,
+        recent.provider ?? 'codex',
+      );
       if (!sessions.some((item) => item.id === session.id)) sessions = [...sessions, session];
       void refreshSessionLists();
       await openSession(session.id);

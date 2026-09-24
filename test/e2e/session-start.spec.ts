@@ -236,6 +236,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     expect(route.request().postDataJSON()).toEqual({
       threadId: 'recent-thread-id',
       cwd: '/projects/from-ssh',
+      provider: 'codex',
     });
     recentOpened = true;
     await route.fulfill({
