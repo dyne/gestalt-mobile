@@ -46,11 +46,15 @@ describe('GET /api/bootstrap', () => {
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
       ],
       protocolCompatible: true,
+      providers: {
+        codex: { available: true, version: 'codex-cli 0.144.3' },
+        kimi: { available: false as const },
+      },
     });
     const response = await app.inject('/api/bootstrap');
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      models: [],
+      models: { codex: [], kimi: [] },
       workspaces: [
         {
           id: 'root',
@@ -82,8 +86,38 @@ describe('GET /api/bootstrap', () => {
         { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
       ],
-      capabilities: { approvals: true, userInput: true, git: true, protocolCompatible: true },
+      capabilities: {
+        approvals: true,
+        userInput: true,
+        git: true,
+        protocolCompatible: true,
+        providers: {
+          codex: { available: true, version: 'codex-cli 0.144.3' },
+          kimi: { available: false },
+        },
+      },
     });
+    await app.close();
+  });
+
+  it('serves each provider model list from that provider catalog', async () => {
+    const app = fastify();
+    registerGetBootstrap(app, {
+      workspaces: { list: async () => [] },
+      profiles: { list: async () => [] },
+      models: {
+        list: async (provider) => (provider === 'codex' ? ['gpt-5.6-terra'] : []),
+      },
+      sessions: { list: () => [] },
+      protocolCompatible: true,
+      providers: {
+        codex: { available: true, version: 'codex-cli 0.144.3' },
+        kimi: { available: false as const },
+      },
+    });
+    const response = await app.inject('/api/bootstrap');
+    expect(response.statusCode).toBe(200);
+    expect(response.json().models).toEqual({ codex: ['gpt-5.6-terra'], kimi: [] });
     await app.close();
   });
 });

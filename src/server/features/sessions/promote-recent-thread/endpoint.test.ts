@@ -35,6 +35,34 @@ describe('POST /api/sessions/recent-threads/open', () => {
     await app.close();
   });
 
+  it('selects a same-id recent thread by provider and defaults legacy requests to Codex', async () => {
+    const app = fastify();
+    const codex = { id: 'shared-thread', cwd: '/work/project', profile: 'work', recencyAt: 100 };
+    const kimi = { ...codex, provider: 'kimi' as const };
+    const promote = vi.fn(async (thread) => ({ id: 'session-1', provider: thread.provider }));
+    registerPromoteRecentThread(app, {
+      list: async () => [codex, kimi],
+      promote: promote as never,
+    });
+
+    const kimiResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/recent-threads/open',
+      payload: { threadId: 'shared-thread', cwd: '/work/project', provider: 'kimi' },
+    });
+    const legacyResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/recent-threads/open',
+      payload: { threadId: 'shared-thread', cwd: '/work/project' },
+    });
+
+    expect(kimiResponse.statusCode).toBe(202);
+    expect(legacyResponse.statusCode).toBe(202);
+    expect(promote).toHaveBeenNthCalledWith(1, kimi);
+    expect(promote).toHaveBeenNthCalledWith(2, codex);
+    await app.close();
+  });
+
   it('rejects a thread and path pair outside the recent list', async () => {
     const app = fastify();
     const promote = vi.fn();

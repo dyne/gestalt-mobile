@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     RelaySkillProfile,
     StartSessionSettings,
   } from './relay-client.js';
+  import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
   import { formatRelativeTime } from './relative-time.js';
   import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
   import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
@@ -43,6 +44,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
     models?: string[];
     selectedModel?: string;
+    /** Provider chosen for the new session; defaults to codex. */
+    provider?: LlmProvider;
+    /** Whether the kimi CLI is installed; shows the provider picker when true. */
+    kimiAvailable?: boolean;
     skillProfiles: RelaySkillProfile[];
     selectedSkillProfile: string;
     skillProfileError: string;
@@ -53,6 +58,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onsandboxchange: (value: NonNullable<StartSessionSettings['sandbox']>) => void;
     onapprovalpolicychange: (value: NonNullable<StartSessionSettings['approvalPolicy']>) => void;
     onmodelchange?: (value: string) => void;
+    onproviderchange?: (value: LlmProvider) => void;
     onskillprofilechange: (value: string) => void;
     onmanageprofiles: (trigger: HTMLButtonElement) => void;
     onopen: (id: string) => void;
@@ -86,6 +92,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     approvalPolicy,
     models = [],
     selectedModel = '',
+    provider = 'codex',
+    kimiAvailable = false,
     skillProfiles,
     selectedSkillProfile,
     skillProfileError,
@@ -96,6 +104,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onsandboxchange,
     onapprovalpolicychange,
     onmodelchange = () => {},
+    onproviderchange = () => {},
     onskillprofilechange,
     onmanageprofiles,
     onopen,
@@ -118,10 +127,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let otherRecentSessions = $derived(
     recentSessions.filter(
-      (recent) => !openSessions.some((session) => session.threadId === recent.id),
+      (recent) =>
+        !openSessions.some(
+          (session) =>
+            session.threadId === recent.id &&
+            (session.provider ?? 'codex') === (recent.provider ?? 'codex'),
+        ),
     ),
   );
   let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
+  let providerLabel = $derived(provider === 'kimi' ? 'Kimi' : 'Codex');
 </script>
 
 <section aria-labelledby="sessions-title">
@@ -146,19 +161,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 current={session.id === selectedSessionId ? 'page' : undefined}
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
-              {#if session.resumeCommand}
+              {#if session.resumeCommand && session.provider !== 'kimi'}
                 <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                   >Copy</AppControl
                 >
               {/if}
-              <AutopilotControl
-                compact
-                indicatorOnly
-                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                controlId={`session-autopilot-${session.id}`}
-                pending={autopilotPending.has(session.id)}
-                ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
-              />
+              {#if session.provider !== 'kimi'}
+                <AutopilotControl
+                  compact
+                  indicatorOnly
+                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                  controlId={`session-autopilot-${session.id}`}
+                  pending={autopilotPending.has(session.id)}
+                  ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+                />
+              {/if}
               <AgentActivityIndicators
                 compact
                 activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
@@ -168,11 +185,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 onopen={() => onactivityopen(session.id)}
               />
               <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
-              <AutopilotLiveness
-                autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                connected={(activitySnapshots.get(session.id) ?? session.agentActivity)?.root
-                  .state !== 'disconnected'}
-              />
+              {#if session.provider !== 'kimi'}
+                <AutopilotLiveness
+                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                  connected={(activitySnapshots.get(session.id) ?? session.agentActivity)?.root
+                    .state !== 'disconnected'}
+                />
+              {/if}
             </div>
             <div class="session-details">
               <div class="session-summary">
@@ -210,6 +229,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 {#if session.model}
                   <span class="profile-badge">Model: {session.model}</span>
                 {/if}
+                {#if session.provider === 'kimi'}<span class="profile-badge">Kimi</span>{/if}
                 {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
                 {#if session.effectiveSkillSelection?.selectedProfileName}
                   <span class="profile-badge"
@@ -266,7 +286,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
-            {#if session.resumeCommand}
+            {#if session.resumeCommand && session.provider !== 'kimi'}
               <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                 >Copy</AppControl
               >
@@ -285,6 +305,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {#if session.model}
               <span class="profile-badge">Model: {session.model}</span>
             {/if}
+            {#if session.provider === 'kimi'}<span class="profile-badge">Kimi</span>{/if}
             {#if session.branch}<span class="profile-badge">Branch: {session.branch}</span>{/if}
             {#if session.effectiveSkillSelection?.selectedProfileName}
               <span class="profile-badge"
@@ -307,7 +328,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <section class="session-base" aria-labelledby="session-base-title">
       <div class="session-base-heading">
         <h3 id="session-base-title">Session base</h3>
-        <p>Select the folder or repository Codex should use as its working directory.</p>
+        <p>Select the folder or repository {providerLabel} should use as its working directory.</p>
       </div>
       <FilesystemTree
         roots={workspaceTree}
@@ -320,12 +341,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       />
     </section>
     <section class="session-settings" aria-label="New session settings">
-      <div class="session-setting-labels">
+      <div
+        class="session-setting-labels"
+        style:grid-template-columns={provider === 'kimi'
+          ? 'minmax(0, 1fr)'
+          : 'repeat(3, minmax(0, 1fr))'}
+      >
         <label for="skills-profile">Skills profile</label>
-        <label for="sandbox">Sandbox</label>
-        <label for="approval-policy">Approval policy</label>
+        {#if provider !== 'kimi'}
+          <label for="sandbox">Sandbox</label>
+          <label for="approval-policy">Approval policy</label>
+        {/if}
       </div>
-      <div class="session-setting-controls">
+      <div
+        class="session-setting-controls"
+        style:grid-template-columns={provider === 'kimi'
+          ? 'minmax(0, 1fr)'
+          : 'repeat(3, minmax(0, 1fr))'}
+      >
         <select
           id="skills-profile"
           value={selectedSkillProfile}
@@ -336,35 +369,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <option value={profile.name}>{profile.name}</option>
           {/each}
         </select>
-        <select
-          id="sandbox"
-          value={sandbox}
-          onchange={(event) =>
-            onsandboxchange(
-              event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
-            )}
-        >
-          <option value="workspace-write">workspace-write</option>
-          <option value="read-only">read-only</option>
-          <option value="danger-full-access">danger-full-access</option>
-        </select>
-        <select
-          id="approval-policy"
-          value={approvalPolicy}
-          aria-describedby="approval-policy-help"
-          onchange={(event) =>
-            onapprovalpolicychange(
-              event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>,
-            )}
-        >
-          <option value="untrusted">Ask on all commands</option>
-          <option value="on-request">Ask out of workspace</option>
-          <option value="never">Approve everything</option>
-        </select>
+        {#if provider !== 'kimi'}
+          <select
+            id="sandbox"
+            value={sandbox}
+            onchange={(event) =>
+              onsandboxchange(
+                event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
+              )}
+          >
+            <option value="workspace-write">workspace-write</option>
+            <option value="read-only">read-only</option>
+            <option value="danger-full-access">danger-full-access</option>
+          </select>
+          <select
+            id="approval-policy"
+            value={approvalPolicy}
+            aria-describedby="approval-policy-help"
+            onchange={(event) =>
+              onapprovalpolicychange(
+                event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>,
+              )}
+          >
+            <option value="untrusted">Ask on all commands</option>
+            <option value="on-request">Ask out of workspace</option>
+            <option value="never">Approve everything</option>
+          </select>
+        {/if}
       </div>
-      <p id="approval-policy-help">
-        This controls when Codex asks; it does not expand the sandbox's technical permissions.
-      </p>
+      {#if provider !== 'kimi'}
+        <p id="approval-policy-help">
+          This controls when {providerLabel} asks; it does not expand the sandbox's technical permissions.
+        </p>
+      {/if}
       {#if skillProfileError}<p class="skills-profile-error" role="alert">
           {skillProfileError}
         </p>{/if}
@@ -374,6 +411,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onclick={(event) => onmanageprofiles(event.currentTarget)}
           >Manage skill profiles
         </AppControl>
+        {#if kimiAvailable}
+          <div class="model-control">
+            <label for="session-provider">Provider</label>
+            <select
+              id="session-provider"
+              value={provider}
+              onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
+            >
+              <option value="codex">Codex</option>
+              <option value="kimi">Kimi</option>
+            </select>
+          </div>
+        {/if}
         <div class="model-control">
           <label for="model">Model</label>
           <select
@@ -391,7 +441,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           class="new-session-button"
           type="submit"
           primary
-          disabled={!selectedWorkspace || startingSession}
+          disabled={!selectedWorkspace || startingSession || (models.length > 0 && !selectedModel)}
         >
           {startingSession ? 'Creating…' : 'Create session'}
         </AppControl>
@@ -402,7 +452,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <h3 id="recent-sessions-title">Recent sessions</h3>
     {#if otherRecentSessions.length}
       <ul class="session-list recent-session-list" aria-label="Recent sessions">
-        {#each otherRecentSessions as session (session.id)}
+        {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
           <li class="recent-session">
             <div class="session-details">
               {#if session.recencyAt !== null}
@@ -414,6 +464,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {/if}
               <div class="workspace-path">{displayWorkspacePath(session.cwd)}</div>
               {#if session.model}<span class="profile-badge">Model: {session.model}</span>{/if}
+              {#if session.provider === 'kimi'}<span class="profile-badge">Kimi</span>{/if}
               {#if session.skillProfile}<span class="profile-badge"
                   >Skills profile: {session.skillProfile}</span
                 >{/if}
@@ -423,13 +474,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             </div>
             <div class="session-actions">
               <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
-              <AppControl onclick={() => oncopyresume(session.resumeCommand)}>Copy</AppControl>
+              {#if session.resumeCommand}
+                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
+              {/if}
             </div>
           </li>
         {/each}
       </ul>
     {:else}
-      <p>No other recent Codex sessions found.</p>
+      <p>No other recent sessions found.</p>
     {/if}
   </section>
 </section>

@@ -15,6 +15,7 @@ describe('release', () => {
           workspaceId: 'w',
           workspacePath: '/w',
           profile: 'default',
+          provider: 'codex' as const,
           threadId: 't',
           state: 'ready',
           desiredState: 'active',

@@ -25,6 +25,32 @@ describe('GET /api/sessions', () => {
     ]);
     await app.close();
   });
+  it('omits Codex resume commands for Kimi while preserving legacy Codex sessions', async () => {
+    const app = fastify();
+    registerListSessions(app, {
+      list: () =>
+        [
+          {
+            id: 'kimi',
+            provider: 'kimi',
+            threadId: 'thread-kimi',
+            workspacePath: '/repo',
+            state: 'stopped',
+          },
+          {
+            id: 'legacy',
+            threadId: 'thread-codex',
+            workspacePath: '/repo',
+            state: 'stopped',
+          },
+        ] as never,
+    });
+
+    const [kimi, legacy] = (await app.inject('/api/sessions')).json();
+    expect(kimi.resumeCommand).toBeNull();
+    expect(legacy.resumeCommand).toContain('thread-codex');
+    await app.close();
+  });
   it('maps the current activity snapshot without collaboration prompts', async () => {
     const app = fastify();
     registerListSessions(app, {

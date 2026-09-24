@@ -18,6 +18,7 @@ const health = {
       status: 'ok' as const,
       version: '0.1.0',
       codex: { installedVersion: 'codex-cli 0.144.3', protocolVersion: null, compatible: false },
+      providers: { codex: { available: true }, kimi: { available: false as const } },
     };
   },
 };

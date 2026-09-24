@@ -71,6 +71,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
       expect(route.request().postDataJSON()).toEqual({
         workspaceId: 'workspace-1',
         profile: 'default',
+        provider: 'codex',
         model: 'gpt-5.6-terra',
         sandbox: 'workspace-write',
         approvalPolicy: 'on-request',
@@ -168,6 +169,7 @@ test('sends a selected named skill profile only when creating a new session', as
     .toEqual({
       workspaceId: 'workspace-1',
       profile: 'default',
+      provider: 'codex',
       model: 'gpt-5.6-terra',
       sandbox: 'workspace-write',
       approvalPolicy: 'on-request',
@@ -234,6 +236,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     expect(route.request().postDataJSON()).toEqual({
       threadId: 'recent-thread-id',
       cwd: '/projects/from-ssh',
+      provider: 'codex',
     });
     recentOpened = true;
     await route.fulfill({
@@ -506,6 +509,7 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
     expect(route.request().postDataJSON()).toEqual({
       workspaceId: 'workspace-1',
       profile: 'default',
+      provider: 'codex',
       model: 'gpt-5.6-terra',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',

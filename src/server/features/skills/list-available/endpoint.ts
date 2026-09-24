@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { SkillProfileStore } from '../application/ports.js';
 import type { SkillCatalogResult } from '../model/skill-profile.js';
@@ -18,6 +19,7 @@ const querySchema = z
   .object({
     workspaceId: z.string().min(1),
     profile: z.string().min(1),
+    provider: z.enum(['codex', 'kimi']).optional(),
     refresh: z.enum(['true']).optional(),
   })
   .strict();
@@ -26,8 +28,8 @@ export type ListAvailableSkillsDependencies = {
   workspaces: Pick<WorkspaceCatalog, 'resolve'>;
   profiles: Pick<ProfileCatalog, 'require'>;
   catalog: {
-    list(profile: string, workspace: string): Promise<SkillCatalogResult>;
-    refresh(profile: string, workspace: string): Promise<SkillCatalogResult>;
+    list(provider: LlmProvider, profile: string, workspace: string): Promise<SkillCatalogResult>;
+    refresh(provider: LlmProvider, profile: string, workspace: string): Promise<SkillCatalogResult>;
   };
   selections: Pick<SkillProfileStore, 'readWorkspaceDefault'>;
 };
@@ -49,10 +51,11 @@ export function registerListAvailableSkills(
         deps.workspaces.resolve(parsed.data.workspaceId),
         deps.profiles.require(parsed.data.profile),
       ]);
+      const provider = parsed.data.provider ?? 'codex';
       const [discovered, project] = await Promise.all([
         parsed.data.refresh
-          ? deps.catalog.refresh(profile.name, workspace.realPath)
-          : deps.catalog.list(profile.name, workspace.realPath),
+          ? deps.catalog.refresh(provider, profile.name, workspace.realPath)
+          : deps.catalog.list(provider, profile.name, workspace.realPath),
         deps.selections.readWorkspaceDefault(workspace.realPath),
       ]);
       const skills = applySkillSelectionSnapshot(discovered.skills, project?.skills);

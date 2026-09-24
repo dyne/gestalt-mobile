@@ -14,6 +14,8 @@ import { RecentThreadHistoryUnavailable } from './use-case.js';
 const requestSchema = z.object({
   threadId: z.string().min(1),
   cwd: z.string().startsWith('/'),
+  // Requests written before provider support remain Codex-compatible.
+  provider: z.enum(['codex', 'kimi']).optional().default('codex'),
 });
 
 export function registerPromoteRecentThread(
@@ -27,7 +29,10 @@ export function registerPromoteRecentThread(
     const parsed = requestSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ code: 'INVALID_RECENT_THREAD' });
     const thread = (await deps.list()).find(
-      (candidate) => candidate.id === parsed.data.threadId && candidate.cwd === parsed.data.cwd,
+      (candidate) =>
+        candidate.id === parsed.data.threadId &&
+        candidate.cwd === parsed.data.cwd &&
+        (candidate.provider ?? 'codex') === parsed.data.provider,
     );
     if (!thread) return reply.code(404).send({ code: 'RECENT_THREAD_NOT_FOUND' });
     try {
@@ -39,7 +44,7 @@ export function registerPromoteRecentThread(
           ? 'RECENT_THREAD_HISTORY_UNAVAILABLE'
           : 'RECENT_THREAD_OPEN_FAILED',
         detail: historyUnavailable
-          ? 'The selected thread history is currently unavailable. Retry after Codex is available.'
+          ? 'The selected thread history is currently unavailable. Retry after its provider is available.'
           : 'The selected thread could not be opened. Retry shortly.',
       });
     }

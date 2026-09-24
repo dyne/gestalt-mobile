@@ -62,6 +62,38 @@ describe('skills REPR endpoints', () => {
     await app.close();
   });
 
+  it('routes discovery through the requested provider', async () => {
+    const app = fastify();
+    const listed: string[][] = [];
+    registerListAvailableSkills(app, {
+      workspaces: {
+        resolve: async () => ({ id: 'opaque', name: 'work', realPath: '/workspace' }),
+      },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      catalog: {
+        list: async (provider, profile) => {
+          listed.push([provider, profile]);
+          return { skills: [], errors: [] };
+        },
+        refresh: async () => ({ skills: [], errors: [] }),
+      },
+      selections: { readWorkspaceDefault: async () => undefined },
+    });
+    const codex = await app.inject('/api/skills?workspaceId=opaque&profile=default');
+    expect(codex.statusCode).toBe(200);
+    const kimi = await app.inject('/api/skills?workspaceId=opaque&profile=default&provider=kimi');
+    expect(kimi.statusCode).toBe(200);
+    expect(listed).toEqual([
+      ['codex', 'default'],
+      ['kimi', 'default'],
+    ]);
+    const invalid = await app.inject(
+      '/api/skills?workspaceId=opaque&profile=default&provider=other',
+    );
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('lists valid and corrupt profiles independently and atomically replaces a profile', async () => {
     const app = fastify();
     const profiles = new Map<

@@ -12,7 +12,12 @@ async function openRelay(page: Page): Promise<void> {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ workspaces: [], profiles: [], models: [], sessions: [] }),
+      body: JSON.stringify({
+        workspaces: [],
+        profiles: [],
+        models: { codex: [], kimi: [] },
+        sessions: [],
+      }),
     }),
   );
   await page.route('**/api/sessions/recent-threads', (route) =>

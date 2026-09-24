@@ -10,15 +10,24 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { buildApp } from './app.js';
-import type { ProfileCatalog } from './features/catalog/application/ports.js';
+import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-workspace-files.js';
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
+import { ProviderModelCatalog } from './platform/catalog/provider-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
+import { KimiSessionRuntime } from './platform/kimi/kimi-session-runtime.js';
+import { KimiWebServerManager } from './platform/kimi/kimi-web-server-manager.js';
+import { KimiModelCatalog } from './platform/kimi/kimi-model-catalog.js';
+import { KimiSkillCatalog } from './platform/kimi/kimi-skill-catalog.js';
+import { createKimiRecentSessionLister } from './platform/kimi/kimi-recent-session-lister.js';
+import { kimiStateBase } from './platform/kimi/kimi-share-dir.js';
+import { normalizeKimiEvent } from './platform/kimi/kimi-normalizer.js';
+import { decodeKimiActivityFacts } from './platform/kimi/kimi-activity-facts.js';
 import { isMissingCodexThreadRollout } from './platform/codex/json-rpc-client.js';
 import { migrate } from './platform/persistence/migrate.js';
 import { openRelayDatabase } from './platform/persistence/sqlite.js';
@@ -46,6 +55,7 @@ import { SessionSupervisor } from './platform/runtime/session-supervisor.js';
 import { mapWithConcurrency } from './platform/runtime/concurrency.js';
 import {
   RelaySession,
+  type PendingInteraction,
   type RelaySessionSnapshot,
 } from './features/sessions/model/relay-session.js';
 import { AgentActivityRegistry } from './features/agent-activity/registry.js';
@@ -99,6 +109,7 @@ import {
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
+import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -111,6 +122,7 @@ export type ComposeRelayAppOptions = {
   staticDir?: string;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
+  installedKimiVersion?: string | null;
   componentVersions?: readonly ComponentVersion[];
   startAppServers?: boolean;
   activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
@@ -144,6 +156,10 @@ export type ComposeRelayAppOptions = {
     skillsConfig?: readonly { path: string; enabled: boolean }[];
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
+  /** Test-only explicit-session model resolver; production uses provider runtimes below. */
+  sessionModelCatalog?: ModelCatalog;
+  /** Test seam; production constructs the manager when the kimi CLI is installed. */
+  kimiServerManager?: KimiWebServerManager;
   homeDirectory?: string;
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
@@ -275,7 +291,27 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ((sessionId, code) => console.warn(`agent activity ${code} session=${sessionId}`)),
       reconcile: async (sessionId) => {
         const session = sessions.find(sessionId);
-        if (!session || !runtime) return;
+        if (!session) return;
+        // Kimi sessions own no child-process projection; one detached history
+        // read supplies the whole reconciliation, mirroring the codex tail.
+        if (session.provider === 'kimi') {
+          if (!kimiRuntime) return;
+          const history = await kimiRuntime.readHistory(session);
+          // Forget may commit while the detached history reader is still in
+          // flight. Revalidate ownership before handing its result to the
+          // registry, whose publisher intentionally keeps the journal strict.
+          if (!sessions.find(sessionId)) return;
+          const occurredAt = new Date().toISOString();
+          activity.observe({
+            sessionId,
+            occurredAt,
+            kind: history.activeTurnId ? 'turnStarted' : 'turnCompleted',
+            ...(session.threadId ? { threadId: session.threadId } : {}),
+            ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
+          });
+          return;
+        }
+        if (!runtime) return;
         const history = await runtime.readHistory(session);
         // Forget may commit while the detached history reader is still in
         // flight. Revalidate ownership before handing its result to the
@@ -483,18 +519,44 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const workspaceFiles = new FilesystemWorkspaceFiles();
-  const models = new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer);
+  const homeDirectory = options.homeDirectory ?? homedir();
+  // Constructing the manager is cheap (no spawn until `ensure`); building it
+  // before the model catalog lets the catalog reuse the gestalt-owned servers.
+  const kimiManager =
+    options.kimiServerManager ??
+    (options.installedKimiVersion != null && options.startAppServers
+      ? new KimiWebServerManager({
+          stateBase: kimiStateBase(homeDirectory),
+          sourceShareDir: join(homeDirectory, '.kimi-code'),
+        })
+      : undefined);
+  const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
+  const models = new ProviderModelCatalog({
+    codex: new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
+    kimi: kimiModels,
+  });
+  const sessionModels: ModelCatalog = options.sessionModelCatalog ?? {
+    list: (provider) => (provider === 'kimi' ? kimiModels.listForSession() : models.list(provider)),
+  };
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
-  const skillCatalog = (profile: string) =>
-    new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
-  const editorSkillCatalog = new CachedSkillCatalog((profile, workspace) =>
-    skillCatalog(profile).list(workspace),
+  // kimi discovery is workspace-scoped, not profile-scoped: the profile only
+  // decides which discovered skills a session's server materializes.
+  const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
+  const skillCatalog = (provider: LlmProvider, profile: string) =>
+    provider === 'kimi'
+      ? kimiSkillCatalog
+      : new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
+  const editorSkillCatalog = new CachedSkillCatalog((provider, profile, workspace) =>
+    skillCatalog(provider, profile).list(workspace),
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
-    const catalog = await skillCatalog(session.profile).list(session.workspacePath);
+    const catalog =
+      session.provider === 'kimi'
+        ? await kimiSkillCatalog.list(session.workspacePath)
+        : await skillCatalog('codex', session.profile).list(session.workspacePath);
     if (session.effectiveSkillSelection)
       return compileSkillOverride({
         discovered: catalog.skills,
@@ -513,6 +575,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     profiles: options.profiles,
     launch: options.launchAppServer ?? launchCodexAppServer,
   });
+  const kimiRecentSessions = createKimiRecentSessionLister({
+    servers: kimiManager ?? null,
+    available: kimiManager != null,
+  });
+  // The relay's recent list spans both llm services; execution-policy metadata
+  // stays a codex rollout concern, so the codex lister remains the source.
+  const recentThreadsForRelay = {
+    list: async (): Promise<
+      import('./features/sessions/list-recent-threads/endpoint.js').RecentThread[]
+    > => [...(await recentThreads.list()), ...(await kimiRecentSessions.list())],
+  };
   const recoverExecutionPolicy = async (
     session: RelaySessionSnapshot,
   ): Promise<RelaySessionSnapshot> => {
@@ -523,9 +596,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       : session;
   };
   const protocol = protocolCompatibility(options.installedCodexVersion, generatedProtocolVersion);
+  const providerAvailability: ProviderAvailability = {
+    codex: {
+      available: options.installedCodexVersion !== null && protocol.compatible,
+      ...(options.installedCodexVersion === null ? {} : { version: options.installedCodexVersion }),
+    },
+    kimi: {
+      available: options.installedKimiVersion != null,
+      ...(options.installedKimiVersion ? { version: options.installedKimiVersion } : {}),
+    },
+  };
   const gitFetches = new GitFetchCoordinator(fetchUpstream);
   const gitSummaries = new GitSummaryCache(inspectGit);
   let recoverExitedSession: (sessionId: string) => void = () => {};
+  let recoverExitedKimiSession: (sessionId: string) => void = () => {};
   let scheduleAgentCapacityRecovery: (
     sessionId: string,
     acknowledge: () => boolean,
@@ -683,6 +767,47 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
+  let kimiRuntime: KimiSessionRuntime | null = null;
+  /**
+   * Shared acceptance path for a provider-neutral pending interaction: it
+   * enters the durable store, requests human attention, and notifies autopilot.
+   * Both the codex JSON-RPC handler and the kimi polling handler land here.
+   */
+  const acceptPendingInteraction = (
+    sessionId: string,
+    rawInteraction: PendingInteraction,
+    session: RelaySessionSnapshot,
+  ): boolean => {
+    const interaction = {
+      ...rawInteraction,
+      turnId: session.activeTurnId,
+      requestedAt: new Date().toISOString(),
+    };
+    interactions.add(sessionId, interaction);
+    activity.observe({
+      sessionId,
+      occurredAt: interaction.requestedAt,
+      kind: 'interactionPending',
+      ...(interaction.kind === 'orgPlanAttention'
+        ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
+        : {}),
+    });
+    autopilot.semanticEvent(sessionId, 'interactionChanged');
+    const updated = RelaySession.rehydrate(session).requestInteraction(
+      interaction,
+      new Date().toISOString(),
+    ).snapshot;
+    sessions.save(updated);
+    events.publish(
+      journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
+    );
+    if (interaction.kind === 'orgPlanAttention')
+      events.publish(
+        journal.append(sessionId, 'org-plan.attention-required', interaction, updated.updatedAt),
+      );
+    autopilot.evaluate(sessionId);
+    return true;
+  };
   const acceptPlanUpdate = (sessionId: string, update: PlanStatusUpdate): void => {
     if (closing) return;
     supervisedPlans.accept(sessionId, update);
@@ -930,40 +1055,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             // is cancelled solely by the JSON-RPC write-settlement callback.
             return true;
           }
-          const interaction = {
-            ...rawInteraction,
-            turnId: session.activeTurnId,
-            requestedAt: new Date().toISOString(),
-          };
-          interactions.add(sessionId, interaction);
-          activity.observe({
-            sessionId,
-            occurredAt: interaction.requestedAt,
-            kind: 'interactionPending',
-            ...(interaction.kind === 'orgPlanAttention'
-              ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
-              : {}),
-          });
-          autopilot.semanticEvent(sessionId, 'interactionChanged');
-          const updated = RelaySession.rehydrate(session).requestInteraction(
-            interaction,
-            new Date().toISOString(),
-          ).snapshot;
-          sessions.save(updated);
-          events.publish(
-            journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
-          );
-          if (interaction.kind === 'orgPlanAttention')
-            events.publish(
-              journal.append(
-                sessionId,
-                'org-plan.attention-required',
-                interaction,
-                updated.updatedAt,
-              ),
-            );
-          autopilot.evaluate(sessionId);
-          return true;
+          return acceptPendingInteraction(sessionId, rawInteraction, session);
         },
         (sessionId) => {
           activity.disconnected(sessionId, new Date().toISOString());
@@ -979,6 +1071,69 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         64,
         root,
       )
+    : null;
+  const handleKimiNotification = (
+    sessionId: string,
+    event: import('./platform/kimi/kimi-ws-client.js').KimiWsEvent,
+  ): void => {
+    const occurredAt = new Date().toISOString();
+    const session = sessions.find(sessionId);
+    const context = kimiRuntime?.eventContext(sessionId) ?? {
+      resolveTurnId: () => null,
+      isChildAgent: () => false,
+    };
+    for (const fact of decodeKimiActivityFacts(sessionId, occurredAt, event, context))
+      activity.observe(fact);
+    const normalized = normalizeKimiEvent(sessionId, 0, occurredAt, event, {
+      ...context,
+      workspacePath: session?.workspacePath,
+      activeTurnId: session?.activeTurnId,
+    });
+    if (!normalized) return;
+    let completedSession: RelaySessionSnapshot | undefined;
+    if (normalized.type === 'turnCompleted' || normalized.type === 'turnInterrupted') {
+      const turnId = (normalized.payload as { turn?: { id?: string } }).turn?.id;
+      if (session && turnId && session.activeTurnId === turnId) {
+        completedSession = RelaySession.rehydrate(session).completeTurn(
+          turnId,
+          occurredAt,
+        ).snapshot;
+        sessions.save(completedSession);
+      }
+    }
+    events.publish(journal.append(sessionId, normalized.type, normalized.payload, occurredAt));
+    if (completedSession)
+      events.publish(journal.append(sessionId, 'session.updated', completedSession, occurredAt));
+  };
+  const handleKimiServerRequest = (
+    sessionId: string,
+    request: { id: number; method: string; params: unknown },
+  ): boolean => {
+    const rawInteraction = toPendingInteraction(request);
+    const session = withPendingInteractions(sessions.find(sessionId));
+    return Boolean(
+      rawInteraction && session && acceptPendingInteraction(sessionId, rawInteraction, session),
+    );
+  };
+  kimiRuntime = kimiManager
+    ? new KimiSessionRuntime({
+        servers: kimiManager,
+        skillsFor: async (session) => {
+          const config = await resolveSkills(session);
+          return config?.map((entry) => ({
+            name: basename(entry.path),
+            path: entry.path,
+            enabled: entry.enabled,
+          }));
+        },
+        onNotification: (sessionId, event) => handleKimiNotification(sessionId, event),
+        onServerRequest: (sessionId, request) => handleKimiServerRequest(sessionId, request),
+        onExit: (sessionId) => {
+          activity.disconnected(sessionId, new Date().toISOString());
+          dismissPendingInteractions(sessionId, new Date().toISOString(), 'failed');
+          recoverExitedKimiSession(sessionId);
+        },
+      })
     : null;
   runtime?.onServerResponseSettled((sessionId, requestId, outcome) => {
     const interaction = interactions.find(sessionId, requestId);
@@ -1015,13 +1170,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       prior.state !== 'turnActive' &&
       (session.state === 'ready' || session.state === 'turnActive');
     if (
-      runtime &&
+      (runtime || kimiRuntime) &&
       session.threadId &&
       (!prior || prior.threadId !== session.threadId || becameRuntimeReady)
     )
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
+  if (kimiRuntime) {
+    // A gestalt-owned kimi web process exited or its websocket dropped: stop
+    // the durable session like the codex supervisor does, without a resume
+    // retry (a later activation reattaches through the normal writer path).
+    recoverExitedKimiSession = (sessionId) => {
+      const session = sessions.find(sessionId);
+      if (session) {
+        autopilot.cancel(sessionId, 'sessionEnded');
+        saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
+      }
+    };
+  }
+  /** Routes a session to the runtime owning its provider's llm service. */
+  const ownerRuntime = (session: Readonly<{ provider: LlmProvider }>) =>
+    session.provider === 'kimi' ? kimiRuntime : runtime;
   if (runtime) {
     const capacityRecoveries = new Set<string>();
     scheduleAgentCapacityRecovery = (sessionId, acknowledge) => {
@@ -1138,6 +1308,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               protocolVersion: generatedProtocolVersion,
               compatible: protocol.compatible,
             },
+            providers: providerAvailability,
           };
         },
       },
@@ -1155,7 +1326,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       logger: console,
       staticDir: options.staticDir,
-      recentThreads,
+      recentThreads: recentThreadsForRelay,
       bootstrap: {
         workspaces,
         profiles: options.profiles,
@@ -1172,6 +1343,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
         versions: options.componentVersions,
         protocolCompatible: protocol.compatible,
+        providers: providerAvailability,
       },
       sessionRoutes: {
         createId: randomUUID,
@@ -1185,40 +1357,51 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillProfiles,
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
-        activate: runtime
-          ? async (session) => {
-              const now = new Date().toISOString();
-              dismissPendingInteractions(session.id, now);
-              const started = await runtime.start(session, now);
-              return started;
-            }
-          : undefined,
-        startTurn: runtime
-          ? async (session, text, clientUserMessageId) => {
-              autopilot.manualSend(session.id);
-              return runtime.startTurn(
-                session,
-                text,
-                clientUserMessageId,
-                new Date().toISOString(),
-              );
-            }
-          : undefined,
-        ensureWriter: runtime
-          ? async (session) => {
-              dismissPendingInteractions(session.id, new Date().toISOString());
-              return runtime.ensureWriter(
-                await recoverExecutionPolicy(session),
-                new Date().toISOString(),
-              );
-            }
-          : undefined,
-        releaseWriter: runtime
-          ? (id) => {
-              dismissPendingInteractions(id, new Date().toISOString());
-              return runtime.release(id);
-            }
-          : undefined,
+        activate:
+          runtime || kimiRuntime
+            ? async (session) => {
+                const now = new Date().toISOString();
+                dismissPendingInteractions(session.id, now);
+                const owner = ownerRuntime(session);
+                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                return owner.start(session, now);
+              }
+            : undefined,
+        startTurn:
+          runtime || kimiRuntime
+            ? async (session, text, clientUserMessageId) => {
+                autopilot.manualSend(session.id);
+                const owner = ownerRuntime(session);
+                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                return owner.startTurn(
+                  session,
+                  text,
+                  clientUserMessageId,
+                  new Date().toISOString(),
+                );
+              }
+            : undefined,
+        ensureWriter:
+          runtime || kimiRuntime
+            ? async (session) => {
+                dismissPendingInteractions(session.id, new Date().toISOString());
+                const owner = ownerRuntime(session);
+                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                return owner.ensureWriter(
+                  await recoverExecutionPolicy(session),
+                  new Date().toISOString(),
+                );
+              }
+            : undefined,
+        releaseWriter:
+          runtime || kimiRuntime
+            ? (id) => {
+                dismissPendingInteractions(id, new Date().toISOString());
+                const session = sessions.find(id);
+                const owner = session ? ownerRuntime(session) : null;
+                return owner ? owner.release(id) : Promise.resolve();
+              }
+            : undefined,
         onTurnStarted: (session) => {
           activity.observe({
             sessionId: session.id,
@@ -1235,48 +1418,78 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         autopilotAudit: (id, limit) => journal.autopilotAuditTail(id, limit),
         refreshActivity: (id) => activity.refresh(id),
         models,
-        readHistory: runtime ? (session) => runtime.readHistory(session) : undefined,
+        sessionModels,
+        readHistory:
+          runtime || kimiRuntime
+            ? (session) => {
+                const owner = ownerRuntime(session);
+                if (!owner) return Promise.reject(new Error('LLM_RUNTIME_UNAVAILABLE'));
+                return owner.readHistory(session);
+              }
+            : undefined,
         currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
         activityHistory: (sessionId, throughSequence) =>
           journal.since(sessionId, 0).filter((event) => event.sequence <= throughSequence),
-        interruptTurn: runtime
-          ? (session, turnId) => runtime.interruptTurn(session, turnId)
-          : undefined,
-        queueTurnInput: runtime
-          ? (session, turnId, text, clientUserMessageId) => {
-              autopilot.manualSend(session.id);
-              return runtime.queueTurnInput(session, turnId, text, clientUserMessageId);
-            }
-          : undefined,
-        restore: runtime
-          ? async (session) => {
-              const restored = await runtime.restoreWithOutcome(
-                await recoverExecutionPolicy(session),
-                new Date().toISOString(),
-              );
-              // An exit can be reported while resume is resolving. Do not let the
-              // route persist a stale ready snapshot over that recovered exit.
-              if (!runtime.ownsWriter(session.id))
-                return {
-                  ...restored,
-                  session: RelaySession.rehydrate(restored.session).stop(new Date().toISOString())
-                    .snapshot,
-                };
-              return restored;
-            }
-          : undefined,
-        ownsWriter: runtime ? (id) => runtime.ownsWriter(id) : undefined,
-        promoteRecent: runtime
-          ? (thread) =>
-              promoteRecentThread(thread, {
-                createId: randomUUID,
-                now: () => new Date().toISOString(),
-                list: () => sessions.list(),
-                save: saveSession,
-                read: (session) => runtime.readHistory(session),
-                executionPolicy: (candidate) => recentThreads.executionPolicy(candidate.id),
-              })
-          : undefined,
+        interruptTurn:
+          runtime || kimiRuntime
+            ? (session, turnId) => {
+                const owner = ownerRuntime(session);
+                return owner ? owner.interruptTurn(session, turnId) : Promise.resolve();
+              }
+            : undefined,
+        queueTurnInput:
+          runtime || kimiRuntime
+            ? (session, turnId, text, clientUserMessageId) => {
+                autopilot.manualSend(session.id);
+                const owner = ownerRuntime(session);
+                if (!owner) return Promise.resolve();
+                return owner.queueTurnInput(session, turnId, text, clientUserMessageId);
+              }
+            : undefined,
+        restore:
+          runtime || kimiRuntime
+            ? async (session) => {
+                const owner = ownerRuntime(session);
+                if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                const restored = await owner.restoreWithOutcome(
+                  await recoverExecutionPolicy(session),
+                  new Date().toISOString(),
+                );
+                // An exit can be reported while resume is resolving. Do not let the
+                // route persist a stale ready snapshot over that recovered exit.
+                if (!owner.ownsWriter(session.id))
+                  return {
+                    ...restored,
+                    session: RelaySession.rehydrate(restored.session).stop(new Date().toISOString())
+                      .snapshot,
+                  };
+                return restored;
+              }
+            : undefined,
+        ownsWriter: (id) => {
+          const session = sessions.find(id);
+          const owner = session ? ownerRuntime(session) : null;
+          return owner ? owner.ownsWriter(id) : false;
+        },
+        promoteRecent:
+          runtime || kimiRuntime
+            ? (thread) =>
+                promoteRecentThread(thread, {
+                  createId: randomUUID,
+                  now: () => new Date().toISOString(),
+                  list: () => sessions.list(),
+                  save: saveSession,
+                  read: (session) => {
+                    const owner = ownerRuntime(session);
+                    if (!owner) throw new Error('LLM_RUNTIME_UNAVAILABLE');
+                    return owner.readHistory(session);
+                  },
+                  executionPolicy: (candidate) =>
+                    candidate.provider === 'kimi'
+                      ? Promise.resolve(undefined)
+                      : recentThreads.executionPolicy(candidate.id),
+                })
+            : undefined,
         release: (session) => {
           autopilot.cancel(session.id, 'sessionEnded');
           return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
@@ -1287,19 +1500,31 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           sessions.remove(id);
         },
         idempotency,
-        close: runtime
-          ? (id) => {
-              autopilot.cancel(id, 'sessionEnded');
-              planMeasurementRefresh?.stop(id);
-              dismissPendingInteractions(id, new Date().toISOString());
-              activity.dispose(id);
-              return runtime.release(id);
-            }
-          : undefined,
-        replyInteraction: runtime
-          ? (sessionId, requestId, value) =>
-              runtime.resolveServerRequest(sessionId, requestId, value) ? 'accepted' : 'cleared'
-          : undefined,
+        close:
+          runtime || kimiRuntime
+            ? (id) => {
+                autopilot.cancel(id, 'sessionEnded');
+                planMeasurementRefresh?.stop(id);
+                dismissPendingInteractions(id, new Date().toISOString());
+                activity.dispose(id);
+                const session = sessions.find(id);
+                const owner = session ? ownerRuntime(session) : null;
+                return owner ? owner.release(id) : Promise.resolve();
+              }
+            : undefined,
+        replyInteraction:
+          runtime || kimiRuntime
+            ? async (sessionId, requestId, value) => {
+                const session = sessions.find(sessionId);
+                const owner = session ? ownerRuntime(session) : null;
+                if (await owner?.resolveServerRequest(sessionId, requestId, value))
+                  return 'accepted';
+                // Codex reports false when its app-server has already cleared a
+                // request. Kimi returns false for a failed provider delivery and
+                // retains the pending request for retry.
+                return session?.provider === 'kimi' ? 'unavailable' : 'cleared';
+              }
+            : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
           const remaining = interactions.list(sessionId);
           const attention = remaining.find((item) => item.kind === 'orgPlanAttention');
@@ -1543,7 +1768,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         // not a human disable: a later fenced continuation can reacquire it safely.
         if (session.desiredState === 'active') {
           saveSession(RelaySession.rehydrate(session).stop(new Date().toISOString()).snapshot);
-          await runtime?.release(session.id);
+          await (session.provider === 'kimi' ? kimiRuntime : runtime)?.release(session.id);
         }
         await runtime?.watchPlanStatus(session);
         autopilot.restore(session.id);
@@ -1556,7 +1781,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   app.addHook('onListen', async () => {
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
-    if (profile) await editorSkillCatalog.refresh(profile, root);
+    if (profile) await editorSkillCatalog.refresh('codex', profile, root);
+    // Kimi discovery owns a provider process, so passive relay startup must not
+    // refresh it. Explicit session creation and user-requested skill refreshes
+    // enter KimiSkillCatalog through their normal operation paths instead.
     await detachActiveSessions();
   });
   app.addHook('onClose', async () => {
@@ -1586,6 +1814,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       }
     }
     runtime?.stopAll();
+    kimiRuntime?.stopAll();
+    await kimiManager?.stopAll();
     planStatusSource.closeAll();
     database.close();
     authorization?.close();

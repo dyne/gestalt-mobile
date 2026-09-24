@@ -22,27 +22,43 @@ describe('CachedSkillCatalog', () => {
       });
     const catalog = new CachedSkillCatalog(discover);
 
-    await catalog.refresh('default', '/workspace');
-    await expect(catalog.list('default', '/workspace')).resolves.toMatchObject({
+    await catalog.refresh('codex', 'default', '/workspace');
+    await expect(catalog.list('codex', 'default', '/workspace')).resolves.toMatchObject({
       skills: [{ name: 'Alpha' }],
     });
     expect(discover).toHaveBeenCalledTimes(1);
 
-    await catalog.refresh('default', '/workspace');
-    await expect(catalog.list('default', '/workspace')).resolves.toMatchObject({
+    await catalog.refresh('codex', 'default', '/workspace');
+    await expect(catalog.list('codex', 'default', '/workspace')).resolves.toMatchObject({
       skills: [{ name: 'Beta' }],
     });
     expect(discover).toHaveBeenCalledTimes(2);
   });
 
+  it('caches each provider independently for the same workspace and profile', async () => {
+    const discover = vi
+      .fn()
+      .mockResolvedValueOnce({ skills: [{ name: 'Codex', path: '/c', enabled: true }], errors: [] })
+      .mockResolvedValueOnce({ skills: [{ name: 'Kimi', path: '/k', enabled: true }], errors: [] });
+    const catalog = new CachedSkillCatalog(discover);
+    await catalog.refresh('codex', 'default', '/workspace');
+    await catalog.refresh('kimi', 'default', '/workspace');
+    await expect(catalog.list('codex', 'default', '/workspace')).resolves.toMatchObject({
+      skills: [{ name: 'Codex' }],
+    });
+    await expect(catalog.list('kimi', 'default', '/workspace')).resolves.toMatchObject({
+      skills: [{ name: 'Kimi' }],
+    });
+  });
+
   it('asks for an explicit refresh when a workspace/profile pair was not primed', async () => {
     const catalog = new CachedSkillCatalog(vi.fn());
-    await expect(catalog.list('other', '/workspace')).resolves.toEqual({
+    await expect(catalog.list('codex', 'other', '/workspace')).resolves.toEqual({
       skills: [],
       errors: [
         {
           message:
-            'Skills are not cached for this workspace and Codex profile. Select Refresh skills to discover them.',
+            'Skills are not cached for this workspace and profile. Select Refresh skills to discover them.',
         },
       ],
     });

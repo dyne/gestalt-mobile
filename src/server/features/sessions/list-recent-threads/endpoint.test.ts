@@ -18,6 +18,7 @@ describe('GET /api/sessions/recent-threads', () => {
           status: 'ok',
           version: 'test',
           codex: { installedVersion: null, protocolVersion: 'test', compatible: true },
+          providers: { codex: { available: true }, kimi: { available: false as const } },
         }),
       },
       logger: console,
@@ -73,6 +74,39 @@ describe('GET /api/sessions/recent-threads', () => {
         skillProfile: 'focused',
         orgPlanFilename: 'session-summary.org',
       },
+    ]);
+    await app.close();
+  });
+
+  it('looks up managed-session metadata with provider-qualified thread identity', async () => {
+    const app = fastify();
+    const lookups: Array<[string, string]> = [];
+    registerListRecentThreads(app, {
+      list: async () => [
+        { id: 'shared-thread', cwd: '/codex', profile: 'default', recencyAt: 2 },
+        {
+          id: 'shared-thread',
+          cwd: '/kimi',
+          profile: 'default',
+          provider: 'kimi',
+          recencyAt: 1,
+        },
+      ],
+      metadata: (threadId, provider) => {
+        lookups.push([threadId, provider]);
+        return provider === 'kimi' ? { model: 'k2-thinking' } : { model: 'gpt-5.6-terra' };
+      },
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/sessions/recent-threads' });
+
+    expect(lookups).toEqual([
+      ['shared-thread', 'codex'],
+      ['shared-thread', 'kimi'],
+    ]);
+    expect(response.json()).toMatchObject([
+      { id: 'shared-thread', model: 'gpt-5.6-terra' },
+      { id: 'shared-thread', provider: 'kimi', model: 'k2-thinking' },
     ]);
     await app.close();
   });

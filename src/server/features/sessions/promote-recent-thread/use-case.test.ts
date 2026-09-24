@@ -97,6 +97,42 @@ describe('promoteRecentThread', () => {
     expect(read).toHaveBeenCalledWith(existing);
   });
 
+  it('keeps same-id Codex and Kimi threads distinct when promoting recent sessions', async () => {
+    const existing = {
+      id: 'codex-session',
+      threadId: 'shared-thread',
+      provider: 'codex',
+      state: 'ready',
+    } as RelaySessionSnapshot;
+    const save = vi.fn();
+    const read = vi.fn(async () => undefined);
+
+    const promoted = await promoteRecentThread(
+      {
+        id: 'shared-thread',
+        cwd: '/work/project',
+        profile: 'default',
+        provider: 'kimi',
+        recencyAt: 100,
+      },
+      {
+        createId: () => 'kimi-session',
+        now: () => now,
+        list: () => [existing],
+        save,
+        read,
+      },
+    );
+
+    expect(promoted).toMatchObject({
+      id: 'kimi-session',
+      threadId: 'shared-thread',
+      provider: 'kimi',
+    });
+    expect(read).toHaveBeenCalledWith(promoted);
+    expect(save).toHaveBeenCalledWith(promoted);
+  });
+
   it('repairs a previously imported session before it is resumed', async () => {
     const existing = {
       id: 'session-1',

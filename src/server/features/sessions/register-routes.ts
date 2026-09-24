@@ -38,8 +38,13 @@ export function registerSessionRoutes(
   if (deps.recentThreads) {
     registerListRecentThreads(app, {
       ...deps.recentThreads,
-      metadata: (threadId) => {
-        const session = sessions?.list?.().find((candidate) => candidate.threadId === threadId);
+      metadata: (threadId, provider) => {
+        const session = sessions
+          ?.list?.()
+          .find(
+            (candidate) =>
+              candidate.threadId === threadId && (candidate.provider ?? 'codex') === provider,
+          );
         if (!session) return null;
         return {
           ...(session.model === undefined ? {} : { model: session.model }),
@@ -101,7 +106,7 @@ export function registerSessionRoutes(
     if (sessions.models)
       registerSelectModel(app, {
         find: sessions.find,
-        models: () => sessions.models!.list(),
+        models: (provider) => sessions.models!.list(provider),
         now: sessions.now,
         save: sessions.save,
       });

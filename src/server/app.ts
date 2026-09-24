@@ -59,6 +59,7 @@ import { registerFileRoutes } from './features/files/register-routes.js';
 import type { WorkspaceFileSource } from './features/files/application/ports.js';
 import { registerMaintenanceRoutes } from './features/maintenance/register-routes.js';
 import type { UpdateRestartScheduler } from './features/maintenance/application/ports.js';
+import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 
 export type AppDependencies = {
   health: HealthReader;
@@ -75,7 +76,7 @@ export type AppDependencies = {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     profiles: Pick<ProfileCatalog, 'require'>;
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
-    skillCatalog(profile: string): Pick<SkillCatalog, 'list'>;
+    skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
     activate?(
       session: RelaySessionSnapshot,
@@ -90,6 +91,7 @@ export type AppDependencies = {
     releaseWriter?(id: string): void | Promise<void>;
     onTurnStarted?(session: RelaySessionSnapshot): void;
     models?: Pick<ModelCatalog, 'list'>;
+    sessionModels?: Pick<ModelCatalog, 'list'>;
     close?(id: string): void | Promise<void>;
     remove?(id: string): void;
     replyInteraction?(sessionId: string, requestId: string, value: unknown): InteractionReplyResult;
@@ -259,7 +261,13 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
   registerSessionRoutes(app, deps);
-  if (deps.autopilot) registerAutopilotRoutes(app, deps.autopilot, deps.sessionRoutes?.idempotency);
+  if (deps.autopilot)
+    registerAutopilotRoutes(
+      app,
+      deps.autopilot,
+      deps.sessionRoutes?.idempotency,
+      deps.sessionRoutes ? (id) => deps.sessionRoutes?.find(id)?.provider : undefined,
+    );
   if (deps.orgPlanAttention) registerOrgPlanAttentionRoutes(app, deps.orgPlanAttention);
   registerPlanRoutes(app, deps);
   registerFileRoutes(app, deps);
