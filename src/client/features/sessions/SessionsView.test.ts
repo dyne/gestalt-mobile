@@ -546,4 +546,29 @@ describe('SessionsView provider selection', () => {
     expect(copyButtons).toHaveLength(1);
     expect(screen.getByText('Kimi')).toBeTruthy();
   });
+
+  it('keeps a Kimi recent thread visible beside an open Codex thread with the same id', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'codex-session',
+          state: 'ready',
+          workspacePath: '/codex',
+          provider: 'codex',
+          threadId: 'shared-thread',
+        },
+      ],
+      recentSessions: [
+        {
+          id: 'shared-thread',
+          cwd: '/kimi',
+          recencyAt: 0,
+          provider: 'kimi',
+          model: 'k2-thinking',
+        },
+      ],
+    });
+
+    expect(screen.getByText('Model: k2-thinking')).toBeTruthy();
+  });
 });

@@ -11,9 +11,11 @@ import type { KimiWebServerManager } from './kimi-web-server-manager.js';
 
 function managerWith(models: unknown): KimiWebServerManager {
   return {
-    ensure: async () => ({
-      client: { get: async () => models },
-    }),
+    list: () => [
+      {
+        client: { get: async () => models },
+      },
+    ],
   } as unknown as KimiWebServerManager;
 }
 
@@ -40,15 +42,47 @@ describe('KimiModelCatalog', () => {
     expect(await catalog.list()).toEqual(['k1', 'k2']);
   });
 
+  it('does not start a Kimi server while reading the model catalog', async () => {
+    let ensureCalls = 0;
+    const manager = {
+      list: () => [],
+      ensure: async () => {
+        ensureCalls += 1;
+        throw new Error('bootstrap must not start Kimi');
+      },
+    } as unknown as KimiWebServerManager;
+
+    expect(await new KimiModelCatalog(manager, true).list()).toEqual([]);
+    expect(ensureCalls).toBe(0);
+  });
+
+  it('starts Kimi only for explicit session model resolution', async () => {
+    let ensureCalls = 0;
+    const manager = {
+      list: () => [],
+      ensure: async () => {
+        ensureCalls += 1;
+        return { client: { get: async () => ({ items: [{ model: 'k2-thinking' }] }) } };
+      },
+    } as unknown as KimiWebServerManager;
+    const catalog = new KimiModelCatalog(manager, true);
+
+    expect(await catalog.list()).toEqual([]);
+    expect(await catalog.listForSession()).toEqual(['k2-thinking']);
+    expect(ensureCalls).toBe(1);
+  });
+
   it('degrades to an empty list when the server call fails', async () => {
     const failing = {
-      ensure: async () => ({
-        client: {
-          get: async () => {
-            throw new Error('down');
+      list: () => [
+        {
+          client: {
+            get: async () => {
+              throw new Error('down');
+            },
           },
         },
-      }),
+      ],
     } as unknown as KimiWebServerManager;
     expect(await new KimiModelCatalog(failing, true).list()).toEqual([]);
   });

@@ -24,6 +24,86 @@ const skills = {
 };
 
 describe('startSession', () => {
+  it('uses Kimi-owned discovery without requiring a Codex launcher profile', async () => {
+    const requiredProfiles: string[] = [];
+    const catalogProviders: string[] = [];
+
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'ignored-by-kimi', provider: 'kimi' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: {
+          require: async (profile) => {
+            requiredProfiles.push(profile);
+            throw new Error('CODEX_LAUNCHER_UNAVAILABLE');
+          },
+        },
+        skillProfiles: {
+          readGlobalProfile: async () => undefined,
+          readWorkspaceDefault: async () => undefined,
+        },
+        skillCatalog: (provider) => ({
+          list: async () => {
+            catalogProviders.push(provider);
+            return {
+              skills: [{ name: 'Kimi native', path: '/kimi/SKILL.md', enabled: true }],
+              errors: [],
+            };
+          },
+        }),
+        models: { list: async () => ['kimi-for-coding'] },
+      },
+    );
+
+    expect(requiredProfiles).toEqual([]);
+    expect(catalogProviders).toEqual(['kimi']);
+    expect(result).toMatchObject({ provider: 'kimi', model: 'kimi-for-coding' });
+    expect(result.effectiveSkillSelection?.skills).toEqual([
+      { name: 'Kimi native', path: '/kimi/SKILL.md', enabled: true },
+    ]);
+  });
+
+  it('retains Codex launcher-profile validation and its catalog', async () => {
+    const requiredProfiles: string[] = [];
+    const catalogProviders: string[] = [];
+
+    await startSession(
+      { workspaceId: 'w', profile: 'codex-profile', provider: 'codex' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: {
+          require: async (profile) => {
+            requiredProfiles.push(profile);
+            return { name: profile, state: 'ok' as const, status: 'ready' as const };
+          },
+        },
+        skillProfiles: {
+          readGlobalProfile: async () => undefined,
+          readWorkspaceDefault: async () => undefined,
+        },
+        skillCatalog: (provider) => ({
+          list: async () => {
+            catalogProviders.push(provider);
+            return { skills: [], errors: [] };
+          },
+        }),
+      },
+    );
+
+    expect(requiredProfiles).toEqual(['codex-profile']);
+    expect(catalogProviders).toEqual(['codex']);
+  });
+
   it('creates and persists a starting session', async () => {
     const saved: unknown[] = [];
     const result = await startSession(
@@ -246,6 +326,26 @@ describe('startSession', () => {
       deps,
     );
     expect(codex.model).toBe('gpt-5.6-terra');
+  });
+
+  it('uses the explicit-session catalog when passive Kimi discovery is empty', async () => {
+    const result = await startSession(
+      { workspaceId: 'w', profile: 'default', provider: 'kimi' },
+      {
+        createId: () => 's',
+        now: () => 't',
+        save: () => {},
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/relay/workspace' }),
+        },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        ...skills,
+        models: { list: async () => [] },
+        sessionModels: { list: async () => ['k2-thinking'] },
+      },
+    );
+
+    expect(result).toMatchObject({ provider: 'kimi', model: 'k2-thinking' });
   });
 
   it('falls back to the provider first model when the relay default is unavailable', async () => {

@@ -82,6 +82,23 @@ describe('retainForgottenSession', () => {
     expect(retainForgottenSession(listed, forgotten)).toBe(listed);
     expect(retainForgottenSession(listed, { id: 'unbound', state: 'failed' })).toBe(listed);
   });
+
+  it('does not suppress a forgotten Kimi session when only a Codex thread has the same id', () => {
+    const kimiForgotten = { ...forgotten, provider: 'kimi' as const };
+    const listed = [
+      {
+        id: 'thread-forgotten',
+        cwd: '/workspace/from-codex',
+        recencyAt: 1,
+        resumeCommand: 'codex resume thread-forgotten',
+      },
+    ];
+
+    expect(retainForgottenSession(listed, kimiForgotten)).toEqual([
+      expect.objectContaining({ id: 'thread-forgotten', provider: 'kimi' }),
+      listed[0],
+    ]);
+  });
 });
 
 describe('displayWorkspacePath', () => {

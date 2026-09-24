@@ -31,6 +31,10 @@ import {
 } from './platform/plans/filesystem-plan-status-source.js';
 import { toOrgPlanAttentionToolResponse } from '../shared/contracts/org-plan-attention.js';
 import { toOrgPlanCheckpointToolResponse } from '../shared/contracts/org-plan-checkpoint.js';
+import {
+  applyProjectionEvent,
+  createChatProjection,
+} from '../client/features/chat/chat-projection.js';
 
 function fakeAppServer(calls: string[]) {
   return {
@@ -3749,6 +3753,140 @@ describe('production composition', () => {
         workspaceId: workspace!.id,
         workspacePath: join(root, 'workspace'),
       });
+      await app.close();
+    });
+
+    it('keeps cold bootstrap passive while explicit Kimi session creation resolves a Kimi model', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const sessionModelCalls: string[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: null,
+        installedKimiVersion: '2.0.2',
+        launchAppServer: () => fakeAppServer([]),
+        sessionModelCatalog: {
+          list: async (provider) => {
+            sessionModelCalls.push(provider);
+            return provider === 'kimi' ? ['k2-thinking'] : ['gpt-5.6-terra'];
+          },
+        },
+        profiles: {
+          list: async () => [],
+          require: async () => {
+            throw new Error('CODEX_LAUNCHER_UNAVAILABLE');
+          },
+        },
+      });
+
+      const bootstrap = await app.inject('/api/bootstrap');
+      const workspace = bootstrap
+        .json()
+        .workspaces[0]?.children.find((item: { name: string }) => item.name === 'workspace');
+      expect(bootstrap.json().models.kimi).toEqual([]);
+      expect(sessionModelCalls).toEqual([]);
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: { workspaceId: workspace.id, profile: 'default', provider: 'kimi' },
+      });
+      expect(created.statusCode).toBe(202);
+      expect(created.json()).toMatchObject({ provider: 'kimi', model: 'k2-thinking' });
+      expect(sessionModelCalls).toEqual(['kimi']);
+      await app.close();
+    });
+
+    it('delivers a realistic Codex answer notification through the journal to the chat projection', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+      const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'give the answer' },
+      });
+      expect(started.statusCode).toBe(202);
+      const turnId = started.json().activeTurnId as string;
+      const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+        {
+          headers: {
+            origin: relyingParty.publicOrigin,
+            cookie: 'gestalt_mobile_session=test-session',
+          },
+        },
+      );
+      const messages: Array<{ event: { sequence: number; type: string; payload: unknown } }> = [];
+      socket.on('message', (data) => messages.push(JSON.parse(String(data))));
+      await once(socket, 'open');
+
+      handle.notify!({
+        method: 'item/completed',
+        params: {
+          threadId,
+          turnId,
+          item: {
+            id: 'answer-1',
+            type: 'agentMessage',
+            phase: 'final_answer',
+            text: 'The provider boundary is intact.',
+          },
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.event.type === 'agentMessageCompleted')).toBe(
+          true,
+        ),
+      );
+      const projection = messages
+        .map((message) => message.event)
+        .sort((left, right) => left.sequence - right.sequence)
+        .reduce(
+          (current, event) => applyProjectionEvent(current, event),
+          createChatProjection(sessionId),
+        );
+      expect(projection.messages).toEqual([
+        expect.objectContaining({
+          id: 'assistant:answer-1',
+          role: 'assistant',
+          text: 'The provider boundary is intact.',
+          phase: 'final_answer',
+          complete: true,
+          turnId,
+        }),
+      ]);
+      socket.close();
       await app.close();
     });
 

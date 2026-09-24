@@ -29,7 +29,8 @@ export async function promoteRecentThread(
     executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
 ): Promise<RelaySessionSnapshot> {
-  const key = `${thread.profile}:${thread.cwd}:${thread.id}`;
+  const provider = thread.provider ?? 'codex';
+  const key = `${provider}:${thread.profile}:${thread.cwd}:${thread.id}`;
   const ongoing = inFlightPromotions.get(key);
   if (ongoing) return ongoing;
   const operation = promote(thread, deps);
@@ -52,7 +53,12 @@ async function promote(
     executionPolicy?(thread: RecentThread): Promise<SessionExecutionPolicy | undefined>;
   },
 ): Promise<RelaySessionSnapshot> {
-  const existing = deps.list().find((session) => session.threadId === thread.id);
+  const provider = thread.provider ?? 'codex';
+  const existing = deps
+    .list()
+    .find(
+      (session) => session.threadId === thread.id && (session.provider ?? 'codex') === provider,
+    );
   if (existing) {
     const executionPolicy = existing.executionPolicy
       ? undefined
@@ -76,7 +82,7 @@ async function promote(
       id: deps.createId(),
       workspaceId: thread.cwd,
       workspacePath: thread.cwd,
-      provider: thread.provider ?? 'codex',
+      provider,
       profile: thread.profile,
       threadId: thread.id,
       ...(executionPolicy === undefined ? {} : { executionPolicy }),
