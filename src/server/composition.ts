@@ -1514,12 +1514,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             : undefined,
         replyInteraction:
           runtime || kimiRuntime
-            ? (sessionId, requestId, value) => {
+            ? async (sessionId, requestId, value) => {
                 const session = sessions.find(sessionId);
                 const owner = session ? ownerRuntime(session) : null;
-                return owner?.resolveServerRequest(sessionId, requestId, value)
-                  ? 'accepted'
-                  : 'cleared';
+                if (await owner?.resolveServerRequest(sessionId, requestId, value))
+                  return 'accepted';
+                // Codex reports false when its app-server has already cleared a
+                // request. Kimi returns false for a failed provider delivery and
+                // retains the pending request for retry.
+                return session?.provider === 'kimi' ? 'unavailable' : 'cleared';
               }
             : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
@@ -1779,7 +1782,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   app.addHook('onListen', async () => {
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
     if (profile) await editorSkillCatalog.refresh('codex', profile, root);
-    await editorSkillCatalog.refresh('kimi', 'default', root);
+    // Kimi discovery owns a provider process, so passive relay startup must not
+    // refresh it. Explicit session creation and user-requested skill refreshes
+    // enter KimiSkillCatalog through their normal operation paths instead.
     await detachActiveSessions();
   });
   app.addHook('onClose', async () => {

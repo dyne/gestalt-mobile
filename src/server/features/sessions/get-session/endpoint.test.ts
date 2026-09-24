@@ -14,6 +14,20 @@ describe('GET /api/sessions/:id', () => {
     expect((await app.inject('/api/sessions/nope')).statusCode).toBe(404);
     await app.close();
   });
+  it('omits Codex resume commands for Kimi while preserving legacy Codex sessions', async () => {
+    const app = fastify();
+    registerGetSession(app, (id) =>
+      id === 'kimi'
+        ? ({ id, provider: 'kimi', threadId: 'thread-kimi', workspacePath: '/repo' } as never)
+        : ({ id, threadId: 'thread-codex', workspacePath: '/repo' } as never),
+    );
+
+    expect((await app.inject('/api/sessions/kimi')).json().resumeCommand).toBeNull();
+    expect((await app.inject('/api/sessions/legacy')).json().resumeCommand).toContain(
+      'thread-codex',
+    );
+    await app.close();
+  });
   it('includes a redacted activity snapshot when supplied by the session port', async () => {
     const app = fastify();
     registerGetSession(

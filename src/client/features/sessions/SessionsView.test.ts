@@ -524,6 +524,28 @@ describe('SessionsView provider selection', () => {
     expect(screen.getAllByRole('button', { name: /^Autopilot/ })).toHaveLength(1);
   });
 
+  it('hides stale Codex resume actions on managed Kimi sessions', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'kimi-live',
+          state: 'ready',
+          workspacePath: '/kimi',
+          provider: 'kimi',
+          resumeCommand: 'codex resume kimi-thread',
+        },
+        {
+          id: 'codex-live',
+          state: 'ready',
+          workspacePath: '/codex',
+          resumeCommand: 'codex resume codex-thread',
+        },
+      ],
+    });
+
+    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(1);
+  });
+
   it('hides the resume Copy action for kimi recent threads', () => {
     renderView({
       recentSessions: [

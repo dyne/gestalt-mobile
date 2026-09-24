@@ -31,13 +31,20 @@ function snapshot(threadId: string | null = null) {
 type RecordedCall = { method: 'post' | 'get'; path: string; body?: unknown };
 
 /** Recording REST client whose GET routes may be replaced per test. */
-function fakeRest(getRoutes: Map<string, () => unknown>) {
+function fakeRest(
+  getRoutes: Map<string, () => unknown>,
+  onPost?: (path: string, body: unknown) => unknown | Promise<unknown>,
+) {
   const calls: RecordedCall[] = [];
   let nextThread = 1;
   const client = {
     calls,
     async post(path: string, body?: unknown) {
       calls.push({ method: 'post', path, body });
+      if (onPost) {
+        const result = await onPost(path, body);
+        if (result !== undefined) return result;
+      }
       if (path === '/api/v1/sessions') return { id: `kimi-thread-${nextThread++}` };
       return {};
     },
@@ -90,14 +97,20 @@ type Harness = {
   exits: string[];
 };
 
-function harness(getRoutes = new Map<string, () => unknown>()): Harness {
-  const rest = fakeRest(getRoutes);
+function harness(
+  getRoutes = new Map<string, () => unknown>(),
+  options: {
+    profileKey?: string;
+    onPost?: (path: string, body: unknown) => unknown | Promise<unknown>;
+  } = {},
+): Harness {
   const ws = fakeWs();
+  const rest = fakeRest(getRoutes, options.onPost);
   const notifications: KimiWsEvent[] = [];
   const requests: Harness['requests'] = [];
   const exits: string[] = [];
   const handle = {
-    profileKey: 'default',
+    profileKey: options.profileKey ?? 'default',
     baseUrl: 'http://127.0.0.1:9',
     token: 'token',
     shareDir: '/tmp/share',
@@ -106,7 +119,7 @@ function harness(getRoutes = new Map<string, () => unknown>()): Harness {
   } as unknown as KimiServerHandle;
   const servers = {
     ensure: async () => handle,
-    get: () => handle,
+    get: (profileKey: string) => (profileKey === handle.profileKey ? handle : null),
   } as unknown as KimiWebServerManager;
   const runtime = new KimiSessionRuntime({
     servers,
@@ -208,6 +221,59 @@ describe('KimiSessionRuntime', () => {
     });
     expect(runtime.eventContext('relay-1').isChildAgent('child-1')).toBe(true);
     expect(runtime.eventContext('relay-1').resolveTurnId('a1', 3)).toBeNull();
+  });
+
+  it('correlates the main prompt before a turn-started event races the REST response', async () => {
+    const wsRef: { current?: ReturnType<typeof fakeWs> } = {};
+    const fixture = harness(new Map(), {
+      onPost: (path) => {
+        if (path === '/api/v1/sessions') return { id: 'kimi-thread-1' };
+        if (path.endsWith('/prompts'))
+          wsRef.current?.emit({
+            type: 'turn.started',
+            seq: 1,
+            session_id: 'kimi-thread-1',
+            payload: { type: 'turn.started', agentId: 'main-agent', turnId: 1 },
+          });
+        return {};
+      },
+    });
+    wsRef.current = fixture.ws;
+    const started = await fixture.runtime.start(snapshot(), NOW);
+
+    await fixture.runtime.startTurn(started, 'hello', 'prompt-race', NOW);
+
+    expect(fixture.runtime.eventContext('relay-1').isChildAgent('main-agent')).toBe(false);
+    expect(fixture.runtime.eventContext('relay-1').resolveTurnId('main-agent', 1)).toBe(
+      'prompt-race',
+    );
+  });
+
+  it('rolls back prompt correlation when submission fails after a raced event', async () => {
+    const wsRef: { current?: ReturnType<typeof fakeWs> } = {};
+    const fixture = harness(new Map(), {
+      onPost: (path) => {
+        if (path === '/api/v1/sessions') return { id: 'kimi-thread-1' };
+        if (path.endsWith('/prompts')) {
+          wsRef.current?.emit({
+            type: 'turn.started',
+            seq: 1,
+            session_id: 'kimi-thread-1',
+            payload: { type: 'turn.started', agentId: 'main-agent', turnId: 1 },
+          });
+          throw new Error('submission failed');
+        }
+        return {};
+      },
+    });
+    wsRef.current = fixture.ws;
+    const started = await fixture.runtime.start(snapshot(), NOW);
+
+    await expect(fixture.runtime.startTurn(started, 'hello', 'prompt-failed', NOW)).rejects.toThrow(
+      'submission failed',
+    );
+
+    expect(fixture.runtime.eventContext('relay-1').resolveTurnId('main-agent', 1)).toBeNull();
   });
 
   it('queues steering input as another prompt while a turn runs', async () => {
@@ -331,16 +397,72 @@ describe('KimiSessionRuntime', () => {
     });
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     expect(requests[0].method).toBe('item/commandExecution/requestApproval');
-    expect(runtime.resolveServerRequest('relay-1', String(requests[0].id), 'accept')).toBe(true);
-    await vi.waitFor(() => {
-      expect(
-        rest.calls.some(
-          (call) =>
-            call.method === 'post' &&
-            call.path === '/api/v1/sessions/kimi-thread-1/approvals/ap-1' &&
-            (call.body as { decision: string }).decision === 'approved',
-        ),
-      ).toBe(true);
+    expect(await runtime.resolveServerRequest('relay-1', String(requests[0].id), 'accept')).toBe(
+      true,
+    );
+    expect(
+      rest.calls.some(
+        (call) =>
+          call.method === 'post' &&
+          call.path === '/api/v1/sessions/kimi-thread-1/approvals/ap-1' &&
+          (call.body as { decision: string }).decision === 'approved',
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps a failed provider interaction retryable until Kimi accepts it', async () => {
+    const routes = thread1Routes();
+    routes.set('/api/v1/sessions/kimi-thread-1/approvals', () => ({
+      items: [
+        {
+          approval_id: 'ap-retry',
+          tool_name: 'shell_command',
+          action: 'list files',
+          tool_input_display: { command: 'ls' },
+        },
+      ],
+    }));
+    let failures = 1;
+    const fixture = harness(routes, {
+      onPost: (path) => {
+        if (path === '/api/v1/sessions') return { id: 'kimi-thread-1' };
+        if (path.endsWith('/approvals/ap-retry') && failures-- > 0)
+          throw new Error('provider unavailable');
+        return {};
+      },
+    });
+    await fixture.runtime.start(snapshot(), NOW);
+    fixture.ws.emit({
+      type: 'agent.status.updated',
+      seq: 1,
+      session_id: 'kimi-thread-1',
+      payload: { type: 'agent.status.updated', agentId: 'a1', status: 'awaiting_approval' },
+    });
+    await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
+    const requestId = String(fixture.requests[0].id);
+
+    expect(await fixture.runtime.resolveServerRequest('relay-1', requestId, 'accept')).toBe(false);
+    expect(await fixture.runtime.resolveServerRequest('relay-1', requestId, 'accept')).toBe(true);
+  });
+
+  it('reads an imported recent thread from its non-default owning profile server', async () => {
+    const routes = new Map<string, () => unknown>([
+      ['/api/v1/sessions/recent-thread/messages', () => ({ items: [] })],
+      [
+        '/api/v1/sessions/recent-thread',
+        () => ({ main_turn_active: false, current_prompt_id: null }),
+      ],
+    ]);
+    const { runtime } = harness(routes, { profileKey: 'focused' });
+    const imported = {
+      ...snapshot('recent-thread'),
+      profile: 'focused',
+      effectiveSkillSelection: undefined,
+    };
+
+    await expect(runtime.readHistory(imported)).resolves.toEqual({
+      turns: [],
+      activeTurnId: null,
     });
   });
 
