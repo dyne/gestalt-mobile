@@ -38,11 +38,11 @@ export type KimiNotificationOrigin = Readonly<{
   physicalTurnId?: string;
 }>;
 
-type PendingInteraction = Readonly<{
+type PendingInteraction = {
   kind: 'approval' | 'question';
   kimiId: string;
   settling: boolean;
-}>;
+};
 
 type SessionResource = {
   sessionId: string;
@@ -232,19 +232,36 @@ export class KimiSessionRuntime {
     }
   }
 
-  public resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
+  public async resolveServerRequest(
+    sessionId: string,
+    requestId: string,
+    result: unknown,
+  ): Promise<boolean> {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingInteractions.get(requestId);
     if (!resource || !pending || pending.settling) return false;
-    void this.resolveInteraction(resource, requestId, pending, result).catch(() => {});
-    return true;
+    pending.settling = true;
+    try {
+      await this.resolveInteraction(resource, pending, result);
+      resource.pendingInteractions.delete(requestId);
+      return true;
+    } catch {
+      pending.settling = false;
+      return false;
+    }
   }
 
   public rejectServerRequest(sessionId: string, requestId: string): boolean {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingInteractions.get(requestId);
     if (!resource || !pending || pending.settling) return false;
-    void this.resolveInteraction(resource, requestId, pending, 'cancel').catch(() => {});
+    pending.settling = true;
+    void this.resolveInteraction(resource, pending, 'cancel').then(
+      () => resource.pendingInteractions.delete(requestId),
+      () => {
+        pending.settling = false;
+      },
+    );
     return true;
   }
 
@@ -351,6 +368,15 @@ export class KimiSessionRuntime {
   }
 
   private async ensureServer(session: RelaySessionSnapshot): Promise<KimiServerHandle> {
+    // A recent thread imported from a running Kimi server carries that server's
+    // profile key in `profile`, but no reconstructable effective skill selection.
+    // Reuse its exact owner; never collapse it onto the default server or restart
+    // it with an empty selection.
+    if (!session.effectiveSkillSelection) {
+      const existing = this.input.servers.get(normalizeSkillProfileName(session.profile));
+      if (existing) return existing;
+      throw new Error(KIMI_SESSION_NOT_RUNNING);
+    }
     const skills = await this.input.skillsFor(session);
     return this.input.servers.ensure(
       this.profileKey(session),
@@ -567,16 +593,14 @@ export class KimiSessionRuntime {
 
   private async resolveInteraction(
     resource: SessionResource,
-    requestId: string,
-    pending: PendingInteraction & { settling?: boolean },
+    pending: PendingInteraction,
     result: unknown,
   ): Promise<void> {
-    pending.settling = true;
     const handle = this.input.servers.get(resource.profileKey);
-    if (!handle) return;
+    if (!handle) throw new Error(KIMI_SESSION_NOT_RUNNING);
     if (pending.kind === 'approval') {
       const decision = kimiApprovalDecision(result);
-      if (!decision) return;
+      if (!decision) throw new Error('KIMI_INTERACTION_RESPONSE_INVALID');
       await handle.client.post(
         `/api/v1/sessions/${resource.threadId}/approvals/${pending.kimiId}`,
         { decision },
@@ -588,7 +612,7 @@ export class KimiSessionRuntime {
       (candidate) => candidate.question_id === pending.kimiId,
     );
     const answers = item ? kimiQuestionAnswers(item, result) : null;
-    if (!answers) return;
+    if (!answers) throw new Error('KIMI_INTERACTION_RESPONSE_INVALID');
     try {
       await handle.client.post(
         `/api/v1/sessions/${resource.threadId}/questions/${pending.kimiId}`,
@@ -614,12 +638,23 @@ export class KimiSessionRuntime {
   ): Promise<void> {
     const handle = this.input.servers.get(resource.profileKey);
     if (!handle) throw new Error(KIMI_SESSION_NOT_RUNNING);
-    await handle.client.post(`/api/v1/sessions/${resource.threadId}/prompts`, {
-      content: [{ type: 'text', text }],
-      prompt_id: promptId,
-      ...(model ? { model } : {}),
-    });
     resource.pendingPrompts.push(promptId);
+    try {
+      await handle.client.post(`/api/v1/sessions/${resource.threadId}/prompts`, {
+        content: [{ type: 'text', text }],
+        prompt_id: promptId,
+        ...(model ? { model } : {}),
+      });
+    } catch (error) {
+      resource.pendingPrompts = resource.pendingPrompts.filter(
+        (candidate) => candidate !== promptId,
+      );
+      for (const [binding, bound] of resource.agentTurns) {
+        if (bound === promptId) resource.agentTurns.delete(binding);
+      }
+      if (resource.activePromptId === promptId) resource.activePromptId = null;
+      throw error;
+    }
     // kimi enqueues prompts submitted while a turn runs; steer pulls the
     // queued prompt into the active turn instead of deferring it.
     if (resource.activePromptId) {

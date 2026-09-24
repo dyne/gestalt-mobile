@@ -7,7 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { SafeInteractionOutcome } from '../../../../shared/contracts/chat-snapshot.js';
 
-export type InteractionReplyResult = boolean | 'accepted' | 'cleared' | 'unavailable';
+type InteractionReplyOutcome = boolean | 'accepted' | 'cleared' | 'unavailable';
+export type InteractionReplyResult = InteractionReplyOutcome | Promise<InteractionReplyOutcome>;
 
 export function registerRespondInteraction(
   app: FastifyInstance,
@@ -50,7 +51,7 @@ export function registerRespondInteraction(
         return reply.code(409).send({ code: 'INTERACTION_NOT_PENDING' });
       if (deps.validate && !deps.validate(id, requestId, value as Record<string, unknown>))
         return reply.code(400).send({ code: 'INTERACTION_RESPONSE_INVALID' });
-      const delivery = deps.reply(id, requestId, value);
+      const delivery = await deps.reply(id, requestId, value);
       if (delivery === false || delivery === 'unavailable')
         return reply.code(409).send({ code: 'INTERACTION_DELIVERY_UNAVAILABLE' });
       if (delivery === 'cleared') {

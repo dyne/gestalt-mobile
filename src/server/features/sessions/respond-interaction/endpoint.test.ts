@@ -57,6 +57,32 @@ describe('POST /api/sessions/:id/interactions/:requestId', () => {
     await app.close();
   });
 
+  it('keeps an interaction pending when asynchronous provider delivery fails', async () => {
+    const app = fastify();
+    let resolved = false;
+    registerRespondInteraction(app, {
+      exists: () => true,
+      pending: () => true,
+      resolve: () => {
+        resolved = true;
+        return true;
+      },
+      reply: async () => false,
+      now: () => 'now',
+    });
+
+    const result = await app.inject({
+      method: 'POST',
+      url: '/api/sessions/session-1/interactions/request-1',
+      payload: { decision: 'approved' },
+    });
+
+    expect(result.statusCode).toBe(409);
+    expect(result.json()).toEqual({ code: 'INTERACTION_DELIVERY_UNAVAILABLE' });
+    expect(resolved).toBe(false);
+    await app.close();
+  });
+
   it('publishes an interaction resolution after durable resolution', async () => {
     const app = fastify();
     const completed: unknown[] = [];

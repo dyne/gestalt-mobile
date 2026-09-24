@@ -3801,6 +3801,40 @@ describe('production composition', () => {
       await app.close();
     });
 
+    it('keeps real server listen passive when Kimi is installed', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const ensure = vi.fn(async () => {
+        throw new Error('passive startup must not ensure Kimi');
+      });
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: null,
+        installedKimiVersion: '2.0.2',
+        startAppServers: true,
+        kimiServerManager: {
+          ensure,
+          get: () => null,
+          list: () => [],
+          stopAll: async () => {},
+        } as never,
+        profiles: {
+          list: async () => [],
+          require: async () => {
+            throw new Error('CODEX_LAUNCHER_UNAVAILABLE');
+          },
+        },
+      });
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      expect(ensure).not.toHaveBeenCalled();
+      await app.close();
+    });
+
     it('delivers a realistic Codex answer notification through the journal to the chat projection', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

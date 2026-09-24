@@ -38,7 +38,8 @@ export function registerGetSession(
         pendingAttention: Boolean(session.pendingInteractions?.length),
         observedAt: new Date().toISOString(),
       }),
-      resumeCommand: session.threadId ? buildResumeCommand(session) : null,
+      resumeCommand:
+        session.threadId && session.provider !== 'kimi' ? buildResumeCommand(session) : null,
     });
   });
 }

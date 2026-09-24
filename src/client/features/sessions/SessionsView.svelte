@@ -161,7 +161,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 current={session.id === selectedSessionId ? 'page' : undefined}
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
-              {#if session.resumeCommand}
+              {#if session.resumeCommand && session.provider !== 'kimi'}
                 <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                   >Copy</AppControl
                 >
@@ -286,7 +286,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             >
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
-            {#if session.resumeCommand}
+            {#if session.resumeCommand && session.provider !== 'kimi'}
               <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
                 >Copy</AppControl
               >
