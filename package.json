@@ -34,8 +34,9 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "dev:server": "tsx watch src/server/main.ts -- --cwd .. --public-origin http://localhost:5173",
-    "start": "node dist/server/server/main.js",
+    "dev:server": "node scripts/gestalt-environment.mjs tsx watch src/server/main.ts --cwd .. --port 3001 --public-origin http://localhost:5173 --data-dir .gestalt/dev-state --disable-passkey-auth",
+    "prestart": "npm run build",
+    "start": "node scripts/start.mjs",
     "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
     "build:server": "node scripts/build-server.mjs",

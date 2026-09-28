@@ -3346,6 +3346,7 @@ describe('production composition', () => {
         ['DELETE', '/api/auth/devices/:deviceId', '/api/auth/devices/device-1', 'protected'],
         ['GET', '/api/bootstrap', '/api/bootstrap', 'protected'],
         ['HEAD', '/api/bootstrap', '/api/bootstrap', 'protected'],
+        ['POST', '/api/session-models/:provider', '/api/session-models/codex', 'protected'],
         ['POST', '/api/sessions', '/api/sessions', 'protected'],
         ['GET', '/api/sessions', '/api/sessions', 'protected'],
         ['HEAD', '/api/sessions', '/api/sessions', 'protected'],

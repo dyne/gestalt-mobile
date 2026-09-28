@@ -8,7 +8,10 @@ import { spawn } from 'node:child_process';
 
 const children = [
   spawn('npm', ['run', 'dev:server'], { stdio: 'inherit' }),
-  spawn('npm', ['run', 'dev:client'], { stdio: 'inherit' }),
+  spawn('npm', ['run', 'dev:client'], {
+    stdio: 'inherit',
+    env: { ...process.env, GESTALT_DEV_PROXY: '1' },
+  }),
 ];
 
 let stopping = false;

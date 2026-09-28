@@ -386,6 +386,9 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     listRecentSessions: () => get<RecentSession[]>('/api/sessions/recent-threads'),
     openRecentSession: (threadId: string, cwd: string, provider: LlmProvider = 'codex') =>
       request<RelaySession>('/api/sessions/recent-threads/open', { threadId, cwd, provider }),
+    /** Resolves models when the user explicitly chooses a provider for a new session. */
+    listSessionModels: (provider: LlmProvider) =>
+      request<{ models: string[] }>(`/api/session-models/${encodeURIComponent(provider)}`, {}),
     startSession: (workspaceId: string, settings: StartSessionSettings = {}, key?: string) =>
       request<RelaySession>(
         '/api/sessions',

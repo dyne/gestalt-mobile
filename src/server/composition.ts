@@ -532,7 +532,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       : undefined);
   const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
   const models = new ProviderModelCatalog({
-    codex: new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
+    codex:
+      options.installedCodexVersion === null
+        ? { list: async () => [] }
+        : new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
     kimi: kimiModels,
   });
   const sessionModels: ModelCatalog = options.sessionModelCatalog ?? {

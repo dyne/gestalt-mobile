@@ -9,6 +9,15 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [svelte()],
+  ...(process.env.GESTALT_DEV_PROXY === '1'
+    ? {
+        server: {
+          proxy: {
+            '/api': { target: 'http://127.0.0.1:3001', ws: true },
+          },
+        },
+      }
+    : {}),
   // Local font files must stay external so the relay's strict CSP can permit them.
   build: { outDir: 'dist/client', emptyOutDir: true, assetsInlineLimit: 0 },
 });

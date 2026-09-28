@@ -3,4 +3,6 @@ dist/
 playwright-report/
 test-results/
 coverage/
+.gestalt/dev-state/
+.gestalt/start-state/
 *.sqlite
