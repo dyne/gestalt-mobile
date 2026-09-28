@@ -32,6 +32,22 @@ The command prints the loopback URL when it is ready. Open that URL in a
 browser. Press Ctrl-C, or send SIGINT or SIGTERM, to stop the HTTP server,
 active Codex subprocesses, and database cleanly.
 
+### Run this checkout
+
+`npm run start` builds and runs the current checkout with the same managed
+`CODEX_HOME` and `GESTALT_HOME` defaults as `gestalt mobile`. Explicit overrides
+remain authoritative. The wrapper also prepends the usual user command paths so
+locally installed `codex` and `kimi` executables remain discoverable. It defaults
+to port 3001 and isolated state under `.gestalt/start-state`, allowing the managed
+instance to remain on port 3000; pass explicit `--port` or `--data-dir` options to
+override either default.
+
+For live development, run `npm run dev` and open `http://localhost:5173`.
+Vite proxies API and WebSocket traffic to the source server on port 3001, so a
+managed Gestalt Mobile instance can continue using port 3000. Development uses
+repository-local relay state under `.gestalt/dev-state` and disables passkey
+access control; it remains loopback-only and does not reuse production state.
+
 ## Skill profiles
 
 Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:

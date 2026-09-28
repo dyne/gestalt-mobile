@@ -21,6 +21,8 @@ const relayMessages = {
   SESSION_ROLLOUT_MISSING: 'This stored thread is no longer available.',
   SESSION_RUNTIME_UNAVAILABLE: 'The Codex runtime is unavailable. Retry shortly.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
+  SESSION_MODELS_READ_FAILED:
+    'Models could not be loaded for this provider. Select another provider and try again.',
   SESSION_REFRESH_FAILED: 'Sessions could not be refreshed. Try again.',
   MESSAGE_SEND_FAILED: 'The message was not sent. Your draft is preserved.',
   GIT_SUMMARY_FAILED: 'Repository status could not be loaded. Select it again to retry.',

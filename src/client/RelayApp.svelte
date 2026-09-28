@@ -153,6 +153,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kimi: '',
   });
   let providerCapabilities = $state.raw<ProviderAvailability | null>(null);
+  let loadingSessionModels = $state<LlmProvider | null>(null);
   let kimiAvailable = $derived(providerCapabilities?.kimi.available ?? false);
   let activeSessionProvider = $derived(kimiAvailable ? sessionProvider : 'codex');
   let codexProfiles = $state.raw<Array<{ name: string; state: string; status: string }>>([]);
@@ -565,11 +566,24 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     skillsState?.dispose();
   });
 
-  function selectSessionProvider(provider: LlmProvider): void {
+  async function selectSessionProvider(provider: LlmProvider): Promise<void> {
     sessionProvider = provider;
     const list = sessionModels[provider];
     if (!selectedSessionModels[provider] && list[0]) {
       selectedSessionModels = { ...selectedSessionModels, [provider]: list[0] };
+    }
+    if (list.length > 0) return;
+    loadingSessionModels = provider;
+    try {
+      const resolved = await relay.listSessionModels(provider);
+      sessionModels = { ...sessionModels, [provider]: resolved.models };
+      if (!selectedSessionModels[provider] && resolved.models[0]) {
+        selectedSessionModels = { ...selectedSessionModels, [provider]: resolved.models[0] };
+      }
+    } catch (error) {
+      reportRelayError(error, 'SESSION_MODELS_READ_FAILED');
+    } finally {
+      if (loadingSessionModels === provider) loadingSessionModels = null;
     }
   }
 
@@ -1614,6 +1628,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             selectedModel={selectedSessionModels[activeSessionProvider]}
             provider={activeSessionProvider}
             {kimiAvailable}
+            modelsLoading={loadingSessionModels === activeSessionProvider}
             skillProfiles={sessionSkillProfiles}
             selectedSkillProfile={selectedSessionSkillProfile}
             skillProfileError={sessionSkillProfileError}
@@ -1628,7 +1643,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 ...selectedSessionModels,
                 [activeSessionProvider]: value,
               })}
-            onproviderchange={(value) => selectSessionProvider(value)}
+            onproviderchange={(value) => void selectSessionProvider(value)}
             onskillprofilechange={(value) => (selectedSessionSkillProfile = value)}
             onmanageprofiles={(trigger) => void openProfileManager(trigger)}
             onopen={openSession}

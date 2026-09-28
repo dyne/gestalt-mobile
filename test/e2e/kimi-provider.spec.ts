@@ -115,7 +115,7 @@ test('starts a kimi session from the provider picker and adapts the form', async
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
 
-test('hides the provider picker when kimi is not installed', async ({ page }) => {
+test('explains why kimi cannot be selected when it is not installed', async ({ page }) => {
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -133,9 +133,11 @@ test('hides the provider picker when kimi is not installed', async ({ page }) =>
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(page.getByLabel('Provider')).toHaveCount(0);
+  await expect(page.getByLabel('Provider')).toHaveValue('codex');
+  await expect(page.getByLabel('Provider').locator('option[value="kimi"]')).toBeDisabled();
+  await expect(page.getByText(/Kimi is unavailable because its CLI was not found/)).toBeVisible();
   await expect(page.getByLabel('Sandbox')).toBeVisible();
-  await expect(page.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
+  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-5.6-terra');
 });
 
 test('restricts chat model switching to the session provider and badges kimi sessions', async ({

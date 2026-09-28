@@ -299,9 +299,9 @@ describe('SessionsView session base tree', () => {
     expect(onskillprofilechange).toHaveBeenCalledWith('focused');
     await fireEvent.click(screen.getByRole('button', { name: 'Manage skill profiles' }));
     expect(onmanageprofiles).toHaveBeenCalledOnce();
-    expect((screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByRole('combobox', { name: 'Codex model' }) as HTMLSelectElement).disabled,
+    ).toBe(true);
   });
 
   it('shows a badge only for managed sessions with a named profile snapshot', () => {
@@ -477,9 +477,12 @@ describe('SessionsView session base tree', () => {
 });
 
 describe('SessionsView provider selection', () => {
-  it('hides the provider picker unless kimi is available', () => {
+  it('always identifies the provider and explains when kimi is unavailable', () => {
     renderView();
-    expect(screen.queryByLabelText('Provider')).toBeNull();
+    const picker = screen.getByLabelText('Provider') as HTMLSelectElement;
+    expect(picker.value).toBe('codex');
+    expect((picker.querySelector('option[value="kimi"]') as HTMLOptionElement).disabled).toBe(true);
+    expect(screen.getByText(/Kimi is unavailable because its CLI was not found/i)).toBeTruthy();
     expect(screen.getByText(/Codex should use as its working directory/)).toBeTruthy();
   });
 
@@ -503,7 +506,16 @@ describe('SessionsView provider selection', () => {
     expect(screen.queryByLabelText('Sandbox')).toBeNull();
     expect(screen.queryByLabelText('Approval policy')).toBeNull();
     expect(screen.getByLabelText('Skills profile')).toBeTruthy();
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('k2-thinking');
+    expect((screen.getByLabelText('Kimi model') as HTMLSelectElement).value).toBe('k2-thinking');
+  });
+
+  it('shows model loading state and prevents creating the session', () => {
+    renderView({ kimiAvailable: true, provider: 'kimi', modelsLoading: true });
+    expect((screen.getByLabelText('Kimi model') as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByText('Loading models…')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Create session' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it('disables creating a session while the model list is loaded but unset', () => {

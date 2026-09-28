@@ -46,8 +46,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedModel?: string;
     /** Provider chosen for the new session; defaults to codex. */
     provider?: LlmProvider;
-    /** Whether the kimi CLI is installed; shows the provider picker when true. */
+    /** Whether the kimi CLI is installed; enables the Kimi provider option when true. */
     kimiAvailable?: boolean;
+    modelsLoading?: boolean;
     skillProfiles: RelaySkillProfile[];
     selectedSkillProfile: string;
     skillProfileError: string;
@@ -94,6 +95,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedModel = '',
     provider = 'codex',
     kimiAvailable = false,
+    modelsLoading = false,
     skillProfiles,
     selectedSkillProfile,
     skillProfileError,
@@ -411,27 +413,33 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onclick={(event) => onmanageprofiles(event.currentTarget)}
           >Manage skill profiles
         </AppControl>
-        {#if kimiAvailable}
-          <div class="model-control">
-            <label for="session-provider">Provider</label>
-            <select
-              id="session-provider"
-              value={provider}
-              onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
-            >
-              <option value="codex">Codex</option>
-              <option value="kimi">Kimi</option>
-            </select>
-          </div>
-        {/if}
         <div class="model-control">
-          <label for="model">Model</label>
+          <label for="session-provider">Provider</label>
+          <select
+            id="session-provider"
+            value={provider}
+            aria-describedby={!kimiAvailable ? 'provider-availability' : undefined}
+            onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
+          >
+            <option value="codex">Codex</option>
+            <option value="kimi" disabled={!kimiAvailable}
+              >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
+            >
+          </select>
+        </div>
+        <div class="model-control">
+          <label for="model">{providerLabel} model</label>
           <select
             id="model"
             value={selectedModel}
-            disabled={models.length === 0}
+            disabled={modelsLoading || models.length === 0}
             onchange={(event) => onmodelchange(event.currentTarget.value)}
           >
+            {#if modelsLoading}
+              <option value="">Loading models…</option>
+            {:else if models.length === 0}
+              <option value="">Choose automatically</option>
+            {/if}
             {#each models as model (model)}
               <option value={model}>{model}</option>
             {/each}
@@ -441,11 +449,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           class="new-session-button"
           type="submit"
           primary
-          disabled={!selectedWorkspace || startingSession || (models.length > 0 && !selectedModel)}
+          disabled={!selectedWorkspace ||
+            startingSession ||
+            modelsLoading ||
+            (models.length > 0 && !selectedModel)}
         >
           {startingSession ? 'Creating…' : 'Create session'}
         </AppControl>
       </div>
+      {#if !kimiAvailable}
+        <p id="provider-availability" class="provider-availability">
+          Kimi is unavailable because its CLI was not found when the relay started.
+        </p>
+      {/if}
     </section>
   </form>
   <section aria-labelledby="recent-sessions-title">
@@ -668,6 +684,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .skills-profile-error {
     margin: 0;
+    font-size: 0.875rem;
+  }
+
+  .provider-availability {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--theme-text-muted);
     font-size: 0.875rem;
   }
 

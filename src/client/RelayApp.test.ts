@@ -766,7 +766,7 @@ describe('RelayApp provider selection', () => {
         { id: 'ws1', name: 'repo', relativePath: 'repo', isGitRepository: true, children: [] },
       ],
       profiles: [],
-      models: { codex: ['gpt-5.6-terra'], kimi: ['k2-thinking'] },
+      models: { codex: ['gpt-5.6-terra'], kimi: [] },
       sessions: [],
       capabilities: {
         approvals: true,
@@ -799,6 +799,8 @@ describe('RelayApp provider selection', () => {
             model: 'k2-thinking',
           }),
         );
+      if (url === '/api/session-models/kimi' && init?.method === 'POST')
+        return new Response(JSON.stringify({ models: ['k2-thinking'] }));
       if (url === '/api/skill-profiles') return new Response(JSON.stringify({ profiles: [] }));
       return new Response(JSON.stringify([]));
     });
@@ -822,8 +824,13 @@ describe('RelayApp provider selection', () => {
     const picker = (await screen.findByLabelText('Provider')) as HTMLSelectElement;
     expect(picker.value).toBe('codex');
     await fireEvent.change(picker, { target: { value: 'kimi' } });
-    expect(screen.queryByLabelText('Sandbox')).toBeNull();
-    expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('k2-thinking');
+    await vi.waitFor(() => expect(screen.queryByLabelText('Sandbox')).toBeNull());
+    await vi.waitFor(() =>
+      expect((screen.getByLabelText('Kimi model') as HTMLSelectElement).value).toBe('k2-thinking'),
+    );
+    expect(recordedRequests.some((request) => request.url === '/api/session-models/kimi')).toBe(
+      true,
+    );
 
     await fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
     await vi.waitFor(() =>
@@ -837,14 +844,16 @@ describe('RelayApp provider selection', () => {
     });
   });
 
-  it('keeps codex as the only offered provider when kimi is unavailable', async () => {
+  it('shows why kimi cannot be selected when it is unavailable', async () => {
     stubBrowserGlobals();
     renderWithBootstrap({
       codex: { available: true, version: '1.0' },
       kimi: { available: false },
     });
     await screen.findByRole('tree', { name: 'Session base' });
-    expect(screen.queryByLabelText('Provider')).toBeNull();
+    const picker = screen.getByLabelText('Provider') as HTMLSelectElement;
+    expect((picker.querySelector('option[value="kimi"]') as HTMLOptionElement).disabled).toBe(true);
+    expect(screen.getByText(/Kimi is unavailable because its CLI was not found/i)).toBeTruthy();
     expect(screen.getByLabelText('Sandbox')).toBeTruthy();
   });
 });

@@ -21,6 +21,7 @@ import { registerReleaseSession } from './release-session/endpoint.js';
 import { registerRestoreSession } from './restore-session/endpoint.js';
 import { registerRespondInteraction } from './respond-interaction/endpoint.js';
 import { registerSelectModel } from './select-model/endpoint.js';
+import { registerListSessionModels } from './list-models/endpoint.js';
 import { registerSessionEvents } from './session-events/endpoint.js';
 import { registerStartSession } from './start-session/endpoint.js';
 import { registerStartTurn } from './start-turn/endpoint.js';
@@ -59,6 +60,7 @@ export function registerSessionRoutes(
     });
   }
   if (sessions) {
+    if (sessions.sessionModels) registerListSessionModels(app, sessions.sessionModels);
     registerStartSession(app, {
       ...sessions,
       reportFailure: (operation, error) =>
