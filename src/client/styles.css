@@ -153,6 +153,10 @@ main {
   block-size: 2rem;
 }
 
+.brand-icon-custom {
+  object-fit: contain;
+}
+
 .brand-logotype {
   inline-size: 6.25rem;
   block-size: auto;

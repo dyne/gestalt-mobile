@@ -45,6 +45,7 @@ describe('GET /api/bootstrap', () => {
         { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
       ],
+      headerIconUrl: '/install-icon.svg',
       protocolCompatible: true,
       providers: {
         codex: { available: true, version: 'codex-cli 0.144.3' },
@@ -86,6 +87,7 @@ describe('GET /api/bootstrap', () => {
         { id: 'gestalt-mobile', label: 'Gestalt Mobile', version: '0.33.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
       ],
+      branding: { headerIconUrl: '/install-icon.svg' },
       capabilities: {
         approvals: true,
         userInput: true,

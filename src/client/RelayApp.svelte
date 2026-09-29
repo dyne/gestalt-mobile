@@ -147,6 +147,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kimi: [],
   });
   let componentVersions = $state.raw<ComponentVersion[]>([]);
+  let headerIconUrl = $state<string | null>(null);
   let sessionProvider = $state<LlmProvider>('codex');
   let selectedSessionModels = $state.raw<Record<LlmProvider, string>>({
     codex: defaultSessionModel,
@@ -453,6 +454,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       };
       providerCapabilities = bootstrap.capabilities?.providers ?? null;
       componentVersions = bootstrap.versions ?? [];
+      headerIconUrl = bootstrap.branding?.headerIconUrl ?? null;
       if (!detachedSessionId) await refreshSkillProfiles();
       sessionExpandedIds = defaultExpandedIds(workspaceTree);
       gitExpandedIds = defaultExpandedIds(workspaceTree);
@@ -1417,6 +1419,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           : null}
         sessionModel={tab === 'chat' ? selectedSessionModelLabel : null}
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
+        brandIconUrl={headerIconUrl}
         {componentVersions}
         {passkeyAuthEnabled}
         {onlock}

@@ -14,6 +14,7 @@ export type BootstrapDependencies = {
   models?: Pick<ModelCatalog, 'list'>;
   sessions: { list(): unknown[] };
   versions?: readonly ComponentVersion[];
+  headerIconUrl?: string;
   protocolCompatible: boolean;
   providers: ProviderAvailability;
 };
@@ -30,6 +31,7 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
     models: { codex: codexModels, kimi: kimiModels },
     sessions: deps.sessions.list(),
     versions: deps.versions ?? [],
+    branding: { headerIconUrl: deps.headerIconUrl ?? null },
     capabilities: {
       approvals: true,
       userInput: true,

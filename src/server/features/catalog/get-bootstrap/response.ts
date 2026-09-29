@@ -16,6 +16,9 @@ export type BootstrapResponse = {
   models: Record<LlmProvider, string[]>;
   sessions: unknown[];
   versions: readonly ComponentVersion[];
+  branding: {
+    headerIconUrl: string | null;
+  };
   capabilities: {
     approvals: true;
     userInput: true;
