@@ -242,6 +242,7 @@ async function holdCheckpointRequest(
   timers: Array<{ callback: () => void; cancelled: boolean }>,
   requestId: number,
   expectHeld = true,
+  compact = false,
 ) {
   timers.find((timer) => !timer.cancelled)!.callback();
   await vi.waitFor(() =>
@@ -275,7 +276,20 @@ async function holdCheckpointRequest(
   const startsBefore = fixture.handles
     .flatMap((candidate) => candidate.requests)
     .filter((request) => request.method === 'turn/start').length;
-  const response = handle.request!(l2CheckpointCall(requestId, threadId, turnId, planIdentity));
+  const response = handle.request!(
+    compact
+      ? {
+          id: requestId,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_org_plan_checkpoint',
+            arguments: { kind: 'l2Completed' },
+          },
+        }
+      : l2CheckpointCall(requestId, threadId, turnId, planIdentity),
+  );
   // The caller can be synchronously rejected by a coordinator exception.
   // Mark it observed immediately; callers still assert its exact outcome.
   void response.catch(() => {});
@@ -1165,6 +1179,31 @@ describe('production composition', () => {
             .filter((request) => request.method === 'turn/start'),
         ).toHaveLength(2),
       );
+      await fixture.app.close();
+    });
+
+    it('expands and acknowledges a compact checkpoint signal from the active root', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const { handle, response } = await holdCheckpointRequest(fixture, timers, 812, true, true);
+      handle.responseSettled!({ id: 812, outcome: 'resultWritten' });
+      await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const checkpoint = database
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'org-plan.step-checkpointed'",
+        )
+        .get(fixture.sessionId) as { count: number };
+      database.close();
+      expect(checkpoint.count).toBe(1);
       await fixture.app.close();
     });
 
@@ -4423,8 +4462,6 @@ describe('production composition', () => {
           tool: 'gestalt_org_plan_attention',
           arguments: {
             reason: 'permissionRequired',
-            summary: 'A protected release needs approval.',
-            requestedAction: 'Grant the release permission.',
             resumeCondition: 'permissionGranted',
           },
         },

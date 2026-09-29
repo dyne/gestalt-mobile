@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { validOrgPlanCheckpoint } from './validate.js';
+import { resolveOrgPlanCheckpointSignal, validOrgPlanCheckpoint } from './validate.js';
 
 const plan = {
   title: 'Plan',
@@ -47,6 +47,26 @@ const checkpoint = {
 };
 
 describe('validOrgPlanCheckpoint', () => {
+  it('expands a compact host signal from the authoritative current boundary', () => {
+    const current = {
+      ...plan,
+      currentStepId: 'l1',
+      steps: [
+        {
+          ...plan.steps[0],
+          state: 'WIP' as const,
+          reviewStatus: 'UNREVIEWED' as const,
+        },
+      ],
+    };
+    expect(resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan')).toMatchObject({
+      kind: 'l2Completed',
+      planIdentity: 'plan',
+      l1Id: 'l1',
+      l2Id: 'l2',
+      position: 'L1.1',
+    });
+  });
   it('requires a matching DONE L2 under an unreviewed L1', () => {
     const l2Checkpoint = {
       version: 1 as const,

@@ -13,6 +13,7 @@ import {
 import {
   GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
   parseOrgPlanCheckpoint,
+  type OrgPlanCheckpoint,
 } from '../../../shared/contracts/org-plan-checkpoint.js';
 import {
   GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME,
@@ -98,6 +99,27 @@ export function isAutopilotWaitLeaseCall(input: {
     isRecord(input.params) &&
     input.params.tool === GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME
   );
+}
+
+/** Compatibility signal used by newer hosts that let Mobile derive boundary details. */
+export function compactOrgPlanCheckpointKind(input: {
+  id: number;
+  method: string;
+  params: unknown;
+}): OrgPlanCheckpoint['kind'] | null {
+  if (
+    !Number.isSafeInteger(input.id) ||
+    input.method !== 'item/tool/call' ||
+    !isRecord(input.params) ||
+    input.params.tool !== GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME ||
+    !isRecord(input.params.arguments) ||
+    Object.keys(input.params.arguments).length !== 1
+  )
+    return null;
+  const kind = input.params.arguments.kind;
+  return kind === 'l2Completed' || kind === 'l1Accepted' || kind === 'terminalReviewAccepted'
+    ? kind
+    : null;
 }
 
 export function isAgentCapacityRecoveryCall(input: {
