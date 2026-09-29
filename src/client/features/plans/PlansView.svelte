@@ -29,6 +29,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let lastClosed = $state<string | null>(null);
   let wasViewing = false;
   let restoreFocus = false;
+  let unfinishedEntries = $derived(
+    catalog.kind === 'ready' ? catalog.entries.filter((entry) => entry.allDone !== true) : [],
+  );
+  let completedEntries = $derived(
+    catalog.kind === 'ready' ? catalog.entries.filter((entry) => entry.allDone === true) : [],
+  );
 
   function close(): void {
     onclose();
@@ -64,6 +70,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   });
 </script>
 
+{#snippet planEntry(entry: WorkspacePlanEntry)}
+  <li>
+    <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
+      <strong>{entry.title}</strong>
+      <code>{entry.planName}</code>
+      {#if entry.previewAvailable !== false}
+        <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
+        {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
+      {:else}
+        <span>Org document</span>
+      {/if}
+    </button>
+  </li>
+{/snippet}
+
 {#if planState?.kind === 'org-source'}
   <OrgDocumentView preview={planState} onclose={close} />
 {:else if planState}
@@ -81,22 +102,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <p>No Org files were found below this workspace.</p>
     {:else}
       <p class="scope">Org files below the selected workspace.</p>
-      <ul>
-        {#each catalog.entries as entry (entry.planName)}
-          <li>
-            <button bind:this={buttons[entry.planName]} onclick={() => open(entry.planName)}>
-              <strong>{entry.title}</strong>
-              <code>{entry.planName}</code>
-              {#if entry.previewAvailable !== false}
-                <span>{entry.doneSteps} / {entry.totalSteps} complete</span>
-                {#if entry.subtitle}<span>{entry.subtitle}</span>{/if}
-              {:else}
-                <span>Org document</span>
-              {/if}
-            </button>
-          </li>
-        {/each}
-      </ul>
+      {#if unfinishedEntries.length > 0}
+        <ul aria-label="Unfinished plans">
+          {#each unfinishedEntries as entry (entry.planName)}
+            {@render planEntry(entry)}
+          {/each}
+        </ul>
+      {/if}
+      {#if completedEntries.length > 0}
+        <section class="completed" aria-labelledby="completed-plans-title">
+          <h3 id="completed-plans-title">Completed</h3>
+          <ul>
+            {#each completedEntries as entry (entry.planName)}
+              {@render planEntry(entry)}
+            {/each}
+          </ul>
+        </section>
+      {/if}
     {/if}
   </section>
 {/if}
@@ -118,6 +140,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+  .completed {
+    margin-block-start: 1.5rem;
+    padding-block-start: 1rem;
+    border-block-start: 1px solid var(--theme-border);
+  }
+  h3 {
+    margin-block: 0 0.5rem;
   }
   .plans button {
     display: grid;
