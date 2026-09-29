@@ -2223,6 +2223,7 @@ describe('AutopilotCoordinator', () => {
                 root: {
                   ...createAgentActivitySnapshot('s', now).root,
                   state: 'idle',
+                  observedAt: '2026-08-20T11:00:00.000Z',
                   lastActivityAt: '2026-08-20T11:00:00.000Z',
                 },
               },
@@ -2956,6 +2957,49 @@ describe('AutopilotCoordinator', () => {
       },
     );
 
+    it('hands a completed unreported L2 to root before resuming its executor', async () => {
+      const fixture = subject([], 'partial', 'DONE');
+
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      await fixture.runNext();
+
+      expect(fixture.rootStart).toHaveBeenCalledOnce();
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('hands a reopened and recompleted L2 epoch back to root', async () => {
+      const fixture = subject([], 'partial', 'DONE');
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          completionEpochs: [
+            {
+              target: '["l2","l1","l1-1"]',
+              epoch: 1,
+              reopened: true,
+              completed: false,
+            },
+          ],
+          reportedL2Ids: ['["l1","l1-1"]'],
+          reportedL1Ids: [],
+          acceptedKeys: ['prior-epoch'],
+          pendingTurnId: null,
+          pendingKind: null,
+          terminalReviewAccepted: false,
+        },
+      };
+
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      await fixture.runNext();
+
+      expect(fixture.rootStart).toHaveBeenCalledOnce();
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
     it('rejects an executor wait when its completion is already settled or pending', () => {
       const fixture = subject();
       fixture.coordinator.activitySettled('s', 'stateChanged');
@@ -2998,6 +3042,22 @@ describe('AutopilotCoordinator', () => {
         waitLease: { id: 'active-wait-lease' },
       });
       expect(fixture.timers).toHaveLength(1);
+    });
+
+    it('watches a still-running executor after an invalid root yield without resuming it', async () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'working',
+        subagents: [{ ...fixture.activity.subagents[0]!, state: 'working' }],
+      };
+
+      expect(fixture.coordinator.turnCompleted('s')).toBe(false);
+      await fixture.runNext();
+
+      expect(fixture.resume).not.toHaveBeenCalled();
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+      expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true);
     });
 
     it('durably records an executor command before its callback can start work', async () => {
@@ -4364,6 +4424,19 @@ describe('AutopilotCoordinator', () => {
 
     it('continues after an L2 checkpoint reaches DONE while its L1 remains WIP', async () => {
       const fixture = subject([], 'partial', 'DONE');
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          reportedL2Ids: ['["l1","l1-1"]'],
+          reportedL1Ids: [],
+          acceptedKeys: ['accepted'],
+          pendingTurnId: null,
+          pendingKind: null,
+          terminalReviewAccepted: false,
+        },
+      };
       fixture.coordinator.activitySettled('s', 'checkpoint');
       await fixture.runNext();
       await fixture.runNext();

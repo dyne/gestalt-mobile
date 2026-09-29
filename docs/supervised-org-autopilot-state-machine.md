@@ -30,7 +30,7 @@ be idle while its owned command is still running.
 | Observation                                           | Mechanical action                                          |
 | ----------------------------------------------------- | ---------------------------------------------------------- |
 | Executor turn ends while its L1 is TODO/WIP           | Resume that executor thread after bounded backoff          |
-| L2 completes while its L1 remains WIP                 | Resume the same executor                                   |
+| L2 completes while its L1 remains WIP                 | Wake root to validate and checkpoint the unreported L2     |
 | Collaboration wait times out                          | Reinspect durable plan, activity, and process state        |
 | Executor owns a live process after its turn           | Transfer monitoring ownership to the supervisor            |
 | Owned process exits                                   | Consume its opaque result artifact and resume the executor |
@@ -39,6 +39,26 @@ be idle while its owned command is still running.
 | Supervisor registers a proactive long-wait lease      | Park until its first subscribed event or safety deadline   |
 | Valid Org attention request exists                    | Cancel queued continuation, persist it, and stop nudging   |
 | Every L1 is DONE and REVIEWED and final review passes | Allow successful termination                               |
+
+## Liveness invariant
+
+While an incomplete supervised plan is enabled, Mobile must retain at least
+one reachable next action: an active root turn, a live executor or owned
+process, an accepted wait lease with a bounded deadline, a scheduled fenced
+control, a validated attention request, or a bounded reconciliation watchdog.
+An idle root by itself is never a healthy handoff.
+
+Observation freshness and actor activity are separate clocks. A root may have
+been idle for a long time while a new authoritative runtime read is fresh.
+Conversely, a reconciliation that could not read the owning runtime supplies no
+evidence and must not promote an old snapshot to `fresh`.
+
+Completed-but-unreported L2s and reviewed-but-unreported L1s are mandatory
+root boundaries. They take precedence over mechanical executor continuation,
+including after restart or an invalid root yield. If the executor is still
+working when a root turn disappears without an accepted wait lease, Mobile
+does not send a duplicate continuation; it keeps one bounded reconciliation
+watchdog and converts the eventual settled boundary into a root continuation.
 
 ## Checkpoint handoff
 

@@ -30,7 +30,8 @@ export class AgentActivityRegistry {
       retryDelaysMs?: readonly number[];
       maxReconcileAttempts?: number;
       diagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
-      reconcile?: (sessionId: string) => Promise<void>;
+      /** True only when an authoritative runtime read published actor evidence. */
+      reconcile?: (sessionId: string) => Promise<boolean>;
     } = {},
   ) {}
 
@@ -207,7 +208,8 @@ export class AgentActivityRegistry {
     const now = this.options.now?.() ?? new Date().toISOString();
     this.reconciling(sessionId, now);
     try {
-      await this.options.reconcile?.(sessionId);
+      const observed = await this.options.reconcile?.(sessionId);
+      if (observed !== true) throw new Error('AGENT_ACTIVITY_RECONCILE_NO_EVIDENCE');
       if (this.#generation.get(sessionId) === generation)
         this.reconciled(sessionId, this.options.now?.() ?? now);
     } catch {

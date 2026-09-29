@@ -162,7 +162,7 @@ export function decideAutopilot(input: {
   )
     return { kind: 'safetyPause', reason: 'actionRateExceeded' };
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
-  if (Date.parse(now) - Date.parse(activity.root.lastActivityAt) > policy.staleAfterMs)
+  if (Date.parse(now) - Date.parse(activity.root.observedAt) > policy.staleAfterMs)
     return { kind: 'reconcile' };
   const disposition = classifyAgentActivity(activity);
   if (disposition === 'attention') return { kind: 'observe' };

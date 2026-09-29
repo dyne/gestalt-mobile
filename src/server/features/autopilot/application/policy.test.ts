@@ -291,6 +291,23 @@ describe('autopilot policy', () => {
     };
     expect(
       decideAutopilot({
+        state: enabled,
+        plan: incomplete,
+        activity: {
+          ...active,
+          root: {
+            ...active.root,
+            observedAt: now,
+            lastActivityAt: '2026-08-20T11:00:00.000Z',
+          },
+        },
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'scheduleContinuation', at: '2026-08-20T12:00:01.000Z' });
+    expect(
+      decideAutopilot({
         state: { ...enabled, requestedEnabled: false },
         plan: incomplete,
         activity: active,
