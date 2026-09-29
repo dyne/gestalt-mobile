@@ -117,6 +117,37 @@ describe('PlansView', () => {
     expect(onopen).toHaveBeenCalledWith('plans/releases/roadmap.org');
   });
 
+  it('lists unfinished plans before a completed section while preserving group order', () => {
+    render(PlansView, {
+      catalog: {
+        kind: 'ready',
+        workspaceId: 'one',
+        entries: [
+          { ...entry, planName: 'completed-one.org', title: 'Completed one', allDone: true },
+          { ...entry, planName: 'active-one.org', title: 'Active one' },
+          { ...entry, planName: 'completed-two.org', title: 'Completed two', allDone: true },
+          {
+            planName: 'notes.org',
+            title: 'Notes',
+            previewAvailable: false,
+          },
+        ],
+      },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+    });
+
+    expect(screen.getByRole('list', { name: 'Unfinished plans' }).textContent).toContain(
+      'Active one',
+    );
+    expect(screen.getByRole('list', { name: 'Unfinished plans' }).textContent).toContain('Notes');
+    expect(screen.getByRole('heading', { name: 'Completed', level: 3 })).toBeTruthy();
+    expect(
+      screen.getAllByRole('button').map((button) => button.querySelector('strong')?.textContent),
+    ).toEqual(['Active one', 'Notes', 'Completed one', 'Completed two']);
+  });
+
   it('opens a raw source preview for Org files outside the supervised-plan dialect', async () => {
     const onopen = vi.fn();
     const { rerender } = render(PlansView, {
