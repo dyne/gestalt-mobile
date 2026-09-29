@@ -60,11 +60,13 @@ import type { WorkspaceFileSource } from './features/files/application/ports.js'
 import { registerMaintenanceRoutes } from './features/maintenance/register-routes.js';
 import type { UpdateRestartScheduler } from './features/maintenance/application/ports.js';
 import type { LlmProvider } from '../shared/contracts/llm-provider.js';
+import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
 
 export type AppDependencies = {
   health: HealthReader;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
+  pwaIcon?: PwaIcon;
   bootstrap?: BootstrapDependencies;
   recentThreads?: { list(): Promise<RecentThread[]> };
   sessionRoutes?: {
@@ -250,6 +252,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     return payload;
   });
   await app.register(fastifyCookie);
+  if (deps.pwaIcon) registerPwaRoutes(app, deps.pwaIcon);
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
   if (deps.auth)
     registerAuthorizationBoundary(app, {

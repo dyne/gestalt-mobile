@@ -114,6 +114,7 @@ import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-cap
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
+import type { PwaIcon } from './features/pwa/register-routes.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -124,6 +125,7 @@ export type ComposeRelayAppOptions = {
   relyingParty: RelyingPartyConfig;
   passkeyAuthEnabled?: boolean;
   staticDir?: string;
+  pwaIcon?: PwaIcon;
   profiles: ProfileCatalog;
   installedCodexVersion: string | null;
   installedKimiVersion?: string | null;
@@ -1347,6 +1349,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       logger: console,
       staticDir: options.staticDir,
+      pwaIcon: options.pwaIcon,
       recentThreads: recentThreadsForRelay,
       bootstrap: {
         workspaces,

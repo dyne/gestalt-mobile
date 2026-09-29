@@ -16,6 +16,7 @@ import { composeRelayApp } from './composition.js';
 import { CliUsageError, parseConfig, type RelayConfig } from './config.js';
 import { LauncherProfileCatalog } from './platform/catalog/launcher-profile-catalog.js';
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
+import { loadPwaIcon } from './platform/pwa/load-pwa-icon.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 
 const runFile = promisify(execFile);
@@ -29,6 +30,7 @@ Options:
   --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
+  --icon <path>      SVG or PNG used as the installed PWA application icon
   --skills <profile> Use a global skill profile for every session
   --skills list      List saved global skill profiles without starting the server
   --help             Show this help
@@ -255,6 +257,13 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     stderr.write(`Unknown skill profile: ${config.skillsProfile}\n\n${usage}\n`);
     return 2;
   }
+  let pwaIcon;
+  try {
+    pwaIcon = config.iconPath ? await loadPwaIcon(config.iconPath) : undefined;
+  } catch (error) {
+    stderr.write(`${error instanceof Error ? error.message : 'Invalid --icon file'}\n\n${usage}\n`);
+    return 2;
+  }
   const diagnosis = await (dependencies.runStartupDoctor ?? runStartupDoctor)(cwd);
   if (diagnosis.report) stderr.write(diagnosis.report);
   if (!diagnosis.ok)
@@ -270,6 +279,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),
+    pwaIcon,
     profiles: new LauncherProfileCatalog(),
     installedCodexVersion,
     installedKimiVersion,
