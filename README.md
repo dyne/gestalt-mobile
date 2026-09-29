@@ -32,6 +32,17 @@ The command prints the loopback URL when it is ready. Open that URL in a
 browser. Press Ctrl-C, or send SIGINT or SIGTERM, to stop the HTTP server,
 active Codex subprocesses, and database cleanly.
 
+Use `--icon <path>` to replace the installed PWA application icon with a local
+SVG or PNG. Relative paths resolve from the directory where Mobile is started:
+
+```sh
+gestalt-mobile --cwd . --icon ./branding/project-icon.svg
+```
+
+Without `--icon`, Mobile keeps its packaged Gestalt icons. SVG icons are
+declared scalable; PNG dimensions are read from the file. A square PNG of at
+least 512×512 is recommended for consistent launcher presentation.
+
 ### Run this checkout
 
 `npm run start` builds and runs the current checkout with the same managed
@@ -149,6 +160,7 @@ checks with `npm run format:check`, `npm run license:check`, `npm run check`,
 | `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
 | `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly     |
 | `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                                |
+| `--icon <path>`            | Gestalt icons        | SVG or PNG used when installing the PWA                            |
 | `--skills <profile>`       |                      | Apply a saved global profile to every session                      |
 | `--skills list`            |                      | List global profiles without starting the server                   |
 | `--help`                   |                      | Print usage without starting the application                       |

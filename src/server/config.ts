@@ -17,6 +17,8 @@ export type RelayConfig = {
   dataDir?: string;
   /** A validated global selection to use for every child session. */
   skillsProfile?: string;
+  /** Optional PWA install icon, resolved from the invoking directory. */
+  iconPath?: string;
 };
 
 export type RelyingPartyConfig = Readonly<{
@@ -38,6 +40,7 @@ const optionNames = new Set([
   '--data-dir',
   '--public-origin',
   '--skills',
+  '--icon',
 ]);
 const flagNames = new Set(['--disable-passkey-auth']);
 
@@ -81,7 +84,14 @@ export function parseConfig(args: string[], cwd = process.cwd()): RelayConfig {
     root: resolve(cwd, values.get('--cwd') ?? '.'),
     dataDir: values.get('--data-dir'),
     skillsProfile: values.get('--skills'),
+    iconPath: values.has('--icon') ? resolveIconPath(cwd, values.get('--icon')!) : undefined,
   };
+}
+
+function resolveIconPath(cwd: string, value: string): string {
+  if (!/\.(?:png|svg)$/i.test(value))
+    throw new CliUsageError('--icon must reference an SVG or PNG file');
+  return resolve(cwd, value);
 }
 
 export function normalizePublicOrigin(value: string): string {

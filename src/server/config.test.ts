@@ -40,6 +40,8 @@ describe('parseConfig', () => {
           'https://gestalt.example:8443',
           '--data-dir',
           './state',
+          '--icon',
+          './brand.png',
         ],
         '/caller/subdirectory',
       ),
@@ -54,6 +56,7 @@ describe('parseConfig', () => {
       },
       root: resolve('/caller/work'),
       dataDir: './state',
+      iconPath: resolve('/caller/subdirectory/brand.png'),
     });
   });
 
@@ -91,6 +94,7 @@ describe('parseConfig', () => {
     [['--port', '0'], 'Invalid --port: 0'],
     [['--port', '65536'], 'Invalid --port: 65536'],
     [['--port', '3.5'], 'Invalid --port: 3.5'],
+    [['--icon', 'brand.jpg'], '--icon must reference an SVG or PNG file'],
     [['workspace'], 'Unexpected argument: workspace'],
     [['--cwd', '.', '--cwd', '..'], 'Duplicate option: --cwd'],
     [

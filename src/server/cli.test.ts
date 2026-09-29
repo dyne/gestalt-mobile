@@ -98,6 +98,7 @@ describe('runCli', () => {
     expect(stdout.value()).toBe(`${usage}\n`);
     expect(stdout.value()).toContain('Exact HTTPS browser origin for passkeys');
     expect(stdout.value()).toContain('--disable-passkey-auth');
+    expect(stdout.value()).toContain('--icon <path>');
     expect(compose).not.toHaveBeenCalled();
     expect(probeCodexVersion).not.toHaveBeenCalled();
   });
@@ -121,6 +122,25 @@ describe('runCli', () => {
     expect(stderr.value()).toContain('Usage: gestalt-mobile');
   });
 
+  it('rejects an unreadable install icon before diagnostics or composition', async () => {
+    const stderr = output();
+    const compose = vi.fn();
+    const runStartupDoctor = vi.fn(async () => ({ ok: true, report: '' }));
+
+    expect(
+      await runCli({
+        args: ['--icon', 'missing.svg'],
+        cwd: '/caller',
+        stderr: stderr.stream,
+        compose,
+        runStartupDoctor,
+      }),
+    ).toBe(2);
+    expect(stderr.value()).toContain('Unable to read --icon file: /caller/missing.svg');
+    expect(runStartupDoctor).not.toHaveBeenCalled();
+    expect(compose).not.toHaveBeenCalled();
+  });
+
   it.each([['--help'], ['--version']])(
     'rejects %s when combined with other options',
     async (flag) => {
@@ -131,6 +151,8 @@ describe('runCli', () => {
 
   it('starts with package-relative assets and reports the actual listen URL', async () => {
     const root = await createPackageFixture();
+    const iconPath = join(root, 'brand.svg');
+    await writeFile(iconPath, '<svg viewBox="0 0 64 64"></svg>');
     const stdout = output();
     const signals = new EventEmitter();
     const listen = vi.fn(async () => 'http://127.0.0.1:43210');
@@ -141,7 +163,7 @@ describe('runCli', () => {
 
     expect(
       await runCli({
-        args: ['--cwd', '../workspace', '--port', '43210'],
+        args: ['--cwd', '../workspace', '--port', '43210', '--icon', iconPath],
         cwd: '/caller/project',
         moduleUrl: pathToFileURL(join(root, 'dist/server/server/main.js')).href,
         stdout: stdout.stream,
@@ -174,6 +196,11 @@ describe('runCli', () => {
           rpName: 'Gestalt Mobile',
         },
         passkeyAuthEnabled: true,
+        pwaIcon: expect.objectContaining({
+          contentType: 'image/svg+xml',
+          extension: 'svg',
+          sizes: 'any',
+        }),
       }),
     );
     expect(listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 43210 });
