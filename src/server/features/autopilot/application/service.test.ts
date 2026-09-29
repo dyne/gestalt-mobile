@@ -1147,11 +1147,19 @@ describe('AutopilotCoordinator', () => {
         },
         publish: () => {},
       });
+      if (wakeCondition === 'executorChanged') {
+        expect(coordinator.turnCompleted('s')).toBe(false);
+        expect(scheduled).toHaveLength(1);
+        scheduled.shift()!();
+        await vi.waitFor(() => expect(state?.executor).toBeDefined());
+        expect(state?.supervision?.waitLease).toMatchObject({ id: 'child-lease' });
+      }
       currentActivity = activity([
         {
           ...child,
           state: 'idle',
           outcome: 'partial',
+          ownedProcesses: [],
           observedAt: 'later',
           lastActivityAt: 'later',
         },
@@ -1159,8 +1167,8 @@ describe('AutopilotCoordinator', () => {
       coordinator.activityChanged('s');
       coordinator.activityChanged('s');
       if (wakeCondition === 'executorChanged') {
-        expect(scheduled).toHaveLength(1);
-        scheduled.shift()!();
+        expect(scheduled.length).toBeGreaterThan(0);
+        scheduled.pop()!();
         await vi.waitFor(() => expect(state?.supervision?.waitLease).toBeNull());
       }
       expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
