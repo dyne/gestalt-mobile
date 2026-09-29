@@ -57,3 +57,51 @@ test('the relay exposes an installable standalone web app', async ({ page, reque
   });
   expect(workerPath).toBe('/service-worker.js');
 });
+
+test('a configured install icon replaces only the header symbol', async ({ page }) => {
+  await page.route('**/api/auth/status', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'authenticated',
+        publicOrigin: 'http://127.0.0.1:4173',
+        passkeyAuthEnabled: false,
+      }),
+    }),
+  );
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [],
+        profiles: [],
+        models: { codex: [], kimi: [] },
+        sessions: [],
+        versions: [],
+        branding: { headerIconUrl: '/install-icon.svg' },
+        capabilities: {
+          approvals: true,
+          userInput: true,
+          git: true,
+          protocolCompatible: true,
+        },
+      }),
+    }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '{"profiles":[]}' }),
+  );
+  await page.route('**/install-icon.svg', (route) =>
+    route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64"/></svg>',
+    }),
+  );
+
+  await page.goto('/');
+
+  const brand = page.getByRole('link', { name: 'Gestalt Mobile' });
+  await expect(brand.locator('.brand-icon-custom')).toHaveAttribute('src', '/install-icon.svg');
+  await expect(brand.locator('.brand-logotype')).toHaveCount(2);
+  await expect(brand.locator('[src="/branding/p_glogo_grey.svg"]')).toHaveCount(0);
+});

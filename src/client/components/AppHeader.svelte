@@ -13,6 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionPath = null,
     sessionModel = null,
     weeklyQuotaRemaining = null,
+    brandIconUrl = null,
     passkeyAuthEnabled = true,
     componentVersions = [],
     onthemechange,
@@ -27,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessionPath?: string | null;
     sessionModel?: string | null;
     weeklyQuotaRemaining?: number | null;
+    brandIconUrl?: string | null;
     passkeyAuthEnabled?: boolean;
     componentVersions?: readonly ComponentVersion[];
     onthemechange: (theme: ThemeId) => void;
@@ -62,8 +64,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <header class="app-header">
   <a class="brand" href="/" aria-label="Gestalt Mobile">
-    <img class="brand-icon light-asset" src="/branding/p_glogo_grey.svg" alt="" />
-    <img class="brand-icon dark-asset" src="/branding/p_glogo_white.svg" alt="" />
+    {#if brandIconUrl}
+      <img class="brand-icon brand-icon-custom" src={brandIconUrl} alt="" />
+    {:else}
+      <img class="brand-icon light-asset" src="/branding/p_glogo_grey.svg" alt="" />
+      <img class="brand-icon dark-asset" src="/branding/p_glogo_white.svg" alt="" />
+    {/if}
     <img class="brand-logotype light-asset" src="/branding/t_glogo_grey.svg" alt="" />
     <img class="brand-logotype dark-asset" src="/branding/t_glogo_white.svg" alt="" />
   </a>

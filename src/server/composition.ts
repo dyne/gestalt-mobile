@@ -114,7 +114,7 @@ import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-cap
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
-import type { PwaIcon } from './features/pwa/register-routes.js';
+import { pwaIconUrl, type PwaIcon } from './features/pwa/register-routes.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
 
@@ -1366,6 +1366,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }),
         },
         versions: options.componentVersions,
+        headerIconUrl: options.pwaIcon ? pwaIconUrl(options.pwaIcon) : undefined,
         protocolCompatible: protocol.compatible,
         providers: providerAvailability,
       },

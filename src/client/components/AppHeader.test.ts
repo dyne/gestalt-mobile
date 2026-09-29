@@ -24,6 +24,31 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('substitutes a configured install icon while preserving the Gestalt logotype', () => {
+    const { container } = render(AppHeader, {
+      theme: 'dyne-org',
+      brandIconUrl: '/install-icon.svg',
+      onthemechange: () => {},
+    });
+
+    expect(container.querySelectorAll('.brand-icon')).toHaveLength(1);
+    expect(container.querySelector('.brand-icon-custom')?.getAttribute('src')).toBe(
+      '/install-icon.svg',
+    );
+    expect(container.querySelectorAll('.brand-logotype')).toHaveLength(2);
+    expect(container.querySelector('[src="/branding/p_glogo_grey.svg"]')).toBeNull();
+  });
+
+  it('keeps the theme-specific Gestalt symbol when no install icon is configured', () => {
+    const { container } = render(AppHeader, {
+      theme: 'dyne-org',
+      onthemechange: () => {},
+    });
+
+    expect(container.querySelectorAll('.brand-icon')).toHaveLength(2);
+    expect(container.querySelector('.brand-icon-custom')).toBeNull();
+  });
+
   it('keeps the session model as separately spaced header metadata', () => {
     const { container } = render(AppHeader, {
       theme: 'dyne-org',
