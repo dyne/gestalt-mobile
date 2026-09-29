@@ -35,6 +35,7 @@ describe('agent activity registry', () => {
       },
       reconcile: async (id) => {
         reconciled.push(id);
+        return true;
       },
     });
     expect(callback).toBeUndefined();
@@ -57,6 +58,7 @@ describe('agent activity registry', () => {
       reconcile: async () => {
         calls += 1;
         if (calls === 1) throw new Error('read failed');
+        return true;
       },
     });
     registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });
@@ -73,7 +75,7 @@ describe('agent activity registry', () => {
       schedule: () => () => {
         cancelled = true;
       },
-      reconcile: async () => undefined,
+      reconcile: async () => true,
     });
     registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });
     registry.disconnected('s', at);
@@ -181,6 +183,7 @@ describe('agent activity registry', () => {
         await new Promise<void>((resolve) => {
           release = resolve;
         });
+        return true;
       },
     });
     const first = registry.refresh('s');
@@ -219,7 +222,7 @@ describe('agent activity registry', () => {
         schedule: () => () => {
           cancelled += 1;
         },
-        reconcile: async () => undefined,
+        reconcile: async () => true,
       });
       registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });
       if (operation === 'dispose') registry.dispose('s');
@@ -234,7 +237,7 @@ describe('agent activity registry', () => {
     const registry = new AgentActivityRegistry(() => {}, {
       diagnostic,
       reconcile: () =>
-        new Promise<void>((_, fail) => {
+        new Promise<boolean>((_, fail) => {
           reject = fail;
         }),
     });
@@ -249,7 +252,7 @@ describe('agent activity registry', () => {
   it('does not resurrect a disposed session from an already-dispatched stale callback', async () => {
     let callback: (() => void) | undefined;
     const publish = vi.fn();
-    const reconcile = vi.fn(async () => undefined);
+    const reconcile = vi.fn(async () => true);
     const registry = new AgentActivityRegistry(publish, {
       now: () => at,
       schedule: (scheduled) => {
@@ -268,6 +271,25 @@ describe('agent activity registry', () => {
     expect(reconcile).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
     expect(registry.snapshot('s', at).root.state).toBe('disconnected');
+  });
+  it('never marks a no-evidence reconciliation fresh', async () => {
+    const callbacks: Array<() => void> = [];
+    const registry = new AgentActivityRegistry(() => {}, {
+      now: () => at,
+      schedule: (callback) => {
+        callbacks.push(callback);
+        return () => undefined;
+      },
+      retryDelaysMs: [1],
+      maxReconcileAttempts: 2,
+      reconcile: async () => false,
+    });
+    registry.observe({ sessionId: 's', occurredAt: at, kind: 'turnStarted' });
+    callbacks.shift()?.();
+    await Promise.resolve();
+
+    expect(registry.snapshot('s', at).confidence).toBe('reconciling');
+    expect(callbacks).toHaveLength(1);
   });
   it('qualifies missing collaboration child metadata without stopping root work', () => {
     const registry = new AgentActivityRegistry(() => {});
@@ -298,8 +320,8 @@ describe('agent activity registry', () => {
     const registry = new AgentActivityRegistry(publish, {
       now: () => at,
       reconcile: () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
+        new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
         }),
     });
     const pending = registry.refresh('s');
@@ -322,9 +344,9 @@ describe('agent activity registry', () => {
     const registry = new AgentActivityRegistry(publish, {
       now: () => at,
       reconcile: () =>
-        new Promise<void>((resolve) => {
+        new Promise<boolean>((resolve) => {
           calls += 1;
-          release.push(resolve);
+          release.push(() => resolve(true));
         }),
     });
     const first = registry.refresh('s');

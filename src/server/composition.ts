@@ -295,16 +295,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         ((sessionId, code) => console.warn(`agent activity ${code} session=${sessionId}`)),
       reconcile: async (sessionId) => {
         const session = sessions.find(sessionId);
-        if (!session) return;
+        if (!session) return false;
         // Kimi sessions own no child-process projection; one detached history
         // read supplies the whole reconciliation, mirroring the codex tail.
         if (session.provider === 'kimi') {
-          if (!kimiRuntime) return;
+          if (!kimiRuntime) return false;
           const history = await kimiRuntime.readHistory(session);
           // Forget may commit while the detached history reader is still in
           // flight. Revalidate ownership before handing its result to the
           // registry, whose publisher intentionally keeps the journal strict.
-          if (!sessions.find(sessionId)) return;
+          if (!sessions.find(sessionId)) return false;
           const occurredAt = new Date().toISOString();
           activity.observe({
             sessionId,
@@ -313,22 +313,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             ...(session.threadId ? { threadId: session.threadId } : {}),
             ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
           });
-          return;
+          return true;
         }
-        if (!runtime) return;
+        if (!runtime) return false;
         const history = await runtime.readHistory(session);
-        // Forget may commit while the detached history reader is still in
-        // flight. Revalidate ownership before handing its result to the
-        // registry, whose publisher intentionally keeps the journal strict.
-        if (!sessions.find(sessionId)) return;
-        const occurredAt = new Date().toISOString();
-        activity.observe({
-          sessionId,
-          occurredAt,
-          kind: history.activeTurnId ? 'turnStarted' : 'turnCompleted',
-          ...(session.threadId ? { threadId: session.threadId } : {}),
-          ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
-        });
         const children = await runtime.listDirectChildren(session);
         const childProcesses = new Map<
           string,
@@ -339,7 +327,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         });
         // The writer read is also asynchronous; it cannot publish after the
         // durable owner has gone away either.
-        if (!sessions.find(sessionId)) return;
+        if (!sessions.find(sessionId)) return false;
+        // Publish only after the entire authoritative read succeeds. A fresh
+        // root with stale child topology is not a valid supervision snapshot.
+        const occurredAt = new Date().toISOString();
+        activity.observe({
+          sessionId,
+          occurredAt,
+          kind: history.activeTurnId ? 'turnStarted' : 'turnCompleted',
+          ...(session.threadId ? { threadId: session.threadId } : {}),
+          ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
+        });
         activity.childrenReconciled(
           sessionId,
           occurredAt,
@@ -348,6 +346,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             processes: childProcesses.get(child.id) ?? [],
           })),
         );
+        return true;
       },
     },
   );

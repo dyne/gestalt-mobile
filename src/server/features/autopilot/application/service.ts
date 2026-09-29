@@ -534,15 +534,12 @@ export class AutopilotCoordinator {
         break;
       case 'scheduleContinuation':
         if (session?.activeTurnId || this.deps.pendingInteraction(sessionId)) break;
+        const plan = this.deps.plan(sessionId)?.plan;
         if (
           this.deps.executorController &&
-          this.deps.plan(sessionId)?.plan &&
-          this.currentExecutor(
-            sessionId,
-            this.deps.plan(sessionId)!.plan,
-            prior.consecutiveNoProgress,
-            prior.executor,
-          )
+          plan &&
+          !this.requiresRootBoundary(prior, plan) &&
+          this.currentExecutor(sessionId, plan, prior.consecutiveNoProgress, prior.executor)
         ) {
           this.enqueue(sessionId, async () => {
             await this.enforceSupervisedLifecycle(sessionId, 'stateChanged');
@@ -1206,6 +1203,7 @@ export class AutopilotCoordinator {
       this.deps.executorController &&
       retained &&
       !current.executor?.replacement &&
+      !this.requiresRootBoundary(current, retained.plan) &&
       this.currentExecutor(
         sessionId,
         retained.plan,
@@ -1403,6 +1401,9 @@ export class AutopilotCoordinator {
       this.deps.pendingInteraction(sessionId)
     )
       return false;
+    // Checkpoints are root-owned report boundaries. Once an executor has made
+    // one eligible, never mechanically resume it past the unreported result.
+    if (this.requiresRootBoundary(state, retained.plan)) return false;
     const executor = this.currentExecutor(
       sessionId,
       retained.plan,
@@ -1414,6 +1415,19 @@ export class AutopilotCoordinator {
     if (executor)
       this.supersedeExecutorCommands(sessionId, retained.identity, retained.plan, executor);
     if (executorChanged && this.wakeForExecutorChange(sessionId, executor!)) return true;
+    if (executor && this.executorTurnActive(executor, this.deps.activity(sessionId))) {
+      // A malformed root yield must not send a duplicate continuation into a
+      // still-running executor. A valid parked lease already owns its wake;
+      // otherwise retain one bounded reconciliation watchdog as the fallback.
+      const parkedLease = state.supervision?.waitLease;
+      const parkedWakeLive =
+        state.supervision?.outcome === 'parked' &&
+        parkedLease &&
+        this.parkedSubscriptions.get(sessionId) === parkedLease.id;
+      if (!parkedWakeLive)
+        this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+      return true;
+    }
     const decision = decideSupervisedLifecycle({
       plan: retained.plan,
       event,
@@ -1529,6 +1543,30 @@ export class AutopilotCoordinator {
         return true;
       }
     }
+  }
+
+  private requiresRootBoundary(state: AutopilotSession, plan: SupervisedPlan): boolean {
+    const reportedL2 = new Set(state.checkpoints?.reportedL2Ids ?? []);
+    const reportedL1 = new Set(state.checkpoints?.reportedL1Ids ?? []);
+    const epochs = new Map(
+      state.checkpoints?.completionEpochs?.map((entry) => [entry.target, entry]) ?? [],
+    );
+    const epochNeedsReport = (target: string) => {
+      const epoch = epochs.get(target);
+      return Boolean(epoch?.reopened || epoch?.completed === false);
+    };
+    return plan.steps.some(
+      (l1) =>
+        l1.children.some(
+          (l2) =>
+            l2.state === 'DONE' &&
+            (!reportedL2.has(JSON.stringify([l1.id, l2.id])) ||
+              epochNeedsReport(checkpointTarget('l2', l1.id, l2.id))),
+        ) ||
+        (l1.state === 'DONE' &&
+          l1.reviewStatus === 'REVIEWED' &&
+          (!reportedL1.has(l1.id) || epochNeedsReport(checkpointTarget('l1', l1.id)))),
+    );
   }
 
   private currentExecutor(
@@ -2434,6 +2472,19 @@ export class AutopilotCoordinator {
         )),
     );
   }
+  private executorTurnActive(
+    executor: ExecutorLifecycle,
+    activity: AgentActivitySnapshot | null,
+  ): boolean {
+    if (activity?.confidence !== 'fresh') return false;
+    const child = activity.subagents.find(
+      (candidate) =>
+        (candidate.threadId ?? candidate.id) === executor.threadId &&
+        candidate.taskPath === executor.taskPath &&
+        (candidate.continuationGeneration ?? 1) === executor.continuationGeneration,
+    );
+    return child?.state === 'working' || child?.state === 'awaitingAgent';
+  }
   /** Builds both GET and pre-commit event payloads from the same prospective facts. */
   private snapshotFor(
     next: AutopilotSession,
@@ -2650,7 +2701,7 @@ export class AutopilotCoordinator {
       const activity = this.deps.activity(sessionId);
       if (
         activity?.confidence === 'fresh' &&
-        Date.parse(this.deps.now()) - Date.parse(activity.root.lastActivityAt) <=
+        Date.parse(this.deps.now()) - Date.parse(activity.root.observedAt) <=
           this.deps.policy.staleAfterMs
       ) {
         this.evaluate(sessionId);
