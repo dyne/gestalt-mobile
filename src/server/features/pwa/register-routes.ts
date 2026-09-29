@@ -26,9 +26,13 @@ const manifestBase = {
   categories: ['productivity', 'utilities'],
 } as const;
 
+export function pwaIconUrl(icon: PwaIcon): string {
+  return `/install-icon.${icon.extension}`;
+}
+
 /** Overrides only install metadata; ordinary client assets stay package-static. */
 export function registerPwaRoutes(app: FastifyInstance, icon: PwaIcon): void {
-  const iconPath = `/install-icon.${icon.extension}`;
+  const iconPath = pwaIconUrl(icon);
   app.get('/manifest.webmanifest', async (_request, reply) =>
     reply
       .header('Cache-Control', 'no-cache')

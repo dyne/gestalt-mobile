@@ -22,6 +22,9 @@ export type Bootstrap = {
   models?: Record<LlmProvider, string[]>;
   sessions: RelaySession[];
   versions: ComponentVersion[];
+  branding?: {
+    headerIconUrl: string | null;
+  };
   capabilities: {
     approvals: true;
     userInput: true;
