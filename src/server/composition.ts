@@ -63,6 +63,7 @@ import { toAgentActivityDto } from './features/agent-activity/activity-dto.js';
 import { decodeAgentActivityFacts } from './platform/codex/activity-facts.js';
 import {
   completedCommandId,
+  compactOrgPlanCheckpointKind,
   isAgentCapacityRecoveryCall,
   isAutopilotWaitLeaseCall,
   resolvedServerRequestId,
@@ -72,7 +73,10 @@ import {
   parseOrgPlanCheckpoint,
   toOrgPlanCheckpointToolResponse,
 } from '../shared/contracts/org-plan-checkpoint.js';
-import { validOrgPlanCheckpoint } from './features/org-plan-checkpoint/application/validate.js';
+import {
+  resolveOrgPlanCheckpointSignal,
+  validOrgPlanCheckpoint,
+} from './features/org-plan-checkpoint/application/validate.js';
 import {
   isValidInteractionResponse,
   isValidQuizInteractionResponse,
@@ -920,9 +924,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             );
         },
         (sessionId, request, origin) => {
-          const rawInteraction = toPendingInteraction(request);
+          let rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
+          const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
+          if (!rawInteraction && compactCheckpointKind) {
+            const retained = supervisedPlans.find(sessionId);
+            const identity = supervisedPlans.identity(sessionId);
+            const checkpoint =
+              retained && identity
+                ? resolveOrgPlanCheckpointSignal(compactCheckpointKind, retained, identity)
+                : null;
+            if (checkpoint)
+              rawInteraction = {
+                requestId: String(request.id),
+                kind: 'orgPlanCheckpoint',
+                payload: checkpoint,
+              };
+          }
           if (!rawInteraction && isAgentCapacityRecoveryCall(request)) {
             const rootOwned =
               origin.kind === 'root' && origin.physicalTurnId === session.activeTurnId;

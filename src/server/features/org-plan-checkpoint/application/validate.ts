@@ -7,6 +7,50 @@
 import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 
+/** Expands a host-owned compact boundary signal from authoritative plan state. */
+export function resolveOrgPlanCheckpointSignal(
+  kind: OrgPlanCheckpoint['kind'],
+  plan: SupervisedPlan,
+  planIdentity: string,
+): OrgPlanCheckpoint | null {
+  if (kind === 'terminalReviewAccepted')
+    return {
+      version: 1,
+      kind,
+      planIdentity,
+      verdict: 'ACCEPT',
+    };
+  const selected =
+    plan.steps.find((step) => step.id === plan.currentStepId) ??
+    [...plan.steps].reverse().find((step) => step.state === 'DONE' || step.state === 'WIP');
+  if (!selected) return null;
+  const l1Position = `L${plan.steps.indexOf(selected) + 1}`;
+  if (kind === 'l1Accepted')
+    return {
+      version: 1,
+      kind,
+      planIdentity,
+      l1Id: selected.id,
+      position: l1Position,
+      verdict: 'ACCEPT',
+      commit: { kind: 'notRequired' },
+    };
+  const child = [...selected.children].reverse().find((step) => step.state === 'DONE');
+  if (!child) return null;
+  return {
+    version: 1,
+    kind,
+    planIdentity,
+    l1Id: selected.id,
+    l2Id: child.id,
+    position: `${l1Position}.${selected.children.indexOf(child) + 1}`,
+    status: 'DONE',
+    changes: 'Validated from the authoritative Org Plan boundary.',
+    files: 'Recorded by the supervised executor.',
+    tests: 'Focused verification recorded before the boundary.',
+  };
+}
+
 export function validOrgPlanCheckpoint(
   input: Readonly<{
     checkpoint: OrgPlanCheckpoint;

@@ -73,7 +73,22 @@ export const gestaltOrgPlanAttentionDynamicTool = {
 } as const;
 
 export function parseOrgPlanAttention(value: unknown): OrgPlanAttention | null {
-  if (!isRecord(value) || Object.keys(value).length !== 4) return null;
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value);
+  if (
+    keys.length === 2 &&
+    keys.every((key) => key === 'reason' || key === 'resumeCondition') &&
+    isReason(value.reason) &&
+    isResumeCondition(value.resumeCondition) &&
+    orgPlanAttentionResumeConditionByReason[value.reason] === value.resumeCondition
+  )
+    return {
+      reason: value.reason,
+      summary: `Supervised execution requires human attention (${value.reason}).`,
+      requestedAction: `Satisfy the ${value.resumeCondition} resume condition, then resume or disable Autopilot.`,
+      resumeCondition: value.resumeCondition,
+    };
+  if (keys.length !== 4) return null;
   if (
     !isReason(value.reason) ||
     !isBoundedText(value.summary, 600) ||

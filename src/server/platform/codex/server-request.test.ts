@@ -11,6 +11,7 @@ import { GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME } from '../../../shared/contracts/
 import { GESTALT_AUTOPILOT_WAIT_LEASE_TOOL_NAME } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { GESTALT_AGENT_CAPACITY_RECOVERY_TOOL_NAME } from '../../../shared/contracts/agent-capacity-recovery.js';
 import {
+  compactOrgPlanCheckpointKind,
   completedCommandId,
   isAgentCapacityRecoveryCall,
   resolvedServerRequestId,
@@ -119,13 +120,27 @@ describe('Codex server request mapping', () => {
         method: 'item/tool/call',
         params: {
           tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
+          arguments: { reason: 'hardBlock', resumeCondition: 'externalStateChanged' },
+        },
+      }),
+    ).toMatchObject({
+      requestId: '12',
+      kind: 'orgPlanAttention',
+      payload: { reason: 'hardBlock', resumeCondition: 'externalStateChanged' },
+    });
+    expect(
+      toPendingInteraction({
+        id: 13,
+        method: 'item/tool/call',
+        params: {
+          tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
           arguments: { reason: 'hardBlock', summary: 'x', requestedAction: 'y' },
         },
       }),
     ).toBeNull();
     expect(
       toPendingInteraction({
-        id: 13,
+        id: 14,
         method: 'item/tool/call',
         params: {
           tool: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
@@ -135,6 +150,26 @@ describe('Codex server request mapping', () => {
             requestedAction: 'Grant deployment approval.',
             resumeCondition: 'planRevision',
           },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it('recognizes only the compact checkpoint signal emitted by newer hosts', () => {
+    expect(
+      compactOrgPlanCheckpointKind({
+        id: 15,
+        method: 'item/tool/call',
+        params: { tool: 'gestalt_org_plan_checkpoint', arguments: { kind: 'l2Completed' } },
+      }),
+    ).toBe('l2Completed');
+    expect(
+      compactOrgPlanCheckpointKind({
+        id: 16,
+        method: 'item/tool/call',
+        params: {
+          tool: 'gestalt_org_plan_checkpoint',
+          arguments: { kind: 'l2Completed', planIdentity: 'unexpected' },
         },
       }),
     ).toBeNull();

@@ -1164,7 +1164,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function decodeAgentTaskPath(value: unknown): string | undefined {
-  const subagent = asRecord(asRecord(value)?.subagent);
+  const source = asRecord(value);
+  // Codex 0.153 renamed this source discriminator from `subagent` to
+  // `subAgent`. Accept both spellings because the task path is the durable
+  // correlation between a physical child thread and its Org Plan executor.
+  const subagent = asRecord(source?.subAgent) ?? asRecord(source?.subagent);
   const spawn = asRecord(subagent?.thread_spawn);
   const path = boundedString(spawn?.agent_path, 256);
   return path?.startsWith('/') && !path.includes('..') ? path : undefined;

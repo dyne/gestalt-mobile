@@ -88,7 +88,7 @@ describe('CodexSessionRuntime', () => {
                   {
                     id: 'child',
                     status: { type: 'active' },
-                    source: { subagent: { thread_spawn: { agent_path: '/root/l4_g2' } } },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l4_g2' } } },
                   },
                 ],
               };
