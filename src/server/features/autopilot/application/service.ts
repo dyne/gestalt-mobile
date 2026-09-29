@@ -1999,6 +1999,14 @@ export class AutopilotCoordinator {
 
   private wakeForExecutorChange(sessionId: string, executor: ExecutorLifecycle): boolean {
     const processes = executor.ownedProcesses;
+    const state = this.deps.store.find(sessionId);
+    const plan = this.deps.plan(sessionId)?.plan ?? null;
+    const activity = this.deps.activity(sessionId);
+    // Persisting a newly recovered executor identity is bookkeeping, not the
+    // completion edge an executorChanged lease is waiting for. Keep the lease
+    // parked while that canonical executor is still authoritatively active.
+    const executorSettled =
+      !state || !this.authoritativeExecutorActive(state, plan, activity ?? null);
     const conditions: ObservableWakeCondition[] = [
       ...(processes.some((process) => process.state === 'exited-awaiting-result')
         ? (['processExited', 'processResultAvailable'] as const)
@@ -2006,7 +2014,7 @@ export class AutopilotCoordinator {
       ...(processes.some((process) => process.state === 'terminated-for-budget')
         ? (['processLimitBreached'] as const)
         : []),
-      'executorChanged',
+      ...(executorSettled ? (['executorChanged'] as const) : []),
     ];
     return conditions.some((condition) => this.semanticEvent(sessionId, condition));
   }
