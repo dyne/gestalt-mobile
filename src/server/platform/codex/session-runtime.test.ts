@@ -158,6 +158,94 @@ describe('CodexSessionRuntime', () => {
     await runtime.restore(session, 'after');
     await expect(runtime.listDirectChildren(session)).resolves.toHaveLength(64);
   });
+  it('merges fresh detached topology with owned live status and coalesces concurrent reads', async () => {
+    let launches = 0;
+    let releaseTopology!: () => void;
+    const topologyPending = new Promise<void>((resolve) => {
+      releaseTopology = resolve;
+    });
+    const detachedClosed = vi.fn();
+    const runtime = new CodexSessionRuntime(() => {
+      const owned = launches++ === 0;
+      return {
+        rpc: {
+          request: async (method) => {
+            if (method === 'initialize' || method === 'thread/resume') return {};
+            if (method !== 'thread/list') return {};
+            if (owned)
+              return {
+                data: [
+                  {
+                    id: 'l1',
+                    status: { type: 'active' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                  },
+                  {
+                    id: 'l2',
+                    status: { type: 'idle' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
+                  },
+                  {
+                    id: 'l3',
+                    status: { type: 'idle' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l3' } } },
+                  },
+                ],
+              };
+            await topologyPending;
+            return {
+              data: ['l1', 'l2', 'l3', 'l4', 'l5'].map((id, index) => ({
+                id,
+                status: { type: 'notLoaded' },
+                source: {
+                  subAgent: { thread_spawn: { agent_path: `/root/l${index + 1}` } },
+                },
+              })),
+            };
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: owned ? () => {} : detachedClosed,
+      };
+    });
+    const session = {
+      id: 'stale-owned-topology',
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      provider: 'codex' as const,
+      threadId: 'root',
+      state: 'ready' as const,
+      desiredState: 'active' as const,
+      activeTurnId: null,
+      protocolVersion: null,
+      failureCount: 0,
+      pendingInteractions: [],
+      createdAt: 'before',
+      updatedAt: 'before',
+    };
+    await runtime.restore(session, 'after');
+
+    const first = runtime.listDirectChildren(session);
+    const second = runtime.listDirectChildren(session);
+    releaseTopology();
+
+    const [firstChildren, secondChildren] = await Promise.all([first, second]);
+    for (const children of [firstChildren, secondChildren]) {
+      expect(children.map((child) => child.taskPath)).toEqual([
+        '/root/l1',
+        '/root/l2',
+        '/root/l3',
+        '/root/l4',
+        '/root/l5',
+      ]);
+      expect(children.find((child) => child.id === 'l1')?.status).toBe('active');
+      expect(children.find((child) => child.id === 'l4')?.status).toBe('notLoaded');
+    }
+    expect(launches).toBe(2);
+    expect(detachedClosed).toHaveBeenCalledOnce();
+  });
   it('keeps the resolved child model published by thread settings across history refreshes', async () => {
     let publishNotification:
       ((notification: { method: string; params: unknown }) => void) | undefined;
