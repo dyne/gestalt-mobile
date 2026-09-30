@@ -71,11 +71,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ),
   );
   function ownerGroupId(interaction: ProjectedInteraction): string | null {
-    return (
-      promptGroups.findLast((group) => group.turnId && group.turnId === interaction.turnId)?.id ??
-      promptGroups.at(-1)?.id ??
-      null
+    const exact = promptGroups.findLast(
+      (group) => group.turnId && group.turnId === interaction.turnId,
     );
+    if (exact) return exact.id;
+    const occurredAt = interaction.occurredAt;
+    if (occurredAt !== undefined) {
+      const preceding = promptGroups.findLast(
+        (group) => group.occurredAt !== undefined && group.occurredAt <= occurredAt,
+      );
+      if (preceding) return preceding.id;
+    }
+    return promptGroups.at(-1)?.id ?? null;
   }
   function turnInteractions(group: (typeof groups)[number]): ProjectedInteraction[] {
     if (group.kind !== 'user') return [];

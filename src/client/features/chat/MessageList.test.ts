@@ -441,6 +441,51 @@ describe('MessageList', () => {
     expect(screen.getAllByText('commandApproval')).toHaveLength(2);
   });
 
+  it('does not carry a timed unmatched interaction forward to later prompts', () => {
+    const start = Date.UTC(2026, 8, 30, 7, 56, 0);
+    render(MessageList, {
+      messages: [
+        {
+          id: 'original-prompt',
+          role: 'user',
+          turnId: 'root-turn-1',
+          text: 'original request',
+          occurredAt: start,
+          complete: true,
+        },
+        {
+          id: 'later-prompt',
+          role: 'user',
+          turnId: 'root-turn-2',
+          text: 'continue',
+          occurredAt: start + 60_000,
+          complete: true,
+        },
+      ],
+      activities: [],
+      interactions: [
+        {
+          requestId: 'checkpoint',
+          key: 'interaction:checkpoint',
+          kind: 'orgPlanCheckpoint',
+          turnId: 'unmatched-supervisor-turn',
+          payload: null,
+          state: 'resolved',
+          attemptedOutcome: 'answered',
+          occurredAt: start + 30_000,
+        },
+      ],
+    });
+
+    expect(screen.getAllByText('orgPlanCheckpoint')).toHaveLength(1);
+    expect(screen.getByText('original request').closest('.prompt-turn')?.textContent).toContain(
+      'orgPlanCheckpoint',
+    );
+    expect(screen.getByText('continue').closest('.prompt-turn')?.textContent).not.toContain(
+      'orgPlanCheckpoint',
+    );
+  });
+
   it('assigns an interaction to only the last prompt record for a duplicated turn', () => {
     render(MessageList, {
       messages: [
