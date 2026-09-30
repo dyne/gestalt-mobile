@@ -193,6 +193,75 @@ test('marks an interaction already cleared upstream as no longer pending', async
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
 });
 
+test('keeps a resolved supervision interaction with the prompt that preceded it', async ({
+  page,
+}) => {
+  const start = Date.parse('2026-01-01T07:56:00.000Z');
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [],
+        profiles: [],
+        sessions: [session([], null)],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/session-1/history', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        chatSnapshot({
+          items: [
+            {
+              id: 'original-prompt',
+              kind: 'user',
+              turnId: 'root-turn-1',
+              text: 'original request',
+              occurredAt: start,
+            },
+            {
+              id: 'later-prompt',
+              kind: 'user',
+              turnId: 'root-turn-2',
+              text: 'continue',
+              occurredAt: start + 60_000,
+            },
+          ],
+          interactions: [
+            {
+              requestId: 'checkpoint',
+              kind: 'orgPlanCheckpoint',
+              turnId: 'unmatched-supervisor-turn',
+              requestedAt: '2026-01-01T07:56:30.000Z',
+              resolvedAt: '2026-01-01T07:56:40.000Z',
+              outcome: 'answered',
+            },
+          ],
+        }),
+      ),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.routeWebSocket(
+    /ws:\/\/127\.0\.0\.1:\d+\/api\/sessions\/session-1\/events\?after=\d+/,
+    () => {},
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+
+  await expect(page.getByText('orgPlanCheckpoint')).toHaveCount(1);
+  await expect(page.getByText('original request').locator('xpath=ancestor::li')).toContainText(
+    'orgPlanCheckpoint',
+  );
+  await expect(page.getByText('continue').locator('xpath=ancestor::li')).not.toContainText(
+    'orgPlanCheckpoint',
+  );
+});
+
 test('submits a quiz as a follow-up prompt after its original turn has ended', async ({ page }) => {
   await openChat(
     page,
