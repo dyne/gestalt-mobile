@@ -214,6 +214,7 @@ export class CodexSessionRuntime {
     string,
     Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
   >();
+  private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
@@ -478,13 +479,57 @@ export class CodexSessionRuntime {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const owned = this.sessions.get(session.id);
     if (!owned) return [];
+    const [liveChildren, topologyChildren] = await Promise.all([
+      this.listDirectChildrenFromProcess(owned.process, session.threadId),
+      this.readDetachedChildTopology(session),
+    ]);
+    return this.withResolvedChildModels(owned, mergeDirectChildren(topologyChildren, liveChildren));
+  }
+
+  private async readDetachedChildTopology(
+    session: RelaySessionSnapshot,
+  ): Promise<readonly DirectChildThread[]> {
+    const existing = this.childTopologyReads.get(session.id);
+    if (existing) return existing;
+    const read = this.readDetachedChildTopologyOnce(session);
+    this.childTopologyReads.set(session.id, read);
+    try {
+      return await read;
+    } finally {
+      if (this.childTopologyReads.get(session.id) === read)
+        this.childTopologyReads.delete(session.id);
+    }
+  }
+
+  private async readDetachedChildTopologyOnce(
+    session: RelaySessionSnapshot,
+  ): Promise<readonly DirectChildThread[]> {
+    const process = this.launch({
+      profile: session.profile,
+      cwd: this.readerCwd ?? session.workspacePath,
+    });
+    try {
+      await process.rpc.request('initialize', {
+        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      });
+      return await this.listDirectChildrenFromProcess(process, session.threadId!);
+    } finally {
+      process.close();
+    }
+  }
+
+  private async listDirectChildrenFromProcess(
+    process: AppServer,
+    parentThreadId: string,
+  ): Promise<readonly DirectChildThread[]> {
     const children: DirectChildThread[] = [];
     const childIds = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < 4 && childIds.size < 64; page += 1) {
-      const result = await owned.process.rpc.request('thread/list', {
-        parentThreadId: session.threadId,
+      const result = await process.rpc.request('thread/list', {
+        parentThreadId,
         ...(cursor ? { cursor } : {}),
       });
       const response =
@@ -520,9 +565,6 @@ export class CodexSessionRuntime {
               ...(typeof value.agentRole === 'string' && value.agentRole.length <= 128
                 ? { role: value.agentRole }
                 : {}),
-              ...(owned.spawnedAgentModels.get(value.id)
-                ? { model: owned.spawnedAgentModels.get(value.id)! }
-                : {}),
               ...(decodeAgentTaskPath(value.source)
                 ? { taskPath: decodeAgentTaskPath(value.source)! }
                 : {}),
@@ -535,13 +577,13 @@ export class CodexSessionRuntime {
         typeof response?.nextCursor === 'string' && response.nextCursor.length <= 256
           ? response.nextCursor
           : undefined;
-      if (!next) return this.withResolvedChildModels(owned, uniqueDirectChildren(children));
+      if (!next) return uniqueDirectChildren(children);
       if (cursors.has(next) || childIds.size >= 64) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
       cursors.add(next);
       cursor = next;
     }
     if (cursor) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
-    return this.withResolvedChildModels(owned, uniqueDirectChildren(children));
+    return uniqueDirectChildren(children);
   }
 
   private async withResolvedChildModels(
@@ -1089,6 +1131,17 @@ function uniqueDirectChildren(
   const result = new Map<string, DirectChildThread>();
   for (const child of children) result.set(child.id, child);
   return [...result.values()].slice(0, 64);
+}
+
+/** Detached topology repairs a stale owned index; owned rows retain the live status. */
+function mergeDirectChildren(
+  topology: readonly DirectChildThread[],
+  live: readonly DirectChildThread[],
+): readonly DirectChildThread[] {
+  const result = new Map(live.map((child) => [child.id, child]));
+  for (const child of topology) result.set(child.id, { ...child, ...result.get(child.id) });
+  if (result.size > 64) throw new Error('CODEX_CHILD_LIST_UNSUPPORTED');
+  return [...result.values()];
 }
 
 function isMethodNotFound(error: unknown): boolean {

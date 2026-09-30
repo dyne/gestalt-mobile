@@ -560,10 +560,15 @@ describe('production composition', () => {
       // This is production composition, not a coordinator fake: the scheduler reaches the
       // real runtime adapter and can pass only policy-owned lifecycle context and an opaque ID.
       await vi.waitFor(
-        () => expect(handles.at(-1)?.calls.filter((call) => call === 'turn/start')).toHaveLength(1),
+        () =>
+          expect(
+            handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+          ).toHaveLength(1),
         { timeout: 2_500 },
       );
-      const automaticStart = handles.at(-1)?.requests.find((call) => call.method === 'turn/start');
+      const automaticStart = handles
+        .flatMap((handle) => handle.requests)
+        .find((call) => call.method === 'turn/start');
       expect(automaticStart?.params).toEqual({
         threadId: expect.any(String),
         input: [
