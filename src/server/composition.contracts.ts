@@ -1014,15 +1014,31 @@ describe('production composition', () => {
       beforeWriteDatabase.close();
       expect(beforeWrite.resolved_at).toBeNull();
       handle.responseSettled!({ id: 811, outcome: 'resultWritten' });
-      await expect(checkpointResponse).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      await expect(checkpointResponse).resolves.toEqual(
+        toOrgPlanCheckpointToolResponse('recorded'),
+      );
+      const replayResponse = handle.request!(
+        l2CheckpointCall(812, threadId, active.active_turn_id, planIdentity),
+      );
+      await vi.waitFor(() => expect(handle.pendingResponses.has(812)).toBe(true));
+      handle.responseSettled!({ id: 812, outcome: 'resultWritten' });
+      await expect(replayResponse).resolves.toEqual(
+        toOrgPlanCheckpointToolResponse('alreadyRecorded'),
+      );
       const afterWriteDatabase = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const afterWrite = afterWriteDatabase
         .prepare(
           'SELECT resolved_at FROM pending_interactions WHERE session_id = ? AND request_id = ?',
         )
         .get(fixture.sessionId, '811') as { resolved_at: string | null };
+      const checkpointEvents = afterWriteDatabase
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'org-plan.step-checkpointed'",
+        )
+        .get(fixture.sessionId) as { count: number };
       afterWriteDatabase.close();
       expect(afterWrite.resolved_at).toEqual(expect.any(String));
+      expect(checkpointEvents.count).toBe(1);
       expect(timers).toHaveLength(schedulesBeforeCheckpoint);
       expect(coordinator!.snapshot(fixture.sessionId).health).not.toMatchObject({
         phase: 'waitingForAgentEvent',
@@ -1200,7 +1216,7 @@ describe('production composition', () => {
       });
       const { handle, response } = await holdCheckpointRequest(fixture, timers, 812, true, true);
       handle.responseSettled!({ id: 812, outcome: 'resultWritten' });
-      await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+      await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
       const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const checkpoint = database
         .prepare(
@@ -1212,7 +1228,7 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
-    it('leaves an unsupported checkpoint exception before persistence inert', async () => {
+    it('returns a typed failed checkpoint result when persistence never occurs', async () => {
       let coordinator:
         import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
@@ -1232,13 +1248,15 @@ describe('production composition', () => {
       vi.spyOn(coordinator!, 'checkpointAccepted').mockImplementation(() => {
         throw new Error('injected-before-checkpoint-persistence');
       });
-      const { response, startsBefore, writersBefore } = await holdCheckpointRequest(
+      const { handle, response, startsBefore, writersBefore } = await holdCheckpointRequest(
         fixture,
         timers,
         995,
         false,
       );
-      await expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+      await vi.waitFor(() => expect(handle.pendingResponses.has(995)).toBe(true));
+      handle.responseSettled!({ id: 995, outcome: 'resultWritten' });
+      await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('failed'));
       expect(coordinator!.checkpointAccepted).not.toBe(original);
       expect(fixture.handles).toHaveLength(writersBefore);
       expect(
@@ -1445,14 +1463,14 @@ describe('production composition', () => {
       };
       if (scenario === 'resultWritten-before-timeout') {
         handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
-        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
         await new Promise((resolve) => setTimeout(resolve, 30));
         expect(fixture.handles).toHaveLength(writersBefore);
         expect(failures()).toBe(0);
       } else if (scenario === 'duplicate-settlement') {
         handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
         handle.responseSettled!({ id: 992, outcome: 'resultWritten' });
-        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse());
+        await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
         await new Promise((resolve) => setTimeout(resolve, 30));
         expect(fixture.handles).toHaveLength(writersBefore);
         expect(failures()).toBe(0);

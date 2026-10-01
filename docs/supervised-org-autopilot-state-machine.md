@@ -72,6 +72,9 @@ Checkpoint delivery is idempotent within its plan identity, canonical position,
 and completion epoch. A DONE-to-WIP-to-DONE cycle opens a new epoch only after
 the authoritative plan has durably reopened that target. A duplicate, late, or
 mismatched final cannot emit another milestone report or release another writer.
+The tool returns `recorded`, `alreadyRecorded`, or `failed`. Only `recorded`
+authorizes the matching boundary final; replay is durable evidence for recovery,
+not authority to emit the boundary again.
 
 The checkpoint response has a bounded acknowledgement deadline. A lost response
 becomes the explicit `checkpointHandoffFailed` recovery state, consumes stale
@@ -85,7 +88,9 @@ Each canonical L1 has exactly one durable physical owner. The visible name is
 always `l<a>`; a replacement is a bounded physical generation such as
 `l<a>_g2`. Every executor resume, process action, and replacement handoff carries
 the plan identity/fingerprint, canonical position, task path, thread, and
-generation fence.
+generation fence. A replacement additionally persists the unavailable previous
+assignment, exact authorized identity, and evidence. Roster state or generated
+instructions cannot create or increment a replacement generation.
 
 Commands persist as scheduled, issued, accepted, failed, cancelled, or
 superseded. An issued command is ambiguous across process loss and is never

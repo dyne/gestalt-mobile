@@ -11,6 +11,8 @@ export type OrgPlanCheckpointCommit =
   | Readonly<{ kind: 'created'; subject: string; shortHash: string }>
   | Readonly<{ kind: 'notRequired' }>;
 
+export type OrgPlanCheckpointRecordStatus = 'recorded' | 'alreadyRecorded' | 'failed';
+
 export type OrgPlanCheckpoint =
   | Readonly<{
       version: 1;
@@ -233,16 +235,37 @@ export function parseOrgPlanCheckpoint(value: unknown): OrgPlanCheckpoint | null
 }
 
 /** Acknowledgement deliberately contains no plan path, findings, or model text. */
-export function toOrgPlanCheckpointToolResponse(): {
+export function toOrgPlanCheckpointToolResponse(status: OrgPlanCheckpointRecordStatus): {
   contentItems: Array<{ type: 'inputText'; text: string }>;
-  success: true;
+  success: boolean;
 } {
+  const result =
+    status === 'recorded'
+      ? {
+          status,
+          durable: true,
+          next: 'emitBoundaryFinalAndEndTurn',
+          allowFurtherTools: false,
+        }
+      : status === 'alreadyRecorded'
+        ? {
+            status,
+            durable: true,
+            next: 'continueFromDurableCheckpoint',
+            allowBoundaryFinal: false,
+          }
+        : {
+            status,
+            durable: false,
+            next: 'reconcileCheckpointState',
+            allowBoundaryFinal: false,
+          };
   return {
-    success: true,
+    success: status !== 'failed',
     contentItems: [
       {
         type: 'inputText',
-        text: '{"accepted":true,"next":"emitBoundaryFinalAndEndTurn","allowFurtherTools":false}',
+        text: JSON.stringify(result),
       },
     ],
   };

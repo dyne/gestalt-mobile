@@ -75,14 +75,24 @@ describe('Org Plan checkpoint contract', () => {
   });
 
   it('directs the root to publish the accepted boundary before any more tools', () => {
-    expect(toOrgPlanCheckpointToolResponse()).toEqual({
+    expect(toOrgPlanCheckpointToolResponse('recorded')).toEqual({
       success: true,
       contentItems: [
         {
           type: 'inputText',
-          text: '{"accepted":true,"next":"emitBoundaryFinalAndEndTurn","allowFurtherTools":false}',
+          text: '{"status":"recorded","durable":true,"next":"emitBoundaryFinalAndEndTurn","allowFurtherTools":false}',
         },
       ],
+    });
+    expect(toOrgPlanCheckpointToolResponse('alreadyRecorded')).toMatchObject({
+      success: true,
+      contentItems: [
+        { type: 'inputText', text: expect.stringContaining('"status":"alreadyRecorded"') },
+      ],
+    });
+    expect(toOrgPlanCheckpointToolResponse('failed')).toMatchObject({
+      success: false,
+      contentItems: [{ type: 'inputText', text: expect.stringContaining('"status":"failed"') }],
     });
   });
 });

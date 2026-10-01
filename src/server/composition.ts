@@ -72,6 +72,7 @@ import {
 import {
   parseOrgPlanCheckpoint,
   toOrgPlanCheckpointToolResponse,
+  type OrgPlanCheckpointRecordStatus,
 } from '../shared/contracts/org-plan-checkpoint.js';
 import {
   resolveOrgPlanCheckpointSignal,
@@ -1037,16 +1038,23 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             });
             if (!valid) return false;
             if (!session.activeTurnId) return false;
-            let accepted = false;
+            let recordStatus: OrgPlanCheckpointRecordStatus = 'failed';
             try {
-              accepted = autopilot.checkpointAccepted(
+              recordStatus = autopilot.checkpointAccepted(
                 sessionId,
                 checkpoint,
                 session.activeTurnId,
                 new Date().toISOString(),
               );
             } catch {
-              if (!autopilot.checkpointHandoffFailed(sessionId, session.activeTurnId)) return false;
+              if (!autopilot.checkpointHandoffFailed(sessionId, session.activeTurnId))
+                return (
+                  runtime?.resolveServerRequest(
+                    sessionId,
+                    rawInteraction.requestId,
+                    toOrgPlanCheckpointToolResponse('failed'),
+                  ) === true
+                );
               const interaction = {
                 ...rawInteraction,
                 turnId: session.activeTurnId,
@@ -1056,7 +1064,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               failCheckpointHandoff(sessionId, rawInteraction.requestId, session.activeTurnId);
               return true;
             }
-            if (!accepted) return false;
+            if (recordStatus === 'failed')
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanCheckpointToolResponse('failed'),
+                ) === true
+              );
+            if (recordStatus === 'alreadyRecorded')
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanCheckpointToolResponse('alreadyRecorded'),
+                ) === true
+              );
             const interaction = {
               ...rawInteraction,
               turnId: session.activeTurnId,
@@ -1068,7 +1091,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               runtime?.resolveServerRequest(
                 sessionId,
                 rawInteraction.requestId,
-                toOrgPlanCheckpointToolResponse(),
+                toOrgPlanCheckpointToolResponse('recorded'),
               );
             } catch {
               // The accepted hold remains owned by the bounded deadline.

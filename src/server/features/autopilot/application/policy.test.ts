@@ -128,7 +128,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v10');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v11');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -168,6 +168,8 @@ describe('autopilot policy', () => {
       taskName: 'l7_g2',
     });
     expect(prompt).toContain('Launch task_name l7_g2 for canonical L7');
+    expect(prompt).toContain('This exact replacement generation 2 is durably authorized by Mobile');
+    expect(prompt).toContain('do not infer another generation from this prompt or the roster');
     expect(prompt).toContain('the durable l7 slot may remain reserved');
     expect(prompt).toContain(
       "Do not reuse that task_name or attempt to change an existing agent's model in place",
