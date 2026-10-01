@@ -8,7 +8,10 @@ import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
-import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
+import type {
+  OrgPlanCheckpoint,
+  OrgPlanCheckpointRecordStatus,
+} from '../../../../shared/contracts/org-plan-checkpoint.js';
 import {
   AUTOPILOT_WAIT_MAX_MS,
   AUTOPILOT_WAIT_MIN_MS,
@@ -744,13 +747,13 @@ export class AutopilotCoordinator {
     checkpoint: OrgPlanCheckpoint,
     turnId: string | null,
     occurredAt: string,
-  ): boolean {
+  ): OrgPlanCheckpointRecordStatus {
     const prior = this.deps.store.find(sessionId);
     const retained = this.deps.plan(sessionId);
     if (!prior || !retained || !turnId || checkpoint.planIdentity !== retained.identity)
-      return false;
+      return 'failed';
     const previous = prior.checkpoints;
-    if (previous && previous.planIdentity !== retained.identity) return false;
+    if (previous && previous.planIdentity !== retained.identity) return 'failed';
     const reportedL1Ids = previous?.reportedL1Ids ?? [];
     const reportedL2Ids = previous?.reportedL2Ids ?? [];
     const canonicalPosition =
@@ -767,13 +770,12 @@ export class AutopilotCoordinator {
       .update(JSON.stringify([retained.identity, checkpoint.kind, canonicalPosition, epoch]))
       .digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
-    if (acceptedKeys.includes(key))
-      return previous?.pendingTurnId === turnId && previous.pendingKind === checkpoint.kind;
+    if (acceptedKeys.includes(key)) return 'alreadyRecorded';
     const l2Key =
       checkpoint.kind === 'l2Completed' ? JSON.stringify([checkpoint.l1Id, checkpoint.l2Id]) : null;
     if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
-      return false;
-    if (completionEpoch?.completed && !completionEpoch.reopened) return false;
+      return 'alreadyRecorded';
+    if (completionEpoch?.completed && !completionEpoch.reopened) return 'alreadyRecorded';
     const completionEpochs = [
       ...(previous?.completionEpochs ?? []).filter((entry) => entry.target !== target),
       { target, epoch, reopened: false, completed: true },
@@ -848,7 +850,7 @@ export class AutopilotCoordinator {
     this.cancelWaitTimer(sessionId);
     this.parkedSubscriptions.delete(sessionId);
     this.cancelTimer(sessionId);
-    return true;
+    return 'recorded';
   }
   /**
    * Records a failed checkpoint transport handoff without releasing its root

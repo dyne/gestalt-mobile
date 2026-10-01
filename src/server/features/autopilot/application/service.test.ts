@@ -1538,10 +1538,12 @@ describe('AutopilotCoordinator', () => {
         files: 'src/reporting.ts',
         tests: 'Focused tests passed.',
       };
-      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('recorded');
       expect(schedules).toBe(0);
       expect(state?.supervision).toMatchObject({ outcome: 'active', waitLease: null });
-      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+      expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(
+        'alreadyRecorded',
+      );
       expect(schedules).toBe(0);
       expect(
         coordinator.checkpointAccepted(
@@ -1550,7 +1552,15 @@ describe('AutopilotCoordinator', () => {
           'turn-1',
           now,
         ),
-      ).toBe(true);
+      ).toBe('alreadyRecorded');
+      expect(
+        coordinator.checkpointAccepted(
+          's',
+          { ...checkpoint, planIdentity: 'different-plan' },
+          'turn-1',
+          now,
+        ),
+      ).toBe('failed');
       expect(state?.checkpoints).toMatchObject({
         reportedL2Ids: ['["l1","l2"]'],
         pendingTurnId: 'turn-1',
@@ -1643,8 +1653,8 @@ describe('AutopilotCoordinator', () => {
       files: 'x',
       tests: 'x',
     };
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('recorded');
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('alreadyRecorded');
     planState = {
       ...planState,
       steps: [{ ...completedPlan.steps[0]!, reviewStatus: 'REVIEWED' as const }],
@@ -1659,13 +1669,15 @@ describe('AutopilotCoordinator', () => {
       completed: true,
     });
     // A parent review/reopen cycle is not a child completion epoch.
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1-replay', now)).toBe(false);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1-replay', now)).toBe(
+      'alreadyRecorded',
+    );
     planState = {
       ...planState,
       steps: [...planState.steps, { ...planState.steps[0]!, id: 'append', children: [] }],
     };
     coordinator.planStatusChanged('s');
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(false);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe('alreadyRecorded');
     planState = {
       ...planState,
       steps: [
@@ -1678,7 +1690,7 @@ describe('AutopilotCoordinator', () => {
     coordinator.planStatusChanged('s');
     planState = completedPlan;
     coordinator.planStatusChanged('s');
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-3', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-3', now)).toBe('recorded');
     expect(state?.checkpoints?.completionEpochs).toContainEqual({
       target: '["l2","l1","l2"]',
       epoch: 1,
@@ -1740,7 +1752,7 @@ describe('AutopilotCoordinator', () => {
       verdict: 'ACCEPT' as const,
       commit: { kind: 'notRequired' as const },
     };
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('recorded');
     expect(
       coordinator.checkpointAccepted(
         's',
@@ -1748,7 +1760,7 @@ describe('AutopilotCoordinator', () => {
         'turn-1',
         now,
       ),
-    ).toBe(true);
+    ).toBe('alreadyRecorded');
     planState = { ...acceptedPlan, title: 'append-only refinement' };
     coordinator.planStatusChanged('s');
     expect(state?.checkpoints?.completionEpochs).toContainEqual({
@@ -1764,7 +1776,7 @@ describe('AutopilotCoordinator', () => {
     coordinator.planStatusChanged('s');
     planState = acceptedPlan;
     coordinator.planStatusChanged('s');
-    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe(true);
+    expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-2', now)).toBe('recorded');
     expect(state?.checkpoints?.completionEpochs).toContainEqual({
       target: '["l1","l1"]',
       epoch: 1,
@@ -1844,7 +1856,7 @@ describe('AutopilotCoordinator', () => {
         updatedAt: now,
       });
       const active = coordinator(first);
-      expect(active.checkpointAccepted('s', checkpoint, 'first', now)).toBe(true);
+      expect(active.checkpointAccepted('s', checkpoint, 'first', now)).toBe('recorded');
       planState = {
         ...completedPlan,
         steps: [
@@ -1857,7 +1869,7 @@ describe('AutopilotCoordinator', () => {
       active.planStatusChanged('s');
       planState = completedPlan;
       active.planStatusChanged('s');
-      expect(active.checkpointAccepted('s', checkpoint, 'second', now)).toBe(true);
+      expect(active.checkpointAccepted('s', checkpoint, 'second', now)).toBe('recorded');
       await Promise.resolve();
       await Promise.resolve();
       first.close();
@@ -1870,7 +1882,9 @@ describe('AutopilotCoordinator', () => {
         ],
         reportedL2Ids: ['["l1","l2"]'],
       });
-      expect(coordinator(reopened).checkpointAccepted('s', checkpoint, 'replay', now)).toBe(false);
+      expect(coordinator(reopened).checkpointAccepted('s', checkpoint, 'replay', now)).toBe(
+        'alreadyRecorded',
+      );
       await Promise.resolve();
       await Promise.resolve();
       reopened.close();
@@ -1990,7 +2004,7 @@ describe('AutopilotCoordinator', () => {
         .run();
       const active = coordinator(first);
       active.supervisionStarted('s');
-      expect(active.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(true);
+      expect(active.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe('recorded');
       expect(published.filter((type) => type === 'org-plan.step-checkpointed')).toHaveLength(1);
       first.close();
 
@@ -2000,7 +2014,9 @@ describe('AutopilotCoordinator', () => {
       restored.restore('s');
       // Replayed delivery is accepted idempotently, but cannot report or start
       // the child while the durable owning root turn remains active.
-      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(true);
+      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(
+        'alreadyRecorded',
+      );
       expect(timers.filter((timer) => !timer.cancelled)).toHaveLength(0);
       expect(resume).not.toHaveBeenCalled();
       expect(published.filter((type) => type === 'org-plan.step-checkpointed')).toHaveLength(1);
@@ -2019,7 +2035,9 @@ describe('AutopilotCoordinator', () => {
         reportedL2Ids: ['["l1","l2"]'],
       });
       expect(published.filter((type) => type === 'org-plan.step-reported')).toHaveLength(1);
-      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(false);
+      expect(restored.checkpointAccepted('s', checkpoint, 'turn-checkpoint', now)).toBe(
+        'alreadyRecorded',
+      );
       reopened.close();
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -4339,7 +4357,7 @@ describe('AutopilotCoordinator', () => {
               'turn-checkpoint',
               now,
             ),
-          ).toBe(true);
+          ).toBe('recorded');
           fixture.coordinator.turnCompleted('s');
         },
       },
