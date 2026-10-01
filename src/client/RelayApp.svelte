@@ -412,15 +412,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     void tick().then(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
   }
 
-  async function updateRestart(): Promise<void> {
+  async function quit(): Promise<void> {
     try {
-      await relay.updateRestart();
-      toastQueue.enqueue({
-        kind: 'info',
-        message: 'Update started. Gestalt Mobile will disconnect briefly, then reconnect.',
-      });
+      await relay.quit();
     } catch (error) {
-      reportRelayError(error, 'UPDATE_RESTART_FAILED');
+      reportRelayError(error, 'QUIT_FAILED');
       throw error;
     }
   }
@@ -1426,7 +1422,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         ondevices={() => (devicesOpen = true)}
         onnotifications={() => (notificationsOpen = true)}
         onscratchpad={openScratchpad}
-        onupdaterestart={updateRestart}
+        onquit={quit}
         onthemechange={setTheme}
         ondetach={tab === 'chat' && sessionId ? detachChat : undefined}
       />{/if}

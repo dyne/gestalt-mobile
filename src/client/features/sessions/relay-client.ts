@@ -290,7 +290,7 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
-    updateRestart: () => request<{ accepted: true }>('/api/maintenance/update-restart', {}),
+    quit: () => request<{ accepted: true }>('/api/maintenance/quit', {}),
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
     listWorkspaceDirectory: (
       workspaceId: string,

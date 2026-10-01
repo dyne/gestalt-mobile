@@ -31,8 +31,7 @@ const relayMessages = {
   GIT_PUSH_FAILED: 'The push failed. Refresh Git status and resolve remote divergence first.',
   GIT_CLONE_FAILED: 'Clone failed.',
   WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
-  UPDATE_RESTART_FAILED:
-    'Gestalt could not start the update and restart. Try again from a managed Mobile session.',
+  QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
 } as const;
 
 export type RelayFeedbackCode = keyof typeof relayMessages;

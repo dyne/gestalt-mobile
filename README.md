@@ -29,8 +29,9 @@ gestalt-mobile --cwd .
 ```
 
 The command prints the loopback URL when it is ready. Open that URL in a
-browser. Press Ctrl-C, or send SIGINT or SIGTERM, to stop the HTTP server,
-active Codex subprocesses, and database cleanly.
+browser. Choose **Quit** from the configuration menu and confirm to stop the
+HTTP server and every managed Codex or Kimi process, including running work.
+Pressing Ctrl-C or sending SIGINT or SIGTERM uses the same clean shutdown path.
 
 Use `--icon <path>` to replace the installed PWA application icon with a local
 SVG or PNG. Relative paths resolve from the directory where Mobile is started:

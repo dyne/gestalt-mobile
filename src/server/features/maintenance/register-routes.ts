@@ -6,12 +6,8 @@
 
 import type { FastifyInstance } from 'fastify';
 
-import type { AppDependencies } from '../../app.js';
-import { registerUpdateRestart } from './update-restart/endpoint.js';
+import { registerQuit } from './quit/endpoint.js';
 
-export function registerMaintenanceRoutes(
-  app: FastifyInstance,
-  deps: Pick<AppDependencies, 'maintenance'>,
-): void {
-  if (deps.maintenance) registerUpdateRestart(app, deps.maintenance.updateRestart);
+export function registerMaintenanceRoutes(app: FastifyInstance): void {
+  registerQuit(app);
 }

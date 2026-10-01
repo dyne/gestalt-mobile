@@ -58,7 +58,6 @@ import type { AutopilotCoordinator } from './features/autopilot/application/serv
 import { registerFileRoutes } from './features/files/register-routes.js';
 import type { WorkspaceFileSource } from './features/files/application/ports.js';
 import { registerMaintenanceRoutes } from './features/maintenance/register-routes.js';
-import type { UpdateRestartScheduler } from './features/maintenance/application/ports.js';
 import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
 
@@ -218,9 +217,6 @@ export type AppDependencies = {
     ListSkillProfilesDependencies &
     ReplaceSkillProfileDependencies &
     DeleteSkillProfileDependencies;
-  maintenance?: {
-    updateRestart: UpdateRestartScheduler;
-  };
   auth?: {
     repository: AuthorizationRepository;
     clock: Clock;
@@ -276,7 +272,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerFileRoutes(app, deps);
   registerGitRoutes(app, deps);
   registerSkillRoutes(app, deps);
-  registerMaintenanceRoutes(app, deps);
+  registerMaintenanceRoutes(app);
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }

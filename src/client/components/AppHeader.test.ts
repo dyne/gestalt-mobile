@@ -140,26 +140,34 @@ describe('AppHeader', () => {
     ]);
   });
 
-  it('requires confirmation before scheduling an update and restart', async () => {
-    const onupdaterestart = vi.fn(async () => undefined);
-    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onupdaterestart });
+  it('requires confirmation before quitting the relay', async () => {
+    const onquit = vi.fn(async () => undefined);
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onquit });
 
     const menu = document.getElementById('configuration-panel')!;
-    await fireEvent.click(
-      within(menu).getByRole('button', { name: 'Update and restart', hidden: true }),
-    );
+    await fireEvent.click(within(menu).getByRole('button', { name: 'Quit', hidden: true }));
 
-    const dialog = screen.getByRole('dialog', { name: 'Update Gestalt?' });
+    const dialog = screen.getByRole('dialog', { name: 'Quit Gestalt Mobile?' });
     expect(dialog.hasAttribute('open')).toBe(true);
-    expect(onupdaterestart).not.toHaveBeenCalled();
+    expect(onquit).not.toHaveBeenCalled();
     const cancel = screen.getByRole('button', { name: 'Cancel' });
     await Promise.resolve();
     expect(document.activeElement).toBe(cancel);
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Update and restart' }));
-
-    expect(onupdaterestart).toHaveBeenCalledOnce();
+    await fireEvent.click(cancel);
+    await Promise.resolve();
     expect(dialog.hasAttribute('open')).toBe(false);
+    expect(onquit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Open configuration' })).toBe(document.activeElement);
+
+    await fireEvent.click(within(menu).getByRole('button', { name: 'Quit', hidden: true }));
+    await fireEvent.click(dialog.querySelector<HTMLButtonElement>('.confirm-quit')!);
+
+    expect(onquit).toHaveBeenCalledOnce();
+    expect(dialog.hasAttribute('open')).toBe(true);
+    expect(dialog.getAttribute('aria-busy')).toBe('true');
+    expect((screen.getByRole('button', { name: 'Quitting…' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it('omits passkey-only actions when passkey access control is disabled', () => {

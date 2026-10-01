@@ -3515,7 +3515,7 @@ describe('production composition', () => {
           'protected',
         ],
         ['POST', '/api/git/clone', '/api/git/clone', 'protected'],
-        ['POST', '/api/maintenance/update-restart', '/api/maintenance/update-restart', 'protected'],
+        ['POST', '/api/maintenance/quit', '/api/maintenance/quit', 'protected'],
         ['GET', '/api/skills', '/api/skills', 'protected'],
         ['HEAD', '/api/skills', '/api/skills', 'protected'],
         ['GET', '/api/skill-profiles', '/api/skill-profiles', 'protected'],
@@ -4203,7 +4203,7 @@ describe('production composition', () => {
       await second.close();
     });
 
-    it('closes an active Codex child during graceful relay shutdown', async () => {
+    it('quits through graceful relay shutdown and closes an active Codex child', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
       ownTemporaryPaths(root, dataDir);
@@ -4247,10 +4247,12 @@ describe('production composition', () => {
         payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
       });
 
-      await app.close();
+      const quit = await app.inject({ method: 'POST', url: '/api/maintenance/quit' });
 
+      expect(quit.statusCode).toBe(202);
+      expect(quit.json()).toEqual({ accepted: true });
       // Model and skill catalogs run for bootstrap and session start; the active child closes with the relay.
-      expect(closed).toBe(5);
+      await vi.waitFor(() => expect(closed).toBe(5));
     });
 
     it('reconciles an interaction cleared upstream as no longer pending', async () => {
