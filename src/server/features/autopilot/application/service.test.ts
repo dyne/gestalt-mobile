@@ -3020,6 +3020,21 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
+    it('rejects an executor wait when a recoverable failure is visible before registration', () => {
+      const fixture = subject([], 'failed');
+
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'failed-wait-report',
+          leaseId: 'failed-wait-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe('wakeAlreadySatisfied');
+
+      expect(fixture.state?.supervision?.waitLease).toBeFalsy();
+    });
+
     it('accepts an executor wait while the canonical executor is still working', () => {
       const fixture = subject();
       fixture.activity = {
@@ -3042,6 +3057,44 @@ describe('AutopilotCoordinator', () => {
         waitLease: { id: 'active-wait-lease' },
       });
       expect(fixture.timers).toHaveLength(1);
+    });
+
+    it('consumes a just-registered executor wait and resumes the same failed executor', async () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'working',
+        subagents: [{ ...fixture.activity.subagents[0]!, state: 'working' }],
+      };
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'racing-wait-report',
+          leaseId: 'racing-wait-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'blocked',
+        subagents: [
+          {
+            ...fixture.activity.subagents[0]!,
+            state: 'blocked',
+            reason: 'agentError',
+            outcome: 'failed',
+          },
+        ],
+      };
+      fixture.coordinator.activityChanged('s');
+
+      expect(fixture.state?.supervision?.waitLease).toBeFalsy();
+      await Promise.resolve();
+      await Promise.resolve();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(fixture.rootStart).not.toHaveBeenCalled();
     });
 
     it('watches a still-running executor after an invalid root yield without resuming it', async () => {
@@ -5070,27 +5123,17 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
-    it('launches a fresh physical generation for a failed historical canonical executor', async () => {
+    it('resumes the same canonical executor after a recoverable failed turn', async () => {
       const fixture = subject([], 'failed');
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();
       await fixture.runNext();
-      expect(fixture.rootStart).toHaveBeenCalledWith(
-        's',
-        'root-control',
-        1,
-        expect.objectContaining({
-          canonicalPosition: 'L1',
-          canonicalTaskName: 'l1',
-          generation: 2,
-          taskName: 'l1_g2',
-        }),
-      );
-      expect(fixture.resume).not.toHaveBeenCalled();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(fixture.rootStart).not.toHaveBeenCalled();
     });
 
     it('rearms an interrupted replacement root turn with the same physical generation', async () => {
-      const fixture = subject([], 'failed');
+      const fixture = subject([], 'cancelled');
       fixture.rootStart.mockRejectedValueOnce(new Error('root writer interrupted'));
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();

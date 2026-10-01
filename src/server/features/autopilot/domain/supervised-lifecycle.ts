@@ -12,6 +12,7 @@ import {
 } from './supervision-protocol.js';
 
 export type ExecutorOutcome = 'objective_complete' | 'partial' | 'blocked' | 'cancelled' | 'failed';
+export type ExecutorOutcomeClassification = 'done' | 'recoverableFailure' | 'blocker' | 'ongoing';
 
 export type BlockingReason =
   | 'planChange'
@@ -609,25 +610,34 @@ function parseCheckpoints(
 export function classifyExecutorOutcome(
   input: Readonly<{
     objectiveComplete: boolean;
+    active?: boolean;
     reportedOutcome?: ExecutorOutcome;
     blockingReason?: BlockingReason;
     resumeCondition?: ResumeCondition;
     /** Examined transiently for compatibility; never retained by the lifecycle record. */
     finalText?: string;
   }>,
-): Readonly<{ outcome: ExecutorOutcome; blocking?: StructuredBlock }> {
-  if (input.objectiveComplete) return { outcome: 'objective_complete' };
-  if (input.reportedOutcome === 'cancelled' || input.reportedOutcome === 'failed')
-    return { outcome: input.reportedOutcome };
+): Readonly<{
+  classification: ExecutorOutcomeClassification;
+  outcome: ExecutorOutcome;
+  blocking?: StructuredBlock;
+}> {
+  if (input.objectiveComplete) return { classification: 'done', outcome: 'objective_complete' };
   const blocking =
     input.blockingReason && input.resumeCondition
       ? { reason: input.blockingReason, resumeCondition: input.resumeCondition }
       : undefined;
   if (input.reportedOutcome === 'blocked' && validStructuredBlock(blocking))
-    return { outcome: 'blocked', blocking };
+    return { classification: 'blocker', outcome: 'blocked', blocking };
+  if (input.active)
+    // Fresh activity outranks the previous turn's terminal transport status.
+    return { classification: 'ongoing', outcome: 'partial' };
+  if (input.reportedOutcome === 'cancelled' || input.reportedOutcome === 'failed')
+    return { classification: 'recoverableFailure', outcome: input.reportedOutcome };
   // A turn ending, a checkpoint, or free-form language about time/context is
-  // not objective state. Incomplete Org state remains mechanically partial.
-  return { outcome: 'partial' };
+  // not objective state. Incomplete, settled Org state is mechanically
+  // recoverable and must return to the same canonical executor.
+  return { classification: 'recoverableFailure', outcome: 'partial' };
 }
 
 export function decideSupervisedLifecycle(

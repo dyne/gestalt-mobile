@@ -319,6 +319,7 @@ export class AutopilotCoordinator {
       retained.plan,
       state.consecutiveNoProgress,
       state.executor,
+      activity,
     );
     return Boolean(executor && !this.authoritativeExecutorActive(state, retained.plan, activity));
   }
@@ -1009,6 +1010,14 @@ export class AutopilotCoordinator {
     if (this.activityEventKeys.get(sessionId) === eventKey) return;
     this.activityEventKeys.set(sessionId, eventKey);
     if (this.semanticEvent(sessionId, 'agentActivityChanged')) return;
+    // `executorChanged` is an edge subscription, not a request to wait for a
+    // later generic reconciliation pass. Consume it from the same fresh
+    // activity snapshot that exposed the settled canonical executor.
+    if (
+      this.executorWakeAlreadySatisfied(sessionId, prior, ['executorChanged']) &&
+      this.semanticEvent(sessionId, 'executorChanged')
+    )
+      return;
     const disposition = classifyAgentActivity(activity);
     if (disposition === 'attention') {
       this.evaluate(sessionId);
@@ -1574,6 +1583,7 @@ export class AutopilotCoordinator {
     plan: SupervisedPlan,
     continuationCount: number,
     persisted?: ExecutorLifecycle,
+    activity: AgentActivitySnapshot | null = this.deps.activity(sessionId),
   ): ExecutorLifecycle | undefined {
     const stepIndex = plan.steps.findIndex(
       (step) => step.id === plan.currentStepId || step.state === 'WIP',
@@ -1583,9 +1593,8 @@ export class AutopilotCoordinator {
     if (index < 0) return undefined;
     const step = plan.steps[index]!;
     const canonicalPosition = `L${index + 1}`;
-    const child = this.deps
-      .activity(sessionId)
-      ?.subagents.filter((candidate) => candidate.canonicalPosition === canonicalPosition)
+    const child = activity?.subagents
+      .filter((candidate) => candidate.canonicalPosition === canonicalPosition)
       .sort(
         (left, right) =>
           (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1) ||
@@ -1593,11 +1602,7 @@ export class AutopilotCoordinator {
           (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
       )[0];
     if (!child) {
-      if (
-        persisted?.canonicalPosition !== canonicalPosition ||
-        persisted.outcome === 'cancelled' ||
-        persisted.outcome === 'failed'
-      )
+      if (persisted?.canonicalPosition !== canonicalPosition || persisted.outcome === 'cancelled')
         return undefined;
       return {
         ...persisted,
@@ -1610,10 +1615,19 @@ export class AutopilotCoordinator {
     // generation is disconnected. Never fall back to an older persisted
     // writer; incomplete owner metadata instead fences all continuation.
     if (!child.taskPath || !child.canonicalTaskName) return undefined;
-    if (child.outcome === 'cancelled' || child.outcome === 'failed') return undefined;
+    if (child.outcome === 'cancelled') return undefined;
     const activeL2 = step.children.find((candidate) => candidate.state === 'WIP');
+    const active =
+      child.state === 'working' ||
+      child.state === 'awaitingAgent' ||
+      Boolean(
+        child.ownedProcesses?.some(
+          (process) => process.state === 'running' || process.state === 'detached-active',
+        ),
+      );
     const outcome = classifyExecutorOutcome({
       objectiveComplete: step.state === 'DONE',
+      active,
       reportedOutcome: child.outcome,
     });
     return {
