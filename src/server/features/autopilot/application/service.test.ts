@@ -2957,6 +2957,27 @@ describe('AutopilotCoordinator', () => {
       },
     );
 
+    it('keeps the idle physical executor when review correction reopens its L1', async () => {
+      const fixture = subject();
+      fixture.plan = {
+        ...fixture.plan,
+        steps: [
+          {
+            ...fixture.plan.steps[0]!,
+            state: 'WIP',
+            reviewStatus: 'UNREVIEWED',
+          },
+        ],
+      } as never;
+
+      expect(fixture.coordinator.turnCompleted('s')).toBe(false);
+      await fixture.runNext();
+      await fixture.runNext();
+
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+    });
+
     it('hands a completed unreported L2 to root before resuming its executor', async () => {
       const fixture = subject([], 'partial', 'DONE');
 
@@ -2965,6 +2986,28 @@ describe('AutopilotCoordinator', () => {
       await fixture.runNext();
 
       expect(fixture.rootStart).toHaveBeenCalledOnce();
+      expect(fixture.rootStart).toHaveBeenCalledWith('s', 'root-control', 1, undefined);
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('does not invent a replacement at the final nested/L1-wide report gate', async () => {
+      const fixture = subject([], 'partial', 'DONE');
+      fixture.plan = {
+        ...fixture.plan,
+        steps: [
+          {
+            ...fixture.plan.steps[0]!,
+            state: 'DONE',
+            reviewStatus: 'REVIEWED',
+          },
+        ],
+      } as never;
+
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      await fixture.runNext();
+
+      expect(fixture.rootStart).toHaveBeenCalledWith('s', 'root-control', 1, undefined);
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
@@ -5132,15 +5175,14 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.rootStart).not.toHaveBeenCalled();
     });
 
-    it('rearms an interrupted replacement root turn with the same physical generation', async () => {
+    it('does not infer a replacement from a legacy cancelled roster row', async () => {
       const fixture = subject([], 'cancelled');
       fixture.rootStart.mockRejectedValueOnce(new Error('root writer interrupted'));
       fixture.coordinator.turnCompleted('s');
       await fixture.runNext();
       await fixture.runNext();
       await vi.waitFor(() => expect(fixture.rootStart).toHaveBeenCalledOnce());
-      // The failed root start never adopted an owner, so retrying must retain
-      // the durable g2 identity rather than manufacturing g3.
+      // A legacy roster observation is not durable replacement authority.
       fixture.coordinator.evaluate('s');
       await fixture.runNext();
       await vi.waitFor(() => expect(fixture.rootStart).toHaveBeenCalledTimes(2));
@@ -5148,10 +5190,7 @@ describe('AutopilotCoordinator', () => {
         fixture.rootStart.mock.calls.map(
           (call) => (call as unknown as [string, string, number, unknown])[3],
         ),
-      ).toEqual([
-        expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
-        expect.objectContaining({ taskName: 'l1_g2', generation: 2 }),
-      ]);
+      ).toEqual([undefined, undefined]);
     });
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {
