@@ -69,6 +69,39 @@ describe('POST /api/sessions', () => {
     await app.close();
   });
 
+  it('accepts the managed workspace-git permission profile', async () => {
+    const app = fastify();
+    let receivedSandbox: string | undefined;
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+      activate: async (session) => {
+        receivedSandbox = session.executionPolicy?.sandbox;
+        return session;
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        workspaceId: 'w',
+        profile: 'default',
+        provider: 'codex',
+        sandbox: 'workspace-git',
+        approvalPolicy: 'on-request',
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(receivedSandbox).toBe('workspace-git');
+    await app.close();
+  });
+
   it('replays a successful start for the same idempotency key', async () => {
     const app = fastify();
     const results = new Map<string, string>();

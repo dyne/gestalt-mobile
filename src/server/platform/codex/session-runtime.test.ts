@@ -1905,7 +1905,7 @@ describe('CodexSessionRuntime', () => {
     });
   });
 
-  it('derives start, resume, and writer reacquisition overrides from the durable policy', async () => {
+  it('adopts workspace-git for start, resume, and writer reacquisition', async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const runtime = new CodexSessionRuntime(() => ({
       rpc: {
@@ -1918,7 +1918,7 @@ describe('CodexSessionRuntime', () => {
       },
       close: () => {},
     }));
-    const policy = { sandbox: 'danger-full-access' as const, approvalPolicy: 'never' as const };
+    const policy = { sandbox: 'workspace-git' as const, approvalPolicy: 'on-request' as const };
     const starting = {
       id: 'policy-session',
       workspaceId: 'w',
@@ -1946,13 +1946,21 @@ describe('CodexSessionRuntime', () => {
     expect(writerCalls).toEqual([
       expect.objectContaining({
         method: 'thread/start',
-        params: expect.objectContaining({ model: 'gpt-5.4', ...policy }),
+        params: expect.objectContaining({
+          model: 'gpt-5.4',
+          permissions: 'workspace-git',
+          approvalPolicy: 'on-request',
+        }),
       }),
       expect.objectContaining({
         method: 'thread/resume',
-        params: expect.objectContaining({ ...policy }),
+        params: expect.objectContaining({
+          permissions: 'workspace-git',
+          approvalPolicy: 'on-request',
+        }),
       }),
     ]);
+    for (const call of writerCalls) expect(call.params).not.toHaveProperty('sandbox');
   });
 
   it.each(['stopped', 'released', 'attentionRequired'] as const)(

@@ -182,8 +182,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let sessionListAbort: AbortController | null = null;
   let chatEnabled = $derived(sessions.some((session) => session.id === sessionId));
   let recentSessions = $state<RecentSession[]>([]);
-  let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-write');
-  let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('on-request');
+  let sandbox = $state<NonNullable<StartSessionSettings['sandbox']>>('workspace-git');
+  let approvalPolicy = $state<NonNullable<StartSessionSettings['approvalPolicy']>>('never');
   let startRequestKey = $state<string | null>(null);
   let sessionStartState = $state<SessionStartState>({ starting: false, error: null });
   let startingSession = $derived(sessionStartState.starting);

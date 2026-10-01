@@ -163,7 +163,7 @@ describe('KimiSessionRuntime', () => {
     });
     expect((rest.calls[1].body as { agent_config: object }).agent_config).toMatchObject({
       model: 'k1',
-      permission_mode: 'manual',
+      permission_mode: 'yolo',
     });
     expect(runtime.ownsWriter('relay-1')).toBe(true);
   });

@@ -73,7 +73,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
         profile: 'default',
         provider: 'codex',
         model: 'gpt-5.6-terra',
-        sandbox: 'workspace-write',
+        sandbox: 'workspace-git',
         approvalPolicy: 'on-request',
       });
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
@@ -171,8 +171,8 @@ test('sends a selected named skill profile only when creating a new session', as
       profile: 'default',
       provider: 'codex',
       model: 'gpt-5.6-terra',
-      sandbox: 'workspace-write',
-      approvalPolicy: 'on-request',
+      sandbox: 'workspace-git',
+      approvalPolicy: 'never',
       skillProfile: 'focused',
     });
 });

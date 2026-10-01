@@ -866,7 +866,7 @@ export class CodexSessionRuntime {
           ...(session.executionPolicy?.approvalPolicy
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
             : {}),
-          ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
+          ...this.permissionParams(session),
           dynamicTools: [
             gestaltQuizDynamicTool,
             gestaltOrgPlanAttentionDynamicTool,
@@ -975,8 +975,16 @@ export class CodexSessionRuntime {
         gestaltAgentCapacityRecoveryDynamicTool,
       ],
       ...(session.model ? { model: session.model } : {}),
-      ...(session.executionPolicy?.sandbox ? { sandbox: session.executionPolicy.sandbox } : {}),
+      ...this.permissionParams(session),
     };
+  }
+
+  private permissionParams(session: RelaySessionSnapshot): Record<string, string> {
+    const selection = session.executionPolicy?.sandbox;
+    if (!selection) return {};
+    return selection === 'workspace-git'
+      ? { permissions: 'workspace-git' }
+      : { sandbox: selection };
   }
 
   private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {

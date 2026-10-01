@@ -67,7 +67,8 @@ export type LastOrgPlan = {
   title: string;
 };
 
-export type SessionSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type SessionSandbox =
+  'workspace-git' | 'read-only' | 'workspace-write' | 'danger-full-access';
 export type SessionApprovalPolicy = 'untrusted' | 'on-request' | 'never';
 
 /** Codex thread settings selected for this relay session, never host permissions. */
@@ -76,7 +77,12 @@ export type SessionExecutionPolicy = {
   approvalPolicy: SessionApprovalPolicy;
 };
 
-const sandboxes = new Set<SessionSandbox>(['read-only', 'workspace-write', 'danger-full-access']);
+const sandboxes = new Set<SessionSandbox>([
+  'workspace-git',
+  'read-only',
+  'workspace-write',
+  'danger-full-access',
+]);
 const approvalPolicies = new Set<SessionApprovalPolicy>(['untrusted', 'on-request', 'never']);
 
 export function createSessionExecutionPolicy(input: {
@@ -88,7 +94,7 @@ export function createSessionExecutionPolicy(input: {
     (typeof input.sandbox !== 'string' || !sandboxes.has(input.sandbox as SessionSandbox))
   )
     throw new DomainError('SESSION_EXECUTION_POLICY_INVALID');
-  const approvalPolicy = input.approvalPolicy ?? 'on-request';
+  const approvalPolicy = input.approvalPolicy ?? 'never';
   if (
     typeof approvalPolicy !== 'string' ||
     !approvalPolicies.has(approvalPolicy as SessionApprovalPolicy)

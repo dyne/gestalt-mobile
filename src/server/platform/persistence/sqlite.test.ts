@@ -71,6 +71,7 @@ describe('SQLite relay persistence', () => {
   });
 
   it.each([
+    ['workspace-git', 'on-request'],
     ['read-only', 'untrusted'],
     ['workspace-write', 'on-request'],
     ['danger-full-access', 'never'],
