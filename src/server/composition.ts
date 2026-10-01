@@ -1027,7 +1027,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               checkpoint.planIdentity !== identity ||
               !rootOwned
             )
-              return false;
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanCheckpointToolResponse('failed'),
+                ) === true
+              );
             const valid = validOrgPlanCheckpoint({
               checkpoint,
               plan: retained,
@@ -1036,8 +1042,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               hasActiveL1Writer: (position) =>
                 hasActiveL1Writer(activity.snapshot(sessionId, new Date().toISOString()), position),
             });
-            if (!valid) return false;
-            if (!session.activeTurnId) return false;
+            if (!valid || !session.activeTurnId)
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanCheckpointToolResponse('failed'),
+                ) === true
+              );
             let recordStatus: OrgPlanCheckpointRecordStatus = 'failed';
             try {
               recordStatus = autopilot.checkpointAccepted(

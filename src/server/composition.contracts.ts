@@ -1645,7 +1645,7 @@ describe('production composition', () => {
       await approvalFixture.app.close();
     });
 
-    it('rejects a checkpoint delivered after its owning root final has closed', async () => {
+    it('returns failed for a checkpoint delivered after its owning root final has closed', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
         autopilotSchedule: (callback) => {
@@ -1692,7 +1692,7 @@ describe('production composition', () => {
         .digest('hex');
       await expect(
         handle.request!(l2CheckpointCall(812, threadId, active.active_turn_id, planIdentity)),
-      ).rejects.toThrow('CODEX_SERVER_REQUEST_UNSUPPORTED');
+      ).resolves.toEqual(toOrgPlanCheckpointToolResponse('failed'));
       expect(timers).toHaveLength(timersAfterFinal);
       expect(
         fixture.handles
