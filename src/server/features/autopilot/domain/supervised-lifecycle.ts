@@ -79,8 +79,21 @@ export type ExecutorLifecycle = Readonly<{
   continuationCount: number;
   /** Consecutive, bounded failures for this physical executor only. */
   resumeFailures?: number;
+  /**
+   * Durable sole-writer binding.  Legacy rows omit it and are reconciled from
+   * the persisted executor plus one fresh matching roster entry.
+   */
+  assignment?: ExecutorAssignment;
   /** A durable root-owned replacement handoff; cleared only by its new roster owner. */
-  replacement?: ExecutorIdentity & Readonly<{ planIdentity: string; planFingerprint: string }>;
+  replacement?: ExecutorIdentity &
+    Readonly<{
+      planIdentity: string;
+      planFingerprint: string;
+      /** New rows bind a replacement to the sole owner it supersedes. */
+      previous?: ExecutorAssignment;
+      reason?: 'explicitExecutorRejection';
+      evidence?: string;
+    }>;
   /** Bounded durable command history.  An issued command is never blindly replayed. */
   commands?: readonly ExecutorCommand[];
 }>;
@@ -139,6 +152,37 @@ export type ExecutorIdentity = Readonly<{
   generation: number;
   taskName: string;
 }>;
+
+export type ExecutorAssignment = Readonly<{
+  canonicalPosition: string;
+  canonicalTaskName: string;
+  taskName: string;
+  taskPath: string;
+  threadId: string;
+  /** Physical generation, deliberately distinct from continuation attempts. */
+  generation: number;
+  state: 'resumable' | 'closed' | 'unavailable';
+}>;
+
+export function executorAssignment(
+  executor: Pick<
+    ExecutorLifecycle,
+    'canonicalPosition' | 'canonicalTaskName' | 'taskPath' | 'threadId' | 'continuationGeneration'
+  >,
+  state: ExecutorAssignment['state'] = 'resumable',
+): ExecutorAssignment {
+  const taskName = executor.taskPath.split('/').filter(Boolean).at(-1);
+  const identity = executorIdentity(executor.canonicalTaskName, executor.continuationGeneration);
+  return {
+    canonicalPosition: executor.canonicalPosition,
+    canonicalTaskName: executor.canonicalTaskName,
+    taskName: taskName || identity.taskName,
+    taskPath: executor.taskPath,
+    threadId: executor.threadId,
+    generation: identity.generation,
+    state,
+  };
+}
 
 export function checkpointTarget(
   kind: 'l1' | 'l2' | 'terminal',
@@ -342,6 +386,9 @@ export function parsePersistedSupervisedLifecycle(
     executorValue.resumeFailures === undefined
       ? 0
       : nonNegativeInteger(executorValue.resumeFailures);
+  const assignmentValue =
+    executorValue.assignment === undefined ? undefined : record(executorValue.assignment);
+  const assignment = assignmentValue ? parseExecutorAssignment(assignmentValue) : undefined;
   const replacementValue =
     executorValue.replacement === undefined ? undefined : record(executorValue.replacement);
   const replacementGeneration = replacementValue && nonNegativeInteger(replacementValue.generation);
@@ -353,6 +400,13 @@ export function parsePersistedSupervisedLifecycle(
   const replacementPlanIdentity = replacementValue && boundedText(replacementValue.planIdentity);
   const replacementPlanFingerprint =
     replacementValue && boundedText(replacementValue.planFingerprint);
+  const replacementPreviousValue = replacementValue && record(replacementValue.previous);
+  const replacementPrevious = replacementPreviousValue
+    ? parseExecutorAssignment(replacementPreviousValue)
+    : undefined;
+  const replacementReason =
+    replacementValue && stringValue(replacementValue.reason, ['explicitExecutorRejection']);
+  const replacementEvidence = replacementValue && boundedText(replacementValue.evidence);
   if (
     !canonicalPosition ||
     !canonicalTaskName ||
@@ -364,15 +418,34 @@ export function parsePersistedSupervisedLifecycle(
     continuationGeneration === null ||
     continuationCount === null ||
     resumeFailures === null ||
+    (executorValue.assignment !== undefined && !assignment) ||
     (replacementValue &&
       (!replacementGeneration ||
         !replacementTaskName ||
         !replacementCanonicalTaskName ||
         !replacementCanonicalPosition ||
         !replacementPlanIdentity ||
-        !replacementPlanFingerprint))
+        !replacementPlanFingerprint ||
+        (replacementValue.previous !== undefined && !replacementPrevious) ||
+        (replacementReason !== undefined && replacementReason !== 'explicitExecutorRejection') ||
+        (replacementValue.evidence !== undefined && !replacementEvidence)))
   )
     return undefined;
+  if (replacementValue) {
+    try {
+      const identity = executorIdentity(replacementCanonicalTaskName!, replacementGeneration!);
+      if (
+        identity.taskName !== replacementTaskName ||
+        identity.canonicalPosition !== replacementCanonicalPosition ||
+        (replacementPrevious &&
+          (replacementPrevious.canonicalTaskName !== canonicalTaskName ||
+            replacementPrevious.canonicalPosition !== canonicalPosition))
+      )
+        return undefined;
+    } catch {
+      return undefined;
+    }
+  }
   const commandsValue = executorValue.commands;
   if (commandsValue !== undefined && (!Array.isArray(commandsValue) || commandsValue.length > 32))
     return undefined;
@@ -468,6 +541,7 @@ export function parsePersistedSupervisedLifecycle(
       continuationGeneration,
       continuationCount,
       ...(resumeFailures ? { resumeFailures } : {}),
+      ...(assignment ? { assignment } : {}),
       ...(replacementValue
         ? {
             replacement: {
@@ -477,6 +551,9 @@ export function parsePersistedSupervisedLifecycle(
               canonicalPosition: replacementCanonicalPosition!,
               planIdentity: replacementPlanIdentity!,
               planFingerprint: replacementPlanFingerprint!,
+              ...(replacementPrevious ? { previous: replacementPrevious } : {}),
+              ...(replacementReason ? { reason: replacementReason } : {}),
+              ...(replacementEvidence ? { evidence: replacementEvidence } : {}),
             },
           }
         : {}),
@@ -605,6 +682,35 @@ function parseCheckpoints(
       : { checkpointHandoffFailed: value.checkpointHandoffFailed }),
     terminalReviewAccepted: value.terminalReviewAccepted,
   };
+}
+
+function parseExecutorAssignment(value: Record<string, unknown>): ExecutorAssignment | undefined {
+  const canonicalPosition = boundedText(value.canonicalPosition);
+  const canonicalTaskName = boundedText(value.canonicalTaskName);
+  const taskName = boundedText(value.taskName);
+  const taskPath = boundedText(value.taskPath);
+  const threadId = boundedText(value.threadId);
+  const generation = nonNegativeInteger(value.generation);
+  const state = stringValue(value.state, ['resumable', 'closed', 'unavailable']);
+  if (
+    !canonicalPosition ||
+    !canonicalTaskName ||
+    !taskName ||
+    !taskPath ||
+    !threadId ||
+    generation === null ||
+    generation < 1 ||
+    !state
+  )
+    return undefined;
+  try {
+    const identity = executorIdentity(canonicalTaskName, generation);
+    return identity.canonicalPosition === canonicalPosition && identity.taskName === taskName
+      ? { canonicalPosition, canonicalTaskName, taskName, taskPath, threadId, generation, state }
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function classifyExecutorOutcome(

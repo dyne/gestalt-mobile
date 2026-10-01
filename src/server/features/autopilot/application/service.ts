@@ -30,6 +30,7 @@ import {
   type SupervisedLifecycleEvent,
   validStructuredBlock,
   checkpointTarget,
+  executorAssignment,
 } from '../domain/supervised-lifecycle.js';
 import {
   classifyAgentActivity,
@@ -793,7 +794,19 @@ export class AutopilotCoordinator {
       terminalReviewAccepted:
         checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
     };
-    const checkpointed = { ...prior, checkpoints, updatedAt: occurredAt };
+    const checkpointed = {
+      ...prior,
+      ...(checkpoint.kind === 'l1Accepted' && prior.executor?.assignment
+        ? {
+            executor: {
+              ...prior.executor,
+              assignment: { ...prior.executor.assignment, state: 'closed' as const },
+            },
+          }
+        : {}),
+      checkpoints,
+      updatedAt: occurredAt,
+    };
     this.persist(
       {
         ...checkpointed,
@@ -1593,14 +1606,41 @@ export class AutopilotCoordinator {
     if (index < 0) return undefined;
     const step = plan.steps[index]!;
     const canonicalPosition = `L${index + 1}`;
-    const child = activity?.subagents
-      .filter((candidate) => candidate.canonicalPosition === canonicalPosition)
-      .sort(
-        (left, right) =>
-          (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1) ||
-          Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt) ||
-          (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
-      )[0];
+    const candidates =
+      activity?.subagents.filter(
+        (candidate) => candidate.canonicalPosition === canonicalPosition,
+      ) ?? [];
+    const assigned =
+      persisted?.assignment?.canonicalPosition === canonicalPosition
+        ? persisted.assignment
+        : undefined;
+    const replacementChild = persisted?.replacement
+      ? candidates.find(
+          (candidate) =>
+            candidate.canonicalTaskName === persisted.replacement!.canonicalTaskName &&
+            (candidate.continuationGeneration ?? 1) === persisted.replacement!.generation &&
+            candidate.taskPath?.split('/').filter(Boolean).at(-1) ===
+              persisted.replacement!.taskName,
+        )
+      : undefined;
+    const child =
+      replacementChild ??
+      (assigned
+        ? candidates.find(
+            (candidate) =>
+              candidate.canonicalTaskName === assigned.canonicalTaskName &&
+              candidate.taskPath === assigned.taskPath &&
+              (candidate.threadId ?? candidate.id) === assigned.threadId &&
+              (candidate.continuationGeneration ?? 1) === assigned.generation,
+          )
+        : candidates
+            .filter((candidate) => candidate.canonicalPosition === canonicalPosition)
+            .sort(
+              (left, right) =>
+                (right.continuationGeneration ?? 1) - (left.continuationGeneration ?? 1) ||
+                Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt) ||
+                (left.threadId ?? left.id).localeCompare(right.threadId ?? right.id),
+            )[0]);
     if (!child) {
       if (persisted?.canonicalPosition !== canonicalPosition || persisted.outcome === 'cancelled')
         return undefined;
@@ -1611,9 +1651,9 @@ export class AutopilotCoordinator {
         ownedProcesses: refreshPersistedProcesses(persisted.ownedProcesses, [], this.deps.now()),
       };
     }
-    // A roster entry for a newer generation is authoritative even when that
-    // generation is disconnected. Never fall back to an older persisted
-    // writer; incomplete owner metadata instead fences all continuation.
+    // Once adopted, a persisted assignment outranks every unrelated roster
+    // entry.  A new physical writer can enter only through the exact durable
+    // replacement authorization above.
     if (!child.taskPath || !child.canonicalTaskName) return undefined;
     if (child.outcome === 'cancelled') return undefined;
     const activeL2 = step.children.find((candidate) => candidate.state === 'WIP');
@@ -1664,6 +1704,16 @@ export class AutopilotCoordinator {
           ? { resumeFailures: persisted.resumeFailures }
           : {}),
       ...(persisted?.commands ? { commands: persisted.commands } : {}),
+      assignment:
+        replacementChild || !assigned
+          ? executorAssignment({
+              canonicalPosition,
+              canonicalTaskName: child.canonicalTaskName,
+              taskPath: child.taskPath,
+              threadId: child.threadId ?? child.id,
+              continuationGeneration: child.continuationGeneration ?? 1,
+            })
+          : assigned,
     };
   }
 
@@ -2072,7 +2122,8 @@ export class AutopilotCoordinator {
   }
 
   private freshExecutorIdentity(sessionId: string) {
-    const replacement = this.deps.store.find(sessionId)?.executor?.replacement;
+    const state = this.deps.store.find(sessionId);
+    const replacement = state?.executor?.replacement;
     if (replacement && this.validReplacement(sessionId, replacement)) return replacement;
     const plan = this.deps.plan(sessionId)?.plan;
     if (!plan) return undefined;
@@ -2083,12 +2134,26 @@ export class AutopilotCoordinator {
       stepIndex >= 0 ? stepIndex : plan.steps.findIndex((step) => step.state !== 'DONE');
     if (index < 0) return undefined;
     const canonicalTaskName = `l${index + 1}`;
-    const generations =
+    // A root boundary starts a root turn, not a replacement executor.  The
+    // existing physical owner remains resumable through ordinary L2, review,
+    // and completion boundaries, regardless of its most recently observed
+    // continuation generation.  Only a durable replacement handoff above may
+    // authorize a generated physical task name.
+    if (
+      state?.executor?.canonicalTaskName === canonicalTaskName &&
+      state.executor.outcome !== 'cancelled'
+    )
+      return undefined;
+    // Legacy roster observations establish a resumable owner but never
+    // authorize a generated name.  Only scheduleExecutorReplacement creates
+    // the exact durable replacement record consumed above.
+    if (
       this.deps
         .activity(sessionId)
-        ?.subagents.filter((child) => child.canonicalTaskName === canonicalTaskName)
-        .map((child) => child.continuationGeneration ?? 1) ?? [];
-    return executorIdentity(canonicalTaskName, Math.max(0, ...generations) + 1);
+        ?.subagents.some((child) => child.canonicalTaskName === canonicalTaskName)
+    )
+      return undefined;
+    return executorIdentity(canonicalTaskName, 1);
   }
 
   private validReplacement(
@@ -2115,17 +2180,25 @@ export class AutopilotCoordinator {
     if (!current?.requestedEnabled || !retained || current.executor?.replacement) return;
     const identity = executorIdentity(
       executor.canonicalTaskName,
-      executor.continuationGeneration + 1,
+      (executor.assignment?.generation ?? executor.continuationGeneration) + 1,
     );
     const now = this.deps.now();
     const controlId = this.deps.nextControlId(sessionId, current.generation);
     const replacement: ExecutorLifecycle = {
       ...executor,
       outcome: 'failed',
+      ...(executor.assignment
+        ? { assignment: { ...executor.assignment, state: 'unavailable' } }
+        : {}),
       replacement: {
         ...identity,
         planIdentity: retained.identity,
         planFingerprint: fingerprint(retained.plan),
+        previous: executor.assignment
+          ? { ...executor.assignment, state: 'unavailable' }
+          : executorAssignment(executor, 'unavailable'),
+        reason: 'explicitExecutorRejection',
+        evidence: 'retry-limit-exhausted',
       },
       commands: executor.commands?.map((command) =>
         ['scheduled', 'issued'].includes(command.status)

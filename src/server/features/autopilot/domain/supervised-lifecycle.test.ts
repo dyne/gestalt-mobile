@@ -10,6 +10,7 @@ import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import {
   classifyExecutorOutcome,
   decideSupervisedLifecycle,
+  executorAssignment,
   executorIdentity,
   parsePersistedSupervisedLifecycle,
   type ExecutorLifecycle,
@@ -82,6 +83,51 @@ const input = (change: Partial<SupervisedLifecycleInput> = {}): SupervisedLifecy
 });
 
 describe('supervised Org Plan lifecycle', () => {
+  it('migrates a legacy executor row and round-trips one immutable physical assignment', () => {
+    const legacy = executor();
+    const assignment = executorAssignment(legacy);
+    expect(
+      parsePersistedSupervisedLifecycle({ executor: legacy })?.executor?.assignment,
+    ).toBeUndefined();
+    expect(
+      parsePersistedSupervisedLifecycle({ executor: { ...legacy, assignment } })?.executor
+        ?.assignment,
+    ).toEqual(assignment);
+  });
+
+  it('rejects an assignment whose physical task name is not authorized by its generation', () => {
+    const legacy = executor();
+    expect(
+      parsePersistedSupervisedLifecycle({
+        executor: {
+          ...legacy,
+          assignment: { ...executorAssignment(legacy), taskName: 'l4_g2' },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('rejects a replacement authorization whose task name does not match its exact generation', () => {
+    const legacy = executor();
+    const replacement = {
+      ...executorIdentity('l4', 2),
+      planIdentity: 'plan',
+      planFingerprint: 'fingerprint',
+      previous: { ...executorAssignment(legacy), state: 'unavailable' as const },
+      reason: 'explicitExecutorRejection' as const,
+      evidence: 'retry-limit-exhausted',
+    };
+    expect(
+      parsePersistedSupervisedLifecycle({ executor: { ...legacy, replacement } })?.executor
+        ?.replacement,
+    ).toEqual(replacement);
+    expect(
+      parsePersistedSupervisedLifecycle({
+        executor: { ...legacy, replacement: { ...replacement, taskName: 'l4_g3' } },
+      }),
+    ).toBeUndefined();
+  });
+
   it('loads legacy checkpoints and infers their pending report kind', () => {
     expect(
       parsePersistedSupervisedLifecycle({
