@@ -113,6 +113,40 @@ describe('SQLite relay persistence', () => {
     },
   );
 
+  it('upgrades existing default execution policies once and preserves explicit choices', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
+    directories.push(directory);
+    const database = openRelayDatabase(join(directory, 'relay.sqlite'));
+    database.exec(
+      'CREATE TABLE relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, sandbox TEXT, approval_policy TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+    );
+    const insert = database.prepare(
+      "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,sandbox,approval_policy,state,desired_state,created_at,updated_at) VALUES (?,?,?,?,?,?,'ready','active','t','t')",
+    );
+    insert.run('old-default', 'w', '/w', 'default', 'workspace-write', 'on-request');
+    insert.run('explicit', 'w', '/w', 'default', 'workspace-write', 'never');
+
+    migrate(database);
+
+    const sessions = new SqliteSessionRepository(database);
+    expect(sessions.find('old-default')?.executionPolicy).toEqual({
+      sandbox: 'workspace-git',
+      approvalPolicy: 'never',
+    });
+    expect(sessions.find('explicit')?.executionPolicy).toEqual({
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+    });
+
+    insert.run('later-choice', 'w', '/w', 'default', 'workspace-write', 'on-request');
+    migrate(database);
+    expect(sessions.find('later-choice')?.executionPolicy).toEqual({
+      sandbox: 'workspace-write',
+      approvalPolicy: 'on-request',
+    });
+    database.close();
+  });
+
   it('migrates an oldest schema row as a legacy policy omission and rejects corrupt stored policy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);

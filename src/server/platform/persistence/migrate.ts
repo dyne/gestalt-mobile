@@ -6,7 +6,33 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 
-const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, sandbox TEXT, approval_policy TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, last_org_plan_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, turn_id TEXT, requested_at TEXT, resolved_at TEXT, outcome TEXT, operation_key TEXT, resolution_state TEXT NOT NULL DEFAULT 'active', PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, autopilot_outbox_id INTEGER, PRIMARY KEY (session_id, sequence), UNIQUE(session_id, autopilot_outbox_id)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key)); CREATE TABLE IF NOT EXISTS autopilot_sessions (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state TEXT NOT NULL, requested_enabled INTEGER NOT NULL, plan_identity TEXT, plan_fingerprint TEXT, generation INTEGER NOT NULL, no_progress_count INTEGER NOT NULL, next_evaluation_at TEXT, last_control_id TEXT, stop_reason TEXT, lifecycle_json TEXT, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS autopilot_controls (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, control_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, failure_code TEXT, turn_id TEXT, PRIMARY KEY (session_id, control_id)); CREATE TABLE IF NOT EXISTS autopilot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, type TEXT NOT NULL, payload_json TEXT NOT NULL, occurred_at TEXT NOT NULL);`;
+const schema = `CREATE TABLE IF NOT EXISTS relay_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, workspace_path TEXT NOT NULL, profile TEXT NOT NULL, model TEXT, branch TEXT, sandbox TEXT, approval_policy TEXT, thread_id TEXT, state TEXT NOT NULL, desired_state TEXT NOT NULL, active_turn_id TEXT, protocol_version TEXT, failure_count INTEGER NOT NULL DEFAULT 0, effective_skill_selection_json TEXT, last_org_plan_json TEXT, next_sequence INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS pending_interactions (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, request_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, turn_id TEXT, requested_at TEXT, resolved_at TEXT, outcome TEXT, operation_key TEXT, resolution_state TEXT NOT NULL DEFAULT 'active', PRIMARY KEY (session_id, request_id)); CREATE TABLE IF NOT EXISTS session_events (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, sequence INTEGER NOT NULL, occurred_at TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, autopilot_outbox_id INTEGER, PRIMARY KEY (session_id, sequence), UNIQUE(session_id, autopilot_outbox_id)); CREATE TABLE IF NOT EXISTS idempotency_results (scope TEXT NOT NULL, key TEXT NOT NULL, status_code INTEGER NOT NULL, body_json TEXT NOT NULL, PRIMARY KEY (scope, key)); CREATE TABLE IF NOT EXISTS autopilot_sessions (session_id TEXT PRIMARY KEY REFERENCES relay_sessions(id) ON DELETE CASCADE, state TEXT NOT NULL, requested_enabled INTEGER NOT NULL, plan_identity TEXT, plan_fingerprint TEXT, generation INTEGER NOT NULL, no_progress_count INTEGER NOT NULL, next_evaluation_at TEXT, last_control_id TEXT, stop_reason TEXT, lifecycle_json TEXT, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS autopilot_controls (session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, control_id TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, failure_code TEXT, turn_id TEXT, PRIMARY KEY (session_id, control_id)); CREATE TABLE IF NOT EXISTS autopilot_outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, type TEXT NOT NULL, payload_json TEXT NOT NULL, occurred_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS relay_schema_migrations (name TEXT PRIMARY KEY);`;
+
+const workspaceGitDefaultsMigration = '2026-10-01-workspace-git-defaults';
+
+function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const applied = database
+      .prepare('SELECT 1 FROM relay_schema_migrations WHERE name = ?')
+      .get(workspaceGitDefaultsMigration);
+    if (!applied) {
+      database
+        .prepare(
+          "UPDATE relay_sessions SET sandbox = 'workspace-git', approval_policy = 'never' WHERE sandbox = 'workspace-write' AND approval_policy = 'on-request'",
+        )
+        .run();
+      database
+        .prepare('INSERT INTO relay_schema_migrations (name) VALUES (?)')
+        .run(workspaceGitDefaultsMigration);
+    }
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   database.exec(
@@ -29,6 +55,7 @@ export function migrate(database: DatabaseSync): void {
     database.exec('ALTER TABLE relay_sessions ADD COLUMN sandbox TEXT');
   if (!columns.some((column) => column.name === 'approval_policy'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN approval_policy TEXT');
+  migrateWorkspaceGitDefaults(database);
   if (!columns.some((column) => column.name === 'provider'))
     database.exec("ALTER TABLE relay_sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'codex'");
   const autopilotColumns = database

@@ -263,7 +263,10 @@ The Gestalt manager installs that named profile in `~/.codex-gestalt/config.toml
 Mobile passes the selection to app-server as `permissions: "workspace-git"`,
 which keeps Git metadata writable without selecting full host access. Other
 legacy sandbox choices remain available in the session form. The approval
-policy defaults to **Approve everything** (`never`) for new sessions.
+policy defaults to **Approve everything** (`never`) for new sessions. On the
+first startup after upgrading, saved sessions that still use the former
+default pair (`workspace-write` with `on-request`) are migrated to the new
+defaults. Other explicit policy combinations are preserved.
 
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
