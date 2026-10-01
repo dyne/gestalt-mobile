@@ -152,6 +152,14 @@ reconciliation, Mobile fences pending automatic callbacks and returns
 `accepted:false` with `reason:wakeAlreadySatisfied`; the supervisor continues
 in the same root turn instead of parking after the completion edge.
 
+Executor reconciliation uses four mechanical classes: a DONE Org milestone,
+ongoing actor/process work, a genuine structured blocker, or a recoverable
+failure. A failed or completed executor turn with incomplete Org state and no
+structured blocker is recoverable; Mobile follows up the same canonical
+executor thread. It neither parses report prose nor converts that local failure
+into human attention. Explicit cancellation remains the boundary that permits
+a fresh physical generation.
+
 Long GitHub checks use the same generic process boundary. The supervisor owns a
 running `gh pr checks <PR> --watch --interval 30` command and requests
 `processExited` and `processResultAvailable`; Mobile observes its process state

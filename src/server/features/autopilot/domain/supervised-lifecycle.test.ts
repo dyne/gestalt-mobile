@@ -305,11 +305,37 @@ describe('supervised Org Plan lifecycle', () => {
         reportedOutcome: 'blocked',
         finalText: 'L4 remains incomplete',
       }),
-    ).toEqual({ outcome: 'partial' });
+    ).toEqual({ classification: 'recoverableFailure', outcome: 'partial' });
     expect(decideSupervisedLifecycle(input({ event: 'rootFinalAttempt' }))).toMatchObject({
       finalAllowed: false,
       action: { kind: 'resumeExecutor', threadId: 'thread-l4', generation: 2 },
     });
+  });
+
+  it.each([
+    ['DONE milestone', { objectiveComplete: true, reportedOutcome: 'partial' as const }, 'done'],
+    [
+      'recoverable executor failure',
+      { objectiveComplete: false, reportedOutcome: 'failed' as const },
+      'recoverableFailure',
+    ],
+    [
+      'genuine structured blocker',
+      {
+        objectiveComplete: false,
+        reportedOutcome: 'blocked' as const,
+        blockingReason: 'missingDependency' as const,
+        resumeCondition: 'dependencyInstalled' as const,
+      },
+      'blocker',
+    ],
+    [
+      'ongoing work',
+      { objectiveComplete: false, reportedOutcome: 'partial' as const, active: true },
+      'ongoing',
+    ],
+  ])('classifies %s without parsing report prose', (_name, input, classification) => {
+    expect(classifyExecutorOutcome(input)).toMatchObject({ classification });
   });
 
   it('continues the same executor after one L2 completes while L1 remains WIP', () => {
