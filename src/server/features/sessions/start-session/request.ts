@@ -16,7 +16,9 @@ const schema = z.object({
     .trim()
     .optional()
     .transform((value) => value || undefined),
-  sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+  sandbox: z
+    .enum(['workspace-git', 'read-only', 'workspace-write', 'danger-full-access'])
+    .optional(),
   approvalPolicy: z.enum(['untrusted', 'on-request', 'never']).optional(),
 });
 

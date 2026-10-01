@@ -258,6 +258,13 @@ so it can be changed in a future configuration surface. The selected model is
 stored with the relay session and shown in managed session entries; in chat,
 `/model` lists only models of the session's own provider.
 
+New Codex sessions select the `workspace-git` permission profile by default.
+The Gestalt manager installs that named profile in `~/.codex-gestalt/config.toml`;
+Mobile passes the selection to app-server as `permissions: "workspace-git"`,
+which keeps Git metadata writable without selecting full host access. Other
+legacy sandbox choices remain available in the session form. The approval
+policy defaults to **Approve everything** (`never`) for new sessions.
+
 Use **Open** to relaunch a released, stopped, or attention-required
 relay session from the browser.
 

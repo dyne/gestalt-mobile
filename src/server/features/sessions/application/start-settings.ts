@@ -13,6 +13,6 @@ export const DEFAULT_SESSION_MODEL = 'gpt-5.6-terra';
 export type StartSessionSettings = {
   provider: LlmProvider;
   model?: string;
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  sandbox?: 'workspace-git' | 'read-only' | 'workspace-write' | 'danger-full-access';
   approvalPolicy?: 'untrusted' | 'on-request' | 'never';
 };

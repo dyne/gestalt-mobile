@@ -74,6 +74,7 @@ describe('RelaySession', () => {
   });
 
   it.each([
+    ['workspace-git', 'on-request'],
     ['read-only', 'untrusted'],
     ['workspace-write', 'on-request'],
     ['danger-full-access', 'never'],
@@ -104,7 +105,7 @@ describe('RelaySession', () => {
         effectiveSkillSelection: { skills: [] },
         now: createdAt,
       }).snapshot.executionPolicy,
-    ).toEqual({ approvalPolicy: 'on-request' });
+    ).toEqual({ approvalPolicy: 'never' });
   });
 
   it('binds a thread and allows exactly one active turn', () => {

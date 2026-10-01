@@ -380,6 +380,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
               )}
           >
+            <option value="workspace-git">workspace-git (Git writable)</option>
             <option value="workspace-write">workspace-write</option>
             <option value="read-only">read-only</option>
             <option value="danger-full-access">danger-full-access</option>
