@@ -9,17 +9,17 @@ import { describe, expect, it } from 'vitest';
 import { createRelayClient } from './relay-client.js';
 
 describe('relay client', () => {
-  it('requests a live update and restart through the maintenance endpoint', async () => {
+  it('requests a graceful relay quit through the maintenance endpoint', async () => {
     let request: { url: string; method?: string; body?: string } | undefined;
     const client = createRelayClient(async (url, init) => {
       request = { url: String(url), method: init?.method, body: init?.body as string | undefined };
       return new Response(JSON.stringify({ accepted: true }), { status: 202 });
     });
 
-    await client.updateRestart();
+    await client.quit();
 
     expect(request).toEqual({
-      url: '/api/maintenance/update-restart',
+      url: '/api/maintenance/quit',
       method: 'POST',
       body: '{}',
     });

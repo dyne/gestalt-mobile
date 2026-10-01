@@ -21,7 +21,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondevices = () => {},
     onnotifications = () => {},
     onscratchpad = () => {},
-    onupdaterestart = async () => {},
+    onquit = async () => {},
     ondetach,
   }: {
     theme: ThemeId;
@@ -36,29 +36,36 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondevices?: (trigger: HTMLButtonElement) => void;
     onnotifications?: () => void;
     onscratchpad?: () => void;
-    onupdaterestart?: () => Promise<void>;
+    onquit?: () => Promise<void>;
     ondetach?: () => void;
   } = $props();
 
-  let updateDialog = $state<HTMLDialogElement | null>(null);
-  let updateCancel = $state<HTMLButtonElement | null>(null);
-  let updatePending = $state(false);
+  let menuTrigger = $state<HTMLButtonElement | null>(null);
+  let quitDialog = $state<HTMLDialogElement | null>(null);
+  let quitCancel = $state<HTMLButtonElement | null>(null);
+  let quitPending = $state(false);
 
-  function openUpdateRestart(): void {
-    updateDialog?.showModal();
-    queueMicrotask(() => updateCancel?.focus());
+  function openQuit(): void {
+    quitDialog?.showModal();
+    queueMicrotask(() => quitCancel?.focus());
   }
 
-  async function confirmUpdateRestart(): Promise<void> {
-    updatePending = true;
+  async function confirmQuit(): Promise<void> {
+    quitPending = true;
     try {
-      await onupdaterestart();
-      updateDialog?.close();
+      await onquit();
     } catch {
       // The application reports the actionable failure through the shared toast queue.
-    } finally {
-      updatePending = false;
+      quitPending = false;
     }
+  }
+
+  function closeQuit(): void {
+    if (!quitPending) quitDialog?.close();
+  }
+
+  function restoreMenuFocus(): void {
+    if (!quitPending) queueMicrotask(() => menuTrigger?.focus());
   }
 </script>
 
@@ -101,6 +108,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </button>
     {/if}
     <button
+      bind:this={menuTrigger}
       class="menu-trigger"
       type="button"
       popovertarget="configuration-panel"
@@ -176,31 +184,34 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
-      onclick={openUpdateRestart}>Update and restart</button
+      class="quit-relay"
+      onclick={openQuit}>Quit</button
     >
   </div>
 </div>
 
 <dialog
-  bind:this={updateDialog}
-  aria-labelledby="update-restart-title"
-  aria-describedby="update-restart-description"
-  oncancel={(event) => updatePending && event.preventDefault()}
+  bind:this={quitDialog}
+  aria-labelledby="quit-title"
+  aria-describedby="quit-description"
+  aria-busy={quitPending}
+  oncancel={(event) => (quitPending ? event.preventDefault() : restoreMenuFocus())}
+  onclose={restoreMenuFocus}
 >
-  <h2 id="update-restart-title">Update Gestalt?</h2>
-  <p id="update-restart-description">
-    Mobile and every active session will disconnect briefly. Saved sessions remain available after
-    the relay restarts.
+  <h2 id="quit-title">Quit Gestalt Mobile?</h2>
+  <p id="quit-description">
+    This stops Gestalt Mobile and every session process it started, including work that is currently
+    running. Saved sessions remain available the next time Gestalt Mobile starts.
   </p>
   <div class="dialog-actions">
-    <button
-      bind:this={updateCancel}
-      type="button"
-      disabled={updatePending}
-      onclick={() => updateDialog?.close()}>Cancel</button
+    <button bind:this={quitCancel} type="button" disabled={quitPending} onclick={closeQuit}
+      >Cancel</button
     >
-    <button type="button" disabled={updatePending} onclick={() => void confirmUpdateRestart()}
-      >{updatePending ? 'Starting update…' : 'Update and restart'}</button
+    <button
+      class="confirm-quit"
+      type="button"
+      disabled={quitPending}
+      onclick={() => void confirmQuit()}>{quitPending ? 'Quitting…' : 'Quit'}</button
     >
   </div>
 </dialog>
@@ -299,6 +310,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .maintenance-actions button {
     inline-size: 100%;
+  }
+
+  .quit-relay,
+  .confirm-quit {
+    color: var(--theme-error);
   }
 
   dialog {
