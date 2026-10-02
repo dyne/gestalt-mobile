@@ -15,6 +15,7 @@ import {
   orgPlanAttentionReasons,
   orgPlanAttentionResumeConditionByReason,
   orgPlanAttentionResumeConditions,
+  toOrgPlanAttentionAcknowledgement,
   toOrgPlanAttentionToolResponse,
 } from './org-plan-attention.js';
 
@@ -97,5 +98,20 @@ describe('Org Plan attention contract', () => {
       parseOrgPlanAttentionResponse({ action: 'resume', guidance: 'x'.repeat(1001) }),
     ).toBeNull();
     expect(parseOrgPlanAttentionResponse({ action: 'resume', stack: 'no' })).toBeNull();
+  });
+
+  it('returns a bounded persist-first acknowledgement to the tool caller', () => {
+    expect(toOrgPlanAttentionAcknowledgement()).toEqual({
+      success: true,
+      contentItems: [{ type: 'inputText', text: '{"accepted":true}' }],
+    });
+    expect(
+      toOrgPlanAttentionAcknowledgement({ accepted: false, reason: 'persistenceFailed' }),
+    ).toEqual({
+      success: false,
+      contentItems: [
+        { type: 'inputText', text: '{"accepted":false,"reason":"persistenceFailed"}' },
+      ],
+    });
   });
 });

@@ -8,6 +8,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { debuglog } from 'node:util';
 
 import { buildApp } from './app.js';
 import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
@@ -75,8 +76,9 @@ import {
   type OrgPlanCheckpointRecordStatus,
 } from '../shared/contracts/org-plan-checkpoint.js';
 import {
+  hasActiveL1Writer,
   resolveOrgPlanCheckpointSignal,
-  validOrgPlanCheckpoint,
+  validateOrgPlanCheckpoint,
 } from './features/org-plan-checkpoint/application/validate.js';
 import {
   isValidInteractionResponse,
@@ -105,7 +107,10 @@ import {
 import { createRelyingPartyConfig, type RelyingPartyConfig } from './config.js';
 import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.js';
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
-import { parseOrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
+import {
+  parseOrgPlanAttention,
+  toOrgPlanAttentionAcknowledgement,
+} from '../shared/contracts/org-plan-attention.js';
 import {
   autopilotWaitLeaseToolResponse,
   type AutopilotWaitLease,
@@ -117,6 +122,8 @@ import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-
 import { pwaIconUrl, type PwaIcon } from './features/pwa/register-routes.js';
 
 const generatedProtocolVersion = 'codex-cli 0.144.3';
+const checkpointDiagnostic = debuglog('gestalt-mobile:checkpoint');
+const attentionDiagnostic = debuglog('gestalt-mobile:attention');
 
 export type ComposeRelayAppOptions = {
   root: string;
@@ -137,6 +144,7 @@ export type ComposeRelayAppOptions = {
   autopilotSchedule?: (callback: () => void, delayMs: number) => () => void;
   /** Test-only bounded checkpoint response-write deadline. */
   checkpointHandoffDeadlineMs?: number;
+  attentionAcknowledgementDeadlineMs?: number;
   /** Test-only deterministic seam for the runtime activity reconciliation boundary. */
   autopilotReconcile?: (sessionId: string) => Promise<{ compatible: boolean }>;
   /** Test-only activity projection seam for deterministic stale reconciliation. */
@@ -233,6 +241,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     >
   >();
   const checkpointHandoffTimers = new Map<
+    string,
+    { handle: ReturnType<typeof setTimeout>; token: symbol }
+  >();
+  const attentionAcknowledgementTimers = new Map<
     string,
     { handle: ReturnType<typeof setTimeout>; token: symbol }
   >();
@@ -678,6 +690,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       // Quiz answers remain useful after Codex clears the original dynamic-tool
       // request: the client can deliver them as a follow-up prompt instead.
       if (interaction.kind === 'quiz') continue;
+      if (
+        interaction.kind === 'orgPlanAttention' &&
+        interactions.resolutionState(sessionId, interaction.requestId) === 'acknowledged'
+      )
+        continue;
       if (interactions.resolve(sessionId, interaction.requestId, occurredAt, outcome))
         publishInteractionResolved(sessionId, interaction.requestId, occurredAt, outcome);
     }
@@ -766,6 +783,34 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     handle.unref?.();
     checkpointHandoffTimers.set(key, { handle, token });
   };
+  const cancelAttentionAcknowledgementTimer = (sessionId: string, requestId: string) => {
+    const key = checkpointTimerKey(sessionId, requestId);
+    const timer = attentionAcknowledgementTimers.get(key);
+    if (!timer) return;
+    clearTimeout(timer.handle);
+    attentionAcknowledgementTimers.delete(key);
+  };
+  const armAttentionAcknowledgementDeadline = (sessionId: string, requestId: string) => {
+    cancelAttentionAcknowledgementTimer(sessionId, requestId);
+    const key = checkpointTimerKey(sessionId, requestId);
+    const token = Symbol(key);
+    const handle = setTimeout(() => {
+      if (attentionAcknowledgementTimers.get(key)?.token !== token) return;
+      attentionAcknowledgementTimers.delete(key);
+      const ownedRuntime = runtime;
+      const session = sessions.find(sessionId);
+      if (!ownedRuntime || !session || !ownedRuntime.abandonServerRequest(sessionId, requestId))
+        return;
+      void ownedRuntime
+        .recycle(session, new Date().toISOString())
+        .then((recovered) => saveSession(recovered))
+        .catch(() => {
+          // The durable attention survives; normal session recovery can reacquire the writer.
+        });
+    }, options.attentionAcknowledgementDeadlineMs ?? 5_000);
+    handle.unref?.();
+    attentionAcknowledgementTimers.set(key, { handle, token });
+  };
   const failPendingCheckpointHandoffs = (sessionId: string, recoverBoundary: boolean) => {
     for (const interaction of interactions.list(sessionId)) {
       if (interaction.kind !== 'orgPlanCheckpoint') continue;
@@ -785,35 +830,48 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     sessionId: string,
     rawInteraction: PendingInteraction,
     session: RelaySessionSnapshot,
+    acknowledgeAttention = false,
   ): boolean => {
     const interaction = {
       ...rawInteraction,
       turnId: session.activeTurnId,
       requestedAt: new Date().toISOString(),
     };
-    interactions.add(sessionId, interaction);
-    activity.observe({
+    interactions.add(
       sessionId,
-      occurredAt: interaction.requestedAt,
-      kind: 'interactionPending',
-      ...(interaction.kind === 'orgPlanAttention'
-        ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
-        : {}),
-    });
-    autopilot.semanticEvent(sessionId, 'interactionChanged');
-    const updated = RelaySession.rehydrate(session).requestInteraction(
       interaction,
-      new Date().toISOString(),
-    ).snapshot;
-    sessions.save(updated);
-    events.publish(
-      journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
+      acknowledgeAttention && interaction.kind === 'orgPlanAttention' ? 'acknowledged' : 'active',
     );
-    if (interaction.kind === 'orgPlanAttention')
+    try {
+      activity.observe({
+        sessionId,
+        occurredAt: interaction.requestedAt,
+        kind: 'interactionPending',
+        ...(interaction.kind === 'orgPlanAttention'
+          ? { attentionReason: (interaction.payload as OrgPlanAttention).reason }
+          : {}),
+      });
+      autopilot.semanticEvent(sessionId, 'interactionChanged');
+      const updated = RelaySession.rehydrate(session).requestInteraction(
+        interaction,
+        new Date().toISOString(),
+      ).snapshot;
+      sessions.save(updated);
       events.publish(
-        journal.append(sessionId, 'org-plan.attention-required', interaction, updated.updatedAt),
+        journal.append(sessionId, 'interaction.requested', interaction, updated.updatedAt),
       );
-    autopilot.evaluate(sessionId);
+      if (interaction.kind === 'orgPlanAttention')
+        events.publish(
+          journal.append(sessionId, 'org-plan.attention-required', interaction, updated.updatedAt),
+        );
+      autopilot.evaluate(sessionId);
+    } catch (error) {
+      if (!acknowledgeAttention || interaction.kind !== 'orgPlanAttention') throw error;
+      attentionDiagnostic('%o', {
+        requestId: interaction.requestId,
+        reasonCode: 'postPersistenceProjectionFailed',
+      });
+    }
     return true;
   };
   const acceptPlanUpdate = (sessionId: string, update: PlanStatusUpdate): void => {
@@ -859,6 +917,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const interaction = interactions.find(sessionId, resolvedRequestId);
             const outcome = interaction?.kind === 'orgPlanAttention' ? 'failed' : 'dismissed';
             if (
+              !(
+                interaction?.kind === 'orgPlanAttention' &&
+                interactions.resolutionState(sessionId, resolvedRequestId) === 'acknowledged'
+              ) &&
               interaction?.kind !== 'quiz' &&
               interactions.resolve(sessionId, resolvedRequestId, occurredAt, outcome)
             ) {
@@ -934,7 +996,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const identity = supervisedPlans.identity(sessionId);
             const checkpoint =
               retained && identity
-                ? resolveOrgPlanCheckpointSignal(compactCheckpointKind, retained, identity)
+                ? resolveOrgPlanCheckpointSignal(
+                    compactCheckpointKind,
+                    retained,
+                    identity,
+                    supervisedPlans.publicationReason(sessionId),
+                  )
                 : null;
             if (checkpoint)
               rawInteraction = {
@@ -1031,10 +1098,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 runtime?.resolveServerRequest(
                   sessionId,
                   rawInteraction.requestId,
-                  toOrgPlanCheckpointToolResponse('failed'),
+                  checkpointFailureResponse(
+                    !checkpoint
+                      ? compactCheckpointKind === 'l1Accepted'
+                        ? 'acceptedL1NotResolved'
+                        : 'checkpointPayloadInvalid'
+                      : !retained
+                        ? 'planProjectionUnavailable'
+                        : !identity || checkpoint.planIdentity !== identity
+                          ? 'planIdentityMismatch'
+                          : 'rootNotOwner',
+                  ),
                 ) === true
               );
-            const valid = validOrgPlanCheckpoint({
+            const validation = validateOrgPlanCheckpoint({
               checkpoint,
               plan: retained,
               planIdentity: identity,
@@ -1042,12 +1119,22 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               hasActiveL1Writer: (position) =>
                 hasActiveL1Writer(activity.snapshot(sessionId, new Date().toISOString()), position),
             });
-            if (!valid || !session.activeTurnId)
+            if (!validation.valid || !session.activeTurnId)
               return (
                 runtime?.resolveServerRequest(
                   sessionId,
                   rawInteraction.requestId,
-                  toOrgPlanCheckpointToolResponse('failed'),
+                  checkpointFailureResponse(
+                    validation.valid ? 'rootTurnNotActive' : validation.reasonCode,
+                    {
+                      ...(!validation.valid && validation.expected
+                        ? { expected: validation.expected }
+                        : {}),
+                      ...(!validation.valid && validation.observed
+                        ? { observed: validation.observed }
+                        : {}),
+                    },
+                  ),
                 ) === true
               );
             let recordStatus: OrgPlanCheckpointRecordStatus = 'failed';
@@ -1064,7 +1151,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   runtime?.resolveServerRequest(
                     sessionId,
                     rawInteraction.requestId,
-                    toOrgPlanCheckpointToolResponse('failed'),
+                    checkpointFailureResponse('checkpointPersistenceFailed'),
                   ) === true
                 );
               const interaction = {
@@ -1081,7 +1168,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 runtime?.resolveServerRequest(
                   sessionId,
                   rawInteraction.requestId,
-                  toOrgPlanCheckpointToolResponse('failed'),
+                  checkpointFailureResponse('checkpointStateConflict'),
                 ) === true
               );
             if (recordStatus === 'alreadyRecorded')
@@ -1111,6 +1198,33 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             // `true` retains the checkpoint-specific held request. Its timer
             // is cancelled solely by the JSON-RPC write-settlement callback.
             return true;
+          }
+          if (rawInteraction.kind === 'orgPlanAttention') {
+            try {
+              acceptPendingInteraction(sessionId, rawInteraction, session, true);
+              const acknowledged =
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanAttentionAcknowledgement(),
+                ) === true;
+              if (acknowledged)
+                armAttentionAcknowledgementDeadline(sessionId, rawInteraction.requestId);
+              return acknowledged;
+            } catch {
+              const rejected =
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  rawInteraction.requestId,
+                  toOrgPlanAttentionAcknowledgement({
+                    accepted: false,
+                    reason: 'persistenceFailed',
+                  }),
+                ) === true;
+              if (rejected)
+                armAttentionAcknowledgementDeadline(sessionId, rawInteraction.requestId);
+              return rejected;
+            }
           }
           return acceptPendingInteraction(sessionId, rawInteraction, session);
         },
@@ -1168,9 +1282,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   ): boolean => {
     const rawInteraction = toPendingInteraction(request);
     const session = withPendingInteractions(sessions.find(sessionId));
-    return Boolean(
-      rawInteraction && session && acceptPendingInteraction(sessionId, rawInteraction, session),
-    );
+    if (!rawInteraction || !session) return false;
+    if (rawInteraction.kind !== 'orgPlanAttention')
+      return acceptPendingInteraction(sessionId, rawInteraction, session);
+    try {
+      acceptPendingInteraction(sessionId, rawInteraction, session, true);
+      void kimiRuntime?.resolveServerRequest(
+        sessionId,
+        rawInteraction.requestId,
+        toOrgPlanAttentionAcknowledgement(),
+      );
+    } catch {
+      void kimiRuntime?.resolveServerRequest(
+        sessionId,
+        rawInteraction.requestId,
+        toOrgPlanAttentionAcknowledgement({ accepted: false, reason: 'persistenceFailed' }),
+      );
+    }
+    return true;
   };
   kimiRuntime = kimiManager
     ? new KimiSessionRuntime({
@@ -1193,6 +1322,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       })
     : null;
   runtime?.onServerResponseSettled((sessionId, requestId, outcome) => {
+    if (attentionAcknowledgementTimers.has(checkpointTimerKey(sessionId, requestId))) {
+      cancelAttentionAcknowledgementTimer(sessionId, requestId);
+      return;
+    }
     const interaction = interactions.find(sessionId, requestId);
     if (interaction?.kind !== 'orgPlanCheckpoint') return;
     if (outcome !== 'resultWritten') {
@@ -1717,6 +1850,32 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               }
               if (claim === 'stale') return { kind: 'staleOperation' as const };
               if (claim === 'missing') return { kind: 'noActive' as const };
+              const acknowledged =
+                interactions.resolutionState(sessionId, requestId) === 'acknowledged';
+              if (acknowledged) {
+                if (!interactions.beginDelivery(sessionId, requestId, operationKey))
+                  return { kind: 'staleOperation' as const };
+                const resolvedAt = new Date().toISOString();
+                if (
+                  !interactions.settleOperation(
+                    sessionId,
+                    requestId,
+                    operationKey,
+                    resolvedAt,
+                    'answered',
+                  )
+                )
+                  return { kind: 'staleOperation' as const };
+                const accepted = { kind: 'accepted' as const, resolvedAt };
+                idempotency.put(
+                  scope,
+                  operationKey,
+                  202,
+                  JSON.stringify({ kind: 'replayed', resolvedAt }),
+                );
+                publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
+                return accepted;
+              }
               // A durable capability belongs to the session/thread, not the
               // relay process.  A supported stopped writer is retryable;
               // missing capability identifies a pre-rollout legacy thread.
@@ -1858,6 +2017,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           checkpointHandoffTimers.delete(key);
         }
       }
+      for (const key of [...attentionAcknowledgementTimers.keys()]) {
+        if (key.startsWith(`${session.id}:`)) {
+          const timer = attentionAcknowledgementTimers.get(key);
+          if (timer) clearTimeout(timer.handle);
+          attentionAcknowledgementTimers.delete(key);
+        }
+      }
       // Relay shutdown only releases this process's writer.  A typed attention
       // request remains a durable human-visible blocker for the next relay
       // instance; only an app-server-cleared request is a failed audit outcome.
@@ -1888,13 +2054,14 @@ function resolveStateDatabasePath(root: string, stateHome: string): string {
   return existsSync(legacyPath) ? legacyPath : currentPath;
 }
 
-function hasActiveL1Writer(
-  snapshot: Readonly<{ subagents: readonly { canonicalPosition?: string; state: string }[] }>,
-  position: string,
-): boolean {
-  return snapshot.subagents.some(
-    (child) =>
-      child.canonicalPosition === position &&
-      ['working', 'awaitingAgent', 'awaitingHuman'].includes(child.state),
-  );
+function checkpointFailureResponse(
+  reasonCode: string,
+  details: Readonly<{
+    expected?: Readonly<Record<string, string | boolean | null>>;
+    observed?: Readonly<Record<string, string | boolean | null>>;
+  }> = {},
+) {
+  const correlationId = randomUUID();
+  checkpointDiagnostic('%o', { correlationId, reasonCode, ...details });
+  return toOrgPlanCheckpointToolResponse('failed', { reasonCode, correlationId, ...details });
 }

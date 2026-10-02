@@ -121,6 +121,23 @@ describe('agent activity projector', () => {
     );
     expect(completed.subagents).toMatchObject([{ id: 'c', model: 'gpt-5.6-luna' }]);
   });
+  it('treats an executor interrupted after completion as terminal and retained', () => {
+    const working = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('collaboration', {
+        childId: 'c',
+        childTaskPath: '/root/l1',
+        childStatus: 'working',
+      }),
+    );
+    const interrupted = projectAgentActivity(
+      working,
+      fact('collaboration', { childId: 'c', childStatus: 'interrupted' }),
+    );
+    expect(interrupted.subagents).toMatchObject([
+      { id: 'c', canonicalPosition: 'L1', state: 'idle', outcome: 'cancelled' },
+    ]);
+  });
   it('adds a model when reconciliation discovered the child before spawn metadata', () => {
     const discovered = projectAgentActivity(
       createAgentActivitySnapshot('s', at),

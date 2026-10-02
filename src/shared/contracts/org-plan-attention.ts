@@ -47,6 +47,9 @@ export type OrgPlanAttentionResponse = Readonly<{
   guidance?: string;
 }>;
 
+export type OrgPlanAttentionAcknowledgement =
+  Readonly<{ accepted: true }> | Readonly<{ accepted: false; reason: 'persistenceFailed' }>;
+
 export const gestaltOrgPlanAttentionDynamicTool = {
   type: 'function',
   name: GESTALT_ORG_PLAN_ATTENTION_TOOL_NAME,
@@ -116,7 +119,7 @@ export function parseOrgPlanAttentionResponse(value: unknown): OrgPlanAttentionR
   };
 }
 
-/** The only result accepted by the held app-server dynamic-tool request. */
+/** Legacy human resolution payload used only for pre-acknowledgement held requests. */
 export function toOrgPlanAttentionToolResponse(response: OrgPlanAttentionResponse): {
   contentItems: Array<{ type: 'inputText'; text: string }>;
   success: true;
@@ -124,6 +127,19 @@ export function toOrgPlanAttentionToolResponse(response: OrgPlanAttentionRespons
   return {
     success: true,
     contentItems: [{ type: 'inputText', text: JSON.stringify(response) }],
+  };
+}
+
+/** Immediate persist-first acknowledgement returned to the dynamic-tool caller. */
+export function toOrgPlanAttentionAcknowledgement(
+  acknowledgement: OrgPlanAttentionAcknowledgement = { accepted: true },
+): {
+  contentItems: Array<{ type: 'inputText'; text: string }>;
+  success: boolean;
+} {
+  return {
+    success: acknowledgement.accepted,
+    contentItems: [{ type: 'inputText', text: JSON.stringify(acknowledgement) }],
   };
 }
 

@@ -13,6 +13,13 @@ export type OrgPlanCheckpointCommit =
 
 export type OrgPlanCheckpointRecordStatus = 'recorded' | 'alreadyRecorded' | 'failed';
 
+export type OrgPlanCheckpointFailure = Readonly<{
+  reasonCode: string;
+  expected?: Readonly<Record<string, string | boolean | null>>;
+  observed?: Readonly<Record<string, string | boolean | null>>;
+  correlationId?: string;
+}>;
+
 export type OrgPlanCheckpoint =
   | Readonly<{
       version: 1;
@@ -235,7 +242,10 @@ export function parseOrgPlanCheckpoint(value: unknown): OrgPlanCheckpoint | null
 }
 
 /** Acknowledgement deliberately contains no plan path, findings, or model text. */
-export function toOrgPlanCheckpointToolResponse(status: OrgPlanCheckpointRecordStatus): {
+export function toOrgPlanCheckpointToolResponse(
+  status: OrgPlanCheckpointRecordStatus,
+  failure?: OrgPlanCheckpointFailure,
+): {
   contentItems: Array<{ type: 'inputText'; text: string }>;
   success: boolean;
 } {
@@ -256,7 +266,11 @@ export function toOrgPlanCheckpointToolResponse(status: OrgPlanCheckpointRecordS
           }
         : {
             status,
+            reasonCode: failure?.reasonCode ?? 'checkpointPersistenceFailed',
             durable: false,
+            ...(failure?.expected ? { expected: failure.expected } : {}),
+            ...(failure?.observed ? { observed: failure.observed } : {}),
+            ...(failure?.correlationId ? { correlationId: failure.correlationId } : {}),
             next: 'reconcileCheckpointState',
             allowBoundaryFinal: false,
           };

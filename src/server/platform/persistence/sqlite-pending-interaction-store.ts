@@ -23,15 +23,19 @@ function safeInteractionOutcome(value: unknown): SafeInteractionOutcome {
 
 export class SqlitePendingInteractionStore {
   constructor(private readonly db: DatabaseSync) {}
-  add(sessionId: string, interaction: PendingInteraction): void {
+  add(
+    sessionId: string,
+    interaction: PendingInteraction,
+    initialResolutionState: 'active' | 'acknowledged' = 'active',
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at)
-         VALUES (?,?,?,?,?,?)
+        `INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at,resolution_state)
+         VALUES (?,?,?,?,?,?,?)
          ON CONFLICT(session_id,request_id) DO UPDATE SET
            kind = excluded.kind, payload_json = excluded.payload_json, turn_id = excluded.turn_id,
            requested_at = excluded.requested_at, resolved_at = NULL, outcome = NULL, operation_key = NULL,
-           resolution_state = 'active'
+           resolution_state = excluded.resolution_state
          WHERE pending_interactions.kind != 'orgPlanAttention'`,
       )
       .run(
@@ -41,7 +45,16 @@ export class SqlitePendingInteractionStore {
         JSON.stringify(interaction.payload),
         interaction.turnId ?? null,
         interaction.requestedAt ?? null,
+        initialResolutionState,
       );
+  }
+  resolutionState(sessionId: string, requestId: string): string | null {
+    const row = this.db
+      .prepare(
+        'SELECT resolution_state FROM pending_interactions WHERE session_id = ? AND request_id = ? AND resolved_at IS NULL',
+      )
+      .get(sessionId, requestId) as { resolution_state: string } | undefined;
+    return row?.resolution_state ?? null;
   }
   resolve(
     sessionId: string,
@@ -88,7 +101,7 @@ export class SqlitePendingInteractionStore {
     return (
       this.db
         .prepare(
-          "UPDATE pending_interactions SET resolution_state = 'delivering' WHERE session_id = ? AND request_id = ? AND operation_key = ? AND resolved_at IS NULL AND resolution_state IN ('active','delivering')",
+          "UPDATE pending_interactions SET resolution_state = 'delivering' WHERE session_id = ? AND request_id = ? AND operation_key = ? AND resolved_at IS NULL AND resolution_state IN ('active','acknowledged','delivering')",
         )
         .run(sessionId, requestId, operationKey).changes === 1
     );

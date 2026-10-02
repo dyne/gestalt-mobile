@@ -14,8 +14,12 @@ export const planSignalReasons = [
   'resync',
 ] as const;
 
-export type PlanSignalReason = (typeof planSignalReasons)[number];
+export type PlanSignalReason = (typeof planSignalReasons)[number] | `review:${string}:REVIEWED`;
 
 export function isPlanSignalReason(value: unknown): value is PlanSignalReason {
-  return typeof value === 'string' && (planSignalReasons as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' &&
+    ((planSignalReasons as readonly string[]).includes(value) ||
+      /^review:[A-Za-z0-9._-]{1,128}:REVIEWED$/.test(value))
+  );
 }
