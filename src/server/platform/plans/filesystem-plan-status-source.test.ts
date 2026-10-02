@@ -108,7 +108,7 @@ describe('FilesystemPlanStatusSource', () => {
     lease.close();
   });
 
-  it.each(['supervision-start', 'resync'])(
+  it.each(['supervision-start', 'resync', 'review:l1:REVIEWED'])(
     'retains the %s helper signal reason',
     async (reason) => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-plan-status-'));

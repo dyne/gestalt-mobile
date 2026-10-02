@@ -92,7 +92,25 @@ describe('Org Plan checkpoint contract', () => {
     });
     expect(toOrgPlanCheckpointToolResponse('failed')).toMatchObject({
       success: false,
-      contentItems: [{ type: 'inputText', text: expect.stringContaining('"status":"failed"') }],
+      contentItems: [
+        {
+          type: 'inputText',
+          text: expect.stringContaining('"reasonCode":"checkpointPersistenceFailed"'),
+        },
+      ],
+    });
+    expect(
+      toOrgPlanCheckpointToolResponse('failed', {
+        reasonCode: 'executorStillActive',
+        expected: { executorTerminal: true },
+        observed: { executorTerminal: false },
+        correlationId: 'bounded-correlation',
+      }),
+    ).toMatchObject({
+      success: false,
+      contentItems: [
+        { type: 'inputText', text: expect.stringContaining('"reasonCode":"executorStillActive"') },
+      ],
     });
   });
 });

@@ -9,11 +9,18 @@ import type { SupervisedPlan } from '../domain/supervised-plan.js';
 
 /** Retains at most one validated plan projection for each relay session. */
 export class SupervisedPlanRegistry {
-  private readonly plans = new Map<string, Readonly<{ plan: SupervisedPlan; identity: string }>>();
+  private readonly plans = new Map<
+    string,
+    Readonly<{ plan: SupervisedPlan; identity: string; publicationReason: string | null }>
+  >();
 
   accept(sessionId: string, update: PlanStatusUpdate): void {
     if (update.kind === 'updated')
-      this.plans.set(sessionId, { plan: update.plan, identity: update.identity });
+      this.plans.set(sessionId, {
+        plan: update.plan,
+        identity: update.identity,
+        publicationReason: update.reason,
+      });
   }
 
   find(sessionId: string): SupervisedPlan | null {
@@ -22,6 +29,10 @@ export class SupervisedPlanRegistry {
 
   identity(sessionId: string): string | null {
     return this.plans.get(sessionId)?.identity ?? null;
+  }
+
+  publicationReason(sessionId: string): string | null {
+    return this.plans.get(sessionId)?.publicationReason ?? null;
   }
 
   clear(sessionId: string): void {

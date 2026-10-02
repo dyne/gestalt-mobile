@@ -29,7 +29,10 @@ import {
   planStatusDirectoryPath,
   planStatusFilePath,
 } from './platform/plans/filesystem-plan-status-source.js';
-import { toOrgPlanAttentionToolResponse } from '../shared/contracts/org-plan-attention.js';
+import {
+  toOrgPlanAttentionAcknowledgement,
+  toOrgPlanAttentionToolResponse,
+} from '../shared/contracts/org-plan-attention.js';
 import { toOrgPlanCheckpointToolResponse } from '../shared/contracts/org-plan-checkpoint.js';
 import {
   applyProjectionEvent,
@@ -177,6 +180,26 @@ const completedAutopilotPlanText = () =>
   autopilotPlanText('DONE')
     .replace('* WIP [#A] Parent', '* DONE [#A] Parent')
     .replace(':REVIEW_STATUS: UNREVIEWED', ':REVIEW_STATUS: REVIEWED');
+
+const acceptedL1WithNextTodoPlanText = () => `${completedAutopilotPlanText()}
+* TODO [#B] Next parent
+:PROPERTIES:
+:ID: next-parent
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Continue on the next root turn.
+- Notes :: Must remain pending at the accepted-L1 boundary.
+** TODO [#B] Next child
+:PROPERTIES:
+:ID: next-child
+:END:
+- Why :: Verify boundary separation.
+- Change :: Start only after durable handoff.
+- Tests :: Exercise the next continuation.
+- Done when :: The next L1 starts exactly once.
+`;
 
 async function installAutopilotPlan(
   app: Awaited<ReturnType<typeof composeAuthorizedApp>>,
@@ -1228,6 +1251,112 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
+    it('records and idempotently replays accepted L1 after REVIEWED advances to the next TODO L1', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const initial = timers.find((timer) => !timer.cancelled && !timer.fired)!;
+      initial.fired = true;
+      initial.callback();
+      await vi.waitFor(() =>
+        expect(
+          fixture.handles.flatMap((candidate) =>
+            candidate.requests.filter((request) => request.method === 'turn/start'),
+          ),
+        ).toHaveLength(1),
+      );
+      const handle = fixture.handles.find((candidate) => candidate.request)!;
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const threadId = session.threadId as string;
+      const turnId = session.activeTurnId as string;
+      await writeFile(
+        join(fixture.workspacePath, 'autopilot.org'),
+        acceptedL1WithNextTodoPlanText(),
+      );
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
+              .currentStepId,
+        )
+        .toBe('next-parent');
+      handle.deferResponseSettlement = true;
+      const checkpointCall = (id: number) => ({
+        id,
+        method: 'item/tool/call',
+        params: {
+          threadId,
+          turnId,
+          tool: 'gestalt_org_plan_checkpoint',
+          arguments: { kind: 'l1Accepted' },
+        },
+      });
+      const startsBefore = fixture.handles
+        .flatMap((candidate) => candidate.requests)
+        .filter((request) => request.method === 'turn/start').length;
+      const first = handle.request!(checkpointCall(813));
+      await vi.waitFor(() => expect(handle.pendingResponses.has(813)).toBe(true));
+      handle.responseSettled!({ id: 813, outcome: 'resultWritten' });
+      await expect(first).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+      const replay = handle.request!(checkpointCall(814));
+      await vi.waitFor(() => expect(handle.pendingResponses.has(814)).toBe(true));
+      handle.responseSettled!({ id: 814, outcome: 'resultWritten' });
+      await expect(replay).resolves.toEqual(toOrgPlanCheckpointToolResponse('alreadyRecorded'));
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const acceptedEvents = database
+        .prepare(
+          "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'org-plan.milestone-checkpointed'",
+        )
+        .get(fixture.sessionId) as { count: number };
+      const pendingInteractions = database
+        .prepare(
+          'SELECT count(*) AS count FROM pending_interactions WHERE session_id = ? AND resolved_at IS NULL',
+        )
+        .get(fixture.sessionId) as { count: number };
+      database.close();
+      expect(acceptedEvents.count).toBe(1);
+      expect(pendingInteractions.count).toBe(0);
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start'),
+      ).toHaveLength(startsBefore);
+      handle.notify!({ method: 'turn/completed', params: { threadId, turn: { id: turnId } } });
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+        )
+        .toBeNull();
+      const startedTurns = () =>
+        fixture.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((request) => request.method === 'turn/start').length;
+      for (let attempts = 0; attempts < 3 && startedTurns() === startsBefore; attempts += 1) {
+        await vi.waitFor(() =>
+          expect(timers.find((timer) => !timer.cancelled && !timer.fired)).toBeDefined(),
+        );
+        const continuation = timers.find((timer) => !timer.cancelled && !timer.fired)!;
+        continuation.fired = true;
+        continuation.callback();
+        await vi.waitFor(() =>
+          expect(
+            startedTurns() > startsBefore ||
+              timers.some((timer) => !timer.cancelled && !timer.fired),
+          ).toBe(true),
+        );
+      }
+      await vi.waitFor(() => expect(startedTurns()).toBe(startsBefore + 1));
+      await fixture.app.close();
+    });
+
     it('returns a typed failed checkpoint result when persistence never occurs', async () => {
       let coordinator:
         import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
@@ -1256,7 +1385,16 @@ describe('production composition', () => {
       );
       await vi.waitFor(() => expect(handle.pendingResponses.has(995)).toBe(true));
       handle.responseSettled!({ id: 995, outcome: 'resultWritten' });
-      await expect(response).resolves.toEqual(toOrgPlanCheckpointToolResponse('failed'));
+      const failure = (await response) as {
+        success: boolean;
+        contentItems: Array<{ text: string }>;
+      };
+      expect(failure.success).toBe(false);
+      expect(JSON.parse(failure.contentItems[0]!.text)).toMatchObject({
+        status: 'failed',
+        reasonCode: 'checkpointPersistenceFailed',
+        correlationId: expect.any(String),
+      });
       expect(coordinator!.checkpointAccepted).not.toBe(original);
       expect(fixture.handles).toHaveLength(writersBefore);
       expect(
@@ -1690,9 +1828,15 @@ describe('production composition', () => {
       const planIdentity = createHash('sha256')
         .update(join(fixture.workspacePath, 'autopilot.org'))
         .digest('hex');
-      await expect(
-        handle.request!(l2CheckpointCall(812, threadId, active.active_turn_id, planIdentity)),
-      ).resolves.toEqual(toOrgPlanCheckpointToolResponse('failed'));
+      const rejected = (await handle.request!(
+        l2CheckpointCall(812, threadId, active.active_turn_id, planIdentity),
+      )) as { success: boolean; contentItems: Array<{ text: string }> };
+      expect(rejected.success).toBe(false);
+      expect(JSON.parse(rejected.contentItems[0]!.text)).toMatchObject({
+        status: 'failed',
+        reasonCode: 'rootNotOwner',
+        correlationId: expect.any(String),
+      });
       expect(timers).toHaveLength(timersAfterFinal);
       expect(
         fixture.handles
@@ -1715,6 +1859,7 @@ describe('production composition', () => {
         ).statusCode,
       ).toBe(200);
       const attention = handle.request!(attentionCall(810));
+      await expect(attention).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(async () =>
         expect(
           (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
@@ -1732,9 +1877,6 @@ describe('production composition', () => {
           })
         ).statusCode,
       ).toBe(202);
-      await expect(attention).resolves.toEqual(
-        toOrgPlanAttentionToolResponse({ action: 'resume' }),
-      );
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
         {
@@ -2523,6 +2665,62 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('attention', () => {
+    it('bounds a wedged attention acknowledgement writer without losing durable attention', async () => {
+      const fixture = await createProductionAutopilotFixture({
+        attentionAcknowledgementDeadlineMs: 100,
+      });
+      const handle = fixture.handles.find((candidate) => candidate.request)!;
+      handle.deferResponseSettlement = true;
+      const response = handle.request!(attentionCall(699));
+      const rejected = expect(response).rejects.toThrow('CODEX_SERVER_REQUEST_CANCELLED');
+      await vi.waitFor(() => expect(handle.pendingResponses.has(699)).toBe(true));
+      await rejected;
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/attention`)).json(),
+      ).toMatchObject({ requestId: '699', attention: { reason: 'hardBlock' } });
+      await fixture.app.close();
+    });
+
+    it('returns a bounded failure when durable attention persistence fails', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      await createComposedSession(app);
+      const handle = await vi.waitFor(() => {
+        const candidate = handles.find((item) => item.request);
+        expect(candidate).toBeDefined();
+        return candidate!;
+      });
+      const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+      database.exec(`CREATE TRIGGER reject_attention_insert
+        BEFORE INSERT ON pending_interactions
+        WHEN NEW.kind = 'orgPlanAttention'
+        BEGIN SELECT RAISE(ABORT, 'injected attention persistence failure'); END`);
+      database.close();
+      await expect(handle.request!(attentionCall(700))).resolves.toEqual(
+        toOrgPlanAttentionAcknowledgement({ accepted: false, reason: 'persistenceFailed' }),
+      );
+      await app.close();
+    });
+
     it('publishes isolated typed required, resolved, and failed attention transitions through the feature-only seam', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -2570,6 +2768,7 @@ describe('production composition', () => {
       const unsubscribeA = transitions!.subscribe(sessionA, (event) => receivedA.push(event));
       const unsubscribeB = transitions!.subscribe(sessionB, (event) => receivedB.push(event));
       const resolving = handleA.request!(attentionCall(701));
+      await expect(resolving).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(() =>
         expect(receivedA).toEqual([
           expect.objectContaining({ kind: 'required', requestId: '701' }),
@@ -2585,9 +2784,6 @@ describe('production composition', () => {
           })
         ).statusCode,
       ).toBe(202);
-      await expect(resolving).resolves.toEqual(
-        toOrgPlanAttentionToolResponse({ action: 'resume' }),
-      );
       await vi.waitFor(() =>
         expect(receivedA).toEqual([
           expect.objectContaining({ kind: 'required', requestId: '701' }),
@@ -2595,6 +2791,7 @@ describe('production composition', () => {
         ]),
       );
       const failing = handleB.request!(attentionCall(702, 'permissionRequired'));
+      await expect(failing).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(() =>
         expect(receivedB).toEqual([
           expect.objectContaining({ kind: 'required', requestId: '702' }),
@@ -2604,15 +2801,10 @@ describe('production composition', () => {
         method: 'serverRequest/resolved',
         params: { threadId: 'thread-ignored', requestId: 702 },
       });
-      await expect(failing).rejects.toMatchObject({ message: 'CODEX_SERVER_REQUEST_CLEARED' });
-      await vi.waitFor(() =>
-        expect(receivedB).toEqual([
-          expect.objectContaining({ kind: 'required', requestId: '702' }),
-          expect.objectContaining({ kind: 'failed', requestId: '702' }),
-        ]),
-      );
+      expect(receivedB).toEqual([expect.objectContaining({ kind: 'required', requestId: '702' })]);
       unsubscribeA();
       const afterUnsubscribe = handleA.request!(attentionCall(703));
+      await expect(afterUnsubscribe).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(async () =>
         expect((await app.inject(`/api/sessions/${sessionA}/attention`)).json()).toMatchObject({
           requestId: '703',
@@ -2622,9 +2814,6 @@ describe('production composition', () => {
       handleA.notify!({
         method: 'serverRequest/resolved',
         params: { threadId: 'thread-ignored', requestId: 703 },
-      });
-      await expect(afterUnsubscribe).rejects.toMatchObject({
-        message: 'CODEX_SERVER_REQUEST_CLEARED',
       });
       expect(receivedA).toHaveLength(2);
       unsubscribeB();
@@ -2660,6 +2849,7 @@ describe('production composition', () => {
       const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
 
       const attentionFirst = handle.request!(attentionCall(711, 'permissionRequired'));
+      await expect(attentionFirst).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       const inputFirst = handle.request!({
         id: 712,
         method: 'item/tool/requestUserInput',
@@ -2690,9 +2880,6 @@ describe('production composition', () => {
         url: `/api/sessions/${sessionId}/attention/711/resolve`,
         payload: { operationKey: 'attention-first', action: 'resume' },
       });
-      await expect(attentionFirst).resolves.toEqual(
-        toOrgPlanAttentionToolResponse({ action: 'resume' }),
-      );
       await vi.waitFor(async () =>
         expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
           agentActivity: { root: { state: 'working' } },
@@ -2700,6 +2887,7 @@ describe('production composition', () => {
       );
 
       const attentionSecond = handle.request!(attentionCall(713));
+      await expect(attentionSecond).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       const inputSecond = handle.request!({
         id: 714,
         method: 'item/tool/requestUserInput',
@@ -2710,9 +2898,6 @@ describe('production composition', () => {
         url: `/api/sessions/${sessionId}/attention/713/resolve`,
         payload: { operationKey: 'attention-second', action: 'resume' },
       });
-      await expect(attentionSecond).resolves.toEqual(
-        toOrgPlanAttentionToolResponse({ action: 'resume' }),
-      );
       await vi.waitFor(async () =>
         expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
           agentActivity: { root: { state: 'awaitingHuman', reason: 'pendingInteraction' } },
@@ -2758,10 +2943,8 @@ describe('production composition', () => {
       const handle = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
       const active = handle.request!(attentionCall(801));
       const terminal = handle.request!(attentionCall(802));
-      const terminalResponse = toOrgPlanAttentionToolResponse({
-        action: 'resume',
-        guidance: 'Sensitive terminal guidance.',
-      });
+      await expect(active).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
+      await expect(terminal).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       const accepted = await first.inject({
         method: 'POST',
         url: `/api/sessions/${sessionId}/attention/802/resolve`,
@@ -2772,9 +2955,7 @@ describe('production composition', () => {
         },
       });
       const resolvedAt = accepted.json().resolvedAt as string;
-      await expect(terminal).resolves.toEqual(terminalResponse);
       await first.close();
-      await expect(active).rejects.toMatchObject({ message: 'CODEX_SERVER_REQUEST_CANCELLED' });
 
       const reopened = await composeAuthorizedApp({
         root,
@@ -2827,7 +3008,7 @@ describe('production composition', () => {
       await reopened.close();
     });
 
-    it('reports supported offline writers separately from legacy sessions without the attention capability', async () => {
+    it('resolves acknowledged attention offline while retaining legacy writer diagnostics', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
       ownTemporaryPaths(root, dataDir);
@@ -2854,21 +3035,22 @@ describe('production composition', () => {
       const started = handles.filter((handle) => handle.calls.includes('thread/start'));
       const supportedRequest = started[0]!.request!(attentionCall(901));
       const legacyRequest = started[1]!.request!(attentionCall(902));
+      await expect(supportedRequest).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
+      await expect(legacyRequest).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(async () =>
         expect((await first.inject(`/api/sessions/${legacySession}/attention`)).statusCode).toBe(
           200,
         ),
       );
       await first.close();
-      await expect(supportedRequest).rejects.toMatchObject({
-        message: 'CODEX_SERVER_REQUEST_CANCELLED',
-      });
-      await expect(legacyRequest).rejects.toMatchObject({
-        message: 'CODEX_SERVER_REQUEST_CANCELLED',
-      });
       const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
       database
         .prepare('UPDATE relay_sessions SET attention_tool_capability = NULL WHERE id = ?')
+        .run(legacySession);
+      database
+        .prepare(
+          "UPDATE pending_interactions SET resolution_state = 'active' WHERE session_id = ? AND request_id = '902'",
+        )
         .run(legacySession);
       database.close();
       const offline = await composeAuthorizedApp({
@@ -2885,8 +3067,8 @@ describe('production composition', () => {
             url: `/api/sessions/${supportedSession}/attention/901/resolve`,
             payload: { operationKey: 'offline-supported', action: 'resume' },
           })
-        ).json(),
-      ).toEqual({ code: 'ATTENTION_WRITER_UNAVAILABLE' });
+        ).statusCode,
+      ).toBe(202);
       expect(
         (
           await offline.inject({
@@ -4491,6 +4673,7 @@ describe('production composition', () => {
           },
         },
       });
+      await expect(attention).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(async () => {
         expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
           pendingInteractions: [
@@ -4548,7 +4731,6 @@ describe('production composition', () => {
           },
         }),
       ).toMatchObject({ statusCode: 202 });
-      expect(await attention).toEqual(attentionResponse);
       expect(
         (
           await app.inject({
@@ -4594,8 +4776,8 @@ describe('production composition', () => {
       expect(JSON.stringify(attentionHistory)).not.toContain(
         'The release permission is now granted.',
       );
-      // A server-cleared attention request is a durable failed audit and must
-      // re-project the root rather than leaving the GUI awaiting a vanished alert.
+      // Clearing the already-acknowledged dynamic request must not erase the
+      // durable attention record or wedge the caller.
       const clearedAttention = handle!.request!({
         id: 9,
         method: 'item/tool/call',
@@ -4609,6 +4791,7 @@ describe('production composition', () => {
           },
         },
       });
+      await expect(clearedAttention).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
       await vi.waitFor(async () =>
         expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
           agentActivity: { root: { state: 'awaitingHuman' } },
@@ -4618,17 +4801,14 @@ describe('production composition', () => {
         method: 'serverRequest/resolved',
         params: { threadId: 'thread-1', requestId: 9 },
       });
-      await expect(clearedAttention).rejects.toMatchObject({
-        message: 'CODEX_SERVER_REQUEST_CLEARED',
-      });
       await vi.waitFor(async () =>
         expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
-          agentActivity: { root: { state: 'working' } },
+          agentActivity: { root: { state: 'awaitingHuman' } },
         }),
       );
       expect((await app.inject(`/api/sessions/${sessionId}/history`)).json().interactions).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ requestId: '9', kind: 'orgPlanAttention', outcome: 'failed' }),
+          expect.objectContaining({ requestId: '9', kind: 'orgPlanAttention', resolvedAt: null }),
         ]),
       );
 

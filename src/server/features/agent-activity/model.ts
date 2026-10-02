@@ -345,7 +345,13 @@ function childState(
 ): AgentActivityState {
   if (status === 'error' || status === 'failed' || status === 'systemError' || status === 'errored')
     return 'blocked';
-  if (status === 'completed' || status === 'idle' || action === 'close_agent') return 'idle';
+  if (
+    status === 'completed' ||
+    status === 'idle' ||
+    status === 'interrupted' ||
+    action === 'close_agent'
+  )
+    return 'idle';
   // `wait` belongs to the caller/root; it does not rewrite the child which may
   // still be working.  A child can explicitly report its own waiting status.
   if (
@@ -375,7 +381,12 @@ function childReason(status?: string, action?: string): AgentActivityReason {
   )
     return 'processExited';
   if (action === 'wait') return 'collaborationWait';
-  if (status === 'completed' || status === 'idle' || action === 'close_agent')
+  if (
+    status === 'completed' ||
+    status === 'idle' ||
+    status === 'interrupted' ||
+    action === 'close_agent'
+  )
     return 'turnCompleted';
   return 'turnActive';
 }
