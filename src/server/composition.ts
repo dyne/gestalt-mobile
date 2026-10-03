@@ -1001,6 +1001,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           // Complete the durable turn first so its status cannot retain the just-finished
           // activeTurnId while the completion fact makes the root appear idle.
           for (const activityFact of activityFacts) activity.observe(activityFact);
+          // Re-evaluate once both halves of the safe continuation boundary are
+          // observable. turnCompleted() releases the durable checkpoint before
+          // these facts project the idle root; its first evaluation can therefore
+          // still see the pre-completion activity snapshot. This second evaluation
+          // is idempotently fenced by the durable control row.
+          if (completedSession) autopilot.evaluate(sessionId);
           // Lifecycle notifications are fast transition evidence, while
           // thread/list is the bounded topology authority. Reconcile after the
           // mutation so canonical identity and every retained child reach both
