@@ -200,20 +200,12 @@ test('uses the original snapshot only when a detached session sends after profil
     { name: 'Alpha', description: 'Alpha skill', path: '/skills/alpha/SKILL.md', enabled: false },
     { name: 'Beta', description: 'Beta skill', path: '/skills/beta/SKILL.md', enabled: true },
   ];
-  const launches: Array<{
-    profile: string;
-    cwd: string;
-    skillsConfig?: readonly { path: string; enabled: boolean }[];
-  }> = [];
-  const launchAppServer = (input: {
-    profile: string;
-    cwd: string;
-    skillsConfig?: readonly { path: string; enabled: boolean }[];
-  }) => {
-    launches.push(input);
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const launchAppServer = () => {
     return {
       rpc: {
         request: async (method: string, params: unknown) => {
+          requests.push({ method, params });
           if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
           if (method === 'skills/list')
             return {
@@ -286,7 +278,7 @@ test('uses the original snapshot only when a detached session sends after profil
       enabled: true,
     },
   ];
-  launches.splice(0);
+  requests.splice(0);
   const second = await composeRelayApp({
     root,
     dataDir,
@@ -297,8 +289,7 @@ test('uses the original snapshot only when a detached session sends after profil
     startAppServers: true,
     launchAppServer,
   });
-  await second.listen({ host: '127.0.0.1', port: 0 });
-  expect(launches.find((launch) => launch.skillsConfig)).toBeUndefined();
+  expect(requests.find((request) => request.method === 'thread/resume')).toBeUndefined();
   const started = await second.inject({
     method: 'POST',
     url: `/api/sessions/${created.json().id}/turns`,
@@ -306,7 +297,13 @@ test('uses the original snapshot only when a detached session sends after profil
   });
   expect(started.statusCode).toBe(202);
   await expect
-    .poll(() => launches.find((launch) => launch.skillsConfig)?.skillsConfig)
+    .poll(
+      () =>
+        (
+          requests.find((request) => request.method === 'thread/resume')?.params as
+            { config?: { skills?: { config?: unknown } } } | undefined
+        )?.config?.skills?.config,
+    )
     .toEqual([
       { path: '/skills/alpha/SKILL.md', enabled: true },
       { path: '/skills/beta/SKILL.md', enabled: false },
