@@ -1340,6 +1340,18 @@ describe('production composition', () => {
             (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
         )
         .toBeNull();
+      await expect
+        .poll(() => {
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          const scheduled = database
+            .prepare(
+              "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.continuation-scheduled'",
+            )
+            .get(fixture.sessionId) as { count: number };
+          database.close();
+          return scheduled.count;
+        })
+        .toBeGreaterThan(0);
       const startedTurns = () =>
         fixture.handles
           .flatMap((candidate) => candidate.requests)
@@ -2073,8 +2085,13 @@ describe('production composition', () => {
       await vi.waitFor(() =>
         expect(timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(1),
       );
-      await runNextTimer();
-      await runNextTimer();
+      for (let attempts = 0; attempts < 3; attempts += 1) {
+        const pending = timers.find((timer) => !timer.cancelled && !timer.fired);
+        if (!pending) break;
+        pending.fired = true;
+        pending.callback();
+        await Promise.resolve();
+      }
       await vi.waitFor(
         () =>
           expect(
