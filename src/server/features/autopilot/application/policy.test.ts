@@ -128,7 +128,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v12');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v13');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -153,6 +153,15 @@ describe('autopilot policy', () => {
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'all later milestone activity belongs to a new root turn',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'An accepted L1 always ends the root turn with a chat answer',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'never continue into the next L1 or emit post-acceptance documentation as commentary',
+    );
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'launch exactly one fresh canonical executor for the next L1',
     );
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gh pr checks --watch');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('one episode');
