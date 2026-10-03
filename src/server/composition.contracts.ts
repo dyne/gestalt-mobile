@@ -14,7 +14,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
-import { AUTOPILOT_CONTINUATION_PROMPT } from './features/autopilot/application/policy.js';
+import { autopilotExecutorLaunchPrompt } from './features/autopilot/application/policy.js';
 import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import {
@@ -597,7 +597,12 @@ describe('production composition', () => {
         input: [
           {
             type: 'text',
-            text: `${AUTOPILOT_CONTINUATION_PROMPT} Launch task_name l1 for canonical L1; retain the canonical label in status and review output.`,
+            text: autopilotExecutorLaunchPrompt({
+              canonicalTaskName: 'l1',
+              canonicalPosition: 'L1',
+              generation: 1,
+              taskName: 'l1',
+            }),
             text_elements: [],
           },
         ],
@@ -1846,7 +1851,7 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
-    it('production attention request requires explicit re-enable and a complete plan transitions to completed', async () => {
+    it('production attention approval resumes Autopilot and a complete plan transitions to completed', async () => {
       const fixture = await createProductionAutopilotFixture();
       const handle = fixture.handles.find((candidate) => candidate.request)!;
       expect(
@@ -1877,21 +1882,6 @@ describe('production composition', () => {
           })
         ).statusCode,
       ).toBe(202);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
-        {
-          autopilot: { state: 'attentionRequired', enabled: false },
-        },
-      );
-      expect(
-        (
-          await fixture.app.inject({
-            method: 'PUT',
-            url: `/api/sessions/${fixture.sessionId}/autopilot`,
-            payload: { enabled: true },
-          })
-        ).statusCode,
-      ).toBe(200);
       await vi.waitFor(async () =>
         expect(
           (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
@@ -2285,7 +2275,7 @@ describe('production composition', () => {
       ).toContain('Launch task_name l1_g2 for canonical L1');
       expect(
         (starts[3]?.params as { input?: Array<{ text?: string }> }).input?.[0]?.text,
-      ).toContain('explicit model selected by the supervisor');
+      ).toContain('agent_type org-plan-executor and reasoning_effort high');
       // Capacity recovery is allowed only for the active root control. It
       // recycles that writer but must retain the one durable g2 handoff.
       const rootHandle = fixture.handles.find((candidate) =>

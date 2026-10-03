@@ -59,7 +59,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         type="button"
         disabled={pending || Boolean(guidanceError)}
         onclick={() => (guidance.trim() ? onresolve('resume', guidance) : onresolve('resume'))}
-        >{pending ? 'Updating…' : 'Resume'}</button
+        >{pending
+          ? 'Updating…'
+          : attention.attention.executorReplacement
+            ? 'Authorize replacement'
+            : 'Resume'}</button
       >
       <button type="button" disabled={pending} onclick={() => onresolve('disableAutopilot')}
         >Disable Autopilot</button

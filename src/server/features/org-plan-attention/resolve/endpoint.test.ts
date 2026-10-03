@@ -17,6 +17,7 @@ describe('resolve Org Plan attention endpoint', () => {
     ['writerUnavailable', 409, { code: 'ATTENTION_WRITER_UNAVAILABLE' }],
     ['writerCleared', 409, { code: 'ATTENTION_WRITER_CLEARED' }],
     ['legacyUnsupported', 409, { code: 'ATTENTION_LEGACY_UNSUPPORTED' }],
+    ['replacementRejected', 409, { code: 'EXECUTOR_REPLACEMENT_NOT_AUTHORIZED' }],
   ] as const)('maps %s safely', async (kind, status, body) => {
     const app = fastify();
     registerResolveOrgPlanAttention(app, {

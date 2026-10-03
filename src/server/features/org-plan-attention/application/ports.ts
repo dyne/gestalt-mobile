@@ -46,7 +46,8 @@ export interface OrgPlanAttentionResolver {
           | 'staleOperation'
           | 'writerUnavailable'
           | 'writerCleared'
-          | 'legacyUnsupported';
+          | 'legacyUnsupported'
+          | 'replacementRejected';
         resolvedAt?: string;
       }
   >;

@@ -1350,7 +1350,7 @@ describe('AutopilotCoordinator', () => {
   });
 
   it.each(['attentionRequired', 'safetyPaused'] as const)(
-    'keeps the %s stop while explicit recovery removes stale wait ownership',
+    'recovers the %s stop while removing stale wait ownership',
     (outcome) => {
       let state: AutopilotSession | null = {
         sessionId: 's',
@@ -1399,7 +1399,7 @@ describe('AutopilotCoordinator', () => {
       });
       coordinator.enable('s');
       expect(state?.supervision).toMatchObject({
-        outcome: outcome === 'safetyPaused' ? 'active' : 'attentionRequired',
+        outcome: 'active',
         waitLease: null,
       });
     },
@@ -2999,6 +2999,121 @@ describe('AutopilotCoordinator', () => {
       expect(fixture.resume).not.toHaveBeenCalled();
       expect(fixture.rootStart).toHaveBeenCalledWith('s', 'root-control', 1, undefined);
       expect(fixture.state?.supervision?.outcome).toBe('probeRequired');
+    });
+
+    it('turns typed human permission into one exact durable replacement authorization', () => {
+      const fixture = subject();
+      const planFingerprint = JSON.stringify(
+        fixture.plan.steps.map((step) => [
+          step.id,
+          step.state,
+          step.reviewStatus,
+          step.children.map((child) => [child.id, child.state]),
+        ]),
+      );
+      fixture.state = {
+        ...fixture.state!,
+        state: 'attentionRequired',
+        requestedEnabled: false,
+        planFingerprint,
+        stopReason: 'attentionRequired',
+        blocking: { reason: 'permissionRequired', resumeCondition: 'permissionGranted' },
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          threadId: 'thread-l1',
+          l1State: 'WIP',
+          l2State: 'WIP',
+          lastActivityAt: now,
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+          assignment: {
+            canonicalPosition: 'L1',
+            canonicalTaskName: 'l1',
+            taskName: 'l1',
+            taskPath: '/root/l1',
+            threadId: 'thread-l1',
+            generation: 1,
+            state: 'resumable',
+          },
+        },
+      };
+
+      expect(fixture.coordinator.authorizeExecutorReplacement('s', 'l1')).toEqual({
+        accepted: true,
+        identity: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskName: 'l1_g2',
+          generation: 2,
+        },
+      });
+      expect(fixture.coordinator.authorizeExecutorReplacement('s', 'l1')).toMatchObject({
+        accepted: true,
+        identity: { taskName: 'l1_g2', generation: 2 },
+      });
+      fixture.coordinator.enable('s');
+
+      expect(fixture.state).toMatchObject({
+        state: 'monitoring',
+        requestedEnabled: true,
+        blocking: undefined,
+        executor: {
+          assignment: { taskName: 'l1', state: 'unavailable' },
+          replacement: {
+            taskName: 'l1_g2',
+            generation: 2,
+            reason: 'humanPermissionGranted',
+            evidence: 'typed-attention-approval',
+          },
+        },
+      });
+    });
+
+    it('rejects typed replacement permission while the assigned executor is active', () => {
+      const fixture = subject();
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'working',
+        subagents: [{ ...fixture.activity.subagents[0]!, state: 'working' }],
+      };
+      fixture.state = {
+        ...fixture.state!,
+        state: 'attentionRequired',
+        requestedEnabled: false,
+        planFingerprint: JSON.stringify(
+          fixture.plan.steps.map((step) => [
+            step.id,
+            step.state,
+            step.reviewStatus,
+            step.children.map((child) => [child.id, child.state]),
+          ]),
+        ),
+        stopReason: 'attentionRequired',
+        blocking: { reason: 'permissionRequired', resumeCondition: 'permissionGranted' },
+        executor: {
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          taskPath: '/root/l1',
+          threadId: 'thread-l1',
+          l1State: 'WIP',
+          l2State: 'WIP',
+          lastActivityAt: now,
+          ownedProcesses: [],
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+        },
+      };
+
+      expect(fixture.coordinator.authorizeExecutorReplacement('s', 'l1')).toEqual({
+        accepted: false,
+        reason: 'executorStillActive',
+      });
+      expect(fixture.state?.executor?.replacement).toBeUndefined();
     });
 
     it('keeps the idle physical executor when review correction reopens its L1', async () => {
