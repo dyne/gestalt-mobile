@@ -289,7 +289,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         journal.append(
           snapshot.sessionId,
           'agent.activity.updated',
-          toAgentActivityDto(snapshot),
+          {
+            ...toAgentActivityDto(snapshot),
+            ...(autopilotStore.find(snapshot.sessionId)?.checkpoints?.activeHandoffId
+              ? {
+                  traceId: autopilotStore.find(snapshot.sessionId)!.checkpoints!.activeHandoffId,
+                }
+              : {}),
+          },
           occurredAt,
         ),
       );
@@ -717,7 +724,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       journal.append(
         sessionId,
         'org-plan.checkpoint-handoff-failed',
-        { requestId, reason: 'checkpointHandoffFailed' },
+        {
+          requestId,
+          reason: 'checkpointHandoffFailed',
+          ...(autopilotStore.find(sessionId)?.checkpoints?.activeHandoffId
+            ? { traceId: autopilotStore.find(sessionId)!.checkpoints!.activeHandoffId }
+            : {}),
+        },
         occurredAt,
       ),
     );

@@ -343,6 +343,19 @@ durable history, deletes only the exact smoke-created Codex threads through the
 app-server afterwards, and always removes its temporary state. It reports
 `SKIP` when the isolated profile is unavailable.
 
+## Control-plane traces
+
+Export the durable Org Plan, Autopilot, and agent-projection timeline for one relay session without starting the server:
+
+```sh
+gestalt-mobile trace <session-id>
+gestalt-mobile trace <session-id> --json
+```
+
+Use `--cwd <workspace>` to select another workspace state database, or `--data-dir <directory>` when the server uses an explicit data directory. The export excludes chat messages, prompts, model output, and environment values. New checkpoint handoffs share a stable `traceId` across checkpoint persistence, continuation scheduling, control dispatch, turn outcome, and agent projection events. The human format includes bounded diagnoses for missing transitions; JSON is suitable for issue attachments and automated analysis.
+
+Browser receipt is intentionally not inferred from server persistence. A trace that contains `agent.activity.updated` proves the backend projection was journaled, while its diagnostic notes that the browser event cursor is still needed to prove delivery.
+
 ## Run from source
 
 ```sh

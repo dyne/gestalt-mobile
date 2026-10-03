@@ -18,10 +18,16 @@ import { LauncherProfileCatalog } from './platform/catalog/launcher-profile-cata
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { loadPwaIcon } from './platform/pwa/load-pwa-icon.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
+import {
+  exportControlPlaneTrace,
+  formatControlPlaneTrace,
+} from './features/control-plane-trace/export-trace.js';
+import { relayStatePath } from './platform/persistence/state-path.js';
 
 const runFile = promisify(execFile);
 
 export const usage = `Usage: gestalt-mobile [options]
+       gestalt-mobile trace <session-id> [--json] [--cwd <path>] [--data-dir <path>]
 
 Options:
   --cwd <path>       Workspace root (default: current directory)
@@ -51,6 +57,7 @@ export type CliDependencies = {
   compose?: typeof composeRelayApp;
   homeDirectory?: string;
   environment?: NodeJS.ProcessEnv;
+  exportTrace?: typeof exportControlPlaneTrace;
 };
 
 function managedVersion(value: string | undefined): string | null {
@@ -167,7 +174,37 @@ function parseInvocation(
   | { command: 'run'; config: RelayConfig }
   | { command: 'help' }
   | { command: 'version' }
-  | { command: 'list' } {
+  | { command: 'list' }
+  | {
+      command: 'trace';
+      sessionId: string;
+      json: boolean;
+      root: string;
+      dataDir?: string;
+    } {
+  if (args[0] === 'trace') {
+    const sessionId = args[1];
+    if (!sessionId || sessionId.startsWith('--'))
+      throw new CliUsageError('trace requires a session ID');
+    let json = false;
+    let root = cwd;
+    let dataDir: string | undefined;
+    for (let index = 2; index < args.length; index += 1) {
+      const option = args[index];
+      if (option === '--json') {
+        if (json) throw new CliUsageError('Duplicate option: --json');
+        json = true;
+        continue;
+      }
+      if (option !== '--cwd' && option !== '--data-dir')
+        throw new CliUsageError(`Unknown trace option: ${option}`);
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new CliUsageError(`Missing value for ${option}`);
+      if (option === '--cwd') root = resolve(cwd, value);
+      else dataDir = resolve(cwd, value);
+    }
+    return { command: 'trace', sessionId, json, root, ...(dataDir ? { dataDir } : {}) };
+  }
   if (args.includes('--help')) {
     if (args.length !== 1)
       throw new CliUsageError('--help cannot be combined with other arguments');
@@ -235,6 +272,30 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
   if (invocation.command === 'version') {
     stdout.write(`${await packageVersion(moduleUrl)}\n`);
     return 0;
+  }
+  if (invocation.command === 'trace') {
+    const stateHome =
+      dependencies.environment?.XDG_STATE_HOME ??
+      process.env.XDG_STATE_HOME ??
+      resolve(dependencies.homeDirectory ?? homedir(), '.local/state');
+    const databasePath = invocation.dataDir
+      ? resolve(invocation.dataDir, 'relay.sqlite')
+      : relayStatePath(invocation.root, stateHome);
+    try {
+      const trace = (dependencies.exportTrace ?? exportControlPlaneTrace)(
+        databasePath,
+        invocation.sessionId,
+      );
+      stdout.write(
+        invocation.json ? `${JSON.stringify(trace, null, 2)}\n` : formatControlPlaneTrace(trace),
+      );
+      return 0;
+    } catch (error) {
+      stderr.write(
+        `Unable to export control-plane trace: ${error instanceof Error ? error.message : 'unknown error'}\n`,
+      );
+      return 1;
+    }
   }
   const skillProfiles = new FilesystemSkillProfileStore(dependencies.homeDirectory ?? homedir());
   if (invocation.command === 'list') return listSkillProfiles(skillProfiles, stdout, stderr);

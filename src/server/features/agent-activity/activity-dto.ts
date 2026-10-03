@@ -7,7 +7,7 @@
 import type { AgentActivitySnapshot } from './model.js';
 
 /** Public roster projection: expose bounded context use, never raw host metrics or identifiers. */
-export function toAgentActivityDto(snapshot: AgentActivitySnapshot): unknown {
+export function toAgentActivityDto(snapshot: AgentActivitySnapshot): Record<string, unknown> {
   return {
     sessionId: snapshot.sessionId,
     root: snapshot.root,

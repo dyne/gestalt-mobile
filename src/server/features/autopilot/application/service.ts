@@ -670,7 +670,12 @@ export class AutopilotCoordinator {
           {
             sessionId,
             type: 'autopilot.continuation-scheduled',
-            payload: { controlId: scheduledControlId },
+            payload: {
+              controlId: scheduledControlId,
+              ...(prior.checkpoints?.activeHandoffId
+                ? { traceId: prior.checkpoints.activeHandoffId }
+                : {}),
+            },
             occurredAt: now,
           },
         ]);
@@ -795,7 +800,12 @@ export class AutopilotCoordinator {
                 : pendingKind === 'terminalReviewAccepted'
                   ? 'org-plan.terminal-review-reported'
                   : 'org-plan.milestone-reported',
-            payload: { turnId: state.checkpoints.pendingTurnId },
+            payload: {
+              turnId: state.checkpoints.pendingTurnId,
+              ...(state.checkpoints.activeHandoffId
+                ? { traceId: state.checkpoints.activeHandoffId }
+                : {}),
+            },
             occurredAt,
           },
         ],
@@ -860,6 +870,7 @@ export class AutopilotCoordinator {
       ...(previous?.completionEpochs ?? []).filter((entry) => entry.target !== target),
       { target, epoch, reopened: false, completed: true },
     ];
+    const handoffId = `handoff-${key.slice(0, 24)}`;
     const checkpoints = {
       protocolVersion: 1 as const,
       planIdentity: retained.identity,
@@ -871,6 +882,7 @@ export class AutopilotCoordinator {
           : reportedL1Ids,
       acceptedKeys: boundedUnique([...acceptedKeys, key], 768),
       pendingTurnId: turnId,
+      activeHandoffId: handoffId,
       pendingKind: checkpoint.kind,
       checkpointHandoffFailed: false,
       terminalReviewAccepted:
@@ -916,10 +928,16 @@ export class AutopilotCoordinator {
                   l2Id: checkpoint.l2Id,
                   position: checkpoint.position,
                   turnId,
+                  traceId: handoffId,
                 }
               : checkpoint.kind === 'l1Accepted'
-                ? { l1Id: checkpoint.l1Id, position: checkpoint.position, turnId }
-                : { turnId },
+                ? {
+                    l1Id: checkpoint.l1Id,
+                    position: checkpoint.position,
+                    turnId,
+                    traceId: handoffId,
+                  }
+                : { turnId, traceId: handoffId },
           occurredAt,
         },
       ],
@@ -1226,7 +1244,17 @@ export class AutopilotCoordinator {
     const issuedControl = { ...priorControl, status: 'issued' as const, updatedAt: now };
     const events = [
       ...this.snapshotEvents(next, issuedControl),
-      { sessionId, type: 'autopilot.control-issued', payload: { controlId }, occurredAt: now },
+      {
+        sessionId,
+        type: 'autopilot.control-issued',
+        payload: {
+          controlId,
+          ...(prior.checkpoints?.activeHandoffId
+            ? { traceId: prior.checkpoints.activeHandoffId }
+            : {}),
+        },
+        occurredAt: now,
+      },
     ];
     const control = this.deps.store.claimControlIssued
       ? this.deps.store.claimControlIssued(sessionId, controlId, now, next, events)
@@ -2627,8 +2655,19 @@ export class AutopilotCoordinator {
               type: eventType,
               payload:
                 eventType === 'autopilot.turn-failed'
-                  ? { controlId, code: failureCode }
-                  : { controlId },
+                  ? {
+                      controlId,
+                      code: failureCode,
+                      ...(this.deps.store.find(sessionId)?.checkpoints?.activeHandoffId
+                        ? { traceId: this.deps.store.find(sessionId)!.checkpoints!.activeHandoffId }
+                        : {}),
+                    }
+                  : {
+                      controlId,
+                      ...(this.deps.store.find(sessionId)?.checkpoints?.activeHandoffId
+                        ? { traceId: this.deps.store.find(sessionId)!.checkpoints!.activeHandoffId }
+                        : {}),
+                    },
               occurredAt,
             },
           ]

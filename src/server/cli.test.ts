@@ -87,6 +87,28 @@ function output() {
 }
 
 describe('runCli', () => {
+  it('exports a control-plane trace without starting the server', async () => {
+    const stdout = output();
+    const compose = vi.fn();
+    const exportTrace = vi.fn(() => ({
+      schemaVersion: 1 as const,
+      sessionId: 'session-1',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      events: [],
+      diagnoses: [],
+    }));
+    expect(
+      await runCli({
+        args: ['trace', 'session-1', '--json', '--data-dir', '/tmp/relay-data'],
+        stdout: stdout.stream,
+        compose,
+        exportTrace,
+      }),
+    ).toBe(0);
+    expect(exportTrace).toHaveBeenCalledWith('/tmp/relay-data/relay.sqlite', 'session-1');
+    expect(JSON.parse(stdout.value())).toMatchObject({ schemaVersion: 1, sessionId: 'session-1' });
+    expect(compose).not.toHaveBeenCalled();
+  });
   it('prints help without composing the app or probing Codex', async () => {
     const stdout = output();
     const compose = vi.fn();
