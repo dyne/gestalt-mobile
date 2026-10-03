@@ -1311,17 +1311,20 @@ describe('CodexSessionRuntime', () => {
     ]);
   });
 
-  it('applies the resolved override to both new and restored child launches', async () => {
+  it('applies the resolved override as sticky thread config for new and restored sessions', async () => {
     const launches: unknown[] = [];
     const resolvedSelections: unknown[] = [];
+    const requests: Array<{ method: string; params: unknown }> = [];
     const override = [{ path: '/skills/focused/SKILL.md', enabled: true }];
     const runtime = new CodexSessionRuntime(
       (input) => {
         launches.push(input);
         return {
           rpc: {
-            request: async (method) =>
-              method === 'thread/start' ? { thread: { id: 'thread-1' } } : {},
+            request: async (method, params) => {
+              requests.push({ method, params });
+              return method === 'thread/start' ? { thread: { id: 'thread-1' } } : {};
+            },
             onNotification: () => () => {},
             onServerRequest: () => () => {},
           },
@@ -1359,9 +1362,19 @@ describe('CodexSessionRuntime', () => {
     await runtime.start({ ...base, threadId: null }, 'after');
     await runtime.restore({ ...base, threadId: 'thread-1' }, 'after');
     expect(launches).toEqual([
-      { profile: 'default', cwd: '/workspace', skillsConfig: override },
-      { profile: 'default', cwd: '/workspace', skillsConfig: override },
+      { profile: 'default', cwd: '/workspace' },
+      { profile: 'default', cwd: '/workspace' },
     ]);
+    expect(
+      requests.filter((request) => request.method === 'thread/start')[0]?.params,
+    ).toMatchObject({
+      config: { skills: { config: override } },
+    });
+    expect(
+      requests.filter((request) => request.method === 'thread/resume')[0]?.params,
+    ).toMatchObject({
+      config: { skills: { config: override } },
+    });
     expect(resolvedSelections).toEqual([
       base.effectiveSkillSelection,
       base.effectiveSkillSelection,
@@ -1425,7 +1438,6 @@ describe('CodexSessionRuntime', () => {
       {
         profile: 'default',
         cwd: '/workspace',
-        skillsConfig: undefined,
         environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json' },
       },
     ]);

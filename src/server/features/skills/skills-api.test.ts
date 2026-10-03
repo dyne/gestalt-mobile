@@ -20,6 +20,11 @@ describe('skills REPR endpoints', () => {
       catalog: {
         list: async () => ({
           skills: [
+            {
+              name: 'gestalt:systematic-debugging',
+              path: '/plugins/cache/dyne-gestalt-agents/gestalt/2.11.0/skills/systematic-debugging/SKILL.md',
+              enabled: true,
+            },
             { name: 'Same', path: '/skills/b/SKILL.md', enabled: true, description: 'b' },
             { name: 'Same', path: '/skills/a/SKILL.md', enabled: false, description: 'a' },
           ],
@@ -59,6 +64,9 @@ describe('skills REPR endpoints', () => {
         },
       ],
     });
+    expect(response.json().skills).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'gestalt:systematic-debugging' })]),
+    );
     await app.close();
   });
 

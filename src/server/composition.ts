@@ -168,7 +168,6 @@ export type ComposeRelayAppOptions = {
   launchAppServer?: (input: {
     profile: string;
     cwd: string;
-    skillsConfig?: readonly { path: string; enabled: boolean }[];
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
   /** Test-only explicit-session model resolver; production uses provider runtimes below. */
@@ -585,7 +584,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         explicit: session.effectiveSkillSelection.skills,
       }).skillsConfig;
     const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
-    if (!options.explicitSkillProfile && !project) return undefined;
     return compileSkillOverride({
       discovered: catalog.skills,
       explicit: options.explicitSkillProfile?.skills,

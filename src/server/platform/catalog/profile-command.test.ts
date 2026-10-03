@@ -13,20 +13,7 @@ describe('profileAppServerArgs', () => {
       args: ['app-server', '--stdio'],
     }));
 
-  it('keeps native arguments byte-identical without a skill override', () => {
-    expect(profileAppServerCommand()).toEqual(profileAppServerCommand(undefined));
+  it('keeps skill catalogs out of process arguments', () => {
+    expect(profileAppServerCommand().args).toEqual(['app-server', '--stdio']);
   });
-
-  it('passes skills.config as one non-shell child argument', () =>
-    expect(profileAppServerCommand([{ path: '/skills/$quoted/SKILL.md', enabled: false }])).toEqual(
-      {
-        command: 'codex',
-        args: [
-          'app-server',
-          '--stdio',
-          '--config',
-          'skills.config = [{ path = "/skills/$quoted/SKILL.md", enabled = false }]',
-        ],
-      },
-    ));
 });

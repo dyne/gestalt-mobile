@@ -62,7 +62,8 @@ export function registerListAvailableSkills(
       return {
         source: project ? 'project' : 'native',
         errors: discovered.errors.map(({ message }) => ({ message })),
-        skills: [...skills]
+        skills: skills
+          .filter((skill) => !isAlwaysAdvertisedSkill(skill))
           .sort((left, right) => left.path.localeCompare(right.path))
           .map((skill) => ({
             name: skill.name,

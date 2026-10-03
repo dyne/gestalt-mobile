@@ -162,7 +162,7 @@ describe('SkillsState', () => {
     );
   });
 
-  it('does not let a saved profile or toggle hide an always-advertised skill', async () => {
+  it('omits mandatory Gestalt infrastructure from legacy catalogs and saved profiles', async () => {
     const gestaltSkill = {
       name: 'gestalt:org-plan',
       path: '/plugins/gestalt/skills/org-plan/SKILL.md',
@@ -192,12 +192,10 @@ describe('SkillsState', () => {
 
     await state.load('workspace', 'default');
     state.selectProfile('old');
-    state.toggle(gestaltSkill.path, false);
 
-    expect(state.skills[0]?.enabled).toBe(true);
-    expect(state.savePayload('old').skills).toEqual([
-      { name: gestaltSkill.name, path: gestaltSkill.path, enabled: true },
-    ]);
+    expect(state.skills).toEqual([]);
+    expect(state.missingSkills).toEqual([]);
+    expect(state.savePayload('old').skills).toEqual([]);
   });
 
   it('suppresses concurrent saves and preserves a save failure for the view', async () => {
