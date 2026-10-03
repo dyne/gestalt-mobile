@@ -59,9 +59,15 @@ export type AppServer = {
 export type AppServerLaunchInput = {
   profile: string;
   cwd: string;
-  skillsConfig?: readonly { path: string; enabled: boolean }[];
   environment?: Readonly<Record<string, string>>;
 };
+
+/** Sticky thread config keeps skill paths out of the app-server process argv. */
+export function threadSkillConfig(
+  skillsConfig?: readonly { path: string; enabled: boolean }[],
+): Record<string, unknown> {
+  return skillsConfig === undefined ? {} : { config: { skills: { config: skillsConfig } } };
+}
 
 export type RestoreSessionResult =
   | { session: RelaySessionSnapshot; historyUnavailable: false; replacementCreated: false }
@@ -132,6 +138,7 @@ class SessionResource {
   constructor(
     readonly sessionId: string,
     readonly process: AppServer,
+    readonly skillsConfig: readonly { path: string; enabled: boolean }[] | undefined,
     readonly planStatusLease: PlanStatusLease | undefined,
     readonly planMeasurementToken: string,
     private unregister: readonly (() => void)[],
@@ -224,7 +231,11 @@ export class CodexSessionRuntime {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
-      const startedThreadId = await this.startThread(resource.process, session);
+      const startedThreadId = await this.startThread(
+        resource.process,
+        session,
+        resource.skillsConfig,
+      );
       resource.threadId = startedThreadId;
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
@@ -863,6 +874,7 @@ export class CodexSessionRuntime {
         await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
+          ...threadSkillConfig(resource.skillsConfig),
           ...(session.executionPolicy?.approvalPolicy
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
             : {}),
@@ -882,7 +894,11 @@ export class CodexSessionRuntime {
         };
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
-        const replacementThreadId = await this.startThread(resource.process, session);
+        const replacementThreadId = await this.startThread(
+          resource.process,
+          session,
+          resource.skillsConfig,
+        );
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
       resource.threadId = result.session.threadId!;
@@ -957,15 +973,23 @@ export class CodexSessionRuntime {
     });
   }
 
-  private async startThread(process: AppServer, session: RelaySessionSnapshot): Promise<string> {
+  private async startThread(
+    process: AppServer,
+    session: RelaySessionSnapshot,
+    skillsConfig?: readonly { path: string; enabled: boolean }[],
+  ): Promise<string> {
     return decodeThreadStart(
-      await process.rpc.request('thread/start', this.threadStartParams(session)),
+      await process.rpc.request('thread/start', this.threadStartParams(session, skillsConfig)),
     );
   }
 
-  private threadStartParams(session: RelaySessionSnapshot): Record<string, unknown> {
+  private threadStartParams(
+    session: RelaySessionSnapshot,
+    skillsConfig?: readonly { path: string; enabled: boolean }[],
+  ): Record<string, unknown> {
     return {
       cwd: session.workspacePath,
+      ...threadSkillConfig(skillsConfig),
       approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
       dynamicTools: [
         gestaltQuizDynamicTool,
@@ -996,10 +1020,10 @@ export class CodexSessionRuntime {
       : undefined;
     try {
       const token = randomUUID();
+      const skillsConfig = await this.resolveSkills?.(session);
       const process = this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
-        skillsConfig: await this.resolveSkills?.(session),
         ...(lease || this.planMeasurementBaseUrl
           ? {
               environment: {
@@ -1016,9 +1040,17 @@ export class CodexSessionRuntime {
             }
           : {}),
       });
-      const resource = new SessionResource(session.id, process, lease, token, [], () => {
-        if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
-      });
+      const resource = new SessionResource(
+        session.id,
+        process,
+        skillsConfig,
+        lease,
+        token,
+        [],
+        () => {
+          if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
+        },
+      );
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =

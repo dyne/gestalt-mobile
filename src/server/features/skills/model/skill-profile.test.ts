@@ -69,6 +69,14 @@ describe('skill profile codec', () => {
     );
   });
 
+  it('removes mandatory Gestalt infrastructure from legacy profile documents', () => {
+    const profile = parseSkillProfileYaml(
+      'version: 1\nname: work\nskills:\n  - name: gestalt:systematic-debugging\n    path: /plugins/cache/dyne-gestalt-agents/gestalt/2.11.0/skills/systematic-debugging/SKILL.md\n    enabled: false\n  - name: Alpha\n    path: /skills/alpha/SKILL.md\n    enabled: true\n',
+    );
+    expect(profile.skills).toEqual([alpha]);
+    expect(serializeSkillProfileYaml(profile)).not.toContain('gestalt:');
+  });
+
   it('retains stale saved names while keeping paths as identity', () => {
     const profile = parseSkillProfileYaml(
       'version: 1\nname: work\nskills:\n  - name: Old display name\n    path: /skills/current/SKILL.md\n    enabled: true\n',
@@ -247,10 +255,10 @@ describe('skill profile codec', () => {
     ]);
   });
 
-  it('emits no override when neither explicit nor project selection exists', () => {
+  it('renders current discovered paths even when neither profile selection exists', () => {
     expect(compileSkillOverride({ discovered: [alpha] })).toEqual({
       source: 'native',
-      skillsConfig: undefined,
+      skillsConfig: [{ path: alpha.path, enabled: true }],
       warnings: [],
     });
   });

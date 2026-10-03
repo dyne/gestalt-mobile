@@ -79,7 +79,11 @@ export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscov
 
 /** Gestalt workflow skills are session infrastructure, not optional profile entries. */
 export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name'>): boolean {
-  return skill.name.startsWith('gestalt:');
+  return isGestaltSkillName(skill.name);
+}
+
+export function isGestaltSkillName(name: string): boolean {
+  return name.startsWith('gestalt:');
 }
 
 const profileDocumentSchema = z
@@ -233,8 +237,8 @@ export function selectEffectiveSkillSelection(input: {
 
 export type CompiledSkillOverride = {
   source: EffectiveSkillSelection['source'];
-  /** Undefined means no child override, preserving Codex-native configuration. */
-  skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+  /** Complete thread catalog: mandatory Gestalt entries plus optional selection state. */
+  skillsConfig: readonly { path: string; enabled: boolean }[];
   warnings: string[];
 };
 
@@ -284,8 +288,6 @@ export function compileSkillOverride(input: {
   project?: SkillSelection;
 }): CompiledSkillOverride {
   const effective = selectEffectiveSkillSelection(input);
-  if (effective.selection === undefined)
-    return { source: 'native', skillsConfig: undefined, warnings: [] };
   const reconciled = reconcileSkillSelectionSnapshot(input.discovered, effective.selection);
   return {
     source: effective.source,
@@ -304,7 +306,10 @@ export function createSkillProfile(input: {
   return {
     version: 1,
     name: normalizeSkillProfileName(input.name),
-    skills: createSkillSelection(input.skills),
+    // Gestalt skills are mandatory thread infrastructure. Legacy profiles are
+    // normalized on read so they cannot pin a stale plugin-cache version or
+    // expose a meaningless enable/disable control in the editor.
+    skills: createSkillSelection(input.skills.filter((skill) => !isGestaltSkillName(skill.name))),
   };
 }
 

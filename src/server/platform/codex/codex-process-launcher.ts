@@ -18,10 +18,9 @@ export type CodexProcess = {
 export function launchCodexAppServer(input: {
   profile: string;
   cwd: string;
-  skillsConfig?: readonly { path: string; enabled: boolean }[];
   environment?: Readonly<Record<string, string>>;
 }): CodexProcess {
-  const launch = profileAppServerCommand(input.skillsConfig);
+  const launch = profileAppServerCommand();
   const child = spawn(launch.command, launch.args, {
     cwd: input.cwd,
     env: codexChildEnvironment(input.environment),

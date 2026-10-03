@@ -97,7 +97,11 @@ export class SkillsState {
       ]);
       if (!this.current(generation, request)) return;
       this.applyAvailable(available);
-      this.profiles = profiles.profiles;
+      this.profiles = profiles.profiles.map((profile) =>
+        'error' in profile
+          ? profile
+          : { ...profile, skills: profile.skills.filter((skill) => !isGestaltSkill(skill.name)) },
+      );
       const invalid = profiles.profiles.find((profile) => 'error' in profile);
       if (invalid && 'error' in invalid)
         this.status = { kind: 'invalid-profile', message: invalid.error.message };
@@ -154,7 +158,7 @@ export class SkillsState {
     const missing = selected.skills.filter((skill) => !availablePaths.has(skill.path));
     this.skills = this.skills.map((skill) => ({
       ...skill,
-      enabled: skill.alwaysAdvertised ? true : (enabled.get(skill.path) ?? false),
+      enabled: enabled.get(skill.path) ?? false,
     }));
     this.missingSkills = missing.map((skill) => ({ ...skill, enabled: false }));
     this.baseline = new Map(this.skills.map((skill) => [skill.path, skill.enabled]));
@@ -294,18 +298,16 @@ export class SkillsState {
     );
     const missingByPath = new Map(this.missingSkills.map((skill) => [skill.path, skill.enabled]));
     this.source = available.source;
-    this.skills = available.skills.map((skill) => ({
+    const optionalSkills = available.skills.filter((skill) => !skill.alwaysAdvertised);
+    this.skills = optionalSkills.map((skill) => ({
       ...skill,
-      enabled: skill.alwaysAdvertised
-        ? true
-        : (explicitEdits.get(skill.path) ??
-          missingByPath.get(skill.path) ??
-          skill.effectiveEnabled),
+      enabled:
+        explicitEdits.get(skill.path) ?? missingByPath.get(skill.path) ?? skill.effectiveEnabled,
     }));
-    const availablePaths = new Set(available.skills.map((skill) => skill.path));
+    const availablePaths = new Set(optionalSkills.map((skill) => skill.path));
     this.missingSkills = this.missingSkills.filter((skill) => !availablePaths.has(skill.path));
     this.baseline = new Map(
-      available.skills.map((skill) => [
+      optionalSkills.map((skill) => [
         skill.path,
         this.baseline.get(skill.path) ?? skill.effectiveEnabled,
       ]),
@@ -324,6 +326,10 @@ export class SkillsState {
       message: `${count} saved ${count === 1 ? 'skill is' : 'skills are'} missing and disabled. Remove ${count === 1 ? 'it' : 'them'} from this profile, or restore the skill installation.`,
     };
   }
+}
+
+function isGestaltSkill(name: string): boolean {
+  return name.startsWith('gestalt:');
 }
 
 function errorMessage(error: unknown): string {
