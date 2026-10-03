@@ -75,7 +75,9 @@ export type ExecutorLifecycle = Readonly<{
   ownedProcesses: readonly OwnedExecutorProcess[];
   outcome: ExecutorOutcome;
   blocking?: StructuredBlock;
+  /** Physical task generation parsed from l<a> or l<a>_gN; it never counts turns. */
   continuationGeneration: number;
+  /** Number of accepted follow-up turns delivered to this physical executor. */
   continuationCount: number;
   /** Consecutive, bounded failures for this physical executor only. */
   resumeFailures?: number;
@@ -538,7 +540,10 @@ export function parsePersistedSupervisedLifecycle(
       ownedProcesses,
       outcome,
       ...(executorBlocking ? { blocking: executorBlocking } : {}),
-      continuationGeneration,
+      // Earlier releases incremented this value after every follow-up, even
+      // though the roster derives it from the immutable physical task name. A
+      // durable assignment is authoritative during reconciliation.
+      continuationGeneration: assignment?.generation ?? continuationGeneration,
       continuationCount,
       ...(resumeFailures ? { resumeFailures } : {}),
       ...(assignment ? { assignment } : {}),
@@ -816,7 +821,7 @@ export function decideSupervisedLifecycle(
     action: {
       kind: 'resumeExecutor',
       threadId: input.executor.threadId,
-      generation: input.executor.continuationGeneration + 1,
+      generation: input.executor.continuationGeneration + input.executor.continuationCount + 1,
       delayMs,
     },
   };

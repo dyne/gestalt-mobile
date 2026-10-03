@@ -544,6 +544,7 @@ export class AutopilotCoordinator {
           this.deps.executorController &&
           plan &&
           !this.requiresRootBoundary(prior, plan) &&
+          !this.executorDiagnosisRequired(prior) &&
           this.currentExecutor(sessionId, plan, prior.consecutiveNoProgress, prior.executor)
         ) {
           this.enqueue(sessionId, async () => {
@@ -1049,11 +1050,23 @@ export class AutopilotCoordinator {
       const subagentsWorking =
         activity.aggregateSubagents === 'working' ||
         activity.aggregateSubagents === 'awaitingAgent';
+      const supervision =
+        subagentsWorking &&
+        Boolean(this.deps.session(sessionId)?.activeTurnId) &&
+        prior.supervision?.outcome === 'probeRequired'
+          ? reportProbe(prior.supervision, {
+              id: `executor-actionable:${createHash('sha256')
+                .update(this.progressKey(sessionId))
+                .digest('hex')}`,
+              kind: 'actionable',
+            })
+          : prior.supervision;
       if (
         cancelled ||
         prior.state !== 'monitoring' ||
         prior.nextEvaluationAt ||
-        (subagentsWorking && prior.consecutiveNoProgress > 0)
+        (subagentsWorking && prior.consecutiveNoProgress > 0) ||
+        supervision !== prior.supervision
       )
         this.persist(
           {
@@ -1061,6 +1074,7 @@ export class AutopilotCoordinator {
             state: 'monitoring',
             ...(cancelled ? { generation: prior.generation + 1, lastControlId: null } : {}),
             ...(subagentsWorking ? { consecutiveNoProgress: 0 } : {}),
+            ...(supervision ? { supervision } : {}),
             nextEvaluationAt: null,
             updatedAt: now,
           },
@@ -1228,6 +1242,7 @@ export class AutopilotCoordinator {
       retained &&
       !current.executor?.replacement &&
       !this.requiresRootBoundary(current, retained.plan) &&
+      !this.executorDiagnosisRequired(current) &&
       this.currentExecutor(
         sessionId,
         retained.plan,
@@ -1251,10 +1266,15 @@ export class AutopilotCoordinator {
       await this.enforceSupervisedLifecycle(sessionId, 'stateChanged');
       return;
     }
-    const protocol = recordAutomaticContinuation(
-      current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-      this.progressKey(sessionId),
-    );
+    // Direct executor continuations account for their own accepted attempts.
+    // Once that bounded loop requests diagnosis, preserve the probe state for
+    // the root instead of counting the root control as another blind retry.
+    const protocol = this.executorDiagnosisRequired(current)
+      ? current.supervision!
+      : recordAutomaticContinuation(
+          current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+          this.progressKey(sessionId),
+        );
     if (protocol.outcome === 'probeRequired') {
       this.persist({ ...current, supervision: protocol, updatedAt: this.deps.now() }, undefined, [
         {
@@ -1472,6 +1492,7 @@ export class AutopilotCoordinator {
       case 'reinspect':
         return false;
       case 'resumeExecutor':
+        if (this.executorDiagnosisRequired(this.deps.store.find(sessionId) ?? state)) return false;
         this.armExecutorContinuation(
           sessionId,
           decision.action.delayMs,
@@ -1529,7 +1550,7 @@ export class AutopilotCoordinator {
             sessionId,
             this.deps.policy.executorContinuationBaseMs,
             executor.threadId,
-            executor.continuationGeneration + 1,
+            executor.continuationGeneration + executor.continuationCount + 1,
             {
               kind: 'processExited',
               processId,
@@ -1560,7 +1581,7 @@ export class AutopilotCoordinator {
             sessionId,
             this.deps.policy.executorContinuationBaseMs,
             executor.threadId,
-            executor.continuationGeneration + 1,
+            executor.continuationGeneration + executor.continuationCount + 1,
             { kind: 'processResourceLimit', processId },
           );
         else this.armExecutorRefresh(sessionId, this.deps.policy.processPollMs);
@@ -1687,10 +1708,10 @@ export class AutopilotCoordinator {
       ),
       outcome: outcome.outcome,
       ...(outcome.blocking ? { blocking: outcome.blocking } : {}),
-      continuationGeneration: Math.max(
-        child.continuationGeneration ?? 1,
-        persisted?.canonicalPosition === canonicalPosition ? persisted.continuationGeneration : 1,
-      ),
+      // The roster value and assignment identify the physical l<a>_gN slot.
+      // Logical follow-up attempts are tracked separately by continuationCount.
+      continuationGeneration:
+        replacementChild || !assigned ? (child.continuationGeneration ?? 1) : assigned.generation,
       continuationCount:
         persisted?.canonicalPosition === canonicalPosition
           ? persisted.continuationCount
@@ -2342,8 +2363,9 @@ export class AutopilotCoordinator {
     const armedChild = this.deps
       .activity(sessionId)
       ?.subagents.find((child) => (child.threadId ?? child.id) === threadId);
+    const commandExecutor = state?.executor;
     const fence =
-      state && retained
+      state && retained && commandExecutor
         ? {
             sessionGeneration: state.generation,
             planIdentity: retained.identity,
@@ -2351,15 +2373,17 @@ export class AutopilotCoordinator {
             canonicalPosition:
               armedChild?.canonicalPosition ?? state.executor?.canonicalPosition ?? null,
             executorThreadId: threadId,
-            executorGeneration: generation - 1,
+            // The roster generation identifies the physical l<a>_gN slot.
+            // A canonical executor can accept many logical follow-up turns, so
+            // never derive this ownership fence from the follow-up sequence.
+            executorGeneration:
+              commandExecutor.assignment?.generation ?? commandExecutor.continuationGeneration,
             supervisionOutcome: state.supervision?.outcome ?? null,
             checkpoint: JSON.stringify(state.checkpoints ?? null),
             boundaryState: state.state,
           }
         : null;
-    if (!fence || this.deps.session(sessionId)?.activeTurnId) return;
-    const commandExecutor = state?.executor;
-    if (!commandExecutor) return;
+    if (!commandExecutor || !fence || this.deps.session(sessionId)?.activeTurnId) return;
     const requested = this.executorCommand(fence, commandExecutor, generation, trigger);
     const command = this.scheduleExecutorCommand(sessionId, requested);
     // A command that crossed the durable issue boundary is deliberately not
@@ -2430,17 +2454,22 @@ export class AutopilotCoordinator {
               trigger: trigger.kind,
             });
             const latest = this.deps.store.find(sessionId);
-            if (latest?.requestedEnabled)
+            if (latest?.requestedEnabled) {
+              const progressKey = this.progressKey(sessionId);
+              const supervision = recordAutomaticContinuation(
+                latest.supervision ?? startSupervisionProtocol(progressKey),
+                progressKey,
+              );
               this.persist({
                 ...latest,
                 state: 'monitoring',
+                supervision,
                 consecutiveNoProgress: latest.consecutiveNoProgress + 1,
                 ...(latest.executor
                   ? {
                       executor: {
                         ...latest.executor,
                         outcome: 'partial',
-                        continuationGeneration: generation,
                         continuationCount: latest.executor.continuationCount + 1,
                         lastActivityAt: this.deps.now(),
                       },
@@ -2449,6 +2478,7 @@ export class AutopilotCoordinator {
                 nextEvaluationAt: null,
                 updatedAt: this.deps.now(),
               });
+            }
           } catch (error) {
             // Only an explicit app-server rejection is safe to retry. A lost
             // response may conceal accepted work, so retain its issued fence.
@@ -2560,6 +2590,9 @@ export class AutopilotCoordinator {
           (process) => process.state === 'running' || process.state === 'detached-active',
         )),
     );
+  }
+  private executorDiagnosisRequired(state: AutopilotSession): boolean {
+    return state.supervision?.outcome === 'probeRequired';
   }
   private executorTurnActive(
     executor: ExecutorLifecycle,

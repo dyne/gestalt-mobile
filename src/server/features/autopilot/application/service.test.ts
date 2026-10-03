@@ -2975,6 +2975,32 @@ describe('AutopilotCoordinator', () => {
       },
     );
 
+    it('routes repeated unchanged recoverable turns through one root diagnosis probe', async () => {
+      const fixture = subject();
+      fixture.state = {
+        ...fixture.state!,
+        supervision: {
+          outcome: 'probeRequired',
+          progressKey: 'unchanged-wip-l1',
+          unchangedContinuations: 3,
+          probeKey: 'unchanged-wip-l1',
+          lastReportId: null,
+          waitLease: null,
+          retryKey: null,
+          safetyPauseReason: null,
+        },
+      };
+
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      await fixture.runNext();
+      await vi.waitFor(() => expect(fixture.rootStart).toHaveBeenCalledTimes(1));
+
+      expect(fixture.resume).not.toHaveBeenCalled();
+      expect(fixture.rootStart).toHaveBeenCalledWith('s', 'root-control', 1, undefined);
+      expect(fixture.state?.supervision?.outcome).toBe('probeRequired');
+    });
+
     it('keeps the idle physical executor when review correction reopens its L1', async () => {
       const fixture = subject();
       fixture.plan = {
@@ -3156,6 +3182,133 @@ describe('AutopilotCoordinator', () => {
       await fixture.runNext();
       expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
       expect(fixture.rootStart).not.toHaveBeenCalled();
+    });
+
+    it('resumes canonical L4 again after a recoverable incomplete turn consumes its wait lease', async () => {
+      const fixture = subject();
+      const completedStep = (position: number) => ({
+        ...fixture.plan.steps[0]!,
+        id: `l${position}`,
+        title: `L${position}`,
+        state: 'DONE' as const,
+        reviewStatus: 'REVIEWED' as const,
+        children: [],
+      });
+      fixture.plan = {
+        ...fixture.plan,
+        steps: [
+          completedStep(1),
+          completedStep(2),
+          completedStep(3),
+          {
+            ...fixture.plan.steps[0]!,
+            id: 'l4',
+            title: 'L4',
+            children: [
+              {
+                ...fixture.plan.steps[0]!.children[0]!,
+                id: 'l4-1',
+                title: 'L4.1',
+                level: 2 as const,
+                state: 'WIP' as const,
+                reviewStatus: undefined,
+                children: [],
+              },
+            ],
+          },
+        ],
+        totalSteps: 4,
+        doneSteps: 3,
+        currentStepId: 'l4',
+      } as never;
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          completionEpochs: [],
+          reportedL2Ids: [],
+          reportedL1Ids: ['l1', 'l2', 'l3'],
+          acceptedKeys: [],
+          pendingTurnId: null,
+          pendingKind: null,
+          terminalReviewAccepted: false,
+        },
+      };
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          {
+            ...fixture.activity.subagents[0]!,
+            id: 'thread-l4',
+            threadId: 'thread-l4',
+            taskPath: '/root/l4',
+            canonicalTaskName: 'l4',
+            canonicalPosition: 'L4',
+          },
+        ],
+      };
+
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenNthCalledWith(1, 's', 'thread-l4', 2, {
+        kind: 'partial',
+      });
+
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'working',
+        subagents: [{ ...fixture.activity.subagents[0]!, state: 'working', outcome: 'partial' }],
+      };
+      fixture.coordinator.activityChanged('s');
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'l4-build-wait-report',
+          leaseId: 'l4-build-wait-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+
+      fixture.activity = {
+        ...fixture.activity,
+        aggregateSubagents: 'blocked',
+        subagents: [
+          {
+            ...fixture.activity.subagents[0]!,
+            state: 'blocked',
+            reason: 'agentError',
+            outcome: 'failed',
+          },
+        ],
+      };
+      fixture.coordinator.activityChanged('s');
+
+      await vi.waitFor(() => expect(fixture.state?.supervision?.waitLease).toBeFalsy());
+      await vi.waitFor(() =>
+        expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true),
+      );
+      await fixture.runNext();
+
+      expect(fixture.resume).toHaveBeenNthCalledWith(2, 's', 'thread-l4', 3, {
+        kind: 'partial',
+      });
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+      expect(fixture.published).not.toContain('org-plan.step-checkpointed');
+      expect(fixture.state).toMatchObject({
+        requestedEnabled: true,
+        state: 'monitoring',
+        executor: {
+          canonicalPosition: 'L4',
+          canonicalTaskName: 'l4',
+          taskPath: '/root/l4',
+          assignment: { taskName: 'l4', generation: 1 },
+          continuationGeneration: 1,
+          continuationCount: 2,
+        },
+      });
+      expect(fixture.state?.blocking).toBeUndefined();
     });
 
     it('watches a still-running executor after an invalid root yield without resuming it', async () => {

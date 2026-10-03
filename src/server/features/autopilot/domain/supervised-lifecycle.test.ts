@@ -95,6 +95,22 @@ describe('supervised Org Plan lifecycle', () => {
     ).toEqual(assignment);
   });
 
+  it('repairs a legacy logical turn counter that polluted the physical generation', () => {
+    const assigned = executorAssignment(executor());
+    expect(
+      parsePersistedSupervisedLifecycle({
+        executor: {
+          ...executor({ continuationGeneration: 4, continuationCount: 3 }),
+          assignment: assigned,
+        },
+      })?.executor,
+    ).toMatchObject({
+      assignment: assigned,
+      continuationGeneration: 1,
+      continuationCount: 3,
+    });
+  });
+
   it('rejects an assignment whose physical task name is not authorized by its generation', () => {
     const legacy = executor();
     expect(
@@ -355,6 +371,19 @@ describe('supervised Org Plan lifecycle', () => {
     expect(decideSupervisedLifecycle(input({ event: 'rootFinalAttempt' }))).toMatchObject({
       finalAllowed: false,
       action: { kind: 'resumeExecutor', threadId: 'thread-l4', generation: 2 },
+    });
+  });
+
+  it('numbers logical follow-ups independently from the physical executor generation', () => {
+    expect(
+      decideSupervisedLifecycle(
+        input({
+          executor: executor({ continuationGeneration: 1, continuationCount: 2 }),
+        }),
+      ),
+    ).toMatchObject({
+      finalAllowed: false,
+      action: { kind: 'resumeExecutor', threadId: 'thread-l4', generation: 4 },
     });
   });
 
