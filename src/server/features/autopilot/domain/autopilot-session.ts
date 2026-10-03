@@ -59,6 +59,8 @@ export type AutopilotSession = Readonly<{
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
+    /** Correlates checkpoint persistence through scheduling and dispatch. */
+    activeHandoffId?: string | null;
     pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
     /** A checkpoint transport response was not acknowledged within its bounded deadline. */
     checkpointHandoffFailed?: boolean;

@@ -1565,6 +1565,7 @@ describe('AutopilotCoordinator', () => {
         reportedL2Ids: ['["l1","l2"]'],
         pendingTurnId: 'turn-1',
         pendingKind: 'l2Completed',
+        activeHandoffId: expect.stringMatching(/^handoff-[a-f0-9]{24}$/),
       });
       // A failed transport is durable but cannot bypass the root-final fence.
       expect(coordinator.checkpointHandoffFailed('s', 'turn-1')).toBe(true);

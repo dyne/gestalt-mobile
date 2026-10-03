@@ -631,6 +631,11 @@ function parseCheckpoints(
     return undefined;
   const pendingTurnId = value.pendingTurnId === null ? null : boundedText(value.pendingTurnId);
   if (pendingTurnId === undefined) return undefined;
+  const activeHandoffId =
+    value.activeHandoffId === undefined || value.activeHandoffId === null
+      ? null
+      : boundedText(value.activeHandoffId);
+  if (activeHandoffId === undefined) return undefined;
   if (
     value.checkpointHandoffFailed !== undefined &&
     typeof value.checkpointHandoffFailed !== 'boolean'
@@ -683,6 +688,7 @@ function parseCheckpoints(
     reportedL1Ids,
     acceptedKeys,
     pendingTurnId,
+    ...(activeHandoffId ? { activeHandoffId } : {}),
     pendingKind: pendingKind as 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null,
     ...(value.checkpointHandoffFailed === undefined
       ? {}
