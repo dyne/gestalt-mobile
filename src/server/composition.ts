@@ -955,8 +955,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const rootCommandId =
             resolvedOrigin.kind === 'root' ? completedCommandId(notification) : null;
           if (rootCommandId) autopilot.rootProcessCompleted(sessionId, rootCommandId);
+          const refreshChildTopology =
+            notification.method === 'item/completed' &&
+            activityFacts.some(
+              (fact) =>
+                fact.kind === 'collaboration' &&
+                (fact.collaborationAction === 'spawn_agent' ||
+                  fact.collaborationAction === 'resume_agent' ||
+                  fact.collaborationAction === 'close_agent'),
+            );
           if (!normalized) {
             for (const activityFact of activityFacts) activity.observe(activityFact);
+            if (refreshChildTopology) void activity.refresh(sessionId);
             return;
           }
           let completedSession:
@@ -978,6 +988,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           // Complete the durable turn first so its status cannot retain the just-finished
           // activeTurnId while the completion fact makes the root appear idle.
           for (const activityFact of activityFacts) activity.observe(activityFact);
+          // Lifecycle notifications are fast transition evidence, while
+          // thread/list is the bounded topology authority. Reconcile after the
+          // mutation so canonical identity and every retained child reach both
+          // the GUI and Autopilot even when the notification is sparse.
+          if (refreshChildTopology) void activity.refresh(sessionId);
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
           );

@@ -171,10 +171,12 @@ function collaborationAction(tool: string): string | undefined {
       spawnAgent: 'spawn_agent',
       sendInput: 'send_input',
       resumeAgent: 'resume_agent',
+      followupTask: 'resume_agent',
       closeAgent: 'close_agent',
       spawn_agent: 'spawn_agent',
       send_input: 'send_input',
       resume_agent: 'resume_agent',
+      followup_task: 'resume_agent',
       close_agent: 'close_agent',
       wait: 'wait',
     } as Record<string, string>

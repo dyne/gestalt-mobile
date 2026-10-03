@@ -202,6 +202,7 @@ describe('agent activity app-server characterization', () => {
       ['spawnAgent', 'spawn_agent'],
       ['sendInput', 'send_input'],
       ['resumeAgent', 'resume_agent'],
+      ['followupTask', 'resume_agent'],
       ['closeAgent', 'close_agent'],
     ] as const)
       expect(
@@ -219,5 +220,25 @@ describe('agent activity app-server characterization', () => {
           },
         }),
       ).toMatchObject({ childId: 'child', childStatus: 'running', collaborationAction });
+  });
+  it('maps the snake-case follow-up tool to a resumed child', () => {
+    expect(
+      decodeAgentActivityFact('s', at, {
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'collabAgentToolCall',
+            tool: 'followup_task',
+            senderThreadId: 'root',
+            receiverThreadIds: ['child'],
+            agentsStates: { child: { status: 'running', message: null } },
+          },
+        },
+      }),
+    ).toMatchObject({
+      childId: 'child',
+      childStatus: 'running',
+      collaborationAction: 'resume_agent',
+    });
   });
 });

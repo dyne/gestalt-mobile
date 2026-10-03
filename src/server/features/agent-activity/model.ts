@@ -336,6 +336,16 @@ function childOutcome(
   if (status === 'interrupted' || status === 'shutdown' || action === 'close_agent')
     return 'cancelled';
   if (status === 'completed' || status === 'idle') return 'partial';
+  // A follow-up reopens the same physical child. Do not keep presenting its
+  // previous boundary completion while its new turn is running.
+  if (
+    action === 'resume_agent' ||
+    status === 'working' ||
+    status === 'active' ||
+    status === 'running' ||
+    status === 'pendingInit'
+  )
+    return undefined;
   return previous;
 }
 function childState(
