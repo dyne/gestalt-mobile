@@ -109,6 +109,7 @@ import type { SafeInteractionOutcome } from '../shared/contracts/chat-snapshot.j
 import type { OrgPlanAttention } from '../shared/contracts/org-plan-attention.js';
 import {
   parseOrgPlanAttention,
+  parseOrgPlanAttentionToolResponse,
   toOrgPlanAttentionAcknowledgement,
 } from '../shared/contracts/org-plan-attention.js';
 import {
@@ -235,7 +236,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             | 'staleOperation'
             | 'writerUnavailable'
             | 'writerCleared'
-            | 'legacyUnsupported';
+            | 'legacyUnsupported'
+            | 'replacementRejected';
           resolvedAt?: string;
         }
     >
@@ -1841,6 +1843,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               const interaction = interactions.find(sessionId, requestId);
               if (!interaction || interaction.kind !== 'orgPlanAttention')
                 return { kind: 'noActive' as const };
+              const decision = parseOrgPlanAttentionToolResponse(response);
+              const attention = parseOrgPlanAttention(interaction.payload);
+              if (!decision || !attention) return { kind: 'staleOperation' as const };
               const claim = interactions.claimOperation(sessionId, requestId, operationKey);
               if (claim === 'resolved') {
                 const resolved = interactions.resolved(sessionId, requestId);
@@ -1855,6 +1860,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               if (acknowledged) {
                 if (!interactions.beginDelivery(sessionId, requestId, operationKey))
                   return { kind: 'staleOperation' as const };
+                if (decision.action === 'resume' && attention.executorReplacement) {
+                  const authorization = autopilot.authorizeExecutorReplacement(
+                    sessionId,
+                    attention.executorReplacement.canonicalTaskName,
+                  );
+                  if (!authorization.accepted) {
+                    interactions.retryDelivery(sessionId, requestId, operationKey);
+                    return { kind: 'replacementRejected' as const };
+                  }
+                }
                 const resolvedAt = new Date().toISOString();
                 if (
                   !interactions.settleOperation(
@@ -1874,6 +1889,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   JSON.stringify({ kind: 'replayed', resolvedAt }),
                 );
                 publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
+                if (decision.action === 'disableAutopilot') autopilot.disable(sessionId);
+                else autopilot.enable(sessionId);
                 return accepted;
               }
               // A durable capability belongs to the session/thread, not the
@@ -1884,6 +1901,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               if (!runtime) return { kind: 'writerUnavailable' as const };
               if (!interactions.beginDelivery(sessionId, requestId, operationKey))
                 return { kind: 'staleOperation' as const };
+              if (decision.action === 'resume' && attention.executorReplacement) {
+                const authorization = autopilot.authorizeExecutorReplacement(
+                  sessionId,
+                  attention.executorReplacement.canonicalTaskName,
+                );
+                if (!authorization.accepted) {
+                  interactions.retryDelivery(sessionId, requestId, operationKey);
+                  return { kind: 'replacementRejected' as const };
+                }
+              }
               const writer = runtime.attentionWriterState(sessionId, requestId);
               if (writer === 'unavailable') {
                 interactions.retryDelivery(sessionId, requestId, operationKey);
@@ -1928,6 +1955,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 JSON.stringify({ kind: 'replayed', resolvedAt }),
               );
               publishAttentionSettlement(sessionId, requestId, resolvedAt, 'answered');
+              if (decision.action === 'disableAutopilot') autopilot.disable(sessionId);
+              else autopilot.enable(sessionId);
               return accepted;
             })();
             attentionResolutionOperations.set(key, operation);

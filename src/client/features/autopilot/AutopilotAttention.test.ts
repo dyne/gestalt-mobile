@@ -40,4 +40,22 @@ describe('AutopilotAttention', () => {
       true,
     );
   });
+
+  it('labels a typed executor replacement approval explicitly', async () => {
+    const onresolve = vi.fn();
+    render(AutopilotAttention, {
+      attention: {
+        ...attention,
+        attention: {
+          ...attention.attention,
+          reason: 'permissionRequired',
+          resumeCondition: 'permissionGranted',
+          executorReplacement: { canonicalTaskName: 'l4' },
+        },
+      },
+      onresolve,
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Authorize replacement' }));
+    expect(onresolve).toHaveBeenCalledWith('resume');
+  });
 });

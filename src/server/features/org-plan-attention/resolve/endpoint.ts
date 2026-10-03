@@ -51,9 +51,11 @@ export function registerResolveOrgPlanAttention(
           ? 'ATTENTION_OPERATION_STALE'
           : outcome.kind === 'legacyUnsupported'
             ? 'ATTENTION_LEGACY_UNSUPPORTED'
-            : outcome.kind === 'writerCleared'
-              ? 'ATTENTION_WRITER_CLEARED'
-              : 'ATTENTION_WRITER_UNAVAILABLE';
+            : outcome.kind === 'replacementRejected'
+              ? 'EXECUTOR_REPLACEMENT_NOT_AUTHORIZED'
+              : outcome.kind === 'writerCleared'
+                ? 'ATTENTION_WRITER_CLEARED'
+                : 'ATTENTION_WRITER_UNAVAILABLE';
     return reply.code(outcome.kind === 'noActive' ? 404 : 409).send({ code });
   });
 }

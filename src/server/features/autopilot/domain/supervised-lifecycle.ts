@@ -93,7 +93,7 @@ export type ExecutorLifecycle = Readonly<{
       planFingerprint: string;
       /** New rows bind a replacement to the sole owner it supersedes. */
       previous?: ExecutorAssignment;
-      reason?: 'explicitExecutorRejection';
+      reason?: 'explicitExecutorRejection' | 'humanPermissionGranted';
       evidence?: string;
     }>;
   /** Bounded durable command history.  An issued command is never blindly replayed. */
@@ -407,7 +407,8 @@ export function parsePersistedSupervisedLifecycle(
     ? parseExecutorAssignment(replacementPreviousValue)
     : undefined;
   const replacementReason =
-    replacementValue && stringValue(replacementValue.reason, ['explicitExecutorRejection']);
+    replacementValue &&
+    stringValue(replacementValue.reason, ['explicitExecutorRejection', 'humanPermissionGranted']);
   const replacementEvidence = replacementValue && boundedText(replacementValue.evidence);
   if (
     !canonicalPosition ||
@@ -429,7 +430,8 @@ export function parsePersistedSupervisedLifecycle(
         !replacementPlanIdentity ||
         !replacementPlanFingerprint ||
         (replacementValue.previous !== undefined && !replacementPrevious) ||
-        (replacementReason !== undefined && replacementReason !== 'explicitExecutorRejection') ||
+        (replacementReason !== undefined &&
+          !['explicitExecutorRejection', 'humanPermissionGranted'].includes(replacementReason)) ||
         (replacementValue.evidence !== undefined && !replacementEvidence)))
   )
     return undefined;

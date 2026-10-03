@@ -128,7 +128,7 @@ describe('autopilot policy', () => {
     ).toEqual({ kind: 'observe' });
   });
   it('keeps the only continuation prompt versioned and deterministic', () => {
-    expect(AUTOPILOT_PROMPT_VERSION).toBe('v11');
+    expect(AUTOPILOT_PROMPT_VERSION).toBe('v12');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
       'Refer to every L1 as L<a> and each nested L2 as L<a>.<b>',
     );
@@ -157,6 +157,9 @@ describe('autopilot policy', () => {
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('gh pr checks --watch');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('one episode');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain('never rely on blocker prose as the signal');
+    expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(
+      'include executorReplacement with the exact canonicalTaskName',
+    );
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('Whenever an L2 reaches DONE');
     expect(AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT).toContain('prior turn ending did not complete');
   });
@@ -168,15 +171,15 @@ describe('autopilot policy', () => {
       taskName: 'l7_g2',
     });
     expect(prompt).toContain('Launch task_name l7_g2 for canonical L7');
+    expect(prompt).toContain('agent_type org-plan-executor and reasoning_effort high');
+    expect(prompt).toContain('gpt-5.6-terra by default');
     expect(prompt).toContain('This exact replacement generation 2 is durably authorized by Mobile');
     expect(prompt).toContain('do not infer another generation from this prompt or the roster');
     expect(prompt).toContain('the durable l7 slot may remain reserved');
     expect(prompt).toContain(
       "Do not reuse that task_name or attempt to change an existing agent's model in place",
     );
-    expect(prompt).toContain(
-      'spawn l7_g2 with agent_type worker and an explicit model selected by the supervisor',
-    );
+    expect(prompt).not.toContain('agent_type worker');
     expect(prompt).toContain('Transfer sole L7 ownership');
   });
   it('keeps the canonical task name for the first executor generation', () => {
@@ -187,6 +190,7 @@ describe('autopilot policy', () => {
       taskName: 'l7',
     });
     expect(prompt).toContain('Launch task_name l7 for canonical L7');
+    expect(prompt).toContain('agent_type org-plan-executor and reasoning_effort high');
     expect(prompt).not.toContain('replacement generation');
   });
   type ActivityChange = Partial<

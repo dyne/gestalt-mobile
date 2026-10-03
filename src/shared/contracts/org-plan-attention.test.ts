@@ -51,6 +51,26 @@ describe('Org Plan attention contract', () => {
     expect(parseOrgPlanAttention({ ...attention, reason: 'anythingElse' })).toBeNull();
     expect(parseOrgPlanAttention({ ...attention, summary: 'x'.repeat(601) })).toBeNull();
     expect(parseOrgPlanAttention({ ...attention, resumeCondition: 'later' })).toBeNull();
+    expect(
+      parseOrgPlanAttention({
+        ...attention,
+        reason: 'permissionRequired',
+        resumeCondition: 'permissionGranted',
+        executorReplacement: { canonicalTaskName: 'l4' },
+      }),
+    ).toMatchObject({ executorReplacement: { canonicalTaskName: 'l4' } });
+    expect(
+      parseOrgPlanAttention({
+        ...attention,
+        executorReplacement: { canonicalTaskName: 'l4_g2' },
+      }),
+    ).toBeNull();
+    expect(
+      parseOrgPlanAttention({
+        ...attention,
+        executorReplacement: { canonicalTaskName: 'l4' },
+      }),
+    ).toBeNull();
   });
 
   it('matches the Gestalt Agents schema-v1 fixture and rejects every cross-pair', () => {

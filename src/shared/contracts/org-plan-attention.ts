@@ -40,6 +40,7 @@ export type OrgPlanAttention = Readonly<{
   summary: string;
   requestedAction: string;
   resumeCondition: OrgPlanAttentionResumeCondition;
+  executorReplacement?: Readonly<{ canonicalTaskName: string }>;
 }>;
 
 export type OrgPlanAttentionResponse = Readonly<{
@@ -64,6 +65,12 @@ export const gestaltOrgPlanAttentionDynamicTool = {
       summary: { type: 'string', minLength: 1, maxLength: 600 },
       requestedAction: { type: 'string', minLength: 1, maxLength: 600 },
       resumeCondition: { type: 'string', enum: orgPlanAttentionResumeConditions },
+      executorReplacement: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['canonicalTaskName'],
+        properties: { canonicalTaskName: { type: 'string', pattern: '^l[1-9][0-9]*$' } },
+      },
     },
     oneOf: orgPlanAttentionReasons.map((reason) => ({
       properties: {
@@ -91,13 +98,29 @@ export function parseOrgPlanAttention(value: unknown): OrgPlanAttention | null {
       requestedAction: `Satisfy the ${value.resumeCondition} resume condition, then resume or disable Autopilot.`,
       resumeCondition: value.resumeCondition,
     };
-  if (keys.length !== 4) return null;
+  if (keys.length !== 4 && keys.length !== 5) return null;
+  if (
+    keys.some(
+      (key) =>
+        ![
+          'reason',
+          'summary',
+          'requestedAction',
+          'resumeCondition',
+          'executorReplacement',
+        ].includes(key),
+    )
+  )
+    return null;
+  const executorReplacement = parseExecutorReplacement(value.executorReplacement);
   if (
     !isReason(value.reason) ||
     !isBoundedText(value.summary, 600) ||
     !isBoundedText(value.requestedAction, 600) ||
     !isResumeCondition(value.resumeCondition) ||
-    orgPlanAttentionResumeConditionByReason[value.reason] !== value.resumeCondition
+    orgPlanAttentionResumeConditionByReason[value.reason] !== value.resumeCondition ||
+    (value.executorReplacement !== undefined && !executorReplacement) ||
+    (executorReplacement && value.reason !== 'permissionRequired')
   )
     return null;
   return {
@@ -105,6 +128,7 @@ export function parseOrgPlanAttention(value: unknown): OrgPlanAttention | null {
     summary: value.summary,
     requestedAction: value.requestedAction,
     resumeCondition: value.resumeCondition,
+    ...(executorReplacement ? { executorReplacement } : {}),
   };
 }
 
@@ -144,8 +168,11 @@ export function toOrgPlanAttentionAcknowledgement(
 }
 
 export function isOrgPlanAttentionToolResponse(value: unknown): boolean {
-  if (!isRecord(value) || value.success !== true || !Array.isArray(value.contentItems))
-    return false;
+  return parseOrgPlanAttentionToolResponse(value) !== null;
+}
+
+export function parseOrgPlanAttentionToolResponse(value: unknown): OrgPlanAttentionResponse | null {
+  if (!isRecord(value) || value.success !== true || !Array.isArray(value.contentItems)) return null;
   const item = value.contentItems[0];
   if (
     value.contentItems.length !== 1 ||
@@ -153,12 +180,20 @@ export function isOrgPlanAttentionToolResponse(value: unknown): boolean {
     item.type !== 'inputText' ||
     typeof item.text !== 'string'
   )
-    return false;
+    return null;
   try {
-    return parseOrgPlanAttentionResponse(JSON.parse(item.text)) !== null;
+    return parseOrgPlanAttentionResponse(JSON.parse(item.text));
   } catch {
-    return false;
+    return null;
   }
+}
+
+function parseExecutorReplacement(value: unknown): Readonly<{ canonicalTaskName: string }> | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return null;
+  return typeof value.canonicalTaskName === 'string' &&
+    /^l[1-9][0-9]*$/.test(value.canonicalTaskName)
+    ? { canonicalTaskName: value.canonicalTaskName }
+    : null;
 }
 
 function isReason(value: unknown): value is OrgPlanAttentionReason {

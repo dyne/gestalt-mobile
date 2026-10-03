@@ -72,6 +72,7 @@ export type OrgPlanAttention = Readonly<{
     summary: string;
     requestedAction: string;
     resumeCondition: string;
+    executorReplacement?: Readonly<{ canonicalTaskName: string }>;
   }>;
 }>;
 
@@ -192,7 +193,19 @@ export function isOrgPlanAttention(value: unknown): value is OrgPlanAttention {
     text(fields.reason, 64) &&
     text(fields.summary) &&
     text(fields.requestedAction) &&
-    text(fields.resumeCondition, 64)
+    text(fields.resumeCondition, 64) &&
+    (fields.executorReplacement === undefined ||
+      validExecutorReplacement(fields.executorReplacement))
+  );
+}
+
+function validExecutorReplacement(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const fields = value as Record<string, unknown>;
+  return (
+    Object.keys(fields).length === 1 &&
+    typeof fields.canonicalTaskName === 'string' &&
+    /^l[1-9][0-9]*$/.test(fields.canonicalTaskName)
   );
 }
 

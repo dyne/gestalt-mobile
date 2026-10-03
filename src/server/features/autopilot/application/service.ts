@@ -27,6 +27,7 @@ import {
   decideSupervisedLifecycle,
   executorIdentity,
   type ExecutorCommand,
+  type ExecutorIdentity,
   type ExecutorLifecycle,
   type OwnedExecutorProcess,
   type StructuredBlock,
@@ -430,11 +431,11 @@ export class AutopilotCoordinator {
       consecutiveNoProgress: 0,
       nextEvaluationAt: null,
       stopReason: null,
-      executor: undefined,
+      executor: !replacing && prior.state === 'attentionRequired' ? prior.executor : undefined,
       blocking: undefined,
       supervision: recoverSafetyPause(
         consumeObsoleteWait(
-          replacing
+          replacing || prior.supervision?.outcome === 'attentionRequired'
             ? startSupervisionProtocol(this.progressKey(sessionId))
             : (prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId))),
           this.progressKey(sessionId),
@@ -446,6 +447,84 @@ export class AutopilotCoordinator {
     this.persist(next);
     this.evaluate(sessionId);
     return this.snapshot(sessionId);
+  }
+  /** Converts one typed human permission into one exact durable physical replacement. */
+  authorizeExecutorReplacement(
+    sessionId: string,
+    canonicalTaskName: string,
+  ):
+    | { accepted: true; identity: ExecutorIdentity }
+    | {
+        accepted: false;
+        reason:
+          'attentionRequired' | 'executorNotAssigned' | 'executorStillActive' | 'planMismatch';
+      } {
+    const state = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    if (
+      !state ||
+      state.state !== 'attentionRequired' ||
+      state.blocking?.reason !== 'permissionRequired'
+    )
+      return { accepted: false, reason: 'attentionRequired' };
+    if (
+      !retained ||
+      state.planIdentity !== retained.identity ||
+      state.planFingerprint !== fingerprint(retained.plan)
+    )
+      return { accepted: false, reason: 'planMismatch' };
+    const executor = state.executor;
+    if (!executor || executor.canonicalTaskName !== canonicalTaskName || executor.l1State !== 'WIP')
+      return { accepted: false, reason: 'executorNotAssigned' };
+    if (executor.replacement && this.validReplacement(sessionId, executor.replacement))
+      return { accepted: true, identity: executor.replacement };
+    const activity = this.deps.activity(sessionId);
+    if (activity?.confidence !== 'fresh' || this.executorTurnActive(executor, activity))
+      return { accepted: false, reason: 'executorStillActive' };
+
+    const previous = executor.assignment ?? executorAssignment(executor);
+    const identity = executorIdentity(canonicalTaskName, previous.generation + 1);
+    const now = this.deps.now();
+    this.persist(
+      {
+        ...state,
+        executor: {
+          ...executor,
+          outcome: 'failed',
+          assignment: { ...previous, state: 'unavailable' },
+          replacement: {
+            ...identity,
+            planIdentity: retained.identity,
+            planFingerprint: fingerprint(retained.plan),
+            previous: { ...previous, state: 'unavailable' },
+            reason: 'humanPermissionGranted',
+            evidence: 'typed-attention-approval',
+          },
+          commands: executor.commands?.map((command) =>
+            ['scheduled', 'issued'].includes(command.status)
+              ? { ...command, status: 'superseded' as const, updatedAt: now }
+              : command,
+          ),
+        },
+        updatedAt: now,
+      },
+      undefined,
+      [
+        {
+          sessionId,
+          type: 'autopilot.executor-replacement-authorized',
+          payload: {
+            canonicalTaskName,
+            previousTaskName: previous.taskName,
+            taskName: identity.taskName,
+            generation: identity.generation,
+            evidence: 'typed-attention-approval',
+          },
+          occurredAt: now,
+        },
+      ],
+    );
+    return { accepted: true, identity };
   }
   disable(sessionId: string): AutopilotSnapshot {
     const now = this.deps.now();
