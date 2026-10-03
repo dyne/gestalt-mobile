@@ -120,6 +120,28 @@ describe('agent activity registry', () => {
       { canonicalPosition: 'L2', continuationGeneration: 3 },
     ]);
   });
+  it('keeps a completed canonical child visible and reopens it on follow-up', () => {
+    const registry = new AgentActivityRegistry(() => {});
+    registry.childrenReconciled('s', at, [{ id: 'child', status: 'idle', taskPath: '/root/l7' }]);
+    const resumed = registry.observe({
+      sessionId: 's',
+      occurredAt: '2026-01-01T00:00:01.000Z',
+      kind: 'collaboration',
+      childId: 'child',
+      childThreadId: 'child',
+      childStatus: 'running',
+      collaborationAction: 'resume_agent',
+    });
+    expect(resumed.subagents).toMatchObject([
+      {
+        id: 'child',
+        canonicalTaskName: 'l7',
+        canonicalPosition: 'L7',
+        state: 'working',
+      },
+    ]);
+    expect(resumed.subagents[0]).not.toHaveProperty('outcome');
+  });
   it('fails closed for an unqualified child-list row', () => {
     const registry = new AgentActivityRegistry(() => {});
     const next = registry.childrenReconciled('s', at, [
