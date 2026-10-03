@@ -67,6 +67,10 @@ completion epoch and cancels obsolete root/executor wait ownership, but it
 does not start another turn. Only the matching root final releases that durable
 boundary. The resulting `checkpointChanged` lifecycle input schedules the next
 fenced continuation; executor idleness is never used as the handoff trigger.
+The root sends only the checkpoint `kind`; Mobile derives the plan identity,
+canonical position, evidence boundary, commit disposition, and review state
+from its authoritative projections. The advertised tool schema and Org Plan
+skill therefore share the same compact contract.
 
 Checkpoint delivery is idempotent within its plan identity, canonical position,
 and completion epoch. A DONE-to-WIP-to-DONE cycle opens a new epoch only after

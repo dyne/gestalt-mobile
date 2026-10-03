@@ -62,81 +62,14 @@ export const gestaltOrgPlanCheckpointDynamicTool = {
   type: 'function',
   name: GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
   description:
-    'Record a validated supervised Org Plan report boundary. This is not review authority and must only be called by the active root after the Org Plan helper has recorded the matching state.',
+    'Record a validated supervised Org Plan report boundary. Send only the boundary kind; Mobile derives and validates all details from authoritative control state.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['version', 'kind', 'planIdentity'],
+    required: ['kind'],
     properties: {
-      version: { const: 1 },
       kind: { type: 'string', enum: ['l2Completed', 'l1Accepted', 'terminalReviewAccepted'] },
-      planIdentity: { type: 'string', minLength: 1, maxLength: 128 },
-      l1Id: { type: 'string', minLength: 1, maxLength: 128 },
-      l2Id: { type: 'string', minLength: 1, maxLength: 128 },
-      position: { type: 'string', pattern: '^L[1-9][0-9]*(\\.[1-9][0-9]*)?$', maxLength: 32 },
-      status: { const: 'DONE' },
-      verdict: { const: 'ACCEPT' },
-      commit: {
-        oneOf: [
-          {
-            type: 'object',
-            additionalProperties: false,
-            required: ['kind', 'subject', 'shortHash'],
-            properties: {
-              kind: { const: 'created' },
-              subject: { type: 'string', minLength: 1, maxLength: 160 },
-              shortHash: { type: 'string', pattern: '^[0-9a-f]{7,16}$' },
-            },
-          },
-          {
-            type: 'object',
-            additionalProperties: false,
-            required: ['kind'],
-            properties: { kind: { const: 'notRequired' } },
-          },
-        ],
-      },
-      findings: { type: 'string', minLength: 1, maxLength: 600 },
-      changes: { type: 'string', minLength: 1, maxLength: 600 },
-      files: { type: 'string', minLength: 1, maxLength: 600 },
-      tests: { type: 'string', minLength: 1, maxLength: 600 },
     },
-    oneOf: [
-      {
-        properties: { kind: { const: 'l2Completed' } },
-        required: ['l1Id', 'l2Id', 'position', 'status', 'changes', 'files', 'tests'],
-        not: {
-          anyOf: [{ required: ['verdict'] }, { required: ['commit'] }, { required: ['findings'] }],
-        },
-      },
-      {
-        properties: { kind: { const: 'l1Accepted' } },
-        required: ['l1Id', 'position', 'verdict', 'commit'],
-        not: {
-          anyOf: [
-            { required: ['l2Id'] },
-            { required: ['status'] },
-            { required: ['changes'] },
-            { required: ['files'] },
-          ],
-        },
-      },
-      {
-        properties: { kind: { const: 'terminalReviewAccepted' } },
-        required: ['verdict'],
-        not: {
-          anyOf: [
-            { required: ['l1Id'] },
-            { required: ['l2Id'] },
-            { required: ['position'] },
-            { required: ['status'] },
-            { required: ['commit'] },
-            { required: ['changes'] },
-            { required: ['files'] },
-          ],
-        },
-      },
-    ],
   },
 } as const;
 

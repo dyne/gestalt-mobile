@@ -37,6 +37,19 @@ const completed = {
 };
 
 describe('Org Plan checkpoint contract', () => {
+  it('advertises the same compact kind-only contract used by the Org Plan skill', () => {
+    expect(gestaltOrgPlanCheckpointDynamicTool.inputSchema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind'],
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['l2Completed', 'l1Accepted', 'terminalReviewAccepted'],
+        },
+      },
+    });
+  });
   it('exposes a closed schema-v1 dynamic tool', () => {
     expect(gestaltOrgPlanCheckpointDynamicTool).toMatchObject({
       name: GESTALT_ORG_PLAN_CHECKPOINT_TOOL_NAME,
