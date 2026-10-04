@@ -135,6 +135,10 @@ export class AgentActivityRegistry {
           kind: 'collaboration',
           childId: child.id,
           childStatus: 'notLoaded',
+          // The bounded roster/process read is authoritative as a unit. If a
+          // child disappeared, its previous runtime-local process projection
+          // cannot remain eligible as live work after this reconciliation.
+          childOwnedProcesses: [],
         });
     // A malformed/unknown `thread/list` row is not proof that a child is
     // healthy. Preserve it as disconnected but keep the aggregate qualified

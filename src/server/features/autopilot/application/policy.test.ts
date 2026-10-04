@@ -127,6 +127,101 @@ describe('autopilot policy', () => {
       }),
     ).toEqual({ kind: 'observe' });
   });
+  it('selects the next L1 when only completed historical executors are disconnected', () => {
+    const base = createAgentActivitySnapshot('s', now);
+    const incomplete: SupervisedPlan = {
+      title: 'Plan',
+      steps: Array.from({ length: 5 }, (_, index) => ({
+        id: `l${index + 1}`,
+        title: `L${index + 1}`,
+        level: 1 as const,
+        state: index < 4 ? ('DONE' as const) : ('TODO' as const),
+        priority: 'A' as const,
+        reviewStatus: index < 4 ? ('REVIEWED' as const) : ('UNREVIEWED' as const),
+        description: {},
+        children: [],
+      })),
+      totalSteps: 5,
+      doneSteps: 4,
+      allDone: false,
+      executionComplete: false,
+      currentStepId: 'l5',
+    };
+    const historical = [2, 3, 4].map((position) => ({
+      id: `thread-l${position}`,
+      threadId: `thread-l${position}`,
+      taskPath: `/root/l${position}`,
+      canonicalTaskName: `l${position}`,
+      canonicalPosition: `L${position}`,
+      continuationGeneration: 1,
+      outcome: 'partial' as const,
+      ownedProcesses: [
+        {
+          processId: `process-${position}`,
+          itemId: `item-${position}`,
+          ownerThreadId: `thread-l${position}`,
+          ownerTaskPath: `/root/l${position}`,
+          ownership: 'executor' as const,
+          state: position === 3 ? ('running' as const) : ('exited-awaiting-result' as const),
+          observedAt: '2026-08-19T12:00:00.000Z',
+          elapsedMs: 86_400_000,
+          cpuPercent: 0,
+          rssBytes: 0,
+        },
+      ],
+      state: 'disconnected' as const,
+      reason: 'processExited' as const,
+      observedAt: now,
+      lastActivityAt: '2026-08-19T12:00:00.000Z',
+    }));
+    const state = {
+      ...disabledAutopilot('s', now),
+      state: 'monitoring' as const,
+      requestedEnabled: true,
+    };
+    const activity: AgentActivitySnapshot = {
+      ...base,
+      confidence: 'fresh',
+      root: { ...base.root, state: 'idle', reason: 'turnCompleted' },
+      subagents: historical,
+      aggregateSubagents: 'disconnected',
+    };
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity,
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toMatchObject({ kind: 'scheduleContinuation' });
+
+    const supervised = historical.map((child, index) =>
+      index === 0
+        ? {
+            ...child,
+            ownedProcesses: [
+              {
+                ...child.ownedProcesses[0]!,
+                ownership: 'supervisor' as const,
+                state: 'detached-active' as const,
+              },
+            ],
+          }
+        : child,
+    );
+    expect(
+      decideAutopilot({
+        state,
+        plan: incomplete,
+        activity: { ...activity, subagents: supervised, aggregateSubagents: 'working' },
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toMatchObject({ kind: 'observe' });
+  });
   it('keeps the only continuation prompt versioned and deterministic', () => {
     expect(AUTOPILOT_PROMPT_VERSION).toBe('v13');
     expect(AUTOPILOT_CONTINUATION_PROMPT).toContain(

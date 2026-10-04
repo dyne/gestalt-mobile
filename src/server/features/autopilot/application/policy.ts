@@ -107,6 +107,68 @@ export function classifyAgentActivity(activity: AgentActivitySnapshot): AgentAct
   return rootSettled && subagentsSettled ? 'settled' : 'observe';
 }
 
+/**
+ * Classifies actor state against the plan position that can legally run next.
+ * Completed canonical executors remain visible evidence, but their terminal
+ * topology cannot indefinitely turn a fresh read into a reconciliation loop.
+ */
+function classifySupervisedActivity(
+  activity: AgentActivitySnapshot,
+  plan: SupervisedPlan,
+): AgentActivityDisposition {
+  const selected = plan.steps.findIndex(
+    (step) => step.id === plan.currentStepId || step.state === 'WIP',
+  );
+  const index = selected >= 0 ? selected : plan.steps.findIndex((step) => step.state !== 'DONE');
+  if (index < 0) return classifyAgentActivity(activity);
+  const position = index + 1;
+  const retained = activity.subagents.filter((child) => {
+    const match = /^L([1-9]\d*)$/.exec(child.canonicalPosition ?? '');
+    if (!match) return true;
+    const historical = Number(match[1]) < position;
+    const supervisedProcess = child.ownedProcesses?.some(
+      (process) =>
+        process.ownership === 'supervisor' &&
+        (process.state === 'running' || process.state === 'detached-active'),
+    );
+    return !historical || supervisedProcess;
+  });
+  // An aggregate-only observation cannot prove which child is historical.
+  if (retained.length === activity.subagents.length) return classifyAgentActivity(activity);
+  if (
+    activity.root.state === 'awaitingHuman' ||
+    retained.some((child) => child.state === 'awaitingHuman')
+  )
+    return 'attention';
+  if (
+    activity.root.state === 'working' ||
+    retained.some(
+      (child) =>
+        child.state === 'working' ||
+        child.state === 'awaitingAgent' ||
+        child.ownedProcesses?.some(
+          (process) =>
+            (child.state !== 'disconnected' || process.ownership === 'supervisor') &&
+            (process.state === 'running' || process.state === 'detached-active'),
+        ),
+    )
+  )
+    return 'active';
+  if (
+    activity.root.state === 'disconnected' ||
+    retained.some((child) => child.state === 'disconnected')
+  )
+    return 'reconcile';
+  const rootSettled =
+    activity.root.state === 'idle' ||
+    activity.root.state === 'blocked' ||
+    activity.root.state === 'awaitingAgent';
+  const childrenSettled = retained.every(
+    (child) => child.state === 'idle' || child.state === 'blocked',
+  );
+  return rootSettled && childrenSettled ? 'settled' : 'observe';
+}
+
 /** A deliberately pure, exhaustive safety gate. Adapters may only enact this result. */
 export function decideAutopilot(input: {
   state: AutopilotSession;
@@ -164,7 +226,7 @@ export function decideAutopilot(input: {
   if (!activity || activity.confidence !== 'fresh') return { kind: 'reconcile' };
   if (Date.parse(now) - Date.parse(activity.root.observedAt) > policy.staleAfterMs)
     return { kind: 'reconcile' };
-  const disposition = classifyAgentActivity(activity);
+  const disposition = classifySupervisedActivity(activity, plan);
   if (disposition === 'attention') return { kind: 'observe' };
   if (disposition === 'reconcile') return { kind: 'reconcile' };
   if (disposition !== 'settled') return { kind: 'observe' };
