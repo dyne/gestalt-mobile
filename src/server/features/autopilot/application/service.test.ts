@@ -2044,6 +2044,209 @@ describe('AutopilotCoordinator', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  it('launches the next canonical L1 once after restart despite stale historical executors', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-next-l1-restart-'));
+    const path = join(directory, 'relay.sqlite');
+    const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+    const starts = vi.fn(async () => {
+      session = { ...session, activeTurnId: 'turn-l5' };
+    });
+    const consumeProcess = vi.fn();
+    const published: string[] = [];
+    let session = { state: 'ready', threadId: 'root', activeTurnId: null as string | null };
+    const nextL1Plan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
+      title: 'next L1',
+      steps: Array.from({ length: 5 }, (_, index) => ({
+        id: `l${index + 1}`,
+        title: `L${index + 1}`,
+        level: 1 as const,
+        state: index < 4 ? ('DONE' as const) : ('TODO' as const),
+        priority: 'A' as const,
+        reviewStatus: index < 4 ? ('REVIEWED' as const) : ('UNREVIEWED' as const),
+        description: {},
+        children: [],
+      })),
+      totalSteps: 5,
+      doneSteps: 4,
+      allDone: false,
+      executionComplete: false,
+      currentStepId: 'l5',
+    };
+    const historical = [2, 3, 4].map((position) => ({
+      id: `thread-l${position}`,
+      threadId: `thread-l${position}`,
+      taskPath: `/root/l${position}`,
+      canonicalTaskName: `l${position}`,
+      canonicalPosition: `L${position}`,
+      continuationGeneration: 1,
+      outcome: 'partial' as const,
+      ownedProcesses: [
+        {
+          processId: `process-${position}`,
+          itemId: `item-${position}`,
+          ownerThreadId: `thread-l${position}`,
+          ownerTaskPath: `/root/l${position}`,
+          ownership: 'executor' as const,
+          state: position === 3 ? ('running' as const) : ('exited-awaiting-result' as const),
+          observedAt: '2026-08-19T12:00:00.000Z',
+          elapsedMs: 86_400_000,
+          cpuPercent: 0,
+          rssBytes: 0,
+        },
+      ],
+      state: 'disconnected' as const,
+      reason: 'processExited' as const,
+      observedAt: now,
+      lastActivityAt: '2026-08-19T12:00:00.000Z',
+    }));
+    const activity: import('../../agent-activity/model.js').AgentActivitySnapshot = {
+      ...createAgentActivitySnapshot('s', now),
+      confidence: 'fresh',
+      root: {
+        ...createAgentActivitySnapshot('s', now).root,
+        state: 'idle',
+        reason: 'turnCompleted',
+      },
+      subagents: historical,
+      aggregateSubagents: 'disconnected',
+    };
+    const coordinator = (database: DatabaseSync) =>
+      new AutopilotCoordinator({
+        store: new SqliteAutopilotStore(database),
+        now: () => now,
+        policy: { ...defaultAutopilotPolicy, quiescenceMs: 0 },
+        plan: () => ({ plan: nextL1Plan, identity: 'p' }),
+        session: () => session,
+        activity: () => activity,
+        pendingInteraction: () => false,
+        reconcile: async () => ({ compatible: true }),
+        schedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        nextControlId: () => 'launch-l5-once',
+        turnStarter: { start: starts },
+        executorController: {
+          resume: async () => {},
+          refresh: async () => {},
+          interrupt: async () => false,
+          transferProcess: () => {},
+          consumeProcess,
+          terminateProcess: async () => false,
+        },
+        publish: (_sessionId, type) => published.push(type),
+      });
+    const fireNext = async () => {
+      const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+      expect(timer).toBeDefined();
+      timer!.fired = true;
+      timer!.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    try {
+      const first = new DatabaseSync(path);
+      migrate(first);
+      first
+        .prepare(
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+        )
+        .run();
+      new SqliteAutopilotStore(first).save({
+        sessionId: 's',
+        state: 'monitoring',
+        requestedEnabled: true,
+        planIdentity: 'p',
+        planFingerprint: 'persisted',
+        generation: 1,
+        consecutiveNoProgress: 0,
+        nextEvaluationAt: null,
+        lastControlId: null,
+        stopReason: 'reconcileFailed',
+        supervision: startSupervisionProtocol('progress'),
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          reportedL1Ids: ['l1', 'l2', 'l3', 'l4'],
+          acceptedKeys: ['l4-accepted-once'],
+          pendingTurnId: null,
+          pendingKind: null,
+          terminalReviewAccepted: false,
+        },
+        executor: {
+          canonicalPosition: 'L4',
+          canonicalTaskName: 'l4',
+          taskPath: '/root/l4',
+          threadId: 'thread-l4',
+          l1State: 'DONE',
+          lastActivityAt: '2026-08-19T12:00:00.000Z',
+          ownedProcesses: historical[2]!.ownedProcesses,
+          outcome: 'partial',
+          continuationGeneration: 1,
+          continuationCount: 0,
+          assignment: {
+            canonicalPosition: 'L4',
+            canonicalTaskName: 'l4',
+            taskName: 'l4',
+            taskPath: '/root/l4',
+            threadId: 'thread-l4',
+            generation: 1,
+            state: 'closed',
+          },
+        },
+        updatedAt: now,
+      });
+
+      const active = coordinator(first);
+      active.restore('s');
+      await fireNext();
+      await vi.waitFor(() => expect(starts).toHaveBeenCalledTimes(1));
+      expect(starts).toHaveBeenCalledWith(
+        's',
+        'launch-l5-once',
+        1,
+        expect.objectContaining({
+          canonicalPosition: 'L5',
+          canonicalTaskName: 'l5',
+          taskName: 'l5',
+          generation: 1,
+        }),
+      );
+      expect(
+        active.registerProactiveWait('s', {
+          id: 'l5-report',
+          leaseId: 'l5-lease',
+          wakeConditions: ['executorChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+      expect(consumeProcess).not.toHaveBeenCalled();
+      first.close();
+
+      timers.length = 0;
+      const reopened = new DatabaseSync(path);
+      migrate(reopened);
+      const restored = coordinator(reopened);
+      restored.restore('s');
+      await Promise.resolve();
+      expect(starts).toHaveBeenCalledTimes(1);
+      expect(consumeProcess).not.toHaveBeenCalled();
+      expect(new SqliteAutopilotStore(reopened).find('s')?.checkpoints).toMatchObject({
+        reportedL1Ids: ['l1', 'l2', 'l3', 'l4'],
+        acceptedKeys: ['l4-accepted-once'],
+      });
+      expect(published.filter((type) => type === 'autopilot.continuation-scheduled')).toHaveLength(
+        1,
+      );
+      expect(published.filter((type) => type === 'autopilot.turn-started')).toHaveLength(1);
+      reopened.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('does not replay an issued command after a restart boundary', () => {
     let state: AutopilotSession | null = {
       sessionId: 's',

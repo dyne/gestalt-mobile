@@ -215,6 +215,39 @@ describe('agent activity registry', () => {
     release?.();
     await first;
   });
+  it('retires owned-process projections when an authoritative roster omits their child', () => {
+    const registry = new AgentActivityRegistry(() => {});
+    registry.observe({
+      sessionId: 's',
+      occurredAt: at,
+      kind: 'collaboration',
+      childId: 'historical',
+      childThreadId: 'historical',
+      childTaskPath: '/root/l4',
+      childStatus: 'active',
+      childOwnedProcesses: [
+        {
+          processId: 'stale',
+          itemId: 'item',
+          ownerThreadId: 'historical',
+          ownerTaskPath: '/root/l4',
+          ownership: 'executor',
+          state: 'running',
+          observedAt: at,
+          elapsedMs: 1,
+          cpuPercent: 0,
+          rssBytes: 0,
+        },
+      ],
+    });
+
+    const reconciled = registry.childrenReconciled('s', '2026-01-01T00:00:01.000Z', []);
+
+    expect(reconciled).toMatchObject({
+      confidence: 'fresh',
+      subagents: [{ id: 'historical', state: 'disconnected', ownedProcesses: [] }],
+    });
+  });
   it('emits one diagnostic after bounded retry exhaustion', async () => {
     const callbacks: Array<() => void> = [];
     const diagnostic = vi.fn();
