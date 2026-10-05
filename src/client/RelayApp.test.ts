@@ -850,10 +850,10 @@ describe('RelayApp provider selection', () => {
       codex: { available: true, version: '1.0' },
       kimi: { available: false },
     });
-    await screen.findByRole('tree', { name: 'Session base' });
+    await screen.findByLabelText('Skills profile');
     const picker = screen.getByLabelText('Provider') as HTMLSelectElement;
     expect((picker.querySelector('option[value="kimi"]') as HTMLOptionElement).disabled).toBe(true);
-    expect(screen.getByText(/Kimi is unavailable because its CLI was not found/i)).toBeTruthy();
+    expect(screen.queryByText(/Kimi is unavailable because its CLI was not found/i)).toBeNull();
     expect(screen.getByLabelText('Sandbox')).toBeTruthy();
   });
 });

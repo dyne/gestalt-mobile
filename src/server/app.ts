@@ -9,7 +9,8 @@ import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyInstance } from 'fastify';
 
 import { registerGetHealth, type HealthReader } from './features/health/get-health/endpoint.js';
-import { registerGetBootstrap } from './features/catalog/get-bootstrap/endpoint.js';
+import { registerCatalogRoutes } from './features/catalog/register-routes.js';
+import type { SessionDefaultsStore } from '../shared/contracts/session-defaults.js';
 import { registerAuthRoutes } from './features/auth/register-routes.js';
 import { registerGitRoutes } from './features/git/register-routes.js';
 import type { BootstrapDependencies } from './features/catalog/get-bootstrap/use-case.js';
@@ -62,6 +63,7 @@ import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
 
 export type AppDependencies = {
+  sessionDefaults?: SessionDefaultsStore;
   health: HealthReader;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
@@ -258,7 +260,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   registerGetHealth(app, deps.health);
   registerAuthRoutes(app, deps);
-  if (deps.bootstrap) registerGetBootstrap(app, deps.bootstrap);
+  registerCatalogRoutes(app, { bootstrap: deps.bootstrap, sessionDefaults: deps.sessionDefaults });
   registerSessionRoutes(app, deps);
   if (deps.autopilot)
     registerAutopilotRoutes(

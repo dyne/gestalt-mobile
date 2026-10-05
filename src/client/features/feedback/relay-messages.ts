@@ -21,6 +21,14 @@ const relayMessages = {
   SESSION_ROLLOUT_MISSING: 'This stored thread is no longer available.',
   SESSION_RUNTIME_UNAVAILABLE: 'The Codex runtime is unavailable. Retry shortly.',
   SESSION_START_FAILED: 'The session could not be started. Try again.',
+  ORG_EXECUTOR_PROFILE_UNAVAILABLE:
+    'The Org-plan executor profile could not be read. Restore the installed Gestalt agent profile and try again.',
+  ORG_EXECUTOR_PROFILE_INVALID:
+    'The Org-plan executor profile has invalid model settings. Repair the installed profile and try again.',
+  SESSION_CLOSE_FAILED: 'The session could not be closed. Try again.',
+  SESSION_DEFAULTS_READ_FAILED:
+    'Saved session defaults could not be loaded. Using built-in defaults; check the configuration file and reload.',
+  SESSION_DEFAULTS_SAVE_FAILED: 'Session defaults could not be saved. Try again.',
   SESSION_MODELS_READ_FAILED:
     'Models could not be loaded for this provider. Select another provider and try again.',
   SESSION_REFRESH_FAILED: 'Sessions could not be refreshed. Try again.',

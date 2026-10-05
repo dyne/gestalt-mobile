@@ -7,7 +7,7 @@ import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 
-const output = '/tmp/gestalt-mobile-activity-evidence';
+const output = process.env.ACTIVITY_EVIDENCE_DIR ?? '/tmp/gestalt-mobile-activity-evidence';
 for (const viewport of [
   { width: 320, height: 568 },
   { width: 390, height: 844 },

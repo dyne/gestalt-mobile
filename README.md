@@ -60,6 +60,19 @@ managed Gestalt Mobile instance can continue using port 3000. Development uses
 repository-local relay state under `.gestalt/dev-state` and disables passkey
 access control; it remains loopback-only and does not reuse production state.
 
+## Session defaults
+
+The Sessions tab starts with the session base, Skills profile and Codex model (`gpt-6.1-sol`).
+Expand **Advanced settings** to change model thinking, the Org-plan executor model
+and thinking, provider, sandbox, or approval policy, or to manage skill profiles.
+The executor starts with `gpt-5.6-terra` and high thinking; the supervisor uses medium thinking.
+Executor overrides preserve the installed role instructions and belong to each new session.
+**Save as defaults** stores the
+current session settings in `~/.gestalt/session-defaults.json` on the relay host.
+New browser visits load those settings; Advanced settings starts collapsed.
+Without saved settings, Mobile uses the workspace root, the default skills
+profile, Codex, Git-writable workspace access, and automatic approvals.
+
 ## Skill profiles
 
 Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:

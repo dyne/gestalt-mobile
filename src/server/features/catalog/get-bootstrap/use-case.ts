@@ -9,6 +9,7 @@ import type { BootstrapResponse } from './response.js';
 import type { ComponentVersion } from '../../../../shared/contracts/component-version.js';
 import type { ProviderAvailability } from '../../../../shared/contracts/llm-provider.js';
 export type BootstrapDependencies = {
+  sessionDefaults?: import('../../../../shared/contracts/session-defaults.js').SessionDefaultsStore;
   workspaces: Pick<WorkspaceCatalog, 'list'>;
   profiles: Pick<ProfileCatalog, 'list'>;
   models?: Pick<ModelCatalog, 'list'>;
@@ -25,7 +26,17 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
     deps.models?.list('codex').catch(() => []) ?? [],
     deps.models?.list('kimi').catch(() => []) ?? [],
   ]);
+  let sessionDefaults: BootstrapResponse['sessionDefaults'] = null;
+  let sessionDefaultsError = false;
+  if (deps.sessionDefaults) {
+    try {
+      sessionDefaults = await deps.sessionDefaults.read();
+    } catch {
+      sessionDefaultsError = true;
+    }
+  }
   return {
+    ...(deps.sessionDefaults ? { sessionDefaults, sessionDefaultsError } : {}),
     workspaces,
     profiles,
     models: { codex: codexModels, kimi: kimiModels },

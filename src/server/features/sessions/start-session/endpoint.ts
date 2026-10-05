@@ -40,6 +40,20 @@ export function registerStartSession(
       started = await startSession(body, deps);
     } catch (error) {
       deps.reportFailure?.('start-session', error);
+      if (
+        error instanceof Error &&
+        ['ORG_EXECUTOR_PROFILE_UNAVAILABLE', 'ORG_EXECUTOR_PROFILE_INVALID'].includes(error.message)
+      )
+        return reply
+          .code(503)
+          .type('application/problem+json')
+          .send(
+            problem(
+              error.message,
+              503,
+              'The installed Org-plan executor profile could not be configured. Restore the Gestalt agent profile and retry.',
+            ),
+          );
       if (error instanceof SkillProfileError)
         return reply
           .code(400)

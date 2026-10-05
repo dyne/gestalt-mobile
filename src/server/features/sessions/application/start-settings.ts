@@ -5,12 +5,13 @@
  */
 
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
+import type { SessionModelSettings } from '../../../../shared/contracts/session-model-settings.js';
 
 /** The relay's configured default, kept explicit so deployments can change it centrally later. */
 export const DEFAULT_SESSION_MODEL = 'gpt-5.6-terra';
 
 /** Settings accepted by Codex's generated thread/start contract. */
-export type StartSessionSettings = {
+export type StartSessionSettings = SessionModelSettings & {
   provider: LlmProvider;
   model?: string;
   sandbox?: 'workspace-git' | 'read-only' | 'workspace-write' | 'danger-full-access';

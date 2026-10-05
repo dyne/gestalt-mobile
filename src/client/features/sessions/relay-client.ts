@@ -112,13 +112,14 @@ export type RecentSession = {
   skillProfile?: string;
   orgPlanFilename?: string;
 };
-export type StartSessionSettings = {
-  provider?: LlmProvider;
-  model?: string;
-  sandbox?: 'workspace-git' | 'read-only' | 'workspace-write' | 'danger-full-access';
-  approvalPolicy?: 'untrusted' | 'on-request' | 'never';
-  skillProfile?: string;
-};
+export type StartSessionSettings =
+  import('../../../shared/contracts/session-model-settings.js').SessionModelSettings & {
+    provider?: LlmProvider;
+    model?: string;
+    sandbox?: 'workspace-git' | 'read-only' | 'workspace-write' | 'danger-full-access';
+    approvalPolicy?: 'untrusted' | 'on-request' | 'never';
+    skillProfile?: string;
+  };
 
 export type RelayHistoryItem = Record<string, unknown> & {
   id: string;

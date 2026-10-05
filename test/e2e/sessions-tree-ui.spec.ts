@@ -16,7 +16,8 @@ import {
   openThemeEvidence,
 } from './theme-evidence.js';
 
-const evidenceDirectory = '/tmp/gestalt-mobile-sessions-tree-evidence';
+const evidenceDirectory =
+  process.env.SESSIONS_EVIDENCE_DIR ?? '/tmp/gestalt-mobile-sessions-tree-evidence';
 
 test.beforeAll(async () => {
   await mkdir(evidenceDirectory, { recursive: true });
@@ -105,6 +106,7 @@ async function openSessions(
 
   await mockAuthenticatedStatus(page);
   const diagnostics = await openThemeEvidence(page, { theme, fontScale, url: '/' });
+  await page.getByText('Advanced settings', { exact: true }).click();
   await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
   return diagnostics;
 }

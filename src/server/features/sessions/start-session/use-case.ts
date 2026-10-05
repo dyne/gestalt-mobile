@@ -95,6 +95,18 @@ export async function startSession(
     provider: input.provider,
     profile: input.profile,
     model,
+    ...(input.provider === 'codex' &&
+    (input.reasoningEffort || input.executorModel || input.executorReasoningEffort)
+      ? {
+          modelSettings: {
+            ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+            ...(input.executorModel ? { executorModel: input.executorModel } : {}),
+            ...(input.executorReasoningEffort
+              ? { executorReasoningEffort: input.executorReasoningEffort }
+              : {}),
+          },
+        }
+      : {}),
     ...(branch ? { branch } : {}),
     sandbox: input.sandbox,
     approvalPolicy: input.approvalPolicy,

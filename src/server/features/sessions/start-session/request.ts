@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { thinkingLevels } from '../../../../shared/contracts/session-model-settings.js';
 
 const schema = z.object({
   workspaceId: z.string().min(1),
@@ -16,6 +17,9 @@ const schema = z.object({
     .trim()
     .optional()
     .transform((value) => value || undefined),
+  reasoningEffort: z.enum(thinkingLevels).optional(),
+  executorModel: z.string().trim().min(1).max(256).optional(),
+  executorReasoningEffort: z.enum(thinkingLevels).optional(),
   sandbox: z
     .enum(['workspace-git', 'read-only', 'workspace-write', 'danger-full-access'])
     .optional(),

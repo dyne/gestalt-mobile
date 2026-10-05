@@ -10,6 +10,106 @@ import { chatSnapshot } from './chat-snapshot-fixture.js';
 
 test.beforeEach(async ({ page }) => mockAuthenticatedStatus(page));
 
+test('saves session defaults and restores them after reload with Advanced settings collapsed', async ({
+  page,
+}) => {
+  let defaults: Record<string, unknown> | null = null;
+  let newSessionRequest: Record<string, unknown> | null = null;
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: workspaceTree(),
+        profiles: [],
+        sessions: [],
+        models: { codex: ['gpt-6.1-sol', 'gpt-6-sol'], kimi: [] },
+        sessionDefaults: defaults,
+      }),
+    }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '{"profiles":[]}' }),
+  );
+  await page.route('**/api/sessions', (route) => {
+    if (route.request().method() === 'POST') {
+      newSessionRequest = route.request().postDataJSON();
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({ code: 'SESSION_START_FAILED' }),
+      });
+    }
+    return route.fulfill({ contentType: 'application/json', body: '[]' });
+  });
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/session-defaults', (route) => {
+    if (route.request().method() === 'PUT') defaults = route.request().postDataJSON();
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ defaults }) });
+  });
+  await page.goto('/');
+  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByLabel('Sandbox')).toBeHidden();
+  await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Session base' })).toHaveCount(0);
+  await page.getByLabel('Codex model').selectOption('gpt-6-sol');
+  await page.getByText('Advanced settings', { exact: true }).click();
+  await page.getByLabel('Sandbox').selectOption('read-only');
+  await page.getByLabel('Approval policy').selectOption('untrusted');
+  await page.getByLabel('Model thinking').selectOption('high');
+  await page.getByLabel('Executor model').selectOption('gpt-6.1-sol');
+  await page.getByLabel('Executor thinking').selectOption('xhigh');
+  await page.getByRole('button', { name: 'Save as defaults' }).click();
+  await expect
+    .poll(() => defaults)
+    .toMatchObject({
+      workspaceId: 'workspace-1',
+      provider: 'codex',
+      model: 'gpt-6-sol',
+      sandbox: 'read-only',
+      approvalPolicy: 'untrusted',
+      skillProfile: '',
+      reasoningEffort: 'high',
+      executorModel: 'gpt-6.1-sol',
+      executorReasoningEffort: 'xhigh',
+    });
+  await page.reload();
+  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6-sol');
+  await expect(page.getByLabel('Sandbox')).toBeHidden();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: 'test-results/session-settings-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.screenshot({ path: 'test-results/session-settings-desktop.png', fullPage: true });
+  await page.getByText('Advanced settings', { exact: true }).click();
+  await expect(page.getByLabel('Sandbox')).toHaveValue('read-only');
+  await expect(page.getByLabel('Approval policy')).toHaveValue('untrusted');
+  await expect(page.getByLabel('Model thinking')).toHaveValue('high');
+  await expect(page.getByLabel('Executor model')).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByLabel('Executor thinking')).toHaveValue('xhigh');
+  await page.screenshot({
+    path: 'test-results/session-settings-advanced-desktop.png',
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: 'test-results/session-settings-advanced-mobile.png',
+    fullPage: true,
+  });
+  await page.getByText('Advanced settings', { exact: true }).click();
+  await page.getByRole('button', { name: 'Create session' }).click();
+  await expect
+    .poll(() => newSessionRequest)
+    .toMatchObject({
+      model: 'gpt-6-sol',
+      reasoningEffort: 'high',
+      executorModel: 'gpt-6.1-sol',
+      executorReasoningEffort: 'xhigh',
+      sandbox: 'read-only',
+      approvalPolicy: 'untrusted',
+    });
+});
+
 type BootstrapWorkspace = {
   id: string;
   name: string;
@@ -72,7 +172,10 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
         workspaceId: 'workspace-1',
         profile: 'default',
         provider: 'codex',
-        model: 'gpt-5.6-terra',
+        model: 'gpt-6.1-sol',
+        reasoningEffort: 'medium',
+        executorModel: 'gpt-5.6-terra',
+        executorReasoningEffort: 'high',
         sandbox: 'workspace-git',
         approvalPolicy: 'on-request',
       });
@@ -104,6 +207,7 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByText('Advanced settings', { exact: true }).click();
   await page.getByLabel('Approval policy').selectOption({ label: 'Ask out of workspace' });
   await page.getByRole('button', { name: 'Create session' }).click();
 
@@ -170,7 +274,10 @@ test('sends a selected named skill profile only when creating a new session', as
       workspaceId: 'workspace-1',
       profile: 'default',
       provider: 'codex',
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-sol',
+      reasoningEffort: 'medium',
+      executorModel: 'gpt-5.6-terra',
+      executorReasoningEffort: 'high',
       sandbox: 'workspace-git',
       approvalPolicy: 'never',
       skillProfile: 'focused',
@@ -268,9 +375,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByLabel('Recent sessions').getByText('2 hours ago')).toBeVisible();
   await expect(page.getByLabel('Recent sessions').getByText('/projects/from-ssh')).toBeVisible();
   await expect(page.getByLabel('Recent sessions').getByText('recent-thread-id')).toHaveCount(0);
-  await expect(
-    page.getByLabel('Recent sessions').getByRole('button', { name: 'Copy' }),
-  ).toHaveCount(1);
+  await expect(page.getByLabel('Recent sessions').getByLabel('Session menu')).toHaveCount(1);
 
   await expect(page.getByLabel('Open sessions').getByRole('button', { name: 'Open' })).toHaveCount(
     1,
@@ -358,10 +463,10 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(openSessions.getByRole('listitem')).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Close' })).toHaveCount(1);
-  await expect(openSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1);
+  await expect(openSessions.getByLabel('Session menu')).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Forget' })).toHaveCount(0);
   await expect(savedSessions.getByRole('listitem')).toHaveCount(1);
-  await expect(savedSessions.getByRole('button', { name: 'Copy', exact: true })).toHaveCount(1);
+  await expect(savedSessions.getByLabel('Session menu')).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(1);
 
@@ -371,6 +476,10 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(page.getByLabel('Recent sessions').getByText('/projects/stopped')).toBeVisible();
 
   await openSessions.getByRole('button', { name: 'Close' }).click();
+  await page
+    .getByRole('dialog', { name: 'Close session?' })
+    .getByRole('button', { name: 'Close session', exact: true })
+    .click();
   await expect.poll(() => closed).toBe(true);
   await expect(page.getByRole('heading', { name: 'Open sessions' })).toHaveCount(0);
   await expect(savedSessions.getByRole('listitem')).toHaveCount(1);
@@ -510,7 +619,10 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
       workspaceId: 'workspace-1',
       profile: 'default',
       provider: 'codex',
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-sol',
+      reasoningEffort: 'medium',
+      executorModel: 'gpt-5.6-terra',
+      executorReasoningEffort: 'high',
       sandbox: 'workspace-write',
       approvalPolicy: 'never',
     });
@@ -523,9 +635,10 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByText('Advanced settings', { exact: true }).click();
   await page.getByLabel('Sandbox').selectOption('workspace-write');
   await page.getByLabel('Approval policy').selectOption('never');
-  await expect(page.getByLabel('Model')).toHaveValue('gpt-5.6-terra');
+  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
   await page.getByRole('button', { name: 'Create session' }).click();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
@@ -621,6 +734,7 @@ test('shows a start-session failure and permits a retry', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
   await expect(page.getByLabel('Workspace')).toHaveCount(0);
+  await page.getByText('Advanced settings', { exact: true }).click();
   const repository = page.getByRole('treeitem', { name: /^repository/ });
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
@@ -686,7 +800,7 @@ test('keeps active-session glass chrome on one row at 320px with 200% text', asy
     state: 'ready',
     workspaceId: 'workspace-1',
     workspacePath: '/projects/a-very-long-active-workspace-name',
-    model: 'gpt-5.6-terra',
+    model: 'gpt-6.1-sol',
     profile: 'work',
     activeTurnId: null,
   };
@@ -1065,6 +1179,7 @@ test('keeps Sessions and Git selections independent through a successful clone r
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
   const repository = page.getByRole('treeitem', { name: /^repository/ });
+  await page.getByText('Advanced settings', { exact: true }).click();
   await repository.click();
   await expect(repository).toHaveAttribute('aria-selected', 'true');
 

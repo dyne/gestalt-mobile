@@ -70,7 +70,8 @@ async function listProfileThreads(
       limit: 20,
       sortKey: 'recency_at',
       sortDirection: 'desc',
-      sourceKinds: ['cli', 'appServer'],
+      sourceKinds: ['cli', 'vscode', 'appServer'],
+      modelProviders: [],
     })) as ThreadListResult;
     return (result.data ?? []).flatMap((thread) => {
       if (typeof thread.id !== 'string' || typeof thread.cwd !== 'string') return [];

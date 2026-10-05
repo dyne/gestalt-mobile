@@ -21,6 +21,89 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('restores model config and keeps executor turns separate from the supervisor model', async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const config = {
+      model_reasoning_effort: 'high',
+      agents: { 'org-plan-executor': { config_file: '/profiles/session-executor.toml' } },
+    };
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method, params) => {
+            requests.push({ method, params });
+            if (method === 'thread/start') return { thread: { id: 'root-thread' } };
+            if (method === 'turn/start') return { turn: { id: 'turn-1' } };
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      async () => [{ path: '/skills/one', enabled: true }],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      64,
+      undefined,
+      async () => config,
+    );
+    const starting = RelaySession.create({
+      id: 'models',
+      effectiveSkillSelection: { skills: [] },
+      workspaceId: 'w',
+      workspacePath: '/workspace',
+      profile: 'default',
+      provider: 'codex',
+      model: 'gpt-6-sol',
+      modelSettings: {
+        reasoningEffort: 'high',
+        executorModel: 'gpt-6.1-sol',
+        executorReasoningEffort: 'xhigh',
+      },
+      now: 't',
+    }).snapshot;
+    const started = await runtime.start(starting, 't');
+    await runtime.startTurn(started, 'supervise', undefined, 't');
+    await runtime.startExecutorTurn(started, 'executor-thread', 'execute', 'message-1');
+    expect(
+      requests.filter(({ method }) => method === 'turn/start').map(({ params }) => params),
+    ).toEqual([
+      expect.objectContaining({ threadId: 'root-thread', model: 'gpt-6-sol', effort: 'high' }),
+      expect.objectContaining({
+        threadId: 'executor-thread',
+        model: 'gpt-6.1-sol',
+        effort: 'xhigh',
+      }),
+    ]);
+    runtime.stop(started.id);
+    await runtime.restore(started, 'later');
+    const writerRequests = requests.filter(
+      ({ method }) => method === 'thread/start' || method === 'thread/resume',
+    );
+    expect(writerRequests).toHaveLength(2);
+    for (const { params } of writerRequests)
+      expect(params).toMatchObject({
+        config: { ...config, skills: { config: [{ path: '/skills/one', enabled: true }] } },
+      });
+    requests.length = 0;
+    await runtime.startExecutorTurn(
+      { ...started, modelSettings: undefined },
+      'legacy-executor',
+      'execute',
+      'message-2',
+    );
+    expect(requests[0]?.params).not.toHaveProperty('model');
+    expect(requests[0]?.params).not.toHaveProperty('effort');
+    runtime.stopAll();
+  });
+
   it.each([
     ['interrupts an active executor', [{ id: 'turn', status: 'inProgress', items: [] }], false],
     ['does nothing for an idle executor', [], false],

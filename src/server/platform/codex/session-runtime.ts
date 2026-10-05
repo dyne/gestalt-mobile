@@ -65,8 +65,16 @@ export type AppServerLaunchInput = {
 /** Sticky thread config keeps skill paths out of the app-server process argv. */
 export function threadSkillConfig(
   skillsConfig?: readonly { path: string; enabled: boolean }[],
+  modelConfig: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return skillsConfig === undefined ? {} : { config: { skills: { config: skillsConfig } } };
+  return skillsConfig === undefined && !Object.keys(modelConfig).length
+    ? {}
+    : {
+        config: {
+          ...modelConfig,
+          ...(skillsConfig === undefined ? {} : { skills: { config: skillsConfig } }),
+        },
+      };
 }
 
 export type RestoreSessionResult =
@@ -139,6 +147,7 @@ class SessionResource {
     readonly sessionId: string,
     readonly process: AppServer,
     readonly skillsConfig: readonly { path: string; enabled: boolean }[] | undefined,
+    readonly modelConfig: Record<string, unknown>,
     readonly planStatusLease: PlanStatusLease | undefined,
     readonly planMeasurementToken: string,
     private unregister: readonly (() => void)[],
@@ -212,6 +221,9 @@ export class CodexSessionRuntime {
     _legacyRequestTimeoutMs: number | undefined = undefined,
     private readonly maxPendingRequests = 64,
     private readonly readerCwd?: string,
+    private readonly resolveModelConfig?: (
+      session: RelaySessionSnapshot,
+    ) => Promise<Record<string, unknown>>,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -235,6 +247,7 @@ export class CodexSessionRuntime {
         resource.process,
         session,
         resource.skillsConfig,
+        resource.modelConfig,
       );
       resource.threadId = startedThreadId;
       this.sessions.set(session.id, resource);
@@ -353,6 +366,9 @@ export class CodexSessionRuntime {
         input: [{ type: 'text', text, text_elements: [] }],
         ...(clientUserMessageId ? { clientUserMessageId } : {}),
         ...(session.model ? { model: session.model } : {}),
+        ...(session.modelSettings?.reasoningEffort
+          ? { effort: session.modelSettings.reasoningEffort }
+          : {}),
       }),
     );
     resource.turnThreads.set(result, session.threadId);
@@ -372,7 +388,12 @@ export class CodexSessionRuntime {
         threadId: childThreadId,
         input: [{ type: 'text', text, text_elements: [] }],
         clientUserMessageId,
-        ...(session.model ? { model: session.model } : {}),
+        ...(session.modelSettings?.executorModel
+          ? { model: session.modelSettings.executorModel }
+          : {}),
+        ...(session.modelSettings?.executorReasoningEffort
+          ? { effort: session.modelSettings.executorReasoningEffort }
+          : {}),
       }),
     );
     if (resource.turnThreads.has(result) || resource.turnThreads.size < 256)
@@ -874,7 +895,7 @@ export class CodexSessionRuntime {
         await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
-          ...threadSkillConfig(resource.skillsConfig),
+          ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
           ...(session.executionPolicy?.approvalPolicy
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
             : {}),
@@ -898,6 +919,7 @@ export class CodexSessionRuntime {
           resource.process,
           session,
           resource.skillsConfig,
+          resource.modelConfig,
         );
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
@@ -977,19 +999,24 @@ export class CodexSessionRuntime {
     process: AppServer,
     session: RelaySessionSnapshot,
     skillsConfig?: readonly { path: string; enabled: boolean }[],
+    modelConfig: Record<string, unknown> = {},
   ): Promise<string> {
     return decodeThreadStart(
-      await process.rpc.request('thread/start', this.threadStartParams(session, skillsConfig)),
+      await process.rpc.request(
+        'thread/start',
+        this.threadStartParams(session, skillsConfig, modelConfig),
+      ),
     );
   }
 
   private threadStartParams(
     session: RelaySessionSnapshot,
     skillsConfig?: readonly { path: string; enabled: boolean }[],
+    modelConfig: Record<string, unknown> = {},
   ): Record<string, unknown> {
     return {
       cwd: session.workspacePath,
-      ...threadSkillConfig(skillsConfig),
+      ...threadSkillConfig(skillsConfig, modelConfig),
       approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
       dynamicTools: [
         gestaltQuizDynamicTool,
@@ -1021,6 +1048,7 @@ export class CodexSessionRuntime {
     try {
       const token = randomUUID();
       const skillsConfig = await this.resolveSkills?.(session);
+      const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
       const process = this.launch({
         profile: session.profile,
         cwd: session.workspacePath,
@@ -1044,6 +1072,7 @@ export class CodexSessionRuntime {
         session.id,
         process,
         skillsConfig,
+        modelConfig,
         lease,
         token,
         [],

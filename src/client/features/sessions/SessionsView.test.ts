@@ -7,11 +7,24 @@
 /* @vitest-environment jsdom */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
 import SessionsView from './SessionsView.svelte';
 
 afterEach(cleanup);
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+    this.dispatchEvent(new Event('close'));
+  };
+});
+
+function expandAdvanced() {
+  (document.querySelector('.advanced-settings') as HTMLDetailsElement).open = true;
+}
 
 const repository: WorkspaceOption = {
   id: 'opaque:group/repository%leaf',
@@ -83,6 +96,110 @@ function renderView(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionsView session base tree', () => {
+  it('keeps the session base above profile and model while Advanced settings starts collapsed', async () => {
+    const onsavedefaults = vi.fn();
+    renderView({ models: ['gpt-6.1-sol'], selectedModel: 'gpt-6.1-sol', onsavedefaults });
+    expect(document.querySelectorAll('.essential-settings select')).toHaveLength(2);
+    expect((document.querySelector('.advanced-settings') as HTMLDetailsElement).open).toBe(false);
+    expect(
+      screen.getByRole('button', { name: 'Save as defaults' }).closest('.advanced-settings'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('tree', { name: 'Session base' }).closest('.advanced-settings'),
+    ).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Session base' })).toBeNull();
+    expect(
+      screen
+        .getByRole('tree', { name: 'Session base' })
+        .compareDocumentPosition(screen.getByLabelText('Skills profile')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByLabelText('Model thinking').closest('.advanced-settings')).toBeTruthy();
+    expect(screen.getByLabelText('Executor model').closest('.advanced-settings')).toBeTruthy();
+    expandAdvanced();
+    expect(screen.getByRole('tree', { name: 'Session base' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save as defaults' }));
+    expect(onsavedefaults).toHaveBeenCalledOnce();
+  });
+
+  it('changes supervisor and executor thinking independently', async () => {
+    const onreasoningchange = vi.fn();
+    const onexecutormodelchange = vi.fn();
+    const onexecutorreasoningchange = vi.fn();
+    renderView({
+      executorModels: ['gpt-6.1-sol'],
+      onreasoningchange,
+      onexecutormodelchange,
+      onexecutorreasoningchange,
+    });
+    expandAdvanced();
+    await fireEvent.change(screen.getByLabelText('Model thinking'), { target: { value: 'high' } });
+    await fireEvent.change(screen.getByLabelText('Executor model'), {
+      target: { value: 'gpt-6.1-sol' },
+    });
+    await fireEvent.change(screen.getByLabelText('Executor thinking'), {
+      target: { value: 'xhigh' },
+    });
+    expect(onreasoningchange).toHaveBeenCalledWith('high');
+    expect(onexecutormodelchange).toHaveBeenCalledWith('gpt-6.1-sol');
+    expect(onexecutorreasoningchange).toHaveBeenCalledWith('xhigh');
+  });
+
+  it('requires confirmation to close and permits cancelling', async () => {
+    const onclose = vi.fn();
+    renderView({ sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }], onclose });
+    await fireEvent.click(screen.getByRole('button', { name: /^Close$/ }));
+    expect(onclose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Close session?' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onclose).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: /^Close$/ }));
+    await fireEvent.click(screen.getByRole('button', { name: /^Close session$/ }));
+    expect(onclose).toHaveBeenCalledWith('live');
+  });
+
+  it('updates the shared Agents popup when the session activity changes', async () => {
+    const activity = {
+      sessionId: 'live',
+      confidence: 'fresh' as const,
+      aggregateSubagents: 'idle' as const,
+      root: {
+        state: 'idle' as const,
+        observedAt: '2026-10-05T00:00:00Z',
+        lastActivityAt: '2026-10-05T00:00:00Z',
+      },
+      subagents: [],
+    };
+    const { rerender } = renderView({
+      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      activitySnapshots: new Map([['live', activity]]),
+    });
+    expect(screen.getByText('Agents (1)')).toBeTruthy();
+    await rerender({
+      activitySnapshots: new Map([
+        [
+          'live',
+          {
+            ...activity,
+            aggregateSubagents: 'working',
+            subagents: [
+              {
+                id: 'child',
+                canonicalTaskName: 'worker',
+                state: 'working',
+                lastActivityAt: '2026-10-05T00:00:00Z',
+                observedAt: '2026-10-05T00:00:00Z',
+              },
+            ],
+          },
+        ],
+      ]),
+    });
+    expect(screen.getByText('Agents (2)')).toBeTruthy();
+    (document.querySelector('.agents') as HTMLDetailsElement).open = true;
+    expect(screen.getByText('worker')).toBeTruthy();
+  });
+
   it('orders open-session actions in a vertical rail and keeps status controls accessible', () => {
     const activity = {
       sessionId: 'live',
@@ -112,7 +229,7 @@ describe('SessionsView session base tree', () => {
     const control = (index: number, selector: string) =>
       actions[index]?.matches(selector) ? actions[index] : actions[index]?.querySelector(selector);
     expect(control(0, 'button')?.textContent?.trim()).toBe('Open');
-    expect(control(1, 'button')?.textContent?.trim()).toBe('Copy');
+    expect(control(1, 'summary')?.getAttribute('aria-label')).toBe('Session menu');
     expect(control(2, 'button')?.getAttribute('aria-label')).toBe('Autopilot: Unavailable');
     expect(control(3, 'summary')?.textContent?.trim()).toBe('Agents (1)');
     expect(control(4, 'button')?.textContent?.trim()).toBe('Close');
@@ -181,7 +298,7 @@ describe('SessionsView session base tree', () => {
     });
     expect(document.querySelector('.verdict-dot')?.classList.contains('live')).toBe(true);
   });
-  it('makes a disconnected session activity projection explicit in local Autopilot liveness', () => {
+  it('keeps Autopilot liveness text out of the session action rail', () => {
     renderView({
       sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
       autopilotSnapshots: new Map([
@@ -212,25 +329,26 @@ describe('SessionsView session base tree', () => {
         ],
       ]),
     });
-    const liveness = screen.getByRole('status', { name: 'Autopilot disconnected' });
-    expect(liveness.getAttribute('data-state')).toBe('disconnected');
-    expect(liveness.classList.contains('active')).toBe(false);
+    expect(screen.queryByRole('status', { name: 'Autopilot disconnected' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Autopilot: Monitoring' })).toBeTruthy();
   });
   it('uses clear approval labels while emitting the Codex policy value', async () => {
     const onapprovalpolicychange = vi.fn();
     renderView({ onapprovalpolicychange });
+    expandAdvanced();
 
     const policy = screen.getByLabelText('Approval policy') as HTMLSelectElement;
     expect(policy.textContent).toContain('Ask on all commands');
     expect(policy.textContent).toContain('Ask out of workspace');
     expect(policy.textContent).toContain('Approve everything');
-    expect(screen.getByText(/does not expand the sandbox's technical permissions/i)).toBeTruthy();
+    expect(screen.queryByText(/does not expand the sandbox's technical permissions/i)).toBeNull();
     await fireEvent.change(policy, { target: { value: 'never' } });
     expect(onapprovalpolicychange).toHaveBeenCalledWith('never');
   });
 
   it('replaces the workspace select and emits exact IDs for every node depth', async () => {
     const { onworkspacechange, onstart } = renderView();
+    expandAdvanced();
 
     expect(screen.queryByLabelText('Workspace')).toBeNull();
     expect(screen.getByRole('tree', { name: 'Session base' })).toBeTruthy();
@@ -251,6 +369,7 @@ describe('SessionsView session base tree', () => {
     const { onexpandedchange, onworkspacechange } = renderView({
       workspaceId: repository.id,
     });
+    expandAdvanced();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse group' }));
     expect(onexpandedchange).toHaveBeenCalledWith(new Set([root.id]));
@@ -288,6 +407,7 @@ describe('SessionsView session base tree', () => {
 
   it('selects a named profile only for new sessions and opens its manager', async () => {
     const { onskillprofilechange, onmanageprofiles } = renderView();
+    expandAdvanced();
     const select = screen.getByLabelText('Skills profile');
     expect((select as HTMLSelectElement).value).toBe('');
     expect((select as HTMLSelectElement).options[0]?.text).toBe('Default');
@@ -451,7 +571,10 @@ describe('SessionsView session base tree', () => {
       ],
     });
 
-    const copyButtons = screen.getAllByRole('button', { name: 'Copy' });
+    document
+      .querySelectorAll<HTMLDetailsElement>('.session-menu')
+      .forEach((menu) => (menu.open = true));
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy session to CLI' });
     expect(copyButtons).toHaveLength(2);
     await fireEvent.click(copyButtons[0]!);
     await fireEvent.click(copyButtons[1]!);
@@ -471,20 +594,28 @@ describe('SessionsView session base tree', () => {
       ],
     });
 
-    for (const name of ['Open', 'Copy', 'Forget', 'Manage skill profiles', 'Create session']) {
+    expandAdvanced();
+    (document.querySelector('.session-menu') as HTMLDetailsElement).open = true;
+    for (const name of [
+      'Open',
+      'Copy session to CLI',
+      'Forget',
+      'Manage skill profiles',
+      'Create session',
+    ]) {
       expect(screen.getByRole('button', { name }).classList.contains('app-control')).toBe(true);
     }
   });
 });
 
 describe('SessionsView provider selection', () => {
-  it('always identifies the provider and explains when kimi is unavailable', () => {
+  it('keeps unavailable Kimi disabled without redundant help text', () => {
     renderView();
     const picker = screen.getByLabelText('Provider') as HTMLSelectElement;
     expect(picker.value).toBe('codex');
     expect((picker.querySelector('option[value="kimi"]') as HTMLOptionElement).disabled).toBe(true);
-    expect(screen.getByText(/Kimi is unavailable because its CLI was not found/i)).toBeTruthy();
-    expect(screen.getByText(/Codex should use as its working directory/)).toBeTruthy();
+    expect(screen.queryByText(/Kimi is unavailable because its CLI was not found/i)).toBeNull();
+    expect(screen.getByRole('tree', { name: 'Session base' })).toBeTruthy();
   });
 
   it('shows the provider picker and emits changes when kimi is available', async () => {
@@ -503,7 +634,9 @@ describe('SessionsView provider selection', () => {
       models: ['k2-thinking'],
       selectedModel: 'k2-thinking',
     });
-    expect(screen.getByText(/Kimi should use as its working directory/)).toBeTruthy();
+    expect(screen.getByRole('tree', { name: 'Session base' })).toBeTruthy();
+    expect(screen.queryByLabelText('Model thinking')).toBeNull();
+    expect(screen.queryByLabelText('Executor model')).toBeNull();
     expect(screen.queryByLabelText('Sandbox')).toBeNull();
     expect(screen.queryByLabelText('Approval policy')).toBeNull();
     expect(screen.getByLabelText('Skills profile')).toBeTruthy();
@@ -556,7 +689,7 @@ describe('SessionsView provider selection', () => {
       ],
     });
 
-    expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(1);
+    expect(document.querySelectorAll('.session-menu')).toHaveLength(1);
   });
 
   it('hides the resume Copy action for kimi recent threads', () => {
@@ -577,8 +710,7 @@ describe('SessionsView provider selection', () => {
         },
       ],
     });
-    const copyButtons = screen.getAllByRole('button', { name: 'Copy' });
-    expect(copyButtons).toHaveLength(1);
+    expect(document.querySelectorAll('.session-menu')).toHaveLength(1);
     expect(screen.getByText('Kimi')).toBeTruthy();
   });
 

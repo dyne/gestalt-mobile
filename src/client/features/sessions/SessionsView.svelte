@@ -21,13 +21,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
   import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
   import AutopilotControl from '../autopilot/AutopilotControl.svelte';
-  import AutopilotLiveness from '../autopilot/AutopilotLiveness.svelte';
   import type { AutopilotSnapshot } from '../autopilot/contracts.js';
   import type { OrgPlanAttention } from '../autopilot/contracts.js';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
   import AutopilotSafetyStop from '../autopilot/AutopilotSafetyStop.svelte';
   import PlanProgress from '../plans/PlanProgress.svelte';
   import { isSessionStatus } from './session-status.js';
+  import {
+    thinkingLevels,
+    type ThinkingLevel,
+  } from '../../../shared/contracts/session-model-settings.js';
 
   type Props = {
     sessions: RelaySession[];
@@ -44,6 +47,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     approvalPolicy: NonNullable<StartSessionSettings['approvalPolicy']>;
     models?: string[];
     selectedModel?: string;
+    reasoningEffort?: ThinkingLevel;
+    executorModels?: string[];
+    executorModel?: string;
+    executorReasoningEffort?: ThinkingLevel;
+    onreasoningchange?: (value: ThinkingLevel) => void;
+    onexecutormodelchange?: (value: string) => void;
+    onexecutorreasoningchange?: (value: ThinkingLevel) => void;
     /** Provider chosen for the new session; defaults to codex. */
     provider?: LlmProvider;
     /** Whether the kimi CLI is installed; enables the Kimi provider option when true. */
@@ -76,6 +86,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onforget: (id: string) => void;
     oncopyresume: (command: string) => void;
     onstart: () => void;
+    savingDefaults?: boolean;
+    advancedExpanded?: boolean;
+    onsavedefaults?: () => void;
   };
 
   let {
@@ -93,6 +106,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     approvalPolicy,
     models = [],
     selectedModel = '',
+    reasoningEffort = 'medium',
+    executorModels = [],
+    executorModel = 'gpt-5.6-terra',
+    executorReasoningEffort = 'high',
+    onreasoningchange = () => {},
+    onexecutormodelchange = () => {},
+    onexecutorreasoningchange = () => {},
     provider = 'codex',
     kimiAvailable = false,
     modelsLoading = false,
@@ -119,6 +139,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onforget,
     oncopyresume,
     onstart,
+    savingDefaults = false,
+    advancedExpanded = $bindable(false),
+    onsavedefaults = () => {},
   }: Props = $props();
 
   let openSessions = $derived(
@@ -139,7 +162,58 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
   let providerLabel = $derived(provider === 'kimi' ? 'Kimi' : 'Codex');
+  let closeDialog = $state<HTMLDialogElement | null>(null);
+  let closingSessionId = $state<string | null>(null);
+  function requestClose(id: string) {
+    closingSessionId = id;
+    closeDialog?.showModal();
+  }
 </script>
+
+{#snippet sessionMenu(command: string)}
+  <details class="session-menu">
+    <summary aria-label="Session menu">
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg
+      >
+    </summary>
+    <div class="session-menu-items">
+      <AppControl
+        compact
+        onclick={(event) => {
+          oncopyresume(command);
+          const menu = event.currentTarget.closest('details');
+          if (menu) menu.open = false;
+        }}>Copy session to CLI</AppControl
+      >
+    </div>
+  </details>
+{/snippet}
+
+<dialog
+  bind:this={closeDialog}
+  aria-labelledby="close-session-title"
+  onclose={() => (closingSessionId = null)}
+>
+  <h2 id="close-session-title">Close session?</h2>
+  <p>You can reopen this session from the session list.</p>
+  <div class="dialog-actions">
+    <AppControl onclick={() => closeDialog?.close()}>Cancel</AppControl>
+    <AppControl
+      primary
+      onclick={() => {
+        if (closingSessionId) onclose(closingSessionId);
+        closeDialog?.close();
+      }}>Close session</AppControl
+    >
+  </div>
+</dialog>
 
 <section aria-labelledby="sessions-title">
   <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
@@ -164,9 +238,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
               {#if session.resumeCommand && session.provider !== 'kimi'}
-                <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
-                  >Copy</AppControl
-                >
+                {@render sessionMenu(session.resumeCommand)}
               {/if}
               {#if session.provider !== 'kimi'}
                 <AutopilotControl
@@ -181,19 +253,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <AgentActivityIndicators
                 compact
                 activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
-                popupAlign="start"
                 rootModel={session.model ?? models?.[0]}
                 plan={session.plan}
                 onopen={() => onactivityopen(session.id)}
               />
-              <AppControl compact full onclick={() => onclose(session.id)}>Close</AppControl>
-              {#if session.provider !== 'kimi'}
-                <AutopilotLiveness
-                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                  connected={(activitySnapshots.get(session.id) ?? session.agentActivity)?.root
-                    .state !== 'disconnected'}
-                />
-              {/if}
+              <AppControl compact full onclick={() => requestClose(session.id)}>Close</AppControl>
             </div>
             <div class="session-details">
               <div class="session-summary">
@@ -289,9 +353,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
             {#if session.resumeCommand && session.provider !== 'kimi'}
-              <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
-                >Copy</AppControl
-              >
+              {@render sessionMenu(session.resumeCommand)}
             {/if}
             <AppControl compact full onclick={() => onforget(session.id)}>Forget</AppControl>
           </div>
@@ -327,11 +389,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onstart();
     }}
   >
-    <section class="session-base" aria-labelledby="session-base-title">
-      <div class="session-base-heading">
-        <h3 id="session-base-title">Session base</h3>
-        <p>Select the folder or repository {providerLabel} should use as its working directory.</p>
-      </div>
+    <h3 class="new-session-title">New session</h3>
+    <div class="session-base">
       <FilesystemTree
         roots={workspaceTree}
         {expandedIds}
@@ -341,129 +400,168 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         {onexpandedchange}
         onselect={(node) => onworkspacechange(node.id)}
       />
-    </section>
-    <section class="session-settings" aria-label="New session settings">
-      <div
-        class="session-setting-labels"
-        style:grid-template-columns={provider === 'kimi'
-          ? 'minmax(0, 1fr)'
-          : 'repeat(3, minmax(0, 1fr))'}
-      >
-        <label for="skills-profile">Skills profile</label>
-        {#if provider !== 'kimi'}
-          <label for="sandbox">Sandbox</label>
-          <label for="approval-policy">Approval policy</label>
-        {/if}
-      </div>
-      <div
-        class="session-setting-controls"
-        style:grid-template-columns={provider === 'kimi'
-          ? 'minmax(0, 1fr)'
-          : 'repeat(3, minmax(0, 1fr))'}
-      >
+    </div>
+    <div class="essential-settings">
+      <label for="skills-profile"
+        >Skills profile
         <select
           id="skills-profile"
           value={selectedSkillProfile}
           onchange={(event) => onskillprofilechange(event.currentTarget.value)}
         >
           <option value="">Default</option>
-          {#each skillProfiles as profile (profile.name)}
-            <option value={profile.name}>{profile.name}</option>
-          {/each}
+          {#each skillProfiles as profile (profile.name)}<option value={profile.name}
+              >{profile.name}</option
+            >{/each}
         </select>
-        {#if provider !== 'kimi'}
-          <select
-            id="sandbox"
-            value={sandbox}
-            onchange={(event) =>
-              onsandboxchange(
-                event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
-              )}
-          >
-            <option value="workspace-git">workspace-git (Git writable)</option>
-            <option value="workspace-write">workspace-write</option>
-            <option value="read-only">read-only</option>
-            <option value="danger-full-access">danger-full-access</option>
-          </select>
-          <select
-            id="approval-policy"
-            value={approvalPolicy}
-            aria-describedby="approval-policy-help"
-            onchange={(event) =>
-              onapprovalpolicychange(
-                event.currentTarget.value as NonNullable<StartSessionSettings['approvalPolicy']>,
-              )}
-          >
-            <option value="untrusted">Ask on all commands</option>
-            <option value="on-request">Ask out of workspace</option>
-            <option value="never">Approve everything</option>
-          </select>
-        {/if}
-      </div>
-      {#if provider !== 'kimi'}
-        <p id="approval-policy-help">
-          This controls when {providerLabel} asks; it does not expand the sandbox's technical permissions.
-        </p>
-      {/if}
-      {#if skillProfileError}<p class="skills-profile-error" role="alert">
-          {skillProfileError}
-        </p>{/if}
-      <div class="session-secondary-actions">
-        <AppControl
-          id="manage-skill-profiles"
-          onclick={(event) => onmanageprofiles(event.currentTarget)}
-          >Manage skill profiles
-        </AppControl>
-        <div class="model-control">
-          <label for="session-provider">Provider</label>
-          <select
-            id="session-provider"
-            value={provider}
-            aria-describedby={!kimiAvailable ? 'provider-availability' : undefined}
-            onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
-          >
-            <option value="codex">Codex</option>
-            <option value="kimi" disabled={!kimiAvailable}
-              >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
-            >
-          </select>
-        </div>
-        <div class="model-control">
-          <label for="model">{providerLabel} model</label>
-          <select
-            id="model"
-            value={selectedModel}
-            disabled={modelsLoading || models.length === 0}
-            onchange={(event) => onmodelchange(event.currentTarget.value)}
-          >
-            {#if modelsLoading}
-              <option value="">Loading models…</option>
-            {:else if models.length === 0}
-              <option value="">Choose automatically</option>
-            {/if}
-            {#each models as model (model)}
-              <option value={model}>{model}</option>
-            {/each}
-          </select>
-        </div>
-        <AppControl
-          class="new-session-button"
-          type="submit"
-          primary
-          disabled={!selectedWorkspace ||
-            startingSession ||
-            modelsLoading ||
-            (models.length > 0 && !selectedModel)}
+      </label>
+      <label for="model"
+        >{providerLabel} model
+        <select
+          id="model"
+          value={selectedModel}
+          disabled={modelsLoading || models.length === 0}
+          onchange={(event) => onmodelchange(event.currentTarget.value)}
         >
-          {startingSession ? 'Creating…' : 'Create session'}
-        </AppControl>
+          {#if modelsLoading}<option value="">Loading models…</option>
+          {:else if models.length === 0}<option value="">Choose automatically</option>{/if}
+          {#each models as model (model)}<option value={model}>{model}</option>{/each}
+        </select>
+      </label>
+    </div>
+    {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
+    <details class="advanced-settings" bind:open={advancedExpanded}>
+      <summary>Advanced settings</summary>
+      <div class="advanced-content">
+        <section class="session-settings" aria-label="New session settings">
+          {#if provider === 'codex'}
+            <label for="model-thinking"
+              >Model thinking
+              <select
+                id="model-thinking"
+                value={reasoningEffort}
+                onchange={(event) => onreasoningchange(event.currentTarget.value as ThinkingLevel)}
+              >
+                {#each thinkingLevels as level (level)}<option value={level}>{level}</option>{/each}
+              </select>
+            </label>
+            <fieldset class="executor-settings">
+              <legend>Org-plan executor</legend>
+              <label for="executor-model"
+                >Executor model
+                <select
+                  id="executor-model"
+                  value={executorModel}
+                  onchange={(event) => onexecutormodelchange(event.currentTarget.value)}
+                >
+                  {#each [...new Set([executorModel, ...executorModels])] as model (model)}<option
+                      value={model}>{model}</option
+                    >{/each}
+                </select>
+              </label>
+              <label for="executor-thinking"
+                >Executor thinking
+                <select
+                  id="executor-thinking"
+                  value={executorReasoningEffort}
+                  onchange={(event) =>
+                    onexecutorreasoningchange(event.currentTarget.value as ThinkingLevel)}
+                >
+                  {#each thinkingLevels as level (level)}<option value={level}>{level}</option
+                    >{/each}
+                </select>
+              </label>
+            </fieldset>
+          {/if}
+          <div
+            class="session-setting-labels"
+            style:grid-template-columns={provider === 'kimi'
+              ? 'minmax(0, 1fr)'
+              : 'repeat(2, minmax(0, 1fr))'}
+          >
+            {#if provider !== 'kimi'}
+              <label for="sandbox">Sandbox</label>
+              <label for="approval-policy">Approval policy</label>
+            {/if}
+          </div>
+          <div
+            class="session-setting-controls"
+            style:grid-template-columns={provider === 'kimi'
+              ? 'minmax(0, 1fr)'
+              : 'repeat(2, minmax(0, 1fr))'}
+          >
+            {#if provider !== 'kimi'}
+              <select
+                id="sandbox"
+                value={sandbox}
+                onchange={(event) =>
+                  onsandboxchange(
+                    event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
+                  )}
+              >
+                <option value="workspace-git">workspace-git (Git writable)</option>
+                <option value="workspace-write">workspace-write</option>
+                <option value="read-only">read-only</option>
+                <option value="danger-full-access">danger-full-access</option>
+              </select>
+              <select
+                id="approval-policy"
+                value={approvalPolicy}
+                onchange={(event) =>
+                  onapprovalpolicychange(
+                    event.currentTarget.value as NonNullable<
+                      StartSessionSettings['approvalPolicy']
+                    >,
+                  )}
+              >
+                <option value="untrusted">Ask on all commands</option>
+                <option value="on-request">Ask out of workspace</option>
+                <option value="never">Approve everything</option>
+              </select>
+            {/if}
+          </div>
+          <div class="session-secondary-actions">
+            <AppControl
+              id="manage-skill-profiles"
+              onclick={(event) => onmanageprofiles(event.currentTarget)}
+              >Manage skill profiles
+            </AppControl>
+            <div class="model-control">
+              <label for="session-provider">Provider</label>
+              <select
+                id="session-provider"
+                value={provider}
+                onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
+              >
+                <option value="codex">Codex</option>
+                <option value="kimi" disabled={!kimiAvailable}
+                  >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
+                >
+              </select>
+            </div>
+            <AppControl
+              disabled={savingDefaults || modelsLoading || !selectedModel}
+              onclick={onsavedefaults}
+            >
+              {savingDefaults ? 'Saving…' : 'Save as defaults'}
+            </AppControl>
+          </div>
+        </section>
       </div>
-      {#if !kimiAvailable}
-        <p id="provider-availability" class="provider-availability">
-          Kimi is unavailable because its CLI was not found when the relay started.
-        </p>
-      {/if}
-    </section>
+    </details>
+    <div class="create-session-actions">
+      <AppControl
+        class="new-session-button"
+        type="submit"
+        primary
+        disabled={!selectedWorkspace ||
+          startingSession ||
+          modelsLoading ||
+          (models.length > 0 && !selectedModel)}
+      >
+        {startingSession ? 'Creating…' : 'Create session'}
+      </AppControl>
+    </div>
   </form>
   <section aria-labelledby="recent-sessions-title">
     <h3 id="recent-sessions-title">Recent sessions</h3>
@@ -492,7 +590,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <div class="session-actions">
               <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
               {#if session.resumeCommand}
-                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}>Copy</AppControl>
+                {@render sessionMenu(session.resumeCommand)}
               {/if}
             </div>
           </li>
@@ -507,7 +605,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <style>
   .session-list {
     display: grid;
-    gap: 1rem;
+    gap: 0.65rem;
     margin-block: 0 1.5rem;
     padding-inline: 0;
     inline-size: 100%;
@@ -520,14 +618,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .managed-session {
     display: grid;
-    grid-template-columns: minmax(0, min(6rem, 32%)) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(6rem, max-content);
     gap: 0.75rem;
     align-items: start;
     inline-size: 100%;
     box-sizing: border-box;
     padding: 0.75rem;
     border: 1px solid var(--theme-border);
-    border-radius: 0.5rem;
+    border-radius: var(--theme-radius);
   }
 
   .open-session {
@@ -539,13 +637,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
   }
 
+  .managed-session > .session-details {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .managed-session > .session-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .session-summary,
+  .recent-session .session-details,
+  .managed-session:not(.open-session) .session-details {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.65rem;
+  }
+  .open-session .workspace-path,
+  .session-plan-progress,
+  .org-plan-metadata {
+    flex-basis: 100%;
+  }
+  time {
+    color: var(--theme-text-muted);
+    font-size: 0.875rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   .workspace-path {
     overflow-wrap: anywhere;
   }
 
   .profile-badge {
     display: inline-block;
-    margin-block-start: 0.35rem;
     padding: 0.15rem 0.4rem;
     border-radius: 999px;
     background: var(--theme-control-pressed);
@@ -620,7 +744,114 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     display: grid;
     grid-template-columns: minmax(0, 1fr) max-content;
     gap: 0.75rem;
-    align-items: start;
+    align-items: center;
+    padding-block: 0.65rem;
+    border-block-end: 1px solid var(--theme-border);
+  }
+
+  .recent-session .session-actions {
+    flex-direction: row;
+    align-items: center;
+  }
+  .recent-session .session-actions > :global(*) {
+    inline-size: auto;
+  }
+  form {
+    margin-block: 1.75rem;
+    padding-block: 1.25rem;
+    border-block: 1px solid var(--theme-border);
+  }
+  .new-session-title {
+    margin: 0 0 1rem;
+  }
+  .essential-settings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+  .essential-settings label {
+    display: grid;
+    gap: 0.4rem;
+    font-weight: 600;
+  }
+  select {
+    min-inline-size: 0;
+    inline-size: 100%;
+    min-block-size: 44px;
+  }
+  .advanced-settings {
+    margin-block: 1rem;
+  }
+  .advanced-settings > summary {
+    min-block-size: 44px;
+    align-content: center;
+    cursor: pointer;
+    color: var(--theme-text-muted);
+    font-weight: 600;
+  }
+  .advanced-settings > summary:hover {
+    color: var(--theme-text);
+  }
+  .advanced-content {
+    padding-block: 0.25rem 0.75rem;
+  }
+  .create-session-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .session-menu {
+    position: relative;
+  }
+  .session-menu > summary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-block-size: 44px;
+    min-inline-size: 44px;
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+    cursor: pointer;
+    list-style: none;
+  }
+  .session-menu > summary::-webkit-details-marker {
+    display: none;
+  }
+  summary:focus-visible {
+    outline: 3px solid var(--theme-accent);
+    outline-offset: 2px;
+  }
+  .session-menu-items {
+    position: absolute;
+    inset-inline-end: 0;
+    inset-block-start: calc(100% + 0.25rem);
+    z-index: 10;
+    padding: 0.4rem;
+    background: var(--theme-surface);
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+    white-space: nowrap;
+  }
+  dialog {
+    max-inline-size: min(26rem, calc(100% - 2rem));
+    box-sizing: border-box;
+    padding: 1.5rem;
+    background: var(--theme-surface);
+    color: var(--theme-text);
+    border: 1px solid var(--theme-border);
+    border-radius: var(--theme-radius);
+  }
+  dialog::backdrop {
+    background: rgb(0 0 0 / 55%);
+  }
+  dialog h2 {
+    margin-block-start: 0;
+  }
+  .dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
   }
 
   .session-base {
@@ -630,13 +861,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block: 1rem;
   }
 
-  .session-base-heading h3,
-  .session-base-heading p {
-    margin: 0;
+  .executor-settings {
+    display: grid;
+    gap: 0.65rem;
+    min-inline-size: 0;
+    margin: 0.5rem 0;
+    padding: 0.75rem;
+    border: 1px solid var(--theme-border);
+    border-radius: 0.5rem;
   }
 
-  .session-base-heading p {
-    margin-block-start: 0.25rem;
+  .session-settings label {
+    display: grid;
+    gap: 0.35rem;
+    min-inline-size: 0;
   }
 
   .session-settings {
@@ -688,18 +926,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-size: 0.875rem;
   }
 
-  .provider-availability {
-    flex-basis: 100%;
-    margin: 0;
-    color: var(--theme-text-muted);
-    font-size: 0.875rem;
-  }
-
   .skills-profile-error {
     color: var(--theme-error);
   }
 
   @media (max-width: 28rem) {
+    .essential-settings {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.75rem;
+    }
+    .create-session-actions :global(button) {
+      inline-size: 100%;
+    }
+    .recent-session {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
     .model-control {
       margin-inline-start: 0;
     }
