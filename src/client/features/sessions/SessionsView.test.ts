@@ -340,7 +340,7 @@ describe('SessionsView session base tree', () => {
     const policy = screen.getByLabelText('Approval policy') as HTMLSelectElement;
     expect(policy.textContent).toContain('Ask on all commands');
     expect(policy.textContent).toContain('Ask out of workspace');
-    expect(policy.textContent).toContain('Approve everything');
+    expect(policy.textContent).toContain('Never ask for approval');
     expect(screen.queryByText(/does not expand the sandbox's technical permissions/i)).toBeNull();
     await fireEvent.change(policy, { target: { value: 'never' } });
     expect(onapprovalpolicychange).toHaveBeenCalledWith('never');
