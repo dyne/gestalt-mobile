@@ -24,6 +24,36 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('adds and removes the contextual CLI copy action and closes the menu after copying', async () => {
+    const oncopytocli = vi.fn();
+    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
+    const { rerender } = render(AppHeader, props);
+    expect(screen.queryByRole('button', { name: 'Copy session to CLI', hidden: true })).toBeNull();
+    await rerender({ ...props, oncopytocli });
+    const action = screen.getByRole('button', { name: 'Copy session to CLI', hidden: true });
+    expect(action.getAttribute('popovertargetaction')).toBe('hide');
+    await fireEvent.click(action);
+    expect(oncopytocli).toHaveBeenCalledOnce();
+    await rerender({ ...props, oncopytocli: undefined });
+    expect(screen.queryByRole('button', { name: 'Copy session to CLI', hidden: true })).toBeNull();
+  });
+
+  it('keeps contextual copying unavailable when a session has no CLI command', () => {
+    render(AppHeader, {
+      theme: 'dyne-org',
+      onthemechange: () => {},
+      oncopytocli: vi.fn(),
+      copyToCliAvailable: false,
+    });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Copy session to CLI',
+          hidden: true,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
   it('substitutes a configured install icon while preserving the Gestalt logotype', () => {
     const { container } = render(AppHeader, {
       theme: 'dyne-org',

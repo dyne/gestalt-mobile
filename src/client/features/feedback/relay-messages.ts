@@ -26,6 +26,8 @@ const relayMessages = {
   ORG_EXECUTOR_PROFILE_INVALID:
     'The Org-plan executor profile has invalid model settings. Repair the installed profile and try again.',
   SESSION_CLOSE_FAILED: 'The session could not be closed. Try again.',
+  SESSION_COPY_FAILED:
+    'The CLI resume command could not be copied. Check clipboard access and try again.',
   SESSION_DEFAULTS_READ_FAILED:
     'Saved session defaults could not be loaded. Using built-in defaults; check the configuration file and reload.',
   SESSION_DEFAULTS_SAVE_FAILED: 'Session defaults could not be saved. Try again.',

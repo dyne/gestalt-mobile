@@ -91,15 +91,25 @@ test('saves session defaults and restores them after reload with Advanced settin
   await expect(page.getByLabel('Executor thinking')).toHaveValue('xhigh');
   const modelBox = await page.locator('#model').boundingBox();
   const thinkingBox = await page.locator('#model-thinking').boundingBox();
+  const supervisorBox = await page.getByRole('group', { name: 'Main supervisor' }).boundingBox();
+  const executorModelBox = await page.locator('#executor-model').boundingBox();
+  const createBox = await page.getByRole('button', { name: 'Create session' }).boundingBox();
+  const saveBox = await page.getByRole('button', { name: 'Save as defaults' }).boundingBox();
   const providerBox = await page.locator('#session-provider').boundingBox();
   const skillsBox = await page.locator('#skills-profile').boundingBox();
   const executorBox = await page.locator('.executor-settings').boundingBox();
   const sandboxBox = await page.locator('#sandbox').boundingBox();
   expect(modelBox).not.toBeNull();
-  expect(thinkingBox!.x).toBeCloseTo(modelBox!.x, 1);
-  expect(thinkingBox!.width).toBeCloseTo(modelBox!.width, 1);
-  expect(providerBox!.x).toBeCloseTo(modelBox!.x, 1);
-  expect(providerBox!.width).toBeCloseTo(modelBox!.width, 1);
+  expect(supervisorBox!.x).toBeCloseTo(modelBox!.x, 1);
+  expect(supervisorBox!.width).toBeCloseTo(modelBox!.width, 1);
+  expect(thinkingBox!.width).toBeCloseTo(executorModelBox!.width, 1);
+  expect(providerBox!.x).toBeCloseTo(thinkingBox!.x, 1);
+  expect(providerBox!.width).toBeCloseTo(thinkingBox!.width, 1);
+  expect(createBox!.x).toBeCloseTo(modelBox!.x, 1);
+  expect(createBox!.width).toBeCloseTo(modelBox!.width, 1);
+  expect(createBox!.height).toBeGreaterThan(modelBox!.height);
+  expect(saveBox!.x).toBeGreaterThanOrEqual(modelBox!.x);
+  expect(saveBox!.x + saveBox!.width).toBeCloseTo(modelBox!.x + modelBox!.width, 1);
   expect(providerBox!.y).toBeGreaterThan(thinkingBox!.y + thinkingBox!.height);
   expect(executorBox!.x).toBeCloseTo(skillsBox!.x, 1);
   expect(executorBox!.width).toBeCloseTo(skillsBox!.width, 1);
@@ -311,6 +321,7 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     id: 'relay-session-1',
     state: 'ready',
     threadId: 'relay-thread-id',
+    resumeCommand: 'codex resume relay-thread-id',
     workspaceId: 'workspace-1',
     workspacePath: '/projects/relay',
     profile: 'work',
@@ -320,11 +331,21 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
     ...managedSession,
     id: 'promoted-session-1',
     threadId: 'recent-thread-id',
+    resumeCommand: 'codex resume recent-thread-id',
     workspacePath: '/projects/from-ssh',
   };
   let recentOpened = false;
   await page.addInitScript(() => {
     Date.now = () => Date.UTC(2026, 6, 15, 12, 0, 0);
+    const copiedCommands: string[] = [];
+    Object.assign(window, { mobileCopiedCommands: copiedCommands });
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: async (text: string) => {
+          copiedCommands.push(text);
+        },
+      },
+    });
   });
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
@@ -397,7 +418,34 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect(page.getByLabel('Recent sessions').getByText('2 hours ago')).toBeVisible();
   await expect(page.getByLabel('Recent sessions').getByText('/projects/from-ssh')).toBeVisible();
   await expect(page.getByLabel('Recent sessions').getByText('recent-thread-id')).toHaveCount(0);
-  await expect(page.getByLabel('Recent sessions').getByLabel('Session menu')).toHaveCount(1);
+  await expect(page.getByLabel('Recent sessions').getByLabel('Session menu')).toHaveCount(0);
+  await expect(
+    page.getByLabel('Recent sessions').getByRole('button', { name: 'Copy to CLI' }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '200%';
+  });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByLabel('Recent sessions').getByRole('button', { name: 'Copy to CLI' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as Window & { mobileCopiedCommands: string[] }).mobileCopiedCommands,
+      ),
+    )
+    .toEqual(['codex resume recent-thread-id']);
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = '';
+  });
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await expect(
+    page.locator('#configuration-panel').getByRole('button', { name: 'Copy session to CLI' }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open configuration' }).click();
 
   await expect(page.getByLabel('Open sessions').getByRole('button', { name: 'Open' })).toHaveCount(
     1,
@@ -412,7 +460,24 @@ test('labels relay threads as sessions and shows recent sessions from Codex', as
   await expect.poll(() => recentOpened).toBe(true);
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await page
+    .locator('#configuration-panel')
+    .getByRole('button', { name: 'Copy session to CLI' })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as Window & { mobileCopiedCommands: string[] }).mobileCopiedCommands,
+      ),
+    )
+    .toEqual(['codex resume recent-thread-id', 'codex resume recent-thread-id']);
+  await expect(page.locator('#configuration-panel')).toBeHidden();
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await expect(
+    page.locator('#configuration-panel').getByRole('button', { name: 'Copy session to CLI' }),
+  ).toHaveCount(0);
   await expect(page.getByLabel('Open sessions').getByText('/projects/from-ssh')).toBeVisible();
 });
 

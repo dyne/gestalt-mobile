@@ -171,7 +171,12 @@ const chatView = (id: string, text: string) => ({
 });
 
 async function renderChat(
-  initialSessions = [
+  initialSessions: Array<{
+    id: string;
+    state: string;
+    workspacePath: string;
+    resumeCommand?: string;
+  }> = [
     { id: 'a', state: 'ready', workspacePath: '/a' },
     { id: 'b', state: 'ready', workspacePath: '/b' },
   ],
@@ -197,7 +202,9 @@ async function renderChat(
                 models: { codex: [], kimi: [] },
                 sessions: initialSessions,
               }
-            : [],
+            : String(input) === '/api/sessions'
+              ? initialSessions
+              : [],
         ),
       ),
     passkeyAuthEnabled: false,
@@ -210,6 +217,37 @@ async function renderChat(
 }
 
 describe('RelayApp chat controller composition', () => {
+  it('copies the selected Chat session and removes the header action on other tabs', async () => {
+    const writeText = vi.fn(async () => {});
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      await renderChat([
+        { id: 'a', state: 'ready', workspacePath: '/a', resumeCommand: 'codex resume thread-a' },
+        { id: 'b', state: 'ready', workspacePath: '/b', resumeCommand: 'codex resume thread-b' },
+      ]);
+      const menu = within(document.querySelector('#configuration-panel') as HTMLElement);
+      await fireEvent.click(
+        menu.getByRole('button', { name: 'Copy session to CLI', hidden: true }),
+      );
+      await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith('codex resume thread-a'));
+      await fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+      expect(menu.queryByRole('button', { name: 'Copy session to CLI', hidden: true })).toBeNull();
+      await fireEvent.click(
+        within(screen.getByRole('list', { name: 'Open sessions' })).getAllByRole('button', {
+          name: 'Open',
+        })[1]!,
+      );
+      await vi.waitFor(() => expect(fakeController?.selected).toBe('b'));
+      await fireEvent.click(
+        menu.getByRole('button', { name: 'Copy session to CLI', hidden: true }),
+      );
+      await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith('codex resume thread-b'));
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
   afterEach(() => {
     cleanup();
     controllerOptions = null;

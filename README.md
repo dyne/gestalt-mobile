@@ -70,6 +70,9 @@ Executor overrides preserve the installed role instructions and belong to each n
 **Save as defaults** stores the
 current session settings in `~/.gestalt/session-defaults.json` on the relay host.
 New browser visits load those settings; Advanced settings starts collapsed.
+On desktop, Advanced settings groups the Org-plan executor and Main supervisor side by side;
+on phones, the groups stack. Recent sessions expose **Copy to CLI** directly, and the header
+menu offers **Copy session to CLI** for the selected session while viewing Chat.
 Without saved settings, Mobile uses the workspace root, the default skills
 profile, Codex, Git-writable workspace access, and automatic approvals.
 
