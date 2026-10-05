@@ -6,6 +6,7 @@
 
 import type { OrgPlanCheckpoint } from '../../../../shared/contracts/org-plan-checkpoint.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import { checkpointTarget } from '../../autopilot/domain/supervised-lifecycle.js';
 
 export type OrgPlanCheckpointFailureReason =
   | 'rootNotOwner'
@@ -54,6 +55,8 @@ export function resolveOrgPlanCheckpointSignal(
   plan: SupervisedPlan,
   planIdentity: string,
   publicationReason: string | null = null,
+  completedTargets: readonly string[] = [],
+  pendingTarget?: string,
 ): OrgPlanCheckpoint | null {
   if (kind === 'terminalReviewAccepted')
     return {
@@ -62,20 +65,48 @@ export function resolveOrgPlanCheckpointSignal(
       planIdentity,
       verdict: 'ACCEPT',
     };
-  const reviewedId = publicationReason?.match(/^review:([^:]{1,128}):REVIEWED$/)?.[1];
+  const pending = pendingTarget ? (JSON.parse(pendingTarget) as string[]) : undefined;
+  const reviewedId =
+    (pending?.[0] === 'l1' ? pending[1] : undefined) ??
+    publicationReason?.match(/^review:([^:]{1,128}):REVIEWED$/)?.[1];
+  const completedId =
+    (pending?.[0] === 'l2' ? pending[2] : undefined) ??
+    publicationReason?.match(/^l2:([^:]{1,128}):DONE$/)?.[1];
+  // Publication identifies the actual transition, regardless of list order.
+  // Without it, expand only an unambiguous boundary; never guess the last row.
+  const allReviewed = plan.steps.filter(
+    (step) => step.state === 'DONE' && step.reviewStatus === 'REVIEWED',
+  );
+  const unreportedReviewed = allReviewed.filter(
+    (step) => !completedTargets.includes(checkpointTarget('l1', step.id)),
+  );
+  const reviewed = reviewedId || !unreportedReviewed.length ? allReviewed : unreportedReviewed;
+  const allCompleted = plan.steps.flatMap((parent) =>
+    parent.reviewStatus === 'UNREVIEWED'
+      ? parent.children
+          .filter(
+            (child) =>
+              child.state === 'DONE' &&
+              (!completedId || child.id === completedId) &&
+              (pending?.[0] !== 'l2' || parent.id === pending[1]),
+          )
+          .map((child) => ({ parent, child }))
+      : [],
+  );
+  const unreportedCompleted = allCompleted.filter(
+    ({ parent, child }) => !completedTargets.includes(checkpointTarget('l2', parent.id, child.id)),
+  );
+  const completed = completedId || !unreportedCompleted.length ? allCompleted : unreportedCompleted;
   const selected =
     kind === 'l1Accepted'
-      ? ((reviewedId
-          ? plan.steps.find(
-              (step) =>
-                step.id === reviewedId && step.state === 'DONE' && step.reviewStatus === 'REVIEWED',
-            )
-          : undefined) ??
-        [...plan.steps]
-          .reverse()
-          .find((step) => step.state === 'DONE' && step.reviewStatus === 'REVIEWED'))
-      : (plan.steps.find((step) => step.id === plan.currentStepId) ??
-        [...plan.steps].reverse().find((step) => step.state === 'DONE' || step.state === 'WIP'));
+      ? reviewedId
+        ? reviewed.find((step) => step.id === reviewedId)
+        : reviewed.length === 1
+          ? reviewed[0]
+          : undefined
+      : completed.length === 1
+        ? completed[0]?.parent
+        : undefined;
   if (!selected) return null;
   const l1Position = `L${plan.steps.indexOf(selected) + 1}`;
   if (kind === 'l1Accepted')
@@ -88,7 +119,7 @@ export function resolveOrgPlanCheckpointSignal(
       verdict: 'ACCEPT',
       commit: { kind: 'notRequired' },
     };
-  const child = [...selected.children].reverse().find((step) => step.state === 'DONE');
+  const child = completed[0]?.child;
   if (!child) return null;
   return {
     version: 1,
@@ -129,10 +160,18 @@ export function validateOrgPlanCheckpoint(
   if (!rootOwned) return { valid: false, reasonCode: 'rootNotOwner' };
   if (checkpoint.planIdentity !== planIdentity)
     return { valid: false, reasonCode: 'planIdentityMismatch' };
-  if (checkpoint.kind === 'terminalReviewAccepted')
-    return plan.steps.every((step) => step.state === 'DONE' && step.reviewStatus === 'REVIEWED')
-      ? { valid: true }
-      : { valid: false, reasonCode: 'terminalReviewIncomplete' };
+  if (checkpoint.kind === 'terminalReviewAccepted') {
+    if (
+      !plan.steps.length ||
+      !plan.steps.every((step) => step.state === 'DONE' && step.reviewStatus === 'REVIEWED')
+    )
+      return { valid: false, reasonCode: 'terminalReviewIncomplete' };
+    for (const [index, step] of plan.steps.entries()) {
+      const result = validateCompletedChildren(step, input.hasActiveL1Writer(`L${index + 1}`));
+      if (!result.valid) return result;
+    }
+    return { valid: true };
+  }
   const l1 = plan.steps.find((step) => step.id === checkpoint.l1Id);
   if (!l1) return { valid: false, reasonCode: 'l1NotFound' };
   const position = `L${plan.steps.indexOf(l1) + 1}`;
@@ -179,6 +218,13 @@ export function validateOrgPlanCheckpoint(
       expected: { reviewStatus: 'REVIEWED' },
       observed: { reviewStatus: l1.reviewStatus ?? null },
     };
+  return validateCompletedChildren(l1, input.hasActiveL1Writer(position));
+}
+
+function validateCompletedChildren(
+  l1: SupervisedPlan['steps'][number],
+  activeWriter: boolean,
+): OrgPlanCheckpointValidation {
   const incompleteChild = l1.children.find((child) => child.state !== 'DONE');
   if (incompleteChild)
     return {
@@ -187,7 +233,7 @@ export function validateOrgPlanCheckpoint(
       expected: { childrenDone: true },
       observed: { childrenDone: false, childState: incompleteChild.state },
     };
-  if (input.hasActiveL1Writer(position))
+  if (activeWriter)
     return {
       valid: false,
       reasonCode: 'executorStillActive',

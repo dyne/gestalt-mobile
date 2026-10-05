@@ -7,6 +7,10 @@
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
 import { AutopilotStateError } from '../domain/persisted-state-error.js';
+import {
+  canTransitionExecutorCommand,
+  retainExecutorCommands,
+} from '../domain/executor-commands.js';
 import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
@@ -107,6 +111,7 @@ export class AutopilotCoordinator {
   private readonly reconciling = new Set<string>();
   /** Serializes asynchronous watchdog and timer work per relay session. */
   private readonly operations = new Map<string, Promise<void>>();
+  private readonly storeRecoveryAttempts = new Map<string, number>();
   constructor(private readonly deps: AutopilotDependencies) {}
 
   snapshot(sessionId: string): AutopilotSnapshot {
@@ -244,6 +249,7 @@ export class AutopilotCoordinator {
     this.activityEventKeys.delete(sessionId);
     this.reconciling.delete(sessionId);
     this.parkedSubscriptions.delete(sessionId);
+    this.storeRecoveryAttempts.delete(sessionId);
   }
   /** Accepts a session-owned structured probe response; no transcript text is inspected. */
   reportProbe(sessionId: string, report: ProbeReport): boolean {
@@ -784,8 +790,10 @@ export class AutopilotCoordinator {
     return this.snapshot(sessionId);
   }
   /** Returns whether an incomplete supervised plan may be treated as terminal by the relay. */
-  turnCompleted(sessionId: string): boolean {
+  turnCompleted(sessionId: string, turnId?: string): boolean {
     const state = this.deps.store.find(sessionId);
+    if (turnId && state?.checkpoints?.pendingTurnId && state.checkpoints.pendingTurnId !== turnId)
+      return false;
     const plan = this.deps.plan(sessionId)?.plan;
     const explicitlyStopped =
       state?.stopReason === 'manualDisabled' ||
@@ -817,6 +825,7 @@ export class AutopilotCoordinator {
           checkpoints: {
             ...state.checkpoints,
             pendingTurnId: null,
+            pendingTarget: undefined,
             pendingKind: null,
             checkpointHandoffFailed: false,
           },
@@ -878,8 +887,6 @@ export class AutopilotCoordinator {
     if (previous && previous.planIdentity !== retained.identity) return 'failed';
     const reportedL1Ids = previous?.reportedL1Ids ?? [];
     const reportedL2Ids = previous?.reportedL2Ids ?? [];
-    const canonicalPosition =
-      checkpoint.kind === 'terminalReviewAccepted' ? 'terminal' : checkpoint.position;
     const target =
       checkpoint.kind === 'l2Completed'
         ? checkpointTarget('l2', checkpoint.l1Id, checkpoint.l2Id)
@@ -889,7 +896,7 @@ export class AutopilotCoordinator {
     const completionEpoch = previous?.completionEpochs?.find((entry) => entry.target === target);
     const epoch = completionEpoch?.epoch ?? 0;
     const key = createHash('sha256')
-      .update(JSON.stringify([retained.identity, checkpoint.kind, canonicalPosition, epoch]))
+      .update(JSON.stringify([retained.identity, target, epoch]))
       .digest('hex');
     const acceptedKeys = previous?.acceptedKeys ?? [];
     if (acceptedKeys.includes(key)) return 'alreadyRecorded';
@@ -898,6 +905,9 @@ export class AutopilotCoordinator {
     if (checkpoint.kind === 'terminalReviewAccepted' && previous?.terminalReviewAccepted)
       return 'alreadyRecorded';
     if (completionEpoch?.completed && !completionEpoch.reopened) return 'alreadyRecorded';
+    // One turn owns one pending boundary. Retried acknowledgements above are
+    // idempotent; a distinct boundary must not overwrite its handoff slot.
+    if (previous?.pendingTurnId) return 'failed';
     const completionEpochs = [
       ...(previous?.completionEpochs ?? []).filter((entry) => entry.target !== target),
       { target, epoch, reopened: false, completed: true },
@@ -914,11 +924,17 @@ export class AutopilotCoordinator {
           : reportedL1Ids,
       acceptedKeys: boundedUnique([...acceptedKeys, key], 768),
       pendingTurnId: turnId,
+      pendingTarget: target,
       activeHandoffId: handoffId,
       pendingKind: checkpoint.kind,
       checkpointHandoffFailed: false,
       terminalReviewAccepted:
         checkpoint.kind === 'terminalReviewAccepted' || previous?.terminalReviewAccepted === true,
+      ...(checkpoint.kind === 'terminalReviewAccepted'
+        ? { terminalReviewFingerprint: fingerprint(retained.plan) }
+        : previous?.terminalReviewFingerprint
+          ? { terminalReviewFingerprint: previous.terminalReviewFingerprint }
+          : {}),
     };
     const checkpointed = {
       ...prior,
@@ -1012,13 +1028,14 @@ export class AutopilotCoordinator {
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
-    if (!prior?.requestedEnabled) return;
+    if (!prior) return;
     const plan = this.deps.plan(sessionId);
     if (!plan) {
-      this.cancel(sessionId, 'planRemoved');
+      if (prior.requestedEnabled) this.cancel(sessionId, 'planRemoved');
       return;
     }
     if (prior.planIdentity && prior.planIdentity !== plan.identity) {
+      if (!prior.requestedEnabled) return;
       this.supersedeExecutorCommands(sessionId, plan.identity, plan.plan);
       this.cancel(sessionId, 'planReplaced');
       return;
@@ -1028,12 +1045,29 @@ export class AutopilotCoordinator {
     // this update cannot restore commands from the stale pre-supersession row.
     const current = this.deps.store.find(sessionId) ?? prior;
     const checkpointEpochs = this.reopenCheckpointEpochs(current, plan.plan);
-    if (checkpointEpochs !== current.checkpoints?.completionEpochs)
+    const staleTerminalReview =
+      current.checkpoints?.terminalReviewAccepted &&
+      (current.checkpoints.terminalReviewFingerprint ?? current.planFingerprint) !==
+        fingerprint(plan.plan);
+    if (checkpointEpochs !== current.checkpoints?.completionEpochs || staleTerminalReview)
       this.persist({
         ...current,
-        checkpoints: { ...current.checkpoints!, completionEpochs: checkpointEpochs },
+        checkpoints: {
+          ...current.checkpoints!,
+          completionEpochs: staleTerminalReview
+            ? checkpointEpochs?.map((entry) =>
+                entry.target === checkpointTarget('terminal') && !entry.reopened
+                  ? { ...entry, epoch: entry.epoch + 1, reopened: true, completed: false }
+                  : entry,
+              )
+            : checkpointEpochs,
+          ...(staleTerminalReview
+            ? { terminalReviewAccepted: false, terminalReviewFingerprint: undefined }
+            : {}),
+        },
         updatedAt: this.deps.now(),
       });
+    if (!prior.requestedEnabled) return;
     if (
       this.semanticEvent(sessionId, 'planChanged') ||
       this.semanticEvent(sessionId, 'reviewChanged')
@@ -1307,6 +1341,7 @@ export class AutopilotCoordinator {
       ...(control ? { control } : {}),
       events: [...snapshotEvents, ...events],
     });
+    this.storeRecoveryAttempts.delete(next.sessionId);
     if (snapshotEvents.length)
       this.publishedSnapshots.set(next.sessionId, this.semanticSnapshot(next, control));
     this.flushOutbox(next.sessionId);
@@ -2038,6 +2073,41 @@ export class AutopilotCoordinator {
     };
   }
 
+  /** Common ownership fence for process actions and executor continuations. */
+  private executorCommandCurrent(
+    sessionId: string,
+    command: ExecutorCommand,
+    physicalGeneration: number,
+  ): AutopilotSession | null {
+    const state = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    const executor = state?.executor;
+    const child = this.deps
+      .activity(sessionId)
+      ?.subagents.find((candidate) => (candidate.threadId ?? candidate.id) === command.threadId);
+    return state?.requestedEnabled &&
+      retained &&
+      executor &&
+      executor.commands?.some(
+        (entry) =>
+          entry.commandId === command.commandId &&
+          (['scheduled', 'issued'].includes(entry.status) ||
+            (command.processAction && entry.status === 'failed')),
+      ) &&
+      retained.identity === command.planIdentity &&
+      fingerprint(retained.plan) === command.planFingerprint &&
+      executor.canonicalPosition === command.canonicalPosition &&
+      executor.canonicalTaskName === command.canonicalTaskName &&
+      executor.taskPath === command.taskPath &&
+      executor.threadId === command.threadId &&
+      (executor.assignment?.generation ?? executor.continuationGeneration) === physicalGeneration &&
+      child?.canonicalPosition === command.canonicalPosition &&
+      child.canonicalTaskName === command.canonicalTaskName &&
+      (child.continuationGeneration ?? 1) === physicalGeneration
+      ? state
+      : null;
+  }
+
   private processActionCurrent(
     sessionId: string,
     command: ExecutorCommand,
@@ -2046,29 +2116,9 @@ export class AutopilotCoordinator {
     executor: ExecutorLifecycle;
     process: OwnedExecutorProcess;
   } | null {
-    const state = this.deps.store.find(sessionId);
-    const retained = this.deps.plan(sessionId);
+    const state = this.executorCommandCurrent(sessionId, command, command.generation);
     const executor = state?.executor;
-    const child = this.deps
-      .activity(sessionId)
-      ?.subagents.find((candidate) => (candidate.threadId ?? candidate.id) === command.threadId);
-    if (
-      !state?.requestedEnabled ||
-      !retained ||
-      !executor ||
-      !command.processAction ||
-      retained.identity !== command.planIdentity ||
-      fingerprint(retained.plan) !== command.planFingerprint ||
-      executor.canonicalPosition !== command.canonicalPosition ||
-      executor.canonicalTaskName !== command.canonicalTaskName ||
-      executor.taskPath !== command.taskPath ||
-      executor.threadId !== command.threadId ||
-      executor.continuationGeneration !== command.generation ||
-      child?.canonicalPosition !== command.canonicalPosition ||
-      child?.canonicalTaskName !== command.canonicalTaskName ||
-      (child.continuationGeneration ?? 1) !== command.generation
-    )
-      return null;
+    if (!state || !executor || !command.processAction) return null;
     const process = executor.ownedProcesses.find(
       (candidate) => executorProcessKey(candidate) === command.processAction!.processKey,
     );
@@ -2180,7 +2230,13 @@ export class AutopilotCoordinator {
     const state = this.deps.store.find(sessionId);
     const executor = state?.executor;
     const command = executor?.commands?.find((candidate) => candidate.commandId === commandId);
-    if (!state || !executor || !command || command.status === status) return command;
+    if (
+      !state ||
+      !executor ||
+      !command ||
+      !canTransitionExecutorCommand(command.status, status, Boolean(command.processAction))
+    )
+      return undefined;
     const next = { ...command, status, updatedAt: this.deps.now() };
     this.persist({
       ...state,
@@ -2206,7 +2262,11 @@ export class AutopilotCoordinator {
       (candidate) => candidate.commandId === command.commandId,
     );
     if (existing) return existing;
-    const commands = [...(executor.commands ?? []), command].slice(-32);
+    const commands = retainExecutorCommands(state, command);
+    if (!commands) {
+      this.deps.diagnostic?.(sessionId, 'executorCommandCapacityExhausted');
+      return undefined;
+    }
     this.persist({
       ...state,
       executor: { ...executor, commands },
@@ -2475,6 +2535,12 @@ export class AutopilotCoordinator {
    */
   private armStoreRecovery(sessionId: string): void {
     if (this.executorTimers.has(sessionId)) return;
+    const attempts = this.storeRecoveryAttempts.get(sessionId) ?? 0;
+    if (attempts >= this.deps.policy.retryLimit) {
+      this.deps.diagnostic?.(sessionId, 'storeRecoveryExhausted');
+      return;
+    }
+    this.storeRecoveryAttempts.set(sessionId, attempts + 1);
     let delivered = false;
     const cancel = this.deps.schedule(() => {
       this.executorTimers.delete(sessionId);
@@ -2482,6 +2548,7 @@ export class AutopilotCoordinator {
       delivered = true;
       this.enqueue(sessionId, async () => {
         const current = this.deps.store.find(sessionId);
+        this.storeRecoveryAttempts.delete(sessionId);
         if (!current?.requestedEnabled) return;
         this.evaluate(sessionId);
       });
@@ -2546,10 +2613,19 @@ export class AutopilotCoordinator {
         this.enqueue(sessionId, async () => {
           const current = this.deps.store.find(sessionId);
           const latestPlan = this.deps.plan(sessionId);
+          const activity = this.deps.activity(sessionId);
           const currentChild = this.deps
             .activity(sessionId)
             ?.subagents.find((child) => (child.threadId ?? child.id) === fence.executorThreadId);
           const valid =
+            this.executorCommandCurrent(sessionId, command, fence.executorGeneration) &&
+            activity?.confidence === 'fresh' &&
+            activity.root.state === 'idle' &&
+            !activity.subagents.some(
+              (child) =>
+                child.canonicalPosition &&
+                ['working', 'awaitingAgent', 'awaitingHuman'].includes(child.state),
+            ) &&
             current?.requestedEnabled &&
             !this.deps.pendingInteraction(sessionId) &&
             current.generation === fence.sessionGeneration &&
@@ -2569,11 +2645,15 @@ export class AutopilotCoordinator {
               fingerprint(latestPlan.plan) !== fence.planFingerprint ||
               currentChild?.canonicalPosition !== fence.canonicalPosition ||
               (currentChild.continuationGeneration ?? 1) !== fence.executorGeneration;
-            this.executorCommandTransition(
-              sessionId,
-              command.commandId,
-              ownershipChanged ? 'superseded' : 'cancelled',
-            );
+            if (current?.generation === fence.sessionGeneration) {
+              if (ownershipChanged || !current.requestedEnabled)
+                this.executorCommandTransition(
+                  sessionId,
+                  command.commandId,
+                  ownershipChanged ? 'superseded' : 'cancelled',
+                );
+              else this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+            }
             this.audit(sessionId, 'autopilot.executor-continuation-stale', {
               threadId,
               generation,
@@ -2586,39 +2666,17 @@ export class AutopilotCoordinator {
           if (issued?.status !== 'issued') return;
           try {
             await this.deps.executorController?.resume(sessionId, threadId, generation, trigger);
-            this.executorCommandTransition(sessionId, command.commandId, 'accepted');
-            this.audit(sessionId, 'autopilot.executor-resumed', {
-              threadId,
-              generation,
-              trigger: trigger.kind,
-            });
-            const latest = this.deps.store.find(sessionId);
-            if (latest?.requestedEnabled) {
-              const progressKey = this.progressKey(sessionId);
-              const supervision = recordAutomaticContinuation(
-                latest.supervision ?? startSupervisionProtocol(progressKey),
-                progressKey,
-              );
-              this.persist({
-                ...latest,
-                state: 'monitoring',
-                supervision,
-                consecutiveNoProgress: latest.consecutiveNoProgress + 1,
-                ...(latest.executor
-                  ? {
-                      executor: {
-                        ...latest.executor,
-                        outcome: 'partial',
-                        continuationCount: latest.executor.continuationCount + 1,
-                        lastActivityAt: this.deps.now(),
-                      },
-                    }
-                  : {}),
-                nextEvaluationAt: null,
-                updatedAt: this.deps.now(),
-              });
-            }
           } catch (error) {
+            const current = this.executorCommandCurrent(
+              sessionId,
+              command,
+              fence.executorGeneration,
+            );
+            if (!current || current.generation !== fence.sessionGeneration) {
+              if (this.deps.store.find(sessionId)?.generation === fence.sessionGeneration)
+                this.executorCommandTransition(sessionId, command.commandId, 'superseded');
+              return;
+            }
             // Only an explicit app-server rejection is safe to retry. A lost
             // response may conceal accepted work, so retain its issued fence.
             if (!explicitExecutorRejection(error)) {
@@ -2640,7 +2698,58 @@ export class AutopilotCoordinator {
             if (resumeFailures >= this.deps.policy.retryLimit)
               this.scheduleExecutorReplacement(sessionId, next.executor);
             else this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
+            return;
           }
+          // Transport rejection and local persistence/publication failures have
+          // different recovery semantics. Commit acceptance, counters and its
+          // outbox event together; let the queue contain any local failure.
+          const latest = this.executorCommandCurrent(sessionId, command, fence.executorGeneration);
+          if (!latest || latest.generation !== fence.sessionGeneration) {
+            if (this.deps.store.find(sessionId)?.generation === fence.sessionGeneration)
+              this.executorCommandTransition(sessionId, command.commandId, 'superseded');
+            return;
+          }
+          const executor = latest.executor!;
+          if (
+            executor.commands?.find((entry) => entry.commandId === command.commandId)?.status !==
+            'issued'
+          )
+            return;
+          const occurredAt = this.deps.now();
+          const progressKey = this.progressKey(sessionId);
+          this.persist(
+            {
+              ...latest,
+              state: 'monitoring',
+              supervision: recordAutomaticContinuation(
+                latest.supervision ?? startSupervisionProtocol(progressKey),
+                progressKey,
+              ),
+              consecutiveNoProgress: latest.consecutiveNoProgress + 1,
+              executor: {
+                ...executor,
+                outcome: 'partial',
+                continuationCount: executor.continuationCount + 1,
+                lastActivityAt: occurredAt,
+                commands: executor.commands!.map((entry) =>
+                  entry.commandId === command.commandId
+                    ? { ...entry, status: 'accepted' as const, updatedAt: occurredAt }
+                    : entry,
+                ),
+              },
+              nextEvaluationAt: null,
+              updatedAt: occurredAt,
+            },
+            undefined,
+            [
+              {
+                sessionId,
+                type: 'autopilot.executor-resumed',
+                payload: { threadId, generation, trigger: trigger.kind },
+                occurredAt,
+              },
+            ],
+          );
         });
       }, delayMs),
     );
@@ -3041,7 +3150,12 @@ export class AutopilotCoordinator {
     let current: AutopilotSession | null = null;
     try {
       current = this.deps.store.find(sessionId);
-    } catch {
+    } catch (readError) {
+      if (readError instanceof AutopilotStateError) {
+        this.executorTimers.get(sessionId)?.();
+        this.executorTimers.delete(sessionId);
+        return;
+      }
       try {
         this.armStoreRecovery(sessionId);
       } catch {

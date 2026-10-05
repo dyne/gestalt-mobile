@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import type { AutopilotSession } from './autopilot-session.js';
 import { parsePlanFingerprint } from './plan-fingerprint.js';
 import { orgPlanAgentDisplayName } from '../../../../shared/org-plan-position.js';
 import {
@@ -130,23 +131,7 @@ export type PersistedSupervisedLifecycle = Readonly<{
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
   supervision?: SupervisionProtocolState;
-  checkpoints?: Readonly<{
-    protocolVersion: 1;
-    planIdentity: string;
-    completionEpochs?: readonly Readonly<{
-      target: string;
-      epoch: number;
-      reopened: boolean;
-      completed: boolean;
-    }>[];
-    reportedL2Ids?: readonly string[];
-    reportedL1Ids: readonly string[];
-    acceptedKeys: readonly string[];
-    pendingTurnId: string | null;
-    pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
-    checkpointHandoffFailed?: boolean;
-    terminalReviewAccepted: boolean;
-  }>;
+  checkpoints?: AutopilotSession['checkpoints'];
 }>;
 
 export type ExecutorIdentity = Readonly<{
@@ -296,6 +281,9 @@ export function parsePersistedSupervisedLifecycle(
 ): PersistedSupervisedLifecycle | undefined {
   const root = record(value);
   if (!root) return undefined;
+  for (const key of ['blocking', 'executor', 'checkpoints']) {
+    if (root[key] !== undefined && !record(root[key])) return undefined;
+  }
   const blockingValue = record(root.blocking);
   const blocking = blockingValue ? parseStructuredBlock(blockingValue) : undefined;
   if (blockingValue && !blocking) return undefined;
@@ -313,6 +301,9 @@ export function parsePersistedSupervisedLifecycle(
       ...(supervision ? { supervision } : {}),
       ...(checkpoints ? { checkpoints } : {}),
     };
+  for (const key of ['assignment', 'replacement', 'blocking']) {
+    if (executorValue[key] !== undefined && !record(executorValue[key])) return undefined;
+  }
   const processesValue = executorValue.ownedProcesses;
   if (!Array.isArray(processesValue) || processesValue.length > 64) return undefined;
   const ownedProcesses = processesValue.flatMap((candidate) => {
@@ -350,6 +341,12 @@ export function parsePersistedSupervisedLifecycle(
     const osPid = nonNegativeInteger(process.osPid);
     const exitStatus = integer(process.exitStatus);
     const resultArtifact = boundedText(process.resultArtifact);
+    if (
+      (process.osPid !== undefined && osPid === null) ||
+      (process.exitStatus !== undefined && exitStatus === null) ||
+      (process.resultArtifact !== undefined && !resultArtifact)
+    )
+      return [];
     return [
       {
         processId,
@@ -417,6 +414,7 @@ export function parsePersistedSupervisedLifecycle(
     !taskPath ||
     !threadId ||
     !l1State ||
+    (executorValue.l2State !== undefined && !l2State) ||
     !lastActivityAt ||
     !outcome ||
     continuationGeneration === null ||
@@ -431,8 +429,7 @@ export function parsePersistedSupervisedLifecycle(
         !replacementPlanIdentity ||
         !replacementPlanFingerprint ||
         (replacementValue.previous !== undefined && !replacementPrevious) ||
-        (replacementReason !== undefined &&
-          !['explicitExecutorRejection', 'humanPermissionGranted'].includes(replacementReason)) ||
+        (replacementValue.reason !== undefined && !replacementReason) ||
         (replacementValue.evidence !== undefined && !replacementEvidence)))
   )
     return undefined;
@@ -498,7 +495,8 @@ export function parsePersistedSupervisedLifecycle(
       trigger &&
       createdAt &&
       updatedAt &&
-      (!processActionValue || (processActionKind && processActionKey))
+      (command.processAction === undefined ||
+        (processActionValue && processActionKind && processActionKey))
       ? [
           {
             commandId,
@@ -578,7 +576,7 @@ function parseCheckpoints(
 ): PersistedSupervisedLifecycle['checkpoints'] | undefined {
   const planIdentity = boundedText(value.planIdentity);
   if (value.protocolVersion !== 1 || !planIdentity) return undefined;
-  const rawCompletionEpochs = value.completionEpochs ?? [];
+  const rawCompletionEpochs = value.completionEpochs === undefined ? [] : value.completionEpochs;
   if (!Array.isArray(rawCompletionEpochs) || rawCompletionEpochs.length > 640) return undefined;
   const completionEpochs = rawCompletionEpochs.flatMap((candidate) => {
     const epoch = record(candidate);
@@ -604,7 +602,7 @@ function parseCheckpoints(
     new Set(completionEpochs.map((epoch) => epoch.target)).size !== completionEpochs.length
   )
     return undefined;
-  const rawReportedL2Ids = value.reportedL2Ids ?? [];
+  const rawReportedL2Ids = value.reportedL2Ids === undefined ? [] : value.reportedL2Ids;
   if (!Array.isArray(rawReportedL2Ids) || rawReportedL2Ids.length > 512) return undefined;
   const reportedL2Ids = rawReportedL2Ids.map((id) => boundedText(id)).filter(Boolean) as string[];
   if (
@@ -632,6 +630,9 @@ function parseCheckpoints(
     return undefined;
   const pendingTurnId = value.pendingTurnId === null ? null : boundedText(value.pendingTurnId);
   if (pendingTurnId === undefined) return undefined;
+  const pendingTarget =
+    value.pendingTarget === undefined ? undefined : canonicalCheckpointTarget(value.pendingTarget);
+  if (value.pendingTarget !== undefined && (!pendingTarget || !pendingTurnId)) return undefined;
   const activeHandoffId =
     value.activeHandoffId === undefined || value.activeHandoffId === null
       ? null
@@ -643,6 +644,11 @@ function parseCheckpoints(
   )
     return undefined;
   if (typeof value.terminalReviewAccepted !== 'boolean') return undefined;
+  const terminalReviewFingerprint =
+    value.terminalReviewFingerprint === undefined
+      ? undefined
+      : parsePlanFingerprint(value.terminalReviewFingerprint);
+  if (value.terminalReviewFingerprint !== undefined && !terminalReviewFingerprint) return undefined;
   const pendingKind =
     value.pendingKind === undefined
       ? pendingTurnId
@@ -656,6 +662,7 @@ function parseCheckpoints(
     !['l2Completed', 'l1Accepted', 'terminalReviewAccepted'].includes(String(pendingKind))
   )
     return undefined;
+  if ((pendingTurnId === null) !== (pendingKind === null)) return undefined;
   const legacyTargets = [
     ...reportedL1Ids.map((id) => checkpointTarget('l1', id)),
     ...reportedL2Ids.flatMap((id) => {
@@ -689,12 +696,14 @@ function parseCheckpoints(
     reportedL1Ids,
     acceptedKeys,
     pendingTurnId,
+    ...(pendingTarget ? { pendingTarget } : {}),
     ...(activeHandoffId ? { activeHandoffId } : {}),
     pendingKind: pendingKind as 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null,
     ...(value.checkpointHandoffFailed === undefined
       ? {}
       : { checkpointHandoffFailed: value.checkpointHandoffFailed }),
     terminalReviewAccepted: value.terminalReviewAccepted,
+    ...(terminalReviewFingerprint ? { terminalReviewFingerprint } : {}),
   };
 }
 

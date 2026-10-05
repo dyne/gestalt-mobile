@@ -1377,6 +1377,15 @@ describe('production composition', () => {
       const startsBefore = fixture.handles
         .flatMap((candidate) => candidate.requests)
         .filter((request) => request.method === 'turn/start').length;
+      const unresolvedCall = handle.request!({
+        ...checkpointCall(815),
+        params: { ...checkpointCall(815).params, arguments: { kind: 'l2Completed' } },
+      });
+      await vi.waitFor(() => expect(handle.pendingResponses.has(815)).toBe(true));
+      handle.responseSettled!({ id: 815, outcome: 'resultWritten' });
+      await expect(unresolvedCall).resolves.toEqual(
+        toOrgPlanCheckpointToolResponse('failed', { reasonCode: 'checkpointBoundaryAmbiguous' }),
+      );
       const first = handle.request!(checkpointCall(813));
       await vi.waitFor(() => expect(handle.pendingResponses.has(813)).toBe(true));
       handle.responseSettled!({ id: 813, outcome: 'resultWritten' });

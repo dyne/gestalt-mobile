@@ -1010,7 +1010,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 occurredAt,
               ).snapshot;
               sessions.save(completedSession);
-              autopilot.turnCompleted(sessionId);
+              autopilot.turnCompleted(sessionId, turnId);
             }
             planMeasurementRefresh?.refreshNow(sessionId);
           }
@@ -1071,6 +1071,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     retained,
                     identity,
                     supervisedPlans.publicationReason(sessionId),
+                    autopilotStore
+                      .find(sessionId)
+                      ?.checkpoints?.completionEpochs?.filter(
+                        (epoch) => epoch.completed && !epoch.reopened,
+                      )
+                      .map((epoch) => epoch.target),
+                    autopilotStore.find(sessionId)?.checkpoints?.pendingTarget,
                   )
                 : null;
             if (checkpoint)
@@ -1079,6 +1086,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 kind: 'orgPlanCheckpoint',
                 payload: checkpoint,
               };
+            else
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  String(request.id),
+                  toOrgPlanCheckpointToolResponse('failed', {
+                    reasonCode: 'checkpointBoundaryAmbiguous',
+                  }),
+                ) === true
+              );
           }
           if (!rawInteraction && isAgentCapacityRecoveryCall(request)) {
             const rootOwned =

@@ -59,12 +59,16 @@ export type AutopilotSession = Readonly<{
     reportedL1Ids: readonly string[];
     acceptedKeys: readonly string[];
     pendingTurnId: string | null;
+    /** Stable identity of the single boundary awaiting its root final. */
+    pendingTarget?: string;
     /** Correlates checkpoint persistence through scheduling and dispatch. */
     activeHandoffId?: string | null;
     pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
     /** A checkpoint transport response was not acknowledged within its bounded deadline. */
     checkpointHandoffFailed?: boolean;
     terminalReviewAccepted: boolean;
+    /** Semantic plan revision accepted by terminal review; legacy rows omit it. */
+    terminalReviewFingerprint?: string;
   }>;
   updatedAt: string;
 }>;
