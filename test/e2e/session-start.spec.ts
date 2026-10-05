@@ -49,11 +49,13 @@ test('saves session defaults and restores them after reload with Advanced settin
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ defaults }) });
   });
   await page.goto('/');
-  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(
+    'gpt-6.1-sol',
+  );
   await expect(page.getByLabel('Sandbox')).toBeHidden();
   await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Session base' })).toHaveCount(0);
-  await page.getByLabel('Codex model').selectOption('gpt-6-sol');
+  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('gpt-6-sol');
   await page.getByText('Advanced settings', { exact: true }).click();
   await page.getByLabel('Sandbox').selectOption('read-only');
   await page.getByLabel('Approval policy').selectOption('untrusted');
@@ -75,7 +77,7 @@ test('saves session defaults and restores them after reload with Advanced settin
       executorReasoningEffort: 'xhigh',
     });
   await page.reload();
-  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6-sol');
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('gpt-6-sol');
   await expect(page.getByLabel('Sandbox')).toBeHidden();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: 'test-results/session-settings-mobile.png', fullPage: true });
@@ -87,11 +89,31 @@ test('saves session defaults and restores them after reload with Advanced settin
   await expect(page.getByLabel('Model thinking')).toHaveValue('high');
   await expect(page.getByLabel('Executor model')).toHaveValue('gpt-6.1-sol');
   await expect(page.getByLabel('Executor thinking')).toHaveValue('xhigh');
+  const modelBox = await page.locator('#model').boundingBox();
+  const thinkingBox = await page.locator('#model-thinking').boundingBox();
+  const providerBox = await page.locator('#session-provider').boundingBox();
+  const skillsBox = await page.locator('#skills-profile').boundingBox();
+  const executorBox = await page.locator('.executor-settings').boundingBox();
+  const sandboxBox = await page.locator('#sandbox').boundingBox();
+  expect(modelBox).not.toBeNull();
+  expect(thinkingBox!.x).toBeCloseTo(modelBox!.x, 1);
+  expect(thinkingBox!.width).toBeCloseTo(modelBox!.width, 1);
+  expect(providerBox!.x).toBeCloseTo(modelBox!.x, 1);
+  expect(providerBox!.width).toBeCloseTo(modelBox!.width, 1);
+  expect(providerBox!.y).toBeGreaterThan(thinkingBox!.y + thinkingBox!.height);
+  expect(executorBox!.x).toBeCloseTo(skillsBox!.x, 1);
+  expect(executorBox!.width).toBeCloseTo(skillsBox!.width, 1);
+  expect(sandboxBox!.y).toBeGreaterThan(executorBox!.y + executorBox!.height);
+  expect(sandboxBox!.y).toBeGreaterThan(providerBox!.y + providerBox!.height);
   await page.screenshot({
     path: 'test-results/session-settings-advanced-desktop.png',
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  const mobileColumns = await page
+    .locator('.advanced-model-settings')
+    .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length);
+  expect(mobileColumns).toBe(1);
   await page.screenshot({
     path: 'test-results/session-settings-advanced-mobile.png',
     fullPage: true,
@@ -638,7 +660,9 @@ test('starts a session with sandbox and approval settings', async ({ page }) => 
   await page.getByText('Advanced settings', { exact: true }).click();
   await page.getByLabel('Sandbox').selectOption('workspace-write');
   await page.getByLabel('Approval policy').selectOption('never');
-  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(
+    'gpt-6.1-sol',
+  );
   await page.getByRole('button', { name: 'Create session' }).click();
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 });
