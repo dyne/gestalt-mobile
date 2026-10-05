@@ -18,6 +18,16 @@ import {
 } from './supervised-lifecycle.js';
 
 const now = '2026-08-28T12:00:00.000Z';
+describe('optional persisted object shapes', () => {
+  it.each([null, 'invalid', 1, false, []])('rejects present malformed objects: %j', (value) => {
+    for (const field of ['executor', 'blocking', 'checkpoints', 'supervision'])
+      expect(parsePersistedSupervisedLifecycle({ [field]: value })).toBeUndefined();
+    for (const field of ['assignment', 'replacement', 'blocking'])
+      expect(
+        parsePersistedSupervisedLifecycle({ executor: { ...executor(), [field]: value } }),
+      ).toBeUndefined();
+  });
+});
 const incompletePlan = (l1State: 'TODO' | 'WIP' | 'DONE' = 'WIP'): SupervisedPlan => ({
   title: 'Circuit construction',
   steps: [

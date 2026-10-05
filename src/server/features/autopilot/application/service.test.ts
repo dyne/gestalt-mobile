@@ -15,6 +15,7 @@ import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
 import { SqliteAutopilotStore } from '../../../platform/persistence/sqlite-autopilot-store.js';
+import { AutopilotStateError } from '../domain/persisted-state-error.js';
 import {
   recordAutomaticContinuation,
   semanticProgressKey,
@@ -1656,6 +1657,7 @@ describe('AutopilotCoordinator', () => {
     };
     expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('recorded');
     expect(coordinator.checkpointAccepted('s', checkpoint, 'turn-1', now)).toBe('alreadyRecorded');
+    coordinator.turnCompleted('s');
     planState = {
       ...planState,
       steps: [{ ...completedPlan.steps[0]!, reviewStatus: 'REVIEWED' as const }],
@@ -1762,6 +1764,7 @@ describe('AutopilotCoordinator', () => {
         now,
       ),
     ).toBe('alreadyRecorded');
+    coordinator.turnCompleted('s');
     planState = { ...acceptedPlan, title: 'append-only refinement' };
     coordinator.planStatusChanged('s');
     expect(state?.checkpoints?.completionEpochs).toContainEqual({
@@ -1858,6 +1861,7 @@ describe('AutopilotCoordinator', () => {
       });
       const active = coordinator(first);
       expect(active.checkpointAccepted('s', checkpoint, 'first', now)).toBe('recorded');
+      active.turnCompleted('s');
       planState = {
         ...completedPlan,
         steps: [
@@ -3814,6 +3818,115 @@ describe('AutopilotCoordinator', () => {
       await fixture.runNext();
       expect(fixture.refresh).toHaveBeenCalledOnce();
     });
+
+    it.each(['childWorking', 'staleRoster', 'siblingWriter'] as const)(
+      'rechecks writer activity at dispatch: %s',
+      async (change) => {
+        const fixture = subject();
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        fixture.activity = {
+          ...fixture.activity,
+          confidence: change === 'staleRoster' ? 'stale' : 'fresh',
+          subagents:
+            change === 'siblingWriter'
+              ? [
+                  ...fixture.activity.subagents,
+                  {
+                    ...fixture.activity.subagents[0]!,
+                    id: 'other',
+                    threadId: 'other',
+                    canonicalPosition: 'L2',
+                    state: 'working',
+                  },
+                ]
+              : fixture.activity.subagents.map((child) => ({
+                  ...child,
+                  state: change === 'childWorking' ? 'working' : child.state,
+                })),
+        };
+        await fixture.runNext();
+        await new Promise((done) => setImmediate(done));
+        expect(fixture.resume).not.toHaveBeenCalled();
+        fixture.activity = {
+          ...fixture.activity,
+          confidence: 'fresh',
+          subagents: [{ ...fixture.activity.subagents[0]!, state: 'idle' }],
+        };
+        await fixture.runNext();
+        await fixture.runNext();
+        await vi.waitFor(() => expect(fixture.resume).toHaveBeenCalledOnce());
+      },
+    );
+
+    it.each(['offOn', 'planReplacement', 'executorReplacement'] as const)(
+      'ignores late resume success and rejection after %s',
+      async (change) => {
+        for (const rejected of [false, true]) {
+          const fixture = subject();
+          let resolve!: () => void;
+          let reject!: (error: unknown) => void;
+          fixture.resume.mockImplementationOnce(
+            () =>
+              new Promise<undefined>((yes, no) => {
+                resolve = () => yes(undefined);
+                reject = no;
+              }),
+          );
+          fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+          await fixture.runNext();
+          await fixture.runNext();
+          await vi.waitFor(() => expect(fixture.resume).toHaveBeenCalledOnce());
+          if (change === 'offOn')
+            fixture.state = { ...fixture.state!, generation: fixture.state!.generation + 2 };
+          if (change === 'planReplacement') fixture.planIdentity = 'replacement';
+          if (change === 'executorReplacement')
+            fixture.state = {
+              ...fixture.state!,
+              executor: { ...fixture.state!.executor!, threadId: 'new-child' },
+            };
+          const before = fixture.state!;
+          if (rejected) reject(new Error('AUTOPILOT_EXECUTOR_REJECTED'));
+          else resolve();
+          await new Promise((done) => setImmediate(done));
+          expect(fixture.state?.executor?.continuationCount).toBe(
+            before.executor?.continuationCount,
+          );
+          expect(fixture.state?.executor?.resumeFailures).toBe(before.executor?.resumeFailures);
+          expect(fixture.state?.supervision).toEqual(before.supervision);
+          expect(fixture.state?.executor?.commands?.at(-1)?.status).toBe(
+            change === 'offOn' ? 'issued' : 'superseded',
+          );
+          expect(fixture.published).not.toContain('autopilot.executor-resumed');
+        }
+      },
+    );
+
+    it.each([true, false])(
+      'stops recovery for permanent corruption or exhausted reads (corrupt=%s)',
+      async (corrupt) => {
+        const fixture = subject();
+        const internal = fixture.coordinator as unknown as {
+          deps: { store: import('./ports.js').AutopilotStore };
+        };
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        internal.deps.store = {
+          ...internal.deps.store,
+          find: () => {
+            throw corrupt ? new AutopilotStateError('s') : new Error('PERSISTENCE_UNAVAILABLE');
+          },
+        };
+        for (let i = 0; i <= defaultAutopilotPolicy.retryLimit; i++) {
+          if (!fixture.timers.some((timer) => !timer.cancelled && !timer.fired)) break;
+          await fixture.runNext();
+          await new Promise((done) => setImmediate(done));
+        }
+        expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(false);
+        expect(fixture.resume).not.toHaveBeenCalled();
+        if (!corrupt)
+          expect(fixture.diagnostic).toHaveBeenCalledWith('s', 'storeRecoveryExhausted');
+      },
+    );
 
     it('arms a store-independent retry when a lifecycle read fails after timer delivery', async () => {
       const fixture = subject();

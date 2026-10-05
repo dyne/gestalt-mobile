@@ -85,15 +85,19 @@ export class SqliteAutopilotStore implements AutopilotStore {
     };
   }
   save(state: AutopilotSession): void {
-    const lifecycleJson =
-      state.executor || state.blocking || state.supervision || state.checkpoints
-        ? JSON.stringify({
-            executor: state.executor,
-            blocking: state.blocking,
-            supervision: state.supervision,
-            checkpoints: state.checkpoints,
-          })
-        : null;
+    const lifecycleJson = [
+      state.executor,
+      state.blocking,
+      state.supervision,
+      state.checkpoints,
+    ].some((value) => value !== undefined)
+      ? JSON.stringify({
+          executor: state.executor,
+          blocking: state.blocking,
+          supervision: state.supervision,
+          checkpoints: state.checkpoints,
+        })
+      : null;
     // Use the reader's exact contract before any write (including transaction/outbox writes).
     this.decodeRow({
       session_id: state.sessionId,

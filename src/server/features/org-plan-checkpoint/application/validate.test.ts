@@ -52,6 +52,73 @@ const checkpoint = {
 };
 
 describe('validOrgPlanCheckpoint', () => {
+  it('resolves out-of-order completions by publication identity and refuses ambiguous history', () => {
+    const current = {
+      ...plan,
+      steps: [
+        {
+          ...plan.steps[0],
+          reviewStatus: 'UNREVIEWED' as const,
+          children: [plan.steps[0].children[0], { ...plan.steps[0].children[0], id: 'later' }],
+        },
+      ],
+    };
+    expect(
+      resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan', 'l2:l2:DONE'),
+    ).toMatchObject({ l2Id: 'l2', position: 'L1.1' });
+    expect(resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan')).toBeNull();
+    expect(
+      resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan', 'l2:missing:DONE'),
+    ).toBeNull();
+    expect(
+      resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan', null, [
+        JSON.stringify(['l2', 'l1', 'later']),
+      ]),
+    ).toMatchObject({ l2Id: 'l2' });
+    expect(
+      resolveOrgPlanCheckpointSignal(
+        'l2Completed',
+        current,
+        'plan',
+        null,
+        [JSON.stringify(['l2', 'l1', 'l2'])],
+        JSON.stringify(['l2', 'l1', 'l2']),
+      ),
+    ).toMatchObject({ l2Id: 'l2' });
+  });
+  it('applies child completion and writer checks to terminal review, including empty plans', () => {
+    const input = {
+      checkpoint: {
+        version: 1 as const,
+        kind: 'terminalReviewAccepted' as const,
+        verdict: 'ACCEPT' as const,
+        planIdentity: 'plan',
+      },
+      plan,
+      planIdentity: 'plan',
+      rootOwned: true,
+      hasActiveL1Writer: () => false,
+    };
+    expect(validateOrgPlanCheckpoint({ ...input, plan: { ...plan, steps: [] } })).toMatchObject({
+      valid: false,
+      reasonCode: 'terminalReviewIncomplete',
+    });
+    expect(validateOrgPlanCheckpoint({ ...input, hasActiveL1Writer: () => true })).toMatchObject({
+      valid: false,
+      reasonCode: 'executorStillActive',
+    });
+    expect(
+      validateOrgPlanCheckpoint({
+        ...input,
+        plan: {
+          ...plan,
+          steps: [
+            { ...plan.steps[0], children: [{ ...plan.steps[0].children[0], state: 'TODO' }] },
+          ],
+        },
+      }),
+    ).toMatchObject({ valid: false, reasonCode: 'l1ChildrenIncomplete' });
+  });
   it('accepts retained terminal executors and rejects only genuine active writers', () => {
     expect(
       hasActiveL1Writer(
