@@ -12,6 +12,11 @@ for (const width of [390, 1280]) {
     await mockAuthenticatedStatus(page);
     const planName = 'repo/.gestalt/plans/roadmap.org';
     const requests: string[] = [];
+    const referenceChecks: string[][] = [];
+    let releaseChecks = () => {};
+    const checkGate = new Promise<void>((resolve) => {
+      releaseChecks = resolve;
+    });
     await page.route('**/api/bootstrap', (route) =>
       route.fulfill({
         json: {
@@ -40,6 +45,14 @@ for (const width of [390, 1280]) {
         },
       }),
     );
+    await page.route('**/api/workspaces/root/files/references', async (route) => {
+      const paths = (route.request().postDataJSON() as { paths: string[] }).paths;
+      referenceChecks.push(paths);
+      await checkGate;
+      return route.fulfill({
+        json: { paths: paths.filter((path) => path !== 'repo/missing.txt') },
+      });
+    });
     await page.route('**/api/workspaces/root/files/preview?**', (route) => {
       const path = new URL(route.request().url()).searchParams.get('path') ?? '';
       requests.push(path);
@@ -78,6 +91,10 @@ for (const width of [390, 1280]) {
     await page.getByRole('button', { name: 'Plan', exact: true }).click();
     await page.getByRole('button', { name: 'Open Preview roadmap' }).click();
     const notes = page.locator('.notes').filter({ hasText: 'Read' });
+    await expect(notes).toBeVisible();
+    await expect(notes.getByRole('link')).toHaveCount(0);
+    expect(requests).toHaveLength(0);
+    releaseChecks();
     await expect(notes).toHaveCSS('white-space', 'pre-wrap');
     await expect(notes).toContainText('Read docs/README.md\nThen config.json');
     await page.getByRole('link', { name: 'docs/README.md', exact: true }).click();
@@ -108,10 +125,11 @@ for (const width of [390, 1280]) {
     await page.screenshot({ path: `/tmp/mobile-file-preview-${width}.png` });
     await page.keyboard.press('Escape');
     await expect(page.getByRole('link', { name: 'docs', exact: true })).toBeFocused();
-    await page.getByRole('link', { name: 'missing.txt' }).click();
-    await expect(
-      page.getByText('This file or folder no longer exists. Check the path and try again.'),
-    ).toBeVisible();
+    await expect(page.getByRole('link', { name: 'missing.txt' })).toHaveCount(0);
+    await expect(notes).toContainText('Missing missing.txt');
+    expect(requests).not.toContain('repo/missing.txt');
+    expect(referenceChecks).toHaveLength(1);
+    expect(referenceChecks[0]).toContain('repo/docs/README.md');
     expect(requests).toContain('repo/docs/README.md');
   });
 }

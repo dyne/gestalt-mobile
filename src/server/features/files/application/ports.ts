@@ -54,6 +54,7 @@ export type FilePreviewResult =
 /** Boundary for listing one already-authorized workspace directory. */
 export interface WorkspaceFileSource {
   list(workspaceRoot: string, input: ListWorkspaceDirectory): Promise<WorkspaceDirectoryResult>;
+  exists?(workspaceRoot: string, path: string): Promise<boolean>;
   read?(workspaceRoot: string, path: string): Promise<FilePreviewResult>;
   copy?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;
   move?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;

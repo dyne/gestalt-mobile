@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { AppDependencies } from '../../app.js';
+import { registerCheckReferences } from './check-references/endpoint.js';
 import { registerReadEntry } from './read-entry/endpoint.js';
 import { registerListDirectory } from './list-directory/endpoint.js';
 import { registerCopyEntry } from './copy-entry/endpoint.js';
@@ -19,6 +20,7 @@ export function registerFileRoutes(
   deps: Pick<AppDependencies, 'workspaceFileRoutes'>,
 ): void {
   if (!deps.workspaceFileRoutes) return;
+  registerCheckReferences(app, deps.workspaceFileRoutes);
   registerReadEntry(app, deps.workspaceFileRoutes);
   registerListDirectory(app, deps.workspaceFileRoutes);
   registerCopyEntry(app, deps.workspaceFileRoutes);

@@ -320,6 +320,18 @@ describe('workspace file previews', () => {
     for (const path of ['binary', 'invalid-utf8'])
       expect(await files.read(root, path)).toEqual({ kind: 'unsupported' });
     expect(await files.read(root, 'large')).toEqual({ kind: 'too-large' });
+    for (const path of ['', 'docs', 'docs/notes.md', 'binary', 'large'])
+      expect(await files.exists(root, path)).toBe(true);
+    for (const path of [
+      'missing',
+      '/etc/passwd',
+      '../outside',
+      '.git',
+      'alias',
+      'alias/notes.md',
+      'escape',
+    ])
+      expect(await files.exists(root, path)).toBe(false);
     expect(await files.read(root, 'missing')).toEqual({ kind: 'missing' });
   });
 });
