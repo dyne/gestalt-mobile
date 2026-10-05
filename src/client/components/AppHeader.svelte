@@ -23,6 +23,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onscratchpad = () => {},
     onquit = async () => {},
     ondetach,
+    oncopytocli,
+    copyToCliAvailable = true,
   }: {
     theme: ThemeId;
     sessionPath?: string | null;
@@ -38,6 +40,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onscratchpad?: () => void;
     onquit?: () => Promise<void>;
     ondetach?: () => void;
+    oncopytocli?: () => void;
+    copyToCliAvailable?: boolean;
   } = $props();
 
   let menuTrigger = $state<HTMLButtonElement | null>(null);
@@ -149,6 +153,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     popovertargetaction="hide"
     onclick={onscratchpad}>Scratchpad</button
   >
+  {#if oncopytocli}
+    <button
+      type="button"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
+      disabled={!copyToCliAvailable}
+      onclick={oncopytocli}>Copy session to CLI</button
+    >
+  {/if}
   {#if passkeyAuthEnabled}
     <button
       type="button"

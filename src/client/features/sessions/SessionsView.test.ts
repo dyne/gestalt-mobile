@@ -517,8 +517,10 @@ describe('SessionsView session base tree', () => {
     expect(screen.queryByText('Progress')).toBeNull();
   });
 
-  it('shows available metadata for a recent session', () => {
+  it('shows recent-session metadata and copies to CLI without opening a menu', async () => {
+    const oncopyresume = vi.fn();
     renderView({
+      oncopyresume,
       recentSessions: [
         {
           id: 'recent',
@@ -534,6 +536,9 @@ describe('SessionsView session base tree', () => {
     expect(screen.getByText('Model: gpt-5.4')).toBeTruthy();
     expect(screen.getByText('Skills profile: focused')).toBeTruthy();
     expect(screen.getByText('Org plan: recent-context.org')).toBeTruthy();
+    expect(document.querySelector('.recent-session .session-menu')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy to CLI' }));
+    expect(oncopyresume).toHaveBeenCalledWith('codex resume recent');
   });
 
   it('selects another open session and marks only the Chat session as current', async () => {
@@ -710,7 +715,8 @@ describe('SessionsView provider selection', () => {
         },
       ],
     });
-    expect(document.querySelectorAll('.session-menu')).toHaveLength(1);
+    expect(document.querySelectorAll('.session-menu')).toHaveLength(0);
+    expect(screen.getAllByRole('button', { name: 'Copy to CLI' })).toHaveLength(1);
     expect(screen.getByText('Kimi')).toBeTruthy();
   });
 

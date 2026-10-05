@@ -842,9 +842,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function copyResumeCommand(command: string) {
-    shellStatus = (await copyText(command))
-      ? 'Resume command copied.'
-      : 'Could not copy the resume command.';
+    if (await copyText(command)) {
+      shellStatus = 'Resume command copied.';
+      toastQueue.enqueue({ kind: 'success', message: shellStatus });
+    } else {
+      shellStatus = reportRelayError(new Error('SESSION_COPY_FAILED'), 'SESSION_COPY_FAILED');
+    }
   }
 
   async function selectSessionModel(model: string): Promise<void> {
@@ -1496,6 +1499,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onquit={quit}
         onthemechange={setTheme}
         ondetach={tab === 'chat' && sessionId ? detachChat : undefined}
+        oncopytocli={tab === 'chat' && selectedSession
+          ? () => {
+              if (selectedSession?.resumeCommand)
+                void copyResumeCommand(selectedSession.resumeCommand);
+            }
+          : undefined}
+        copyToCliAvailable={!!selectedSession?.resumeCommand}
       />{/if}
     {#if detachedSessionId}
       <header class="detached-chat-header">

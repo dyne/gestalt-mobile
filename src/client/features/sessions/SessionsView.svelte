@@ -463,7 +463,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 </label>
               </fieldset>
             {/if}
-            <div class="supervisor-settings">
+            <fieldset class="supervisor-settings">
+              <legend>Main supervisor</legend>
               {#if provider === 'codex'}
                 <label for="model-thinking"
                   >Model thinking
@@ -491,7 +492,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   >
                 </select>
               </div>
-            </div>
+            </fieldset>
           </div>
           <div
             class="session-setting-labels"
@@ -542,11 +543,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </div>
           <div class="session-secondary-actions">
             <AppControl
+              class="manage-profiles-button"
               id="manage-skill-profiles"
               onclick={(event) => onmanageprofiles(event.currentTarget)}
               >Manage skill profiles
             </AppControl>
             <AppControl
+              class="save-defaults-button"
               disabled={savingDefaults || modelsLoading || !selectedModel}
               onclick={onsavedefaults}
             >
@@ -560,6 +563,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <AppControl
         class="new-session-button"
         type="submit"
+        full
         primary
         disabled={!selectedWorkspace ||
           startingSession ||
@@ -597,7 +601,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <div class="session-actions">
               <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
               {#if session.resumeCommand}
-                {@render sessionMenu(session.resumeCommand)}
+                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}
+                  >Copy to CLI</AppControl
+                >
               {/if}
             </div>
           </li>
@@ -748,8 +754,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .recent-session {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content;
+    display: flex;
+    flex-wrap: wrap;
     gap: 0.75rem;
     align-items: center;
     padding-block: 0.65rem;
@@ -758,7 +764,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .recent-session .session-actions {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
+    max-inline-size: 100%;
+    margin-inline-start: auto;
+  }
+  .recent-session .session-details {
+    flex: 1 1 12rem;
+    min-inline-size: 0;
   }
   .recent-session .session-actions > :global(*) {
     inline-size: auto;
@@ -803,8 +816,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding-block: 0.25rem 0.75rem;
   }
   .create-session-actions {
-    display: flex;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+  .create-session-actions :global(.new-session-button) {
+    grid-column: 2;
+    min-block-size: 3.5rem;
+    padding: 0.75rem 1.25rem;
+    font-size: 1.125rem;
   }
   .session-menu {
     position: relative;
@@ -878,10 +898,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .supervisor-settings {
-    display: grid;
     grid-column: 2;
-    gap: 0.75rem;
-    min-inline-size: 0;
   }
 
   .provider-control {
@@ -890,7 +907,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
   }
 
-  .executor-settings {
+  .executor-settings,
+  .supervisor-settings {
     display: grid;
     gap: 0.65rem;
     min-inline-size: 0;
@@ -935,14 +953,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   .session-secondary-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: center;
-    gap: 0.5rem;
+    gap: 1rem;
     min-inline-size: 0;
   }
 
-  .session-secondary-actions {
-    flex-wrap: wrap;
+  .session-secondary-actions :global(.manage-profiles-button) {
+    justify-self: start;
+  }
+  .session-secondary-actions :global(.save-defaults-button) {
+    justify-self: end;
   }
 
   .skills-profile-error {
@@ -960,15 +982,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       gap: 0.5rem;
     }
     .essential-settings,
-    .advanced-model-settings {
+    .advanced-model-settings,
+    .session-secondary-actions,
+    .create-session-actions {
       grid-template-columns: minmax(0, 1fr);
       gap: 0.75rem;
     }
-    .create-session-actions :global(button) {
-      inline-size: 100%;
-    }
-    .recent-session {
-      grid-template-columns: minmax(0, 1fr) auto;
+    .create-session-actions :global(.new-session-button) {
+      grid-column: auto;
     }
     .supervisor-settings {
       grid-column: auto;

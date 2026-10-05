@@ -254,7 +254,8 @@ test('hides the resume Copy action for kimi recent threads', async ({ page }) =>
   await page.getByRole('button', { name: 'Sessions' }).click();
   const recent = page.getByLabel('Recent sessions');
   await expect(recent.getByText('Kimi')).toBeVisible();
-  await expect(recent.getByLabel('Session menu')).toHaveCount(1);
+  await expect(recent.getByLabel('Session menu')).toHaveCount(0);
+  await expect(recent.getByRole('button', { name: 'Copy to CLI' })).toHaveCount(1);
   await recent.getByRole('button', { name: 'Open' }).first().click();
   await expect
     .poll(() => recentOpenBody)
