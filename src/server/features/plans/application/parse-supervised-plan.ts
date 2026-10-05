@@ -85,12 +85,24 @@ export function parseSupervisedPlan(input: {
     if (!closed) return unavailable('MALFORMED_ORG');
 
     const descriptions = new Map<string, string>();
+    let descriptionKey: string | undefined;
+    let blankLines = 0;
     while (index < lines.length && !lines[index]!.startsWith('*')) {
       const description = descriptionPattern.exec(lines[index]!);
       if (description) {
         const key = description[1]!;
         if (descriptions.has(key)) return unavailable('MALFORMED_ORG');
         descriptions.set(key, description[2] ?? '');
+        descriptionKey = key;
+        blankLines = 0;
+      } else if (descriptionKey && /^[ \t]+\S/.test(lines[index]!)) {
+        descriptions.set(
+          descriptionKey,
+          `${descriptions.get(descriptionKey)}${'\n'.repeat(blankLines + 1)}${lines[index]!.replace(/^(?:  |\t)/, '')}`,
+        );
+        blankLines = 0;
+      } else if (lines[index]!.trim() === '') {
+        blankLines += 1;
       } else if (lines[index]!.trim() !== '') {
         return unavailable('MALFORMED_ORG');
       }

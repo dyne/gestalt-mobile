@@ -12,12 +12,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let {
     controller,
     revision,
+    directory = '',
     destinationMode = false,
     ondestinationselect = () => {},
     onselectionchange = () => {},
   }: {
     controller: FileBrowserController;
     revision: number;
+    directory?: string;
     destinationMode?: boolean;
     ondestinationselect?: (path: string) => void;
     onselectionchange?: (path: string) => void;
@@ -26,30 +28,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let focused = $state('');
   let rootState = $derived.by(() => {
     if (revision < 0) return { entries: [], loading: false, error: false };
-    return controller.state('');
+    return directoryState(directory);
   });
   let nodes = $derived.by(() => {
     if (revision < 0) return [];
     const result: Node[] = [];
     const visit = (directory: string, level: number) => {
-      for (const entry of controller.state(directory).entries) {
+      for (const entry of directoryState(directory).entries) {
         result.push({ entry, level, parent: directory });
-        if (entry.kind === 'directory' && controller.expanded.has(entry.path))
-          visit(entry.path, level + 1);
+        if (entry.kind === 'directory' && expanded(entry.path)) visit(entry.path, level + 1);
       }
     };
-    visit('', 1);
+    visit(directory, 1);
     return result;
   });
+  function directoryState(path: string) {
+    // The shared controller is a class; revision makes its mutations observable to Svelte.
+    void revision;
+    return controller.state(path);
+  }
+  function expanded(path: string): boolean {
+    void revision;
+    return controller.expanded.has(path);
+  }
   function focus(path: string) {
     focused = path;
     elements[path]?.focus();
   }
   function toggle(entry: RelayWorkspaceFile) {
-    if (controller.expanded.has(entry.path)) controller.collapse(entry.path);
+    if (expanded(entry.path)) controller.collapse(entry.path);
     else void controller.expand(entry.path);
   }
   function key(event: KeyboardEvent, node: Node, index: number) {
+    event.stopPropagation();
     const item = node.entry;
     const parent = node.parent;
     const move = (i: number) => {
@@ -76,14 +87,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       case 'ArrowRight':
         if (item.kind === 'directory') {
           event.preventDefault();
-          if (!controller.expanded.has(item.path)) toggle(item);
+          if (!expanded(item.path)) toggle(item);
           else move(index + 1);
         }
         break;
       case 'ArrowLeft':
         event.preventDefault();
-        if (item.kind === 'directory' && controller.expanded.has(item.path))
-          controller.collapse(item.path);
+        if (item.kind === 'directory' && expanded(item.path)) controller.collapse(item.path);
         else if (parent) focus(parent);
         break;
       case 'Enter':
@@ -106,11 +116,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <div class="file-tree" role="tree" aria-label="Files">
   {#if rootState.loading}<p role="status">Loading files…</p>{/if}
-  {#if rootState.error}<button type="button" onclick={() => void controller.load('')}
+  {#if rootState.error}<button type="button" onclick={() => void controller.load(directory)}
       >Retry loading files</button
     >{/if}
   {#snippet renderDirectory(directoryPath: string, level: number)}
-    {#each controller.state(directoryPath).entries as entry (entry.path)}
+    {#each directoryState(directoryPath).entries as entry (entry.path)}
       {@const directory = entry.kind === 'directory'}
       {@const node = nodes.find((candidate) => candidate.entry.path === entry.path)!}
       {@const index = nodes.findIndex((candidate) => candidate.entry.path === entry.path)}
@@ -120,24 +130,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         class="treeitem"
         role="treeitem"
         aria-level={level}
-        aria-expanded={directory ? controller.expanded.has(entry.path) : undefined}
+        aria-expanded={directory ? expanded(entry.path) : undefined}
         aria-selected={entry.kind === 'symlink' ? 'false' : controller.selectedPath === entry.path}
         aria-disabled={entry.kind === 'symlink'}
         aria-describedby={entry.kind === 'symlink' ? `${entry.path}-unsupported` : undefined}
         tabindex={focused === entry.path || (!focused && index === 0) ? 0 : -1}
         onfocus={() => (focused = entry.path)}
         onkeydown={(event) => key(event, node, index)}
-        onclick={() => select(entry)}
+        onclick={(event) => {
+          event.stopPropagation();
+          select(entry);
+        }}
       >
         <div class="tree-row" role="presentation" style:--level={level}>
           {#if directory}<button
               class="disclosure"
               type="button"
-              aria-label={`${controller.expanded.has(entry.path) ? 'Collapse' : 'Expand'} ${entry.name}`}
+              aria-label={`${expanded(entry.path) ? 'Collapse' : 'Expand'} ${entry.name}`}
               onclick={(event) => {
                 event.stopPropagation();
                 toggle(entry);
-              }}>{controller.expanded.has(entry.path) ? '−' : '+'}</button
+              }}>{expanded(entry.path) ? '−' : '+'}</button
             >{:else}<span class="disclosure"></span>{/if}
           <span class="tree-label">{entry.name}</span>{#if destinationMode && !directory}
             <span class="unsupported">Files cannot be destinations</span>
@@ -145,8 +158,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <span id={`${entry.path}-unsupported`} class="unsupported">Unsupported link</span>
           {/if}
         </div>
-        {#if directory && controller.expanded.has(entry.path)}
-          {@const state = controller.state(entry.path)}
+        {#if directory && expanded(entry.path)}
+          {@const state = directoryState(entry.path)}
           <div role="group" aria-label={`Contents of ${entry.name}`}>
             {#if state.loading}<span role="status">Loading…</span>{/if}
             {#if state.error}<button type="button" onclick={() => void controller.load(entry.path)}
@@ -163,8 +176,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       </div>
     {/each}
   {/snippet}
-  {@render renderDirectory('', 1)}
-  {#if rootState.cursor}<button type="button" onclick={() => void controller.load('', true)}
+  {@render renderDirectory(directory, 1)}
+  {#if rootState.cursor}<button type="button" onclick={() => void controller.load(directory, true)}
       >Load more in root</button
     >{/if}
 </div>

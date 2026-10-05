@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     state: PlanState | WorkspaceOrgPreview | null;
     onopen: (planName: string) => void;
     onclose: () => void;
+    onreference?: (path: string) => void;
     onarchive?: (planName: string) => void;
     archivingPlans?: readonly string[];
   };
@@ -37,6 +38,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopen,
     onclose,
     onarchive,
+    onreference,
     archivingPlans = [],
   }: Props = $props();
   let heading = $state<HTMLHeadingElement | null>(null);
@@ -159,9 +161,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#if planState?.kind === 'org-source'}
-  <OrgDocumentView preview={planState} onclose={close} />
+  <OrgDocumentView preview={planState} onclose={close} {onreference} />
 {:else if planState}
-  <PlanView state={planState} onclose={close} />
+  <PlanView state={planState} onclose={close} {onreference} />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <div class="catalog-heading">

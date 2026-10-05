@@ -5,12 +5,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import OrgNotes from './OrgNotes.svelte';
   import type { WorkspaceOrgPreview } from '../sessions/relay-client.js';
   import { parseOrgDocument } from './org-document.js';
 
-  type Props = { preview: WorkspaceOrgPreview; onclose: () => void };
+  type Props = {
+    preview: WorkspaceOrgPreview;
+    onclose: () => void;
+    onreference?: (path: string) => void;
+  };
 
-  let { preview, onclose }: Props = $props();
+  let { preview, onclose, onreference }: Props = $props();
   let document = $derived(parseOrgDocument(preview.source));
   let metadata = $derived(document.metadata.filter(([key]) => key !== 'TITLE'));
 </script>
@@ -31,7 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#each metadata as [label, value] (`${label}:${value}`)}
         <div>
           <dt>{label}</dt>
-          <dd>{value || '—'}</dd>
+          <dd><OrgNotes text={value || '—'} {onreference} /></dd>
         </div>
       {/each}
     </dl>
@@ -63,7 +68,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {#each section.descriptions as [label, value] (`${label}:${value}`)}
                 <div>
                   <dt>{label}</dt>
-                  <dd>{value || '—'}</dd>
+                  <dd><OrgNotes text={value || '—'} {onreference} /></dd>
                 </div>
               {/each}
             </dl>
@@ -78,7 +83,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 {#each section.properties as [label, value] (`${label}:${value}`)}
                   <div>
                     <dt>{label}</dt>
-                    <dd>{value || '—'}</dd>
+                    <dd><OrgNotes text={value || '—'} {onreference} /></dd>
                   </div>
                 {/each}
               </dl>

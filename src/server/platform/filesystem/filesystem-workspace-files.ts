@@ -22,6 +22,7 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 import type { WorkspaceFileSource } from '../../features/files/application/ports.js';
 import type {
+  FilePreviewResult,
   CopyMoveInput,
   DeleteInput,
   FileMutationResult,
@@ -128,6 +129,63 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
         ? { kind: 'missing' }
         : { kind: 'unreadable' };
+    }
+  }
+
+  async read(rootPath: string, requestedPath: string): Promise<FilePreviewResult> {
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return { kind: 'unreadable' };
+    const target = resolve(root, requestedPath);
+    if (!within(root, target)) return { kind: 'unreadable' };
+    const path = relative(root, target).split(sep).join('/');
+    if (path !== '' && !validRelative(path)) return { kind: 'unreadable' };
+    const parentPath = dirnameRelative(path);
+    const parent = await anchoredDirectory(root, parentPath);
+    if (!parent) return { kind: 'unreadable' };
+    try {
+      if (!(await stableAnchor(root, parentPath, parent.path))) return { kind: 'unreadable' };
+      const handle = await open(
+        path ? join(parent.path, basename(path)) : `${parent.path}/.`,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const metadata = await handle.stat();
+        if (!within(root, await realpath(procPath(handle.fd)))) return { kind: 'unreadable' };
+        if (metadata.isDirectory())
+          return { kind: 'available', preview: { kind: 'directory', path } };
+        if (!metadata.isFile()) return { kind: 'unsupported' };
+        const limit = 1024 * 1024;
+        if (metadata.size > limit) return { kind: 'too-large' };
+        const buffer = Buffer.alloc(limit + 1);
+        let size = 0;
+        while (size < buffer.length) {
+          const read = await handle.read(buffer, size, buffer.length - size, size);
+          if (!read.bytesRead) break;
+          size += read.bytesRead;
+        }
+        if (size > limit) return { kind: 'too-large' };
+        if (
+          !(await stableAnchor(root, parentPath, parent.path)) ||
+          !within(root, await realpath(procPath(handle.fd)))
+        )
+          return { kind: 'unreadable' };
+        const bytes = buffer.subarray(0, size);
+        if (bytes.includes(0)) return { kind: 'unsupported' };
+        try {
+          const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          return { kind: 'available', preview: { kind: 'file', path, content, size } };
+        } catch {
+          return { kind: 'unsupported' };
+        }
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      return {
+        kind: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable',
+      };
+    } finally {
+      await parent.close();
     }
   }
 

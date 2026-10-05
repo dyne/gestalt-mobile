@@ -354,3 +354,18 @@ describe('isPlanPathWithinWorkspace', () => {
     expect(isPlanPathWithinWorkspace('plan.org', '/work/project')).toBe(false);
   });
 });
+
+it('preserves indented multiline Notes and blank lines while keeping malformed text rejected', () => {
+  const result = parse(
+    plan().replace(
+      '- Notes :: Keep values immutable.',
+      '- Notes :: First line =src/a.ts=\n  Second line\n\n  Fourth line',
+    ),
+  );
+  expect(result).toMatchObject({
+    kind: 'available',
+    plan: {
+      steps: [{ description: { notes: 'First line =src/a.ts=\nSecond line\n\nFourth line' } }, {}],
+    },
+  });
+});

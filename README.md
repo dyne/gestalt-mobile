@@ -329,6 +329,19 @@ The browser stores the selected session, its replay cursor, and per-session
 composer drafts. On a dropped connection it replays retained events; if the
 server has pruned the gap, it reloads canonical Codex thread history.
 
+## File previews
+
+Plan descriptions preserve line breaks and open file or directory references enclosed
+in `=equal signs=` in a shared read-only viewer. Relative catalog references resolve
+from the project directory containing `.gestalt`; session plan references resolve
+from the session workspace. Absolute references must remain inside that workspace.
+The Git file browser uses the same viewer through its **View** action.
+
+The viewer formats JSON and Markdown, offers the original source, and browses folders
+with the existing lazy-loading tree. Other UTF-8 text files remain readable as text.
+Previews are limited to 1 MiB and do not follow symbolic links. Markdown previews
+sanitize markup and do not load embedded images.
+
 ## Git
 
 The Git tab has its own filesystem-tree selection, independent from the base

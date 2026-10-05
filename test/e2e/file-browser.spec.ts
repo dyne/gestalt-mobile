@@ -131,3 +131,21 @@ test('pauses an upload collision and sends the selected conflict disposition', a
   await page.getByLabel('Upload conflict').getByRole('button', { name: 'Keep both' }).click();
   await expect.poll(() => conflicts).toEqual(['reject', 'keep-both']);
 });
+
+test('opens the same read-only preview from Git browsing and restores the selected action', async ({
+  page,
+}) => {
+  await openBrowser(page);
+  await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
+    route.fulfill({
+      json: { kind: 'file', path: 'note.txt', content: 'First line\nSecond line', size: 22 },
+    }),
+  );
+  await page.getByRole('treeitem', { name: /note.txt/ }).click();
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  const viewer = page.getByRole('dialog', { name: 'note.txt' });
+  await expect(viewer.locator('pre')).toHaveText('First line\nSecond line');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View', exact: true })).toBeFocused();
+});

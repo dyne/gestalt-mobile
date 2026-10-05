@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import OrgNotes from './OrgNotes.svelte';
   import { tick } from 'svelte';
 
   import { orgPlanPosition } from '../../../shared/org-plan-position.js';
@@ -13,7 +14,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import PlanProgress from './PlanProgress.svelte';
   import { presentPlan } from './plan-presentation.js';
 
-  type Props = { state: PlanState; onclose: () => void };
+  type Props = { state: PlanState; onclose: () => void; onreference?: (path: string) => void };
   type DescriptionKey = keyof PlanStep['description'];
 
   const descriptionLabels: Readonly<Record<DescriptionKey, string>> = {
@@ -26,7 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     doneWhen: 'Done when',
   };
 
-  let { state: viewState, onclose }: Props = $props();
+  let { state: viewState, onclose, onreference }: Props = $props();
   let opened = $state<Set<string>>(new Set());
   let detailsById = $state<Partial<Record<string, HTMLDetailsElement>>>({});
   let lastCurrentStepId: string | null = null;
@@ -214,7 +215,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 <span class="measurement">{measurementSummary(step)}</span>
               </summary>
               {#each descriptionEntries(step) as [label, value] (label)}
-                <p><strong>{label}:</strong> {value}</p>
+                <p><strong>{label}:</strong> <OrgNotes text={value} {onreference} /></p>
               {/each}
               {#if step.skills?.length}<p><strong>Skills:</strong> {step.skills.join(', ')}</p>{/if}
               {#if step.children.length}
@@ -242,7 +243,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                           <span>{summary(child)}</span>
                         </summary>
                         {#each descriptionEntries(child) as [label, value] (label)}
-                          <p><strong>{label}:</strong> {value}</p>
+                          <p><strong>{label}:</strong> <OrgNotes text={value} {onreference} /></p>
                         {/each}
                         {#if child.skills?.length}<p>
                             <strong>Skills:</strong>
