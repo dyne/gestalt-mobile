@@ -62,7 +62,7 @@ access control; it remains loopback-only and does not reuse production state.
 
 ## Session defaults
 
-The Sessions tab starts with the session base, Skills profile and Codex model (`gpt-6.1-sol`).
+The Sessions tab starts with the session base, Skills profile and Model (`gpt-6.1-sol`).
 Expand **Advanced settings** to change model thinking, the Org-plan executor model
 and thinking, provider, sandbox, or approval policy, or to manage skill profiles.
 The executor starts with `gpt-5.6-terra` and high thinking; the supervisor uses medium thinking.

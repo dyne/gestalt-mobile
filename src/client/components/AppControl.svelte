@@ -127,7 +127,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     font-weight: 700;
     background: var(--theme-accent);
     border-color: var(--theme-accent);
-    box-shadow: inset 0 0.15rem 0 var(--theme-accent-contrast);
+    box-shadow: inset 0 -0.2rem 0 color-mix(in srgb, var(--theme-shadow) 35%, transparent);
+  }
+
+  .primary:hover:not(:disabled, [aria-disabled='true']) {
+    background: color-mix(in srgb, var(--theme-accent) 90%, var(--theme-text));
+  }
+
+  .primary:active:not(:disabled, [aria-disabled='true']) {
+    box-shadow: inset 0 -0.08rem 0 color-mix(in srgb, var(--theme-shadow) 35%, transparent);
   }
 
   .accentPressed[aria-pressed='true'] {

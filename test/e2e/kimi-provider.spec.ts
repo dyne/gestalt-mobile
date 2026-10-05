@@ -141,7 +141,9 @@ test('explains why kimi cannot be selected when it is not installed', async ({ p
   await expect(page.getByLabel('Provider').locator('option[value="kimi"]')).toBeDisabled();
   await expect(page.getByText(/Kimi is unavailable because its CLI was not found/)).toHaveCount(0);
   await expect(page.getByLabel('Sandbox')).toBeVisible();
-  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue(
+    'gpt-6.1-sol',
+  );
 });
 
 test('restricts chat model switching to the session provider and badges kimi sessions', async ({

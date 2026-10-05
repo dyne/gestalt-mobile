@@ -826,7 +826,7 @@ describe('RelayApp provider selection', () => {
     await fireEvent.change(picker, { target: { value: 'kimi' } });
     await vi.waitFor(() => expect(screen.queryByLabelText('Sandbox')).toBeNull());
     await vi.waitFor(() =>
-      expect((screen.getByLabelText('Kimi model') as HTMLSelectElement).value).toBe('k2-thinking'),
+      expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('k2-thinking'),
     );
     expect(recordedRequests.some((request) => request.url === '/api/session-models/kimi')).toBe(
       true,

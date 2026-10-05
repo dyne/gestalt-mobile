@@ -161,7 +161,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ),
   );
   let selectedWorkspace = $derived(findTreeNode(workspaceTree, workspaceId));
-  let providerLabel = $derived(provider === 'kimi' ? 'Kimi' : 'Codex');
   let closeDialog = $state<HTMLDialogElement | null>(null);
   let closingSessionId = $state<string | null>(null);
   function requestClose(id: string) {
@@ -416,7 +415,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </select>
       </label>
       <label for="model"
-        >{providerLabel} model
+        >Model
         <select
           id="model"
           value={selectedModel}
@@ -434,45 +433,66 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <summary>Advanced settings</summary>
       <div class="advanced-content">
         <section class="session-settings" aria-label="New session settings">
-          {#if provider === 'codex'}
-            <label for="model-thinking"
-              >Model thinking
-              <select
-                id="model-thinking"
-                value={reasoningEffort}
-                onchange={(event) => onreasoningchange(event.currentTarget.value as ThinkingLevel)}
-              >
-                {#each thinkingLevels as level (level)}<option value={level}>{level}</option>{/each}
-              </select>
-            </label>
-            <fieldset class="executor-settings">
-              <legend>Org-plan executor</legend>
-              <label for="executor-model"
-                >Executor model
+          <div class="advanced-model-settings">
+            {#if provider === 'codex'}
+              <fieldset class="executor-settings">
+                <legend>Org-plan executor</legend>
+                <label for="executor-model"
+                  >Executor model
+                  <select
+                    id="executor-model"
+                    value={executorModel}
+                    onchange={(event) => onexecutormodelchange(event.currentTarget.value)}
+                  >
+                    {#each [...new Set([executorModel, ...executorModels])] as model (model)}<option
+                        value={model}>{model}</option
+                      >{/each}
+                  </select>
+                </label>
+                <label for="executor-thinking"
+                  >Executor thinking
+                  <select
+                    id="executor-thinking"
+                    value={executorReasoningEffort}
+                    onchange={(event) =>
+                      onexecutorreasoningchange(event.currentTarget.value as ThinkingLevel)}
+                  >
+                    {#each thinkingLevels as level (level)}<option value={level}>{level}</option
+                      >{/each}
+                  </select>
+                </label>
+              </fieldset>
+            {/if}
+            <div class="supervisor-settings">
+              {#if provider === 'codex'}
+                <label for="model-thinking"
+                  >Model thinking
+                  <select
+                    id="model-thinking"
+                    value={reasoningEffort}
+                    onchange={(event) =>
+                      onreasoningchange(event.currentTarget.value as ThinkingLevel)}
+                  >
+                    {#each thinkingLevels as level (level)}<option value={level}>{level}</option
+                      >{/each}
+                  </select>
+                </label>
+              {/if}
+              <div class="provider-control">
+                <label for="session-provider">Provider</label>
                 <select
-                  id="executor-model"
-                  value={executorModel}
-                  onchange={(event) => onexecutormodelchange(event.currentTarget.value)}
+                  id="session-provider"
+                  value={provider}
+                  onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
                 >
-                  {#each [...new Set([executorModel, ...executorModels])] as model (model)}<option
-                      value={model}>{model}</option
-                    >{/each}
+                  <option value="codex">Codex</option>
+                  <option value="kimi" disabled={!kimiAvailable}
+                    >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
+                  >
                 </select>
-              </label>
-              <label for="executor-thinking"
-                >Executor thinking
-                <select
-                  id="executor-thinking"
-                  value={executorReasoningEffort}
-                  onchange={(event) =>
-                    onexecutorreasoningchange(event.currentTarget.value as ThinkingLevel)}
-                >
-                  {#each thinkingLevels as level (level)}<option value={level}>{level}</option
-                    >{/each}
-                </select>
-              </label>
-            </fieldset>
-          {/if}
+              </div>
+            </div>
+          </div>
           <div
             class="session-setting-labels"
             style:grid-template-columns={provider === 'kimi'
@@ -526,19 +546,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onclick={(event) => onmanageprofiles(event.currentTarget)}
               >Manage skill profiles
             </AppControl>
-            <div class="model-control">
-              <label for="session-provider">Provider</label>
-              <select
-                id="session-provider"
-                value={provider}
-                onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
-              >
-                <option value="codex">Codex</option>
-                <option value="kimi" disabled={!kimiAvailable}
-                  >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
-                >
-              </select>
-            </div>
             <AppControl
               disabled={savingDefaults || modelsLoading || !selectedModel}
               onclick={onsavedefaults}
@@ -861,11 +868,33 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block: 1rem;
   }
 
+  .advanced-model-settings {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 1rem;
+    margin-block-end: 0.75rem;
+    min-inline-size: 0;
+  }
+
+  .supervisor-settings {
+    display: grid;
+    grid-column: 2;
+    gap: 0.75rem;
+    min-inline-size: 0;
+  }
+
+  .provider-control {
+    display: grid;
+    gap: 0.35rem;
+    min-inline-size: 0;
+  }
+
   .executor-settings {
     display: grid;
     gap: 0.65rem;
     min-inline-size: 0;
-    margin: 0.5rem 0;
+    margin: 0;
     padding: 0.75rem;
     border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
@@ -888,7 +917,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .session-setting-controls {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.5rem;
+    gap: 1rem;
     min-inline-size: 0;
   }
 
@@ -905,8 +934,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text-overflow: ellipsis;
   }
 
-  .session-secondary-actions,
-  .model-control {
+  .session-secondary-actions {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -915,10 +943,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .session-secondary-actions {
     flex-wrap: wrap;
-  }
-
-  .model-control {
-    margin-inline-start: auto;
   }
 
   .skills-profile-error {
@@ -931,7 +955,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   @media (max-width: 28rem) {
-    .essential-settings {
+    .session-setting-labels,
+    .session-setting-controls {
+      gap: 0.5rem;
+    }
+    .essential-settings,
+    .advanced-model-settings {
       grid-template-columns: minmax(0, 1fr);
       gap: 0.75rem;
     }
@@ -941,8 +970,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     .recent-session {
       grid-template-columns: minmax(0, 1fr) auto;
     }
-    .model-control {
-      margin-inline-start: 0;
+    .supervisor-settings {
+      grid-column: auto;
     }
   }
   @media (prefers-reduced-motion: reduce) {
