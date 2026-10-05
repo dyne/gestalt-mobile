@@ -108,10 +108,8 @@ test('browses all application-root plans regardless of selected session and reta
   await page.goto('/');
   const navigation = page.getByLabel('Primary');
   await navigation.getByRole('button', { name: 'Plan', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: /First repository.*one\/\.gestalt/ }),
-  ).toBeVisible();
-  const second = page.getByRole('button', { name: /Second repository.*two\/\.gestalt/ });
+  await expect(page.getByRole('button', { name: 'Open First repository' })).toBeVisible();
+  const second = page.getByRole('button', { name: 'Open Second repository' });
   await expect(second).toBeVisible();
   expect(childRequests).toBe(0);
   await second.click();
@@ -119,12 +117,13 @@ test('browses all application-root plans regardless of selected session and reta
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect.poll(() => rootRequests).toBe(2);
   await expect(second).toBeVisible();
-  await expect(page.getByRole('status').filter({ hasText: 'Updating plans' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '(updating…)' })).toBeVisible();
   release();
-  await expect(page.getByRole('button', { name: /Updated second repository/ })).toBeVisible();
-  // The visible catalog discovers external changes without another tab click.
-  await expect.poll(() => rootRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(3);
-  await expect(page.getByRole('button', { name: /Updated second repository/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Updated second repository' })).toBeVisible();
+  // A click while focused refreshes the catalog, without periodic polling.
+  await navigation.getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect.poll(() => rootRequests).toBeGreaterThanOrEqual(3);
+  await expect(page.getByRole('button', { name: 'Open Updated second repository' })).toBeVisible();
   await expect(
     page.getByText('Workspace Org files could not be listed. Try opening the Plan tab again.'),
   ).toBeVisible();
@@ -337,7 +336,7 @@ test('keeps the completed Plan tab reachable and overflow-free at 320px with 200
 
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect.poll(() => closed).toBe(false);
-  await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
   await expect(plan).toHaveAttribute('aria-pressed', 'true');
 });
 
@@ -503,7 +502,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('Waiting for the application workspace…')).toBeVisible();
   releaseBootstrap();
-  const roadmap = page.getByRole('button', { name: /Workspace roadmap.*plans\/roadmap.org/ });
+  const roadmap = page.getByRole('button', { name: 'Open Workspace roadmap' });
   await expect(roadmap).toBeVisible();
   await roadmap.click();
   await expect(page.getByRole('heading', { name: workspacePlan.title })).toBeVisible();
@@ -520,7 +519,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await page.getByRole('button', { name: 'Close plan and return to list' }).click();
   await expect(roadmap).toBeFocused();
   const notes = page.getByRole('button', {
-    name: /Free-form notes.*notes\/free-form.org.*Org document/,
+    name: 'Open Free-form notes',
   });
   await notes.click();
   await expect(page.getByRole('heading', { name: 'Free-form notes' })).toBeVisible();
@@ -534,6 +533,6 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
     type: 'plan.updated',
     payload: { plan: { ...activePlan, title: 'New live session plan' }, reason: 'update' },
   });
-  await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'New live session plan' })).toHaveCount(0);
 });

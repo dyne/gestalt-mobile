@@ -24,7 +24,10 @@ import type { RecentThread } from './features/sessions/list-recent-threads/endpo
 import { registerSessionRoutes } from './features/sessions/register-routes.js';
 import type { InteractionReplyResult } from './features/sessions/respond-interaction/endpoint.js';
 import type { SupervisedPlan } from './features/plans/domain/supervised-plan.js';
-import type { WorkspacePlanCatalogSource } from './features/plans/application/ports.js';
+import type {
+  WorkspacePlanCatalogSource,
+  WorkspacePlanArchiveSource,
+} from './features/plans/application/ports.js';
 import type { RelaySessionSnapshot } from './features/sessions/model/relay-session.js';
 import type { AgentActivitySnapshot } from './features/agent-activity/model.js';
 import type { SessionEvent } from '../shared/contracts/session-event.js';
@@ -165,6 +168,7 @@ export type AppDependencies = {
   workspacePlanRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     plans: WorkspacePlanCatalogSource;
+    archiver?: WorkspacePlanArchiveSource;
   };
   workspaceFileRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;

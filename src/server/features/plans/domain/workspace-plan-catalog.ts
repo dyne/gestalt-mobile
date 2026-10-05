@@ -18,6 +18,7 @@ export type WorkspacePlanEntry = Readonly<{
   totalSteps?: number;
   doneSteps?: number;
   allDone?: boolean;
+  archived?: boolean;
 }>;
 
 export type WorkspacePlanReadResult =

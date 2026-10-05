@@ -217,6 +217,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansCatalogCache: Extract<PlansCatalogState, { kind: 'ready' }> | null = null;
   let plansCatalogRequestWorkspace: string | null = null;
   let passivePlanSessionRelative = false;
+  let archivingPlans = $state<readonly string[]>([]);
   let passivePlanGeneration = 0;
   let navigationFocus = $state<Tab | null>(null);
   let plansWorkspaceId = $derived(workspaceTree[0]?.id ?? null);
@@ -989,11 +990,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const workspaceId = plansWorkspaceId;
     if (tab !== 'plan') return;
     untrack(() => loadPlansCatalog(workspaceId));
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible' && !visiblePlanState && !passivePlanRequest)
-        loadPlansCatalog();
-    }, 5_000);
-    return () => clearInterval(timer);
   });
 
   let externalRefreshQueued = false;
@@ -1005,7 +1001,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       externalRefreshQueued = false;
       if (document.visibilityState !== 'visible') return;
       if (tab === 'git' && gitWorkspaceId) void gitController.refresh();
-      if (tab === 'plan') refreshPlanSurface();
       if (tab === 'sessions') {
         void refreshSessionLists();
         if (sessionId) planController.refresh(sessionId);
@@ -1046,12 +1041,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (swipeStart?.pointerId === event.pointerId) swipeStart = null;
   }
 
-  function loadPlansCatalog(workspaceId = plansWorkspaceId): void {
+  function loadPlansCatalog(workspaceId = plansWorkspaceId, preservePreview = false): void {
     if (plansCatalogRequest && plansCatalogRequestWorkspace === workspaceId) return;
     plansCatalogRequest?.abort();
-    passivePlanRequest?.abort();
-    passivePlan = null;
-    passivePlanName = null;
+    if (!preservePreview) {
+      passivePlanRequest?.abort();
+      passivePlan = null;
+      passivePlanName = null;
+    }
     if (!workspaceId) {
       plansCatalog = { kind: 'no-workspace' };
       return;
@@ -1156,7 +1153,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function refreshPlanSurface(): void {
     if (sessionId) planController.refresh(sessionId);
     if (passivePlanName) openWorkspacePlan(passivePlanName, passivePlanSessionRelative);
-    else loadPlansCatalog();
+    loadPlansCatalog(plansWorkspaceId, true);
+  }
+
+  async function archiveWorkspacePlan(planName: string): Promise<void> {
+    const workspaceId = plansWorkspaceId;
+    if (!workspaceId || archivingPlans.includes(planName)) return;
+    archivingPlans = [...archivingPlans, planName];
+    try {
+      await relay.archiveWorkspacePlan(workspaceId, planName);
+      if (plansCatalogCache?.workspaceId === workspaceId) {
+        plansCatalogRequest?.abort();
+        plansCatalogRequest = null;
+        plansCatalogCache = {
+          ...plansCatalogCache,
+          entries: plansCatalogCache.entries.map((entry) =>
+            entry.planName === planName ? { ...entry, archived: true } : entry,
+          ),
+        };
+        plansCatalog = plansCatalogCache;
+        loadPlansCatalog(workspaceId, true);
+      }
+      toastQueue.enqueue({ kind: 'success', message: 'Plan archived.' });
+    } catch {
+      toastQueue.enqueue({
+        kind: 'error',
+        code: 'PLAN_ARCHIVE_FAILED',
+        message: 'The plan could not be archived. Check that it is writable and try again.',
+      });
+    } finally {
+      archivingPlans = archivingPlans.filter((name) => name !== planName);
+    }
   }
 
   async function loadSkills(workspaceId: string, profile: string): Promise<void> {
@@ -1665,6 +1692,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           catalog={plansCatalog}
           state={visiblePlanState}
           onopen={openWorkspacePlan}
+          onarchive={archiveWorkspacePlan}
+          {archivingPlans}
           onclose={closePlanViewer}
         />
       {:else if tab === 'git'}

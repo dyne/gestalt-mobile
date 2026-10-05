@@ -3689,6 +3689,12 @@ describe('production composition', () => {
           'protected',
         ],
         [
+          'POST',
+          '/api/workspaces/:workspaceId/plans/:planName/archive',
+          '/api/workspaces/workspace-1/plans/.gestalt%2Fplan.org/archive',
+          'protected',
+        ],
+        [
           'GET',
           '/api/git/repositories/:workspaceId',
           '/api/git/repositories/workspace-1',

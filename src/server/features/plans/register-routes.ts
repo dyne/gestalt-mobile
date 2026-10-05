@@ -13,6 +13,7 @@ import { registerGetPlan } from './get-plan/endpoint.js';
 import { registerGetWorkspacePlan } from './get-workspace-plan/endpoint.js';
 import { registerListWorkspacePlans } from './list-workspace-plans/endpoint.js';
 import { registerOpenPlan } from './open-plan/endpoint.js';
+import { registerArchiveWorkspacePlan } from './archive-workspace-plan/endpoint.js';
 
 export function registerPlanRoutes(
   app: FastifyInstance,
@@ -26,6 +27,11 @@ export function registerPlanRoutes(
   if (deps.workspacePlanRoutes) {
     registerListWorkspacePlans(app, deps.workspacePlanRoutes);
     registerGetWorkspacePlan(app, deps.workspacePlanRoutes);
+    if (deps.workspacePlanRoutes.archiver)
+      registerArchiveWorkspacePlan(app, {
+        workspaces: deps.workspacePlanRoutes.workspaces,
+        archiver: deps.workspacePlanRoutes.archiver,
+      });
   }
   if (deps.planMeasurementRoutes) registerGetPlanMeasurement(app, deps.planMeasurementRoutes);
 }

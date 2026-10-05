@@ -32,6 +32,52 @@ const plan = {
 };
 
 describe('PlansView', () => {
+  it('shows compact paths and progress, reserves inline update status, and moves archived rows while preserving focus', async () => {
+    const name = 'group/repository/.gestalt/deep/roadmap.org';
+    const onarchive = vi.fn();
+    const props = {
+      catalog: {
+        kind: 'ready' as const,
+        workspaceId: 'root',
+        refreshing: true,
+        entries: [{ ...entry, planName: name }],
+      },
+      state: null,
+      onopen: vi.fn(),
+      onclose: vi.fn(),
+      onarchive,
+    };
+    const { rerender } = render(PlansView, props);
+    const heading = screen.getByRole('heading', { name: 'ORG Plans' });
+    expect(screen.getByRole('status').parentElement).toBe(heading.parentElement);
+    expect(screen.getByText('group/repository')).toBeTruthy();
+    expect(screen.getByText('roadmap.org').parentElement?.getAttribute('title')).toBe(name);
+    const progress = screen.getByRole('progressbar', { name: 'Completion for Roadmap' });
+    expect(progress.getAttribute('value')).toBe('1');
+    expect(progress.getAttribute('max')).toBe('2');
+    await fireEvent.click(screen.getByRole('button', { name: 'Archive Roadmap' }));
+    expect(onarchive).toHaveBeenCalledWith(name);
+    await rerender({
+      ...props,
+      catalog: {
+        ...props.catalog,
+        refreshing: false,
+        entries: [{ ...entry, planName: name, archived: true }],
+      },
+    });
+    expect(screen.queryByRole('list', { name: 'Unfinished plans' })).toBeNull();
+    expect(
+      screen.getByRole('list', { name: 'Completed and archived plans' }).textContent,
+    ).toContain('Roadmap');
+    expect(screen.getByRole('button', { name: 'Archive Roadmap' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open Roadmap' })),
+    );
+    expect(screen.getByRole('status', { hidden: true }).classList.contains('inactive')).toBe(true);
+  });
+
   it('renders no-workspace, loading, empty, and error catalog states', () => {
     const { rerender } = render(PlansView, {
       catalog: { kind: 'no-workspace' },
@@ -76,7 +122,7 @@ describe('PlansView', () => {
       onopen,
       onclose,
     });
-    const item = screen.getByRole('button', { name: /Roadmap.*roadmap.org.*1 \/ 2 complete/ });
+    const item = screen.getByRole('button', { name: 'Open Roadmap' });
     await fireEvent.click(item);
     expect(onopen).toHaveBeenCalledWith('roadmap.org');
 
@@ -95,9 +141,7 @@ describe('PlansView', () => {
       onclose,
     });
     await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole('button', { name: /Roadmap.*roadmap.org.*1 \/ 2 complete/ }),
-      ),
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open Roadmap' })),
     );
   });
 
@@ -117,9 +161,7 @@ describe('PlansView', () => {
     expect(
       screen.getByText('Org plans in .gestalt folders below the application workspace.'),
     ).toBeTruthy();
-    await fireEvent.click(
-      screen.getByRole('button', { name: /Roadmap.*plans\/releases\/roadmap.org/ }),
-    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Open Roadmap' }));
     expect(onopen).toHaveBeenCalledWith('plans/releases/roadmap.org');
   });
 
@@ -148,9 +190,9 @@ describe('PlansView', () => {
       'Active one',
     );
     expect(screen.getByRole('list', { name: 'Unfinished plans' }).textContent).toContain('Notes');
-    expect(screen.getByRole('heading', { name: 'Completed', level: 3 })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Completed and archived', level: 3 })).toBeTruthy();
     expect(
-      screen.getAllByRole('button').map((button) => button.querySelector('strong')?.textContent),
+      screen.getAllByRole('listitem').map((item) => item.querySelector('strong')?.textContent),
     ).toEqual(['Active one', 'Notes', 'Completed one', 'Completed two']);
   });
 
@@ -174,9 +216,9 @@ describe('PlansView', () => {
     });
 
     expect(screen.getByText('Free-form notes')).toBeTruthy();
-    expect(screen.getByText('notes/free-form.org')).toBeTruthy();
+    expect(screen.getByText('free-form.org')).toBeTruthy();
     const open = screen.getByRole('button', {
-      name: /Free-form notes.*notes\/free-form.org.*Org document/,
+      name: 'Open Free-form notes',
     });
     await fireEvent.click(open);
     expect(onopen).toHaveBeenCalledWith('notes/free-form.org');

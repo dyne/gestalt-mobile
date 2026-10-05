@@ -506,7 +506,7 @@ test('runs the reviewed helper through the real relay and selected mobile sessio
     await planTab.click();
     await page.getByRole('button', { name: 'Close plan and return to list' }).click();
     await expect(planTab).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
     await expect(planTab).toHaveAttribute('aria-pressed', 'true');
     expect(
       await authorizedFetch(`${relayUrl}/api/sessions/${owningSession.id}/plan`).then(

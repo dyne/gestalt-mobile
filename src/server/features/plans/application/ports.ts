@@ -47,6 +47,17 @@ export interface PlanMeasurementSnapshotSource {
 
 /** Discovers Org files anywhere below a workspace and previews supported plans. */
 export interface WorkspacePlanCatalogSource {
-  list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]>;
+  list(workspacePath: string, refresh?: boolean): Promise<readonly WorkspacePlanEntry[]>;
   read(workspacePath: string, planName: string): Promise<WorkspacePlanReadResult>;
+}
+
+export interface WorkspacePlanArchiveSource {
+  archive(
+    workspacePath: string,
+    planName: string,
+  ): Promise<
+    Readonly<{
+      kind: 'archived' | 'missing' | 'unavailable' | 'conflict';
+    }>
+  >;
 }

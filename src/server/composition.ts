@@ -95,6 +95,7 @@ import { SupervisedPlanRegistry } from './features/plans/application/supervised-
 import type { PlanStatusUpdate } from './features/plans/application/ports.js';
 import { FilesystemPlanStatusSource } from './platform/plans/filesystem-plan-status-source.js';
 import { FilesystemWorkspacePlanCatalog } from './platform/plans/filesystem-workspace-plan-catalog.js';
+import { FilesystemPlanArchiver } from './platform/plans/filesystem-plan-archiver.js';
 import { checkpointPlanMeasurement } from './platform/plans/plan-measurement-command.js';
 import { PlanMeasurementRefresh } from './platform/plans/plan-measurement-refresh.js';
 import { SqliteAutopilotStore } from './platform/persistence/sqlite-autopilot-store.js';
@@ -585,6 +586,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     skillCatalog(provider, profile).list(workspace),
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
+  const planArchiver = new FilesystemPlanArchiver();
   const resolveSkills = async (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot,
   ) => {
@@ -1814,7 +1816,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
         },
       },
-      workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog },
+      workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
       workspaceFileRoutes: { workspaces, files: workspaceFiles },
       autopilot,
       ...(runtime

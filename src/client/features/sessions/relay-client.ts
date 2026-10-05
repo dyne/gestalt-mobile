@@ -23,6 +23,7 @@ export type WorkspacePlanEntry = Readonly<{
   totalSteps?: number;
   doneSteps?: number;
   allDone?: boolean;
+  archived?: boolean;
 }>;
 
 export type WorkspaceOrgPreview = Readonly<{
@@ -434,6 +435,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     closePlan: (sessionId: string) => remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),
     listWorkspacePlans: (workspaceId: string, signal?: AbortSignal) =>
       get<WorkspacePlanEntry[]>(`/api/workspaces/${encodeURIComponent(workspaceId)}/plans`, signal),
+    archiveWorkspacePlan: (workspaceId: string, planName: string) =>
+      request<void>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}/archive`,
+        {},
+      ),
     getWorkspacePlan: (workspaceId: string, planName: string, signal?: AbortSignal) =>
       get<SupervisedPlan | WorkspaceOrgPreview>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/plans/${encodeURIComponent(planName)}`,

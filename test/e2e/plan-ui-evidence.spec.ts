@@ -235,12 +235,12 @@ for (const configuration of evidenceConfigurations())
       } else {
         await expect(planTab).toBeVisible();
         await planTab.click();
-        await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
       }
       if (options.close) {
         await page.getByRole('button', { name: 'Close plan and return to list' }).click();
         await expect(planTab).toBeVisible();
-        await expect(page.getByRole('heading', { name: 'Plans' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'ORG Plans' })).toBeVisible();
       }
 
       await assertNoHorizontalOverflow(page);
