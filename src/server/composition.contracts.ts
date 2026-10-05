@@ -4369,6 +4369,95 @@ describe('production composition', () => {
       await restarted.close();
     });
 
+    it('restores explicit plan attachments and fresh progress without launching a writer and persists closure', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-attached-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-attached-state-'));
+      ownTemporaryPaths(root, dataDir);
+      const workspacePath = join(root, 'workspace');
+      await mkdir(workspacePath);
+      const planPath = join(workspacePath, 'plan.org');
+      const source = (state: string) => `#+TITLE: Persistent attachment
+* ${state} [#A] Remember plan
+:PROPERTIES:
+:ID: remember
+:SKILLS: $gestalt:org-plan
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Small
+- Goal :: Keep attachment after restart.
+- Notes :: Persist assignment.
+`;
+      await writeFile(planPath, source('WIP'));
+      const profiles = {
+        list: async () => [{ name: 'default', state: 'ok' as const, status: 'ready' as const }],
+        require: async () => ({ name: 'default', state: 'ok' as const, status: 'ready' as const }),
+      };
+      const options = {
+        root,
+        dataDir,
+        relyingParty,
+        profiles,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: false,
+        launchAppServer: () => fakeAppServer([]),
+      };
+      const first = await composeAuthorizedApp(options);
+      await first.listen({ host: '127.0.0.1', port: 0 });
+      const workspace = (await first.inject('/api/bootstrap'))
+        .json()
+        .workspaces[0].children.find((item: { name: string }) => item.name === 'workspace');
+      const created = await first.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: { workspaceId: workspace.id, profile: 'default', provider: 'codex' },
+      });
+      expect(created.statusCode).toBe(202);
+      const id = created.json().id;
+      expect(
+        (
+          await first.inject({
+            method: 'PUT',
+            url: `/api/sessions/${id}/plan`,
+            payload: { planName: 'plan.org' },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect((await first.inject(`/api/sessions/${id}`)).json().lastOrgPlan).toMatchObject({
+        attached: true,
+        path: planPath,
+        filename: 'plan.org',
+      });
+      await first.close();
+      await rm(planStatusDirectoryPath(workspacePath, id), { recursive: true, force: true });
+      await writeFile(planPath, source('DONE'));
+      const second = await composeAuthorizedApp(options);
+      await second.listen({ host: '127.0.0.1', port: 0 });
+      await expect
+        .poll(async () =>
+          (await second.inject('/api/bootstrap'))
+            .json()
+            .sessions.find((session: { id: string }) => session.id === id),
+        )
+        .toMatchObject({
+          lastOrgPlan: { attached: true },
+          plan: { title: 'Persistent attachment', allDone: true, doneSteps: 1 },
+        });
+      expect((await second.inject(`/api/sessions/${id}/plan`)).json().allDone).toBe(true);
+      expect(
+        (await second.inject({ method: 'DELETE', url: `/api/sessions/${id}/plan` })).statusCode,
+      ).toBe(204);
+      expect((await second.inject(`/api/sessions/${id}`)).json().lastOrgPlan.attached).toBe(false);
+      await second.close();
+      const third = await composeAuthorizedApp(options);
+      await third.listen({ host: '127.0.0.1', port: 0 });
+      expect((await third.inject(`/api/sessions/${id}/plan`)).statusCode).toBe(204);
+      expect((await third.inject(`/api/sessions/${id}`)).json().lastOrgPlan).toMatchObject({
+        attached: false,
+        filename: 'plan.org',
+      });
+      await third.close();
+    }, 20000);
+
     it('detaches active persisted threads when the relay restarts without resuming a writer', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));

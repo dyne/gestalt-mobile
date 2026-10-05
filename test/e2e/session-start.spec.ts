@@ -550,10 +550,10 @@ test('separates open and saved sessions and retains forgotten threads in recent 
   await expect(openSessions.getByRole('listitem')).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Close' })).toHaveCount(1);
-  await expect(openSessions.getByLabel('Session menu')).toHaveCount(1);
+  await expect(openSessions.getByRole('button', { name: 'Copy CLI' })).toHaveCount(1);
   await expect(openSessions.getByRole('button', { name: 'Forget' })).toHaveCount(0);
   await expect(savedSessions.getByRole('listitem')).toHaveCount(1);
-  await expect(savedSessions.getByLabel('Session menu')).toHaveCount(1);
+  await expect(savedSessions.getByRole('button', { name: 'Copy CLI' })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Open' })).toHaveCount(1);
   await expect(savedSessions.getByRole('button', { name: 'Forget' })).toHaveCount(1);
 

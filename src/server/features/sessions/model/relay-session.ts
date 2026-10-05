@@ -66,6 +66,9 @@ export type EffectiveSkillSelection = {
 export type LastOrgPlan = {
   filename: string;
   title: string;
+  /** Canonical path and attachment state survive relay restarts. */
+  path?: string;
+  attached?: boolean;
 };
 
 export type SessionSandbox =

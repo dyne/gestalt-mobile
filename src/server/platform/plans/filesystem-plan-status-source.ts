@@ -51,6 +51,8 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     listener: (update: PlanStatusUpdate) => void,
   ): Promise<PlanStatusLease> {
     this.leases.get(session.id)?.close();
+    if (!(await stat(session.workspacePath)).isDirectory())
+      throw new Error('WORKSPACE_NOT_DIRECTORY');
     const statusDirectory = planStatusDirectoryPath(session.workspacePath, session.id);
     await mkdir(this.dismissalDirectory, { recursive: true, mode: 0o700 });
     await mkdir(statusDirectory, { recursive: true, mode: 0o700 });
@@ -74,6 +76,47 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     this.leases.set(session.id, lease);
     await lease.start();
     return lease;
+  }
+
+  /** Explicit attachments use the same durable publication and watchers as helper updates. */
+  async attach(
+    session: Readonly<{ id: string; workspacePath: string }>,
+    requestedPath: string,
+    listener: (update: PlanStatusUpdate) => void,
+    reason = 'supervision-start',
+  ): Promise<void> {
+    const [planPath, workspacePath] = await Promise.all([
+      this.planReadFilesystem.realpath(requestedPath),
+      this.planReadFilesystem.realpath(session.workspacePath),
+    ]);
+    if (!isPlanPathWithinWorkspace(planPath, workspacePath))
+      throw new Error('PATH_OUTSIDE_WORKSPACE');
+    const parsed = parseSupervisedPlan({
+      source: await this.planReadFilesystem.readFile(planPath, 'utf8'),
+      planPath,
+      workspacePath,
+    });
+    if (parsed.kind !== 'available') throw new Error('PLAN_UNAVAILABLE');
+    const directory = planStatusDirectoryPath(workspacePath, session.id);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const statusPath = planStatusFilePath(directory, planPath);
+    const candidate = join(directory, `.${randomUUID()}.status.tmp`);
+    try {
+      await writeFile(
+        candidate,
+        JSON.stringify({ schemaVersion: 1, planPath, reason, updatedAt: new Date().toISOString() }),
+        { mode: 0o600 },
+      );
+      await rename(candidate, statusPath);
+    } finally {
+      await rm(candidate, { force: true }).catch(() => {});
+    }
+    const identity = createHash('sha256').update(planPath).digest('hex');
+    const dismissed = new Set(await this.dismissed(session.id));
+    if (dismissed.delete(identity)) await this.saveDismissals(session.id, dismissed);
+    const lease = this.leases.get(session.id);
+    if (lease) await lease.refreshLatest();
+    else await this.open(session, listener);
   }
 
   closeAll(): void {
@@ -126,9 +169,13 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
   }
 
   private async dismiss(sessionId: string, identity: string): Promise<void> {
-    const path = this.dismissalPath(sessionId);
     const dismissed = await this.dismissed(sessionId);
     const next = new Set(dismissed).add(identity);
+    await this.saveDismissals(sessionId, next);
+  }
+
+  private async saveDismissals(sessionId: string, next: Set<string>): Promise<void> {
+    const path = this.dismissalPath(sessionId);
     const candidate = join(this.dismissalDirectory, `.${randomUUID()}.dismissals.tmp`);
     try {
       await this.dismissalFilesystem.writeFile(candidate, JSON.stringify([...next]), {
@@ -295,7 +342,7 @@ class ActiveLease implements PlanStatusLease {
     return this.activeStatusPath ? this.refreshPath(this.activeStatusPath) : this.refreshLatest();
   }
 
-  private async refreshLatest(): Promise<PlanStatusUpdate | null> {
+  async refreshLatest(): Promise<PlanStatusUpdate | null> {
     try {
       const candidates = (await readdir(this.statusDirectory))
         .filter((filename) => filename.endsWith(statusFileSuffix))

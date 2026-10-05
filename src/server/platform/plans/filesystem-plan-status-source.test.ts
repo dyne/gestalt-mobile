@@ -587,3 +587,48 @@ describe('FilesystemPlanStatusSource', () => {
     );
   });
 });
+
+it('persists explicit attachments across a new source, watches edits, and permits explicit reattachment after closing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gestalt-plan-attachment-'));
+  temporaryPaths.push(root);
+  const workspace = join(root, 'workspace');
+  await mkdir(workspace);
+  const planPath = join(workspace, 'plan.org');
+  await writeFile(planPath, org('Attached'));
+  const session = { id: 'saved-session', workspacePath: workspace };
+  const updates: PlanStatusUpdate[] = [];
+  const first = new FilesystemPlanStatusSource(join(root, 'state'));
+  await first.attach(session, planPath, (update) => updates.push(update));
+  expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Attached' } });
+  const stored = JSON.parse(
+    await readFile(
+      planStatusFilePath(planStatusDirectoryPath(workspace, session.id), planPath),
+      'utf8',
+    ),
+  );
+  expect(stored.planPath).toBe(planPath);
+  first.closeAll();
+  const second = new FilesystemPlanStatusSource(join(root, 'state'));
+  await second.open(session, (update) => updates.push(update));
+  expect(updates.at(-1)).toMatchObject({ kind: 'updated', plan: { title: 'Attached' } });
+  await writeFile(planPath, org('Changed after restart'));
+  await vi.waitFor(() =>
+    expect(updates.at(-1)).toMatchObject({
+      kind: 'updated',
+      plan: { title: 'Changed after restart' },
+    }),
+  );
+  const identity = createHash('sha256').update(planPath).digest('hex');
+  await second.remove(session.id, identity);
+  second.closeAll();
+  const third = new FilesystemPlanStatusSource(join(root, 'state'));
+  const restored: PlanStatusUpdate[] = [];
+  await third.open(session, (update) => restored.push(update));
+  expect(restored).toHaveLength(0);
+  await third.attach(session, planPath, (update) => restored.push(update));
+  expect(restored.at(-1)).toMatchObject({
+    kind: 'updated',
+    plan: { title: 'Changed after restart' },
+  });
+  third.closeAll();
+});

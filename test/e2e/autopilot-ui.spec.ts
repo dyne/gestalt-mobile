@@ -293,7 +293,7 @@ test('Sessions keeps only active plan work below the Org title in the informatio
   const actions = card.getByLabel('Session actions');
   const actionControls = [
     actions.getByRole('button', { name: 'Open' }),
-    actions.getByLabel('Session menu'),
+    actions.getByRole('button', { name: 'Copy CLI' }),
     actions.getByRole('button', { name: 'Autopilot: Monitoring' }),
     actions.getByText('Agents (2)', { exact: true }),
     actions.getByRole('button', { name: 'Close' }),
