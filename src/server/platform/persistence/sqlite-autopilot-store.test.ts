@@ -177,7 +177,7 @@ describe('SqliteAutopilotStore', () => {
     expect(store.automaticActionsSince('s', '')).toBe(3);
     expect(store.automaticActionsSince('s', 'zzzz')).toBe(0);
     db.prepare("UPDATE autopilot_sessions SET state = 'bad' WHERE session_id = 's'").run();
-    expect(store.find('s')).toBeNull();
+    expect(() => store.find('s')).toThrow('AUTOPILOT_STATE_INVALID');
     db.close();
   });
   it('migrates legacy sessions and rejects malformed lifecycle state', () => {
@@ -196,7 +196,7 @@ describe('SqliteAutopilotStore', () => {
     db.prepare(
       "INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,lifecycle_json,updated_at) VALUES ('s','monitoring',1,'i','f',1,0,NULL,NULL,NULL,'{\"blocking\":{\"reason\":\"permissionRequired\",\"resumeCondition\":\"userGuidance\"}}','t')",
     ).run();
-    expect(new SqliteAutopilotStore(db).find('s')).toBeNull();
+    expect(() => new SqliteAutopilotStore(db).find('s')).toThrow('AUTOPILOT_STATE_INVALID');
     db.close();
   });
   it('preserves an overdue backoff and issued ambiguity across a same-database reopen', async () => {

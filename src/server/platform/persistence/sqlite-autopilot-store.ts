@@ -12,8 +12,16 @@ import type {
   AutopilotOutboxEvent,
   AutopilotStore,
 } from '../../features/autopilot/application/ports.js';
-import type { AutopilotSession } from '../../features/autopilot/domain/autopilot-session.js';
+import {
+  disabledAutopilot,
+  type AutopilotSession,
+} from '../../features/autopilot/domain/autopilot-session.js';
+import { AutopilotStateError } from '../../features/autopilot/domain/persisted-state-error.js';
 import { parsePersistedSupervisedLifecycle } from '../../features/autopilot/domain/supervised-lifecycle.js';
+import {
+  MAX_AUTOPILOT_RECORD_BYTES,
+  parsePlanFingerprint,
+} from '../../features/autopilot/domain/plan-fingerprint.js';
 
 export class SqliteAutopilotStore implements AutopilotStore {
   constructor(private readonly db: DatabaseSync) {}
@@ -22,8 +30,13 @@ export class SqliteAutopilotStore implements AutopilotStore {
       .prepare('SELECT * FROM autopilot_sessions WHERE session_id = ?')
       .get(sessionId) as Record<string, unknown> | undefined;
     if (!row) return null;
+    return this.decodeRow(row);
+  }
+  private decodeRow(row: Record<string, unknown>): AutopilotSession {
     const lifecycle = parseLifecycle(row.lifecycle_json);
     if (
+      Buffer.byteLength(JSON.stringify(row), 'utf8') > MAX_AUTOPILOT_RECORD_BYTES ||
+      (row.plan_fingerprint !== null && parsePlanFingerprint(row.plan_fingerprint) === undefined) ||
       ![
         'disabled',
         'monitoring',
@@ -55,7 +68,7 @@ export class SqliteAutopilotStore implements AutopilotStore {
       ![0, 1].includes(Number(row.requested_enabled)) ||
       lifecycle === null
     )
-      return null;
+      throw new AutopilotStateError(String(row.session_id));
     return {
       sessionId: String(row.session_id),
       state: row.state as AutopilotSession['state'],
@@ -72,6 +85,30 @@ export class SqliteAutopilotStore implements AutopilotStore {
     };
   }
   save(state: AutopilotSession): void {
+    const lifecycleJson =
+      state.executor || state.blocking || state.supervision || state.checkpoints
+        ? JSON.stringify({
+            executor: state.executor,
+            blocking: state.blocking,
+            supervision: state.supervision,
+            checkpoints: state.checkpoints,
+          })
+        : null;
+    // Use the reader's exact contract before any write (including transaction/outbox writes).
+    this.decodeRow({
+      session_id: state.sessionId,
+      state: state.state,
+      requested_enabled: state.requestedEnabled ? 1 : 0,
+      plan_identity: state.planIdentity,
+      plan_fingerprint: state.planFingerprint,
+      generation: state.generation,
+      no_progress_count: state.consecutiveNoProgress,
+      next_evaluation_at: state.nextEvaluationAt,
+      last_control_id: state.lastControlId,
+      stop_reason: state.stopReason,
+      lifecycle_json: lifecycleJson,
+      updated_at: state.updatedAt,
+    });
     this.db
       .prepare(
         'INSERT INTO autopilot_sessions (session_id,state,requested_enabled,plan_identity,plan_fingerprint,generation,no_progress_count,next_evaluation_at,last_control_id,stop_reason,lifecycle_json,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET state=excluded.state,requested_enabled=excluded.requested_enabled,plan_identity=excluded.plan_identity,plan_fingerprint=excluded.plan_fingerprint,generation=excluded.generation,no_progress_count=excluded.no_progress_count,next_evaluation_at=excluded.next_evaluation_at,last_control_id=excluded.last_control_id,stop_reason=excluded.stop_reason,lifecycle_json=excluded.lifecycle_json,updated_at=excluded.updated_at',
@@ -87,16 +124,40 @@ export class SqliteAutopilotStore implements AutopilotStore {
         state.nextEvaluationAt,
         state.lastControlId,
         state.stopReason,
-        state.executor || state.blocking || state.supervision || state.checkpoints
-          ? JSON.stringify({
-              executor: state.executor,
-              blocking: state.blocking,
-              supervision: state.supervision,
-              checkpoints: state.checkpoints,
-            })
-          : null,
+        lifecycleJson,
         state.updatedAt,
       );
+  }
+  /** Explicit manual Off recovery only. Preserve the original row for local diagnosis. */
+  recoverInvalid(sessionId: string, now: string): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db
+        .prepare('SELECT * FROM autopilot_sessions WHERE session_id = ?')
+        .get(sessionId);
+      if (row) {
+        try {
+          this.decodeRow(row);
+        } catch (error) {
+          if (!(error instanceof AutopilotStateError)) throw error;
+          this.db
+            .prepare(
+              'INSERT INTO autopilot_state_quarantine (session_id,record_json,created_at) VALUES (?,?,?)',
+            )
+            .run(sessionId, JSON.stringify(row), now);
+          this.save(disabledAutopilot(sessionId, now));
+          this.db
+            .prepare(
+              "UPDATE autopilot_controls SET status = 'cancelled', updated_at = ? WHERE session_id = ? AND status = 'scheduled'",
+            )
+            .run(now, sessionId);
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   findControl(sessionId: string, controlId: string): AutopilotControl | null {
     const row = this.db
@@ -250,7 +311,8 @@ function parseLifecycle(
   value: unknown,
 ): Pick<AutopilotSession, 'executor' | 'blocking' | 'supervision' | 'checkpoints'> | null {
   if (value === null || value === undefined) return {};
-  if (typeof value !== 'string' || value.length > 256_000) return null;
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_AUTOPILOT_RECORD_BYTES)
+    return null;
   try {
     return parsePersistedSupervisedLifecycle(JSON.parse(value)) ?? null;
   } catch {

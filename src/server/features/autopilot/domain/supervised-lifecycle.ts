@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import { parsePlanFingerprint } from './plan-fingerprint.js';
 import { orgPlanAgentDisplayName } from '../../../../shared/org-plan-position.js';
 import {
   parseSupervisionProtocolState,
@@ -401,7 +402,7 @@ export function parsePersistedSupervisedLifecycle(
     replacementValue && boundedText(replacementValue.canonicalPosition);
   const replacementPlanIdentity = replacementValue && boundedText(replacementValue.planIdentity);
   const replacementPlanFingerprint =
-    replacementValue && boundedText(replacementValue.planFingerprint);
+    replacementValue && parsePlanFingerprint(replacementValue.planFingerprint);
   const replacementPreviousValue = replacementValue && record(replacementValue.previous);
   const replacementPrevious = replacementPreviousValue
     ? parseExecutorAssignment(replacementPreviousValue)
@@ -467,7 +468,7 @@ export function parsePersistedSupervisedLifecycle(
         'superseded',
       ]);
     const planIdentity = command && boundedText(command.planIdentity);
-    const planFingerprint = command && boundedText(command.planFingerprint);
+    const planFingerprint = command && parsePlanFingerprint(command.planFingerprint);
     const commandPosition = command && boundedText(command.canonicalPosition);
     const commandTaskName = command && boundedText(command.canonicalTaskName);
     const commandTaskPath = command && boundedText(command.taskPath);

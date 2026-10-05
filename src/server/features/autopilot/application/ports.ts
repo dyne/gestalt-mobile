@@ -81,6 +81,8 @@ export interface SupervisedExecutorController {
 }
 
 export interface AutopilotStore {
+  /** Explicit manual Off can quarantine an invalid row and restore a disabled controller. */
+  recoverInvalid?(sessionId: string, now: string): void;
   find(sessionId: string): AutopilotSession | null;
   save(state: AutopilotSession): void;
   remove(sessionId: string): void;

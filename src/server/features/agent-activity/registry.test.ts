@@ -258,7 +258,7 @@ describe('agent activity registry', () => {
       },
       retryDelaysMs: [1],
       reconcile: async () => {
-        throw new Error('unavailable');
+        throw Object.assign(new Error('private provider error text'), { code: -32601 });
       },
       diagnostic,
     });
@@ -268,6 +268,11 @@ describe('agent activity registry', () => {
     callbacks.shift()?.();
     await Promise.resolve();
     expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic).toHaveBeenCalledWith('s', 'reconcileExhausted', {
+      attempt: 2,
+      rpcCode: -32601,
+    });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private');
   });
   it.each(['dispose', 'suspend', 'disconnected'] as const)(
     'cancels scheduled activity on %s lifecycle',

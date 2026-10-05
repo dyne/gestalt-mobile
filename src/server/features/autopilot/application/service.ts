@@ -5,6 +5,8 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
+import { AutopilotStateError } from '../domain/persisted-state-error.js';
 import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
@@ -108,7 +110,30 @@ export class AutopilotCoordinator {
   constructor(private readonly deps: AutopilotDependencies) {}
 
   snapshot(sessionId: string): AutopilotSnapshot {
-    const state = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, this.deps.now());
+    let state: AutopilotSession;
+    try {
+      state = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, this.deps.now());
+    } catch (error) {
+      if (!(error instanceof AutopilotStateError)) throw error;
+      const snapshot = autopilotSnapshot(
+        {
+          ...disabledAutopilot(sessionId, this.deps.now()),
+          state: 'safetyPaused',
+          stopReason: 'reconcileFailed',
+        },
+        this.deps.policy.retryLimit,
+      );
+      return {
+        ...snapshot,
+        health: {
+          ...snapshot.health,
+          phase: 'degraded',
+          degradationReason: 'controllerUnavailable',
+          nextExpectedAction:
+            'Controller state is unreadable (AUTOPILOT_STATE_INVALID). Set Autopilot Off to preserve the damaged record and recover a disabled controller; review the Org Plan before enabling.',
+        },
+      };
+    }
     const control = state.lastControlId
       ? this.deps.store.findControl(sessionId, state.lastControlId)
       : null;
@@ -123,7 +148,13 @@ export class AutopilotCoordinator {
   /** Rehydrates only actionable durable state; terminal rows intentionally create no work. */
   restore(sessionId: string): void {
     this.flushOutbox(sessionId);
-    const state = this.deps.store.find(sessionId);
+    let state: AutopilotSession | null;
+    try {
+      state = this.deps.store.find(sessionId);
+    } catch (error) {
+      if (!(error instanceof AutopilotStateError)) throw error;
+      return; // snapshot exposes controllerUnavailable; only explicit Off repairs it.
+    }
     const session = this.deps.session(sessionId);
     if (
       !state ||
@@ -527,6 +558,7 @@ export class AutopilotCoordinator {
     return { accepted: true, identity };
   }
   disable(sessionId: string): AutopilotSnapshot {
+    this.deps.store.recoverInvalid?.(sessionId, this.deps.now());
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
     // Retain the current plan identity even when Autopilot has not previously
@@ -3125,13 +3157,15 @@ function operationFailureCode(error: unknown): 'PERSISTENCE' | 'PUBLICATION' | '
 }
 
 function fingerprint(plan: SupervisedPlan): string {
-  return JSON.stringify(
-    plan.steps.map((step) => [
-      step.id,
-      step.state,
-      step.reviewStatus,
-      step.children.map((child) => [child.id, child.state]),
-    ]),
+  return requirePlanFingerprint(
+    JSON.stringify(
+      plan.steps.map((step) => [
+        step.id,
+        step.state,
+        step.reviewStatus,
+        step.children.map((child) => [child.id, child.state]),
+      ]),
+    ),
   );
 }
 
