@@ -16,6 +16,7 @@ import type {
 } from '../../features/plans/domain/workspace-plan-catalog.js';
 
 import { OrgPlanDiscovery } from './org-plan-discovery.js';
+import { isArchivedOrgPlan } from './org-plan-archive-tag.js';
 
 const maximumBytes = 1_048_576;
 
@@ -45,7 +46,7 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     private readonly now: () => number = Date.now,
   ) {}
 
-  async list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]> {
+  async list(workspacePath: string, refresh = false): Promise<readonly WorkspacePlanEntry[]> {
     const workspace = await this.workspace(workspacePath);
     if (!workspace) return [];
     let cache = this.caches.get(workspace);
@@ -54,7 +55,7 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
       this.caches.set(workspace, cache);
     }
     if (cache.request) return cache.request;
-    if (cache.entries && this.now() - cache.refreshedAt < 1_000) return cache.entries;
+    if (!refresh && cache.entries && this.now() - cache.refreshedAt < 1_000) return cache.entries;
     const current = cache;
     current.request = this.refresh(workspace, current).finally(() => {
       current.request = null;
@@ -124,6 +125,7 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
               parsed.kind === 'available'
                 ? toEntry(name, parsed.plan)
                 : toFallbackEntry(name, candidate.source);
+            if (isArchivedOrgPlan(candidate.source)) entry = { ...entry, archived: true };
             files.set(name, { signature, entry });
           }
           entries[index] = entry;

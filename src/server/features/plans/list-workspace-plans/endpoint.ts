@@ -18,7 +18,7 @@ export function registerListWorkspacePlans(
       const workspace = await deps.workspaces.resolve(
         (request.params as { workspaceId: string }).workspaceId,
       );
-      return reply.send(await deps.plans.list(workspace.realPath));
+      return reply.send(await deps.plans.list(workspace.realPath, true));
     } catch (error) {
       if (error instanceof Error && error.message === 'WORKSPACE_NOT_FOUND')
         return reply.code(404).send({ code: 'WORKSPACE_NOT_FOUND' });

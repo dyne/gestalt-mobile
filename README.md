@@ -87,9 +87,14 @@ links in their session's chat.
 
 The relay caches parsed entries, checks file metadata in parallel, and rereads
 only changed files. Concurrent catalog requests share a scan; results are reused
-for one second. The browser keeps its previous catalog visible during refreshes
-and retries, and refreshes every five seconds while the catalog is visible.
-Returning to the Plan tab or focusing the browser also refreshes it. Opening a
+for one second for internal callers; browser catalog requests always check for changes.
+The browser keeps its previous catalog visible during refreshes and retries.
+Switching to or clicking the Plan tab refreshes it, without periodic polling.
+The **ORG Plans** heading reserves space for an inline refresh indicator,
+and plan rows show compact paths, completion bars, and right-side **Open** and
+**Archive** actions. Archive adds the standard `ARCHIVE` Org file tag while
+preserving task state, existing tags, and content; tagged plans join
+**Completed and archived**. Opening a
 catalog entry reads it relative to the application root; chat links retain their
 session-relative interpretation.
 
