@@ -76,6 +76,23 @@ menu offers **Copy session to CLI** for the selected session while viewing Chat.
 Without saved settings, Mobile uses the workspace root, the default skills
 profile, Codex, Git-writable workspace access, and automatic approvals.
 
+## Plan discovery
+
+The Plan catalog searches from the application-wide `--cwd` root, regardless of
+the selected session or new-session base. It lists `.org` files inside any
+`.gestalt` folder below that root, including folders inside repositories.
+Discovery uses `bfs` when installed, falling back to `find`, with NUL-delimited
+paths and without following symlinks. Other Org files remain accessible through
+links in their session's chat.
+
+The relay caches parsed entries, checks file metadata in parallel, and rereads
+only changed files. Concurrent catalog requests share a scan; results are reused
+for one second. The browser keeps its previous catalog visible during refreshes
+and retries, and refreshes every five seconds while the catalog is visible.
+Returning to the Plan tab or focusing the browser also refreshes it. Opening a
+catalog entry reads it relative to the application root; chat links retain their
+session-relative interpretation.
+
 ## Skill profiles
 
 Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:

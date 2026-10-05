@@ -13,7 +13,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   export type PlansCatalogState =
     | Readonly<{ kind: 'no-workspace' }>
     | Readonly<{ kind: 'loading'; workspaceId: string }>
-    | Readonly<{ kind: 'ready'; workspaceId: string; entries: readonly WorkspacePlanEntry[] }>
+    | Readonly<{
+        kind: 'ready';
+        workspaceId: string;
+        entries: readonly WorkspacePlanEntry[];
+        refreshing?: boolean;
+      }>
     | Readonly<{ kind: 'error'; workspaceId: string; error: string }>;
 
   type Props = {
@@ -92,16 +97,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <h2 id="plans-title" bind:this={heading} tabindex="-1">Plans</h2>
+    {#if catalog.kind === 'ready' && catalog.refreshing}<p role="status">Updating plans…</p>{/if}
     {#if catalog.kind === 'no-workspace'}
-      <p>Select a workspace to browse its local plans.</p>
+      <p>Waiting for the application workspace…</p>
     {:else if catalog.kind === 'loading'}
-      <p>Loading workspace plans…</p>
+      <p>Finding Org plans…</p>
     {:else if catalog.kind === 'error'}
       <p>{catalog.error}</p>
     {:else if catalog.entries.length === 0}
-      <p>No Org files were found below this workspace.</p>
+      <p>No .org files were found in .gestalt folders below the application workspace.</p>
     {:else}
-      <p class="scope">Org files below the selected workspace.</p>
+      <p class="scope">Org plans in .gestalt folders below the application workspace.</p>
       {#if unfinishedEntries.length > 0}
         <ul aria-label="Unfinished plans">
           {#each unfinishedEntries as entry (entry.planName)}

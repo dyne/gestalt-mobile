@@ -24,6 +24,8 @@ export class FilesystemWorkspaceCatalog implements WorkspaceCatalog, GitWorkspac
     return [(await this.tree()).option];
   }
   async resolve(id: string): Promise<{ id: string; name: string; realPath: string }> {
+    const root = await this.root;
+    if (id === this.id(root)) return { id, name: '/', realPath: root };
     const found = this.find(await this.tree(), id);
     if (!found) throw new Error('WORKSPACE_NOT_FOUND');
     return { id: found.option.id, name: found.option.name, realPath: found.realPath };
