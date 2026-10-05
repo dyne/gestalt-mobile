@@ -7,6 +7,118 @@
 import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 
+test('reopens archived plans and opens raw Org documents at the top from a scrolled catalog', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockAuthenticatedStatus(page);
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [
+          { id: 'root', name: '/', relativePath: '.', isGitRepository: false, children: [] },
+        ],
+        profiles: [],
+        sessions: [],
+      }),
+    }),
+  );
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '{"profiles":[]}' }),
+  );
+  await page.route('**/api/workspaces/root/plans', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        ...Array.from({ length: 30 }, (_, index) => ({
+          planName: `.gestalt/plan-${index}.org`,
+          title: `Plan ${index}`,
+          previewAvailable: false,
+        })),
+        {
+          planName: '.gestalt/long.org',
+          title: 'Long roadmap',
+          archived: true,
+          previewAvailable: true,
+          doneSteps: 0,
+          totalSteps: 30,
+          allDone: false,
+        },
+        {
+          planName: '.gestalt/raw.org',
+          title: 'Long raw document',
+          archived: true,
+          previewAvailable: false,
+        },
+      ]),
+    }),
+  );
+  await page.route('**/api/workspaces/root/plans/.gestalt%2Flong.org', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        title: 'Long roadmap',
+        currentStepId: 'task-29',
+        doneSteps: 0,
+        totalSteps: 30,
+        allDone: false,
+        steps: Array.from({ length: 30 }, (_, index) => ({
+          id: `task-${index}`,
+          title: `Task ${index}`,
+          level: 1,
+          state: index === 29 ? 'WIP' : 'TODO',
+          priority: 'A',
+          reviewStatus: 'UNREVIEWED',
+          description: { goal: 'Keep the plan readable from its beginning.' },
+          children: [],
+        })),
+      }),
+    }),
+  );
+  await page.route('**/api/workspaces/root/plans/.gestalt%2Fraw.org', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kind: 'org-source',
+        planName: '.gestalt/raw.org',
+        title: 'Long raw document',
+        source:
+          '#+TITLE: Long raw document\n\n' +
+          Array.from({ length: 60 }, (_, index) => `* Notes ${index}\nSome document text.\n`).join(
+            '\n',
+          ),
+      }),
+    }),
+  );
+  await page.goto('/');
+  await page.getByLabel('Primary').getByRole('button', { name: 'Plan', exact: true }).click();
+  const reopen = page.getByRole('button', { name: 'Reopen Long roadmap', exact: true });
+  await reopen.scrollIntoViewIfNeeded();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await expect(
+    page
+      .getByRole('list', { name: 'Completed and archived plans' })
+      .getByRole('button', { name: /^Archive / }),
+  ).toHaveCount(0);
+  await reopen.click();
+  await expect(page.getByRole('heading', { name: 'Long roadmap', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  const raw = page.getByRole('button', { name: 'Reopen Long raw document', exact: true });
+  await raw.scrollIntoViewIfNeeded();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await raw.click();
+  await expect(page.getByRole('heading', { name: 'Long raw document', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+});
+
 test('refreshes only on Plan actions, keeps layout stable, and persists archiving across reload', async ({
   page,
 }) => {
@@ -152,8 +264,8 @@ test('refreshes only on Plan actions, keeps layout stable, and persists archivin
   await archive.click();
   const completed = page.getByRole('list', { name: 'Completed and archived plans' });
   await expect(completed).toContainText('Working roadmap');
-  await expect(completed.getByRole('button', { name: 'Archive Working roadmap' })).toBeDisabled();
-  await expect(completed.getByRole('button', { name: 'Open Working roadmap' })).toBeFocused();
+  await expect(completed.getByRole('button', { name: 'Archive Working roadmap' })).toHaveCount(0);
+  await expect(completed.getByRole('button', { name: 'Reopen Working roadmap' })).toBeFocused();
   await expect(
     completed.getByRole('progressbar', { name: 'Completion for Working roadmap' }),
   ).toHaveAttribute('value', '2');

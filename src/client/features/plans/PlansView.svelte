@@ -141,15 +141,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if entry.archived}<span class="archive-tag">Archived</span>{/if}
     </div>
     <div class="plan-actions">
-      <AppControl label={`Open ${entry.title}`} onclick={() => open(entry.planName)}
-        >Open</AppControl
-      >
       <AppControl
-        label={`Archive ${entry.title}`}
-        disabled={!onarchive || entry.archived || archivingPlans.includes(entry.planName)}
-        onclick={() => archive(entry.planName)}
-        >{archivingPlans.includes(entry.planName) ? 'Archiving…' : 'Archive'}</AppControl
+        label={`${entry.allDone || entry.archived ? 'Reopen' : 'Open'} ${entry.title}`}
+        onclick={() => open(entry.planName)}
+        >{entry.allDone || entry.archived ? 'Reopen' : 'Open'}</AppControl
       >
+      {#if !entry.allDone && !entry.archived}
+        <AppControl
+          label={`Archive ${entry.title}`}
+          disabled={!onarchive || entry.archived || archivingPlans.includes(entry.planName)}
+          onclick={() => archive(entry.planName)}
+          >{archivingPlans.includes(entry.planName) ? 'Archiving…' : 'Archive'}</AppControl
+        >
+      {/if}
     </div>
   </li>
 {/snippet}
