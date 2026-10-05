@@ -87,7 +87,14 @@ function liveAppServer(handles: LiveServerHandle[]) {
           if (overridden !== undefined) return overridden;
           if (method === 'thread/start') return { thread: { id: `thread-${handles.length}` } };
           if (method === 'turn/start') return { turn: { id: `turn-${handle.calls.length}` } };
-          if (method === 'thread/read') return { thread: { turns: [] } };
+          if (method === 'thread/read')
+            return {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                status: { type: 'idle' },
+                turns: [],
+              },
+            };
           if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
           if (method === 'skills/list')
             return {
@@ -450,6 +457,70 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it('health reads match UI authority, reject session selection, and expose recoverable corrupt state', async () => {
+      const fixture = await createProductionAutopilotFixture();
+      const { app, sessionId, handles, dataDir } = fixture;
+      const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+      try {
+        const handle = handles.filter((value) => value.request).at(-1)!;
+        const read = () =>
+          handle.request!({
+            id: 901,
+            method: 'item/tool/call',
+            params: {
+              tool: 'gestalt_org_plan_health',
+              arguments: {},
+            },
+          }) as Promise<{ success: boolean; contentItems: Array<{ text: string }> }>;
+        const before = (await app.inject(`/api/sessions/${sessionId}`)).json();
+        const response = await read();
+        expect(response.success).toBe(true);
+        const health = JSON.parse(response.contentItems[0]!.text);
+        expect(health).toMatchObject({
+          state: before.autopilot.state,
+          enabled: before.autopilot.enabled,
+        });
+        expect(health.health).toMatchObject({
+          phase: before.autopilot.health.phase,
+          healthy: before.autopilot.health.healthy,
+        });
+        await expect(
+          handle.request!({
+            id: 902,
+            method: 'item/tool/call',
+            params: {
+              tool: 'gestalt_org_plan_health',
+              arguments: { sessionId: 'another' },
+            },
+          }),
+        ).rejects.toThrow();
+        await app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${sessionId}/autopilot`,
+          payload: { enabled: false },
+        });
+        database
+          .prepare('UPDATE autopilot_sessions SET lifecycle_json = ? WHERE session_id = ?')
+          .run('{broken', sessionId);
+        expect(JSON.parse((await read()).contentItems[0]!.text)).toMatchObject({
+          health: { phase: 'degraded', degradationReason: 'controllerUnavailable' },
+        });
+        expect(database.prepare('SELECT * FROM autopilot_state_quarantine').all()).toHaveLength(0);
+        const recovered = await app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${sessionId}/autopilot`,
+          payload: { enabled: false },
+        });
+        expect(recovered.statusCode).toBe(200);
+        expect(recovered.json()).toMatchObject({
+          autopilot: { enabled: false, health: { phase: 'off' } },
+        });
+        expect(database.prepare('SELECT * FROM autopilot_state_quarantine').all()).toHaveLength(1);
+      } finally {
+        database.close();
+        await app.close();
+      }
+    });
     it('autopilot production composition keeps disabled sessions free of timers, reads, polls, and leaks', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
@@ -4616,7 +4687,7 @@ describe('production composition', () => {
                 if (method === 'thread/start') return { thread: { id: 'thread-1' } };
                 if (method === 'thread/read') {
                   if (handle.failReads) throw new Error('READ_DOWN');
-                  return { thread: { turns: [] } };
+                  return { thread: { id: 'thread-1', status: { type: 'idle' }, turns: [] } };
                 }
                 if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
                 if (method === 'skills/list')
@@ -4702,7 +4773,9 @@ describe('production composition', () => {
         await Promise.resolve();
       }
       await vi.waitFor(() => expect(activityDiagnostic).toHaveBeenCalledTimes(1));
-      expect(activityDiagnostic).toHaveBeenCalledWith(sessionId, 'reconcileExhausted');
+      expect(activityDiagnostic).toHaveBeenCalledWith(sessionId, 'reconcileExhausted', {
+        attempt: 4,
+      });
       handle!.failReads = false;
       const initialActivityEvents = activityEvents.filter(
         (message) => message.event.type === 'agent.activity.updated',

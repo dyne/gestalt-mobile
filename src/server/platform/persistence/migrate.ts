@@ -36,6 +36,9 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   database.exec(
+    'CREATE TABLE IF NOT EXISTS autopilot_state_quarantine (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, record_json TEXT NOT NULL, created_at TEXT NOT NULL)',
+  );
+  database.exec(
     "CREATE INDEX IF NOT EXISTS session_events_autopilot_audit_tail_v3 ON session_events(session_id, type, sequence DESC) WHERE type IN ('autopilot.continuation-scheduled','autopilot.control-issued','autopilot.turn-started','autopilot.turn-failed','autopilot.progress-reset','autopilot.final-rejected','autopilot.executor-resumed','autopilot.process-monitoring','autopilot.process-result-consumed','autopilot.process-terminated','autopilot.updated','org-plan.attention-required','org-plan.attention-resolved')",
   );
   const columns = database.prepare('PRAGMA table_info(relay_sessions)').all() as Array<{

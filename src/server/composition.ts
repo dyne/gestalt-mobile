@@ -120,6 +120,7 @@ import {
   type AutopilotWaitLease,
 } from '../shared/contracts/autopilot-wait-lease.js';
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
+import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
@@ -317,7 +318,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       now: () => new Date().toISOString(),
       diagnostic:
         options.activityDiagnostic ??
-        ((sessionId, code) => console.warn(`agent activity ${code} session=${sessionId}`)),
+        ((sessionId, code, detail) =>
+          console.warn(
+            `agent activity ${code} session=${sessionId} attempt=${detail?.attempt ?? 0} rpcCode=${detail?.rpcCode ?? 'none'}`,
+          )),
       reconcile: async (sessionId) => {
         const session = sessions.find(sessionId);
         if (!session) return false;
@@ -341,7 +345,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           return true;
         }
         if (!runtime) return false;
-        const history = await runtime.readHistory(session);
+        const rootActivity = await runtime.readActivity(session);
         const children = await runtime.listDirectChildren(session);
         const childProcesses = new Map<
           string,
@@ -359,9 +363,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         activity.observe({
           sessionId,
           occurredAt,
-          kind: history.activeTurnId ? 'turnStarted' : 'turnCompleted',
+          kind: rootActivity.active ? 'turnStarted' : 'turnCompleted',
           ...(session.threadId ? { threadId: session.threadId } : {}),
-          ...(history.activeTurnId ? { turnId: history.activeTurnId } : {}),
         });
         activity.childrenReconciled(
           sessionId,
@@ -1038,6 +1041,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           let rawInteraction = toPendingInteraction(request);
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
+          if (isOrgPlanHealthCall(request)) {
+            const snapshot = autopilot.snapshot(sessionId);
+            return (
+              runtime?.resolveServerRequest(sessionId, String(request.id), {
+                success: true,
+                contentItems: [
+                  {
+                    type: 'inputText',
+                    text: JSON.stringify({
+                      state: snapshot.state,
+                      enabled: snapshot.enabled,
+                      health: snapshot.health,
+                      reason: snapshot.reason,
+                    }),
+                  },
+                ],
+              }) === true
+            );
+          }
           const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
           if (!rawInteraction && compactCheckpointKind) {
             const retained = supervisedPlans.find(sessionId);

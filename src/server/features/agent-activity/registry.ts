@@ -29,7 +29,11 @@ export class AgentActivityRegistry {
       staleAfterMs?: number;
       retryDelaysMs?: readonly number[];
       maxReconcileAttempts?: number;
-      diagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
+      diagnostic?: (
+        sessionId: string,
+        code: 'reconcileExhausted',
+        detail?: { rpcCode?: number; attempt: number },
+      ) => void;
       /** True only when an authoritative runtime read published actor evidence. */
       reconcile?: (sessionId: string) => Promise<boolean>;
     } = {},
@@ -216,14 +220,25 @@ export class AgentActivityRegistry {
       if (observed !== true) throw new Error('AGENT_ACTIVITY_RECONCILE_NO_EVIDENCE');
       if (this.#generation.get(sessionId) === generation)
         this.reconciled(sessionId, this.options.now?.() ?? now);
-    } catch {
+    } catch (error) {
       if (this.#generation.get(sessionId) !== generation) return;
       const delays = this.options.retryDelaysMs ?? [1_000, 5_000, 15_000];
       if (
         attempt >=
         Math.min(this.options.maxReconcileAttempts ?? delays.length + 1, delays.length + 1)
       ) {
-        this.options.diagnostic?.(sessionId, 'reconcileExhausted');
+        const rpcCode =
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          typeof error.code === 'number' &&
+          Number.isSafeInteger(error.code)
+            ? error.code
+            : undefined;
+        this.options.diagnostic?.(sessionId, 'reconcileExhausted', {
+          attempt,
+          ...(rpcCode !== undefined ? { rpcCode } : {}),
+        });
         this.disconnected(sessionId, this.options.now?.() ?? now);
         return;
       }

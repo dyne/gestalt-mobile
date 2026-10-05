@@ -14,6 +14,7 @@ import {
 } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
+import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
@@ -21,6 +22,52 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('reconciles metadata on untouched threads and preserves genuine history failures', async () => {
+    const calls: unknown[] = [];
+    let status = 'idle';
+    const failure = new CodexJsonRpcError(-32601, 'list_turns is not supported yet');
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          if (method === 'thread/start') return { thread: { id: 'fresh' } };
+          if (method === 'thread/read') {
+            calls.push(params);
+            if ((params as { includeTurns: boolean }).includeTurns) throw failure;
+            return { thread: { id: 'fresh', status: { type: status } } };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = await runtime.start(
+      RelaySession.create({
+        id: 'fresh',
+        provider: 'codex',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot,
+      't',
+    );
+    expect(await runtime.readActivity(session)).toEqual({ active: false });
+    status = 'active';
+    expect(await runtime.readActivity(session)).toEqual({ active: true });
+    for (status of ['notLoaded', 'systemError', 'unknown'])
+      await expect(runtime.readActivity(session)).rejects.toThrow(
+        'CODEX_ACTIVITY_STATUS_UNAVAILABLE',
+      );
+    await expect(runtime.readHistory(session)).rejects.toBe(failure);
+    expect(calls).toEqual([
+      ...Array.from({ length: 5 }, () => ({ threadId: 'fresh', includeTurns: false })),
+      { threadId: 'fresh', includeTurns: true },
+    ]);
+    runtime.stopAll();
+  });
   it('restores model config and keeps executor turns separate from the supervisor model', async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const config = {
@@ -1633,6 +1680,7 @@ describe('CodexSessionRuntime', () => {
     );
 
     expect(threadStartParams).toEqual({
+      config: { 'tools.update_plan.enabled': true },
       cwd: '/workspace',
       model: 'gpt-5.4',
       sandbox: 'workspace-write',
@@ -1641,6 +1689,7 @@ describe('CodexSessionRuntime', () => {
         gestaltQuizDynamicTool,
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
+        gestaltOrgPlanHealthDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
       ],
@@ -2111,6 +2160,7 @@ describe('CodexSessionRuntime', () => {
         'thread/start',
       ]);
       expect(calls.at(-1)?.params).toEqual({
+        config: { 'tools.update_plan.enabled': true },
         cwd: '/workspace',
         approvalPolicy: 'untrusted',
         model: 'gpt-5.4',
@@ -2119,6 +2169,7 @@ describe('CodexSessionRuntime', () => {
           gestaltQuizDynamicTool,
           gestaltOrgPlanAttentionDynamicTool,
           gestaltOrgPlanCheckpointDynamicTool,
+          gestaltOrgPlanHealthDynamicTool,
           gestaltAutopilotWaitLeaseDynamicTool,
           gestaltAgentCapacityRecoveryDynamicTool,
         ],

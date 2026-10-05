@@ -24,6 +24,7 @@ import {
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
+import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
@@ -67,14 +68,13 @@ export function threadSkillConfig(
   skillsConfig?: readonly { path: string; enabled: boolean }[],
   modelConfig: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return skillsConfig === undefined && !Object.keys(modelConfig).length
-    ? {}
-    : {
-        config: {
-          ...modelConfig,
-          ...(skillsConfig === undefined ? {} : { skills: { config: skillsConfig } }),
-        },
-      };
+  return {
+    config: {
+      ...modelConfig,
+      'tools.update_plan.enabled': true,
+      ...(skillsConfig === undefined ? {} : { skills: { config: skillsConfig } }),
+    },
+  };
 }
 
 export type RestoreSessionResult =
@@ -486,6 +486,34 @@ export class CodexSessionRuntime {
   authorizePlanMeasurement(sessionId: string, authorization: string | undefined): boolean {
     const token = this.sessions.get(sessionId)?.planMeasurementToken;
     return Boolean(token && authorization === `Bearer ${token}`);
+  }
+
+  /** Activity needs status, not turn history (untouched threads may not support list_turns). */
+  async readActivity(session: RelaySessionSnapshot): Promise<{ active: boolean }> {
+    if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
+    const owned = this.sessions.get(session.id);
+    const process =
+      owned?.process ??
+      this.launch({ profile: session.profile, cwd: this.readerCwd ?? session.workspacePath });
+    try {
+      if (!owned)
+        await process.rpc.request('initialize', {
+          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+          capabilities: { experimentalApi: true },
+        });
+      const response = (await process.rpc.request('thread/read', {
+        threadId: session.threadId,
+        includeTurns: false,
+      })) as { thread?: { id?: string; status?: { type?: string } } };
+      if (response?.thread?.id !== session.threadId)
+        throw new Error('CODEX_ACTIVITY_STATUS_UNAVAILABLE');
+      const status = response.thread.status?.type;
+      if (status !== 'idle' && status !== 'active')
+        throw new Error('CODEX_ACTIVITY_STATUS_UNAVAILABLE');
+      return { active: status === 'active' };
+    } finally {
+      if (!owned) process.close();
+    }
   }
 
   async readHistory(session: RelaySessionSnapshot): Promise<{
@@ -904,6 +932,7 @@ export class CodexSessionRuntime {
             gestaltQuizDynamicTool,
             gestaltOrgPlanAttentionDynamicTool,
             gestaltOrgPlanCheckpointDynamicTool,
+            gestaltOrgPlanHealthDynamicTool,
             gestaltAutopilotWaitLeaseDynamicTool,
             gestaltAgentCapacityRecoveryDynamicTool,
           ],
@@ -1022,6 +1051,7 @@ export class CodexSessionRuntime {
         gestaltQuizDynamicTool,
         gestaltOrgPlanAttentionDynamicTool,
         gestaltOrgPlanCheckpointDynamicTool,
+        gestaltOrgPlanHealthDynamicTool,
         gestaltAutopilotWaitLeaseDynamicTool,
         gestaltAgentCapacityRecoveryDynamicTool,
       ],
