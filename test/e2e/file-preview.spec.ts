@@ -89,7 +89,7 @@ for (const width of [390, 1280]) {
     ).toBeUndefined();
     await viewer.getByRole('link', { name: 'Config' }).click();
     viewer = page.getByRole('dialog', { name: 'config.json' });
-    await expect(viewer.locator('pre')).toHaveText('{\n  "count": 2,\n  "enabled": true\n}');
+    await expect(viewer.getByLabel('JSON contents')).toContainText('"count": 2');
     await viewer.getByRole('button', { name: 'Show source' }).click();
     await expect(viewer.locator('pre')).toHaveText('{"count":2,"enabled":true}');
     await viewer.getByRole('button', { name: 'Close file preview' }).click();
@@ -100,7 +100,7 @@ for (const width of [390, 1280]) {
     await expect(viewer.getByRole('treeitem', { name: /extra.json/ })).toBeVisible();
     await viewer.getByRole('treeitem', { name: /extra.json/ }).click();
     viewer = page.getByRole('dialog', { name: 'extra.json' });
-    await expect(viewer.locator('pre')).toContainText('"count": 2');
+    await expect(viewer.getByLabel('JSON contents')).toContainText('"count": 2');
     await viewer.getByRole('button', { name: 'Back', exact: true }).click();
     viewer = page.getByRole('dialog', { name: 'docs', exact: true });
     await expect(viewer.getByRole('treeitem', { name: /README.md/ })).toBeVisible();

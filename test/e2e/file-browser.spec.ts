@@ -149,3 +149,44 @@ test('opens the same read-only preview from Git browsing and restores the select
   await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'View', exact: true })).toBeFocused();
 });
+
+test('JSON starts folded and supports one-level controls and global folding', async ({ page }) => {
+  await openBrowser(page);
+  const content = JSON.stringify({
+    name: 'demo',
+    settings: { nested: { secret: 'visible at depth three' }, enabled: true },
+    items: [{ value: 42 }],
+    empty: [],
+  });
+  await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
+    route.fulfill({ json: { kind: 'file', path: 'data.json', content, size: content.length } }),
+  );
+  await page.getByRole('treeitem', { name: /note.txt/ }).click();
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  const viewer = page.getByRole('dialog', { name: 'data.json' });
+  const tree = viewer.getByLabel('JSON contents');
+  await expect(viewer.getByRole('button', { name: 'Unfold all JSON' })).toHaveText('Folded');
+  await expect(tree).toContainText('"name": "demo"');
+  await expect(tree).toContainText('"settings": { … 2 keys }');
+  await expect(tree).not.toContainText('"nested"');
+  await viewer.getByRole('button', { name: 'Unfold JSON root.settings', exact: true }).click();
+  await expect(tree).toContainText('"nested": { … 1 keys }');
+  await expect(tree).not.toContainText('visible at depth three');
+  await viewer
+    .getByRole('button', { name: 'Unfold JSON root.settings.nested', exact: true })
+    .focus();
+  await page.keyboard.press('Enter');
+  await expect(tree).toContainText('visible at depth three');
+  await viewer.getByRole('button', { name: 'Fold JSON root.settings', exact: true }).click();
+  await expect(tree).not.toContainText('visible at depth three');
+  await viewer.getByRole('button', { name: 'Unfold all JSON' }).click();
+  await expect(viewer.getByRole('button', { name: 'Fold all JSON' })).toHaveText('Unfolded');
+  await expect(tree).toContainText('visible at depth three');
+  await expect(tree).toContainText('"value": 42');
+  await viewer.getByRole('button', { name: 'Fold all JSON' }).click();
+  await expect(tree).not.toContainText('"nested"');
+  await expect(tree).not.toContainText('"value"');
+  await expect(tree).toContainText('"empty": []');
+  await viewer.getByRole('button', { name: 'Show source' }).click();
+  await expect(viewer.locator('pre')).toHaveText(content);
+});
