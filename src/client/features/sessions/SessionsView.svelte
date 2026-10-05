@@ -519,7 +519,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               >
                 <option value="untrusted">Ask on all commands</option>
                 <option value="on-request">Ask out of workspace</option>
-                <option value="never">Approve everything</option>
+                <option value="never">Never ask for approval</option>
               </select>
             {/if}
           </div>
