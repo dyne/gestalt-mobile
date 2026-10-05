@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
+  import JsonTree from './JsonTree.svelte';
   import FileTree from './FileTree.svelte';
   import { FileBrowserController, type DirectoryReader } from './file-browser-controller.js';
   import {
@@ -35,6 +36,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let loading = $state(true);
   let failed = $state(false);
   let source = $state(false);
+  let jsonUnfolded = $state(false);
   let revision = $state(0);
   let tree = $state<FileBrowserController | null>(null);
   let history = $state<string[]>([]);
@@ -58,6 +60,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     failed = false;
     preview = null;
     source = false;
+    jsonUnfolded = false;
     try {
       const result = await readFile(target.workspaceId, path, active.signal);
       if (active.signal.aborted) return;
@@ -146,6 +149,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         pressed={source}>{source ? 'Show formatted' : 'Show source'}</AppControl
       >
     {/if}
+    {#if formatted.format === 'json' && !source}
+      <AppControl
+        onclick={() => {
+          jsonUnfolded = !jsonUnfolded;
+        }}
+        pressed={jsonUnfolded}
+        label={jsonUnfolded ? 'Fold all JSON' : 'Unfold all JSON'}
+        >{jsonUnfolded ? 'Unfolded' : 'Folded'}</AppControl
+      >
+    {/if}
     {#if preview?.kind === 'file'}<span class="format"
         >{formatted.format.toUpperCase()} · {preview.size.toLocaleString()} bytes</span
       >{/if}
@@ -175,6 +188,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {:else if preview?.kind === 'file'}
       {#if html}
         <div class="markdown" use:markdownLinks>{@html html}</div>
+      {:else if formatted.format === 'json' && !source}
+        <JsonTree text={formatted.text} unfolded={jsonUnfolded} />
       {:else}<pre class:json={formatted.format === 'json'}><code
             >{source ? preview.content : formatted.text}</code
           ></pre>{/if}

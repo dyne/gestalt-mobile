@@ -338,7 +338,9 @@ from the session workspace. Absolute references must remain inside that workspac
 The Git file browser uses the same viewer through its **View** action.
 
 The viewer formats JSON and Markdown, offers the original source, and browses folders
-with the existing lazy-loading tree. Other UTF-8 text files remain readable as text.
+with the existing lazy-loading tree. JSON starts with the first level visible and nested
+branches folded; the Folded/Unfolded control toggles all branches, and +/− controls
+expand or collapse individual branches. Other UTF-8 text files remain readable as text.
 Previews are limited to 1 MiB and do not follow symbolic links. Markdown previews
 sanitize markup and do not load embedded images.
 
