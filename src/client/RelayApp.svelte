@@ -214,12 +214,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let plansCatalogRequest: AbortController | null = null;
   let passivePlanRequest: AbortController | null = null;
   let plansCatalogGeneration = 0;
+  let plansCatalogCache: Extract<PlansCatalogState, { kind: 'ready' }> | null = null;
+  let plansCatalogRequestWorkspace: string | null = null;
+  let passivePlanSessionRelative = false;
   let passivePlanGeneration = 0;
   let navigationFocus = $state<Tab | null>(null);
-  let plansWorkspaceId = $derived(
-    (sessions.find((session) => session.id === sessionId)?.workspaceId ?? sessionWorkspaceId) ||
-      null,
-  );
+  let plansWorkspaceId = $derived(workspaceTree[0]?.id ?? null);
   let plansWorkspacePath = $derived(
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
@@ -584,6 +584,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onDestroy(() => {
+    plansCatalogRequest?.abort();
+    passivePlanRequest?.abort();
     tailScheduler.invalidate();
     followTail.cancel();
     chatController.dispose();
@@ -985,7 +987,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   $effect(() => {
     const workspaceId = plansWorkspaceId;
-    if (tab === 'plan') loadPlansCatalog(workspaceId);
+    if (tab !== 'plan') return;
+    untrack(() => loadPlansCatalog(workspaceId));
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible' && !visiblePlanState && !passivePlanRequest)
+        loadPlansCatalog();
+    }, 5_000);
+    return () => clearInterval(timer);
   });
 
   let externalRefreshQueued = false;
@@ -1039,6 +1047,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function loadPlansCatalog(workspaceId = plansWorkspaceId): void {
+    if (plansCatalogRequest && plansCatalogRequestWorkspace === workspaceId) return;
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
     passivePlan = null;
@@ -1049,13 +1058,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
     const request = new AbortController();
     plansCatalogRequest = request;
+    plansCatalogRequestWorkspace = workspaceId;
     const generation = ++plansCatalogGeneration;
-    plansCatalog = { kind: 'loading', workspaceId };
+    plansCatalog =
+      plansCatalogCache?.workspaceId === workspaceId
+        ? { ...plansCatalogCache, refreshing: true }
+        : { kind: 'loading', workspaceId };
     void relay
       .listWorkspacePlans(workspaceId, request.signal)
       .then((entries) => {
         if (generation !== plansCatalogGeneration || request.signal.aborted) return;
-        plansCatalog = { kind: 'ready', workspaceId, entries };
+        plansCatalogCache = { kind: 'ready', workspaceId, entries };
+        plansCatalog = plansCatalogCache;
       })
       .catch((error: unknown) => {
         if (generation !== plansCatalogGeneration || request.signal.aborted) return;
@@ -1065,24 +1079,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             code: 'WORKSPACE_PLANS_READ_FAILED',
             message: 'Workspace Org files could not be listed. Try opening the Plan tab again.',
           });
-        plansCatalog = {
-          kind: 'error',
-          workspaceId,
-          error: error instanceof Error ? error.message : 'Could not load workspace plans.',
-        };
+        plansCatalog =
+          plansCatalogCache?.workspaceId === workspaceId
+            ? plansCatalogCache
+            : {
+                kind: 'error',
+                workspaceId,
+                error: error instanceof Error ? error.message : 'Could not load workspace plans.',
+              };
+      })
+      .finally(() => {
+        if (plansCatalogRequest === request) plansCatalogRequest = null;
       });
   }
 
-  function openWorkspacePlan(planName: string): void {
-    const workspaceId = plansWorkspaceId;
+  function openWorkspacePlan(planName: string, sessionRelative = false): void {
+    const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
     if (!workspaceId) return;
     passivePlanRequest?.abort();
     const request = new AbortController();
     passivePlanRequest = request;
     const generation = ++passivePlanGeneration;
-    const opened = sessionId
-      ? relay.openSessionPlan(sessionId, planName)
-      : relay.getWorkspacePlan(workspaceId, planName, request.signal);
+    passivePlanSessionRelative = sessionRelative;
+    const opened =
+      sessionRelative && sessionId
+        ? relay.openSessionPlan(sessionId, planName)
+        : relay.getWorkspacePlan(workspaceId, planName, request.signal);
     void opened
       .then((plan) => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
@@ -1097,11 +1119,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           code: `WORKSPACE_PLAN_OPEN_${planName}`,
           message: 'This Org file could not be opened. Check that it is readable and try again.',
         });
+      })
+      .finally(() => {
+        if (passivePlanRequest === request) passivePlanRequest = null;
       });
   }
 
   function openLinkedOrgPlan(href: string): void {
-    const workspaceId = plansWorkspaceId;
+    const workspaceId = selectedSession?.workspaceId;
     const workspacePath = plansWorkspacePath;
     const planName = workspacePath ? workspacePlanNameFromHref(href, workspacePath) : null;
     if (!workspaceId || !planName) {
@@ -1115,8 +1140,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
     selectTab('plan');
     void tick().then(() => {
-      if (plansWorkspaceId !== workspaceId || plansWorkspacePath !== workspacePath) return;
-      openWorkspacePlan(planName);
+      if (selectedSession?.workspaceId !== workspaceId || plansWorkspacePath !== workspacePath)
+        return;
+      openWorkspacePlan(planName, true);
     });
   }
 
@@ -1129,7 +1155,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function refreshPlanSurface(): void {
     if (sessionId) planController.refresh(sessionId);
-    if (passivePlanName) openWorkspacePlan(passivePlanName);
+    if (passivePlanName) openWorkspacePlan(passivePlanName, passivePlanSessionRelative);
     else loadPlansCatalog();
   }
 

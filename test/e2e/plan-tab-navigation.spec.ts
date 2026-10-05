@@ -18,6 +18,119 @@ const session = (id: string, workspacePath: string) => ({
   activeTurnId: null,
 });
 
+test('browses all application-root plans regardless of selected session and retains results during refresh or failure', async ({
+  page,
+}) => {
+  const selected = session('session-1', '/projects/one');
+  await mockAuthenticatedStatus(page);
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workspaces: [
+          {
+            id: 'root',
+            name: '/',
+            relativePath: '.',
+            isGitRepository: false,
+            children: [
+              {
+                id: 'workspace-1',
+                name: 'one',
+                relativePath: 'one',
+                isGitRepository: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+        profiles: [],
+        sessions: [selected],
+      }),
+    }),
+  );
+  await routeSessionHistory(page, selected.id);
+  await page.route('**/api/sessions/recent-threads', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '[]' }),
+  );
+  await page.route('**/api/sessions', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify([selected]) }),
+  );
+  await page.route('**/api/skill-profiles', (route) =>
+    route.fulfill({ contentType: 'application/json', body: '{"profiles":[]}' }),
+  );
+  await page.route(`**/api/sessions/${selected.id}/plan`, (route) =>
+    route.fulfill({ status: 204 }),
+  );
+  await page.routeWebSocket(/\/api\/sessions\/session-1\/events\?after=\d+/, () => {});
+  let childRequests = 0;
+  await page.route('**/api/workspaces/workspace-1/plans', (route) => {
+    childRequests++;
+    return route.fulfill({ contentType: 'application/json', body: '[]' });
+  });
+  let rootRequests = 0;
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/workspaces/root/plans', async (route) => {
+    const request = ++rootRequests;
+    if (request === 2) await gate;
+    if (request >= 3)
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: '{"code":"PLAN_CATALOG_UNAVAILABLE"}',
+      });
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { planName: 'one/.gestalt/first.org', title: 'First repository', previewAvailable: false },
+        {
+          planName: 'two/.gestalt/second.org',
+          title: request === 1 ? 'Second repository' : 'Updated second repository',
+          previewAvailable: false,
+        },
+      ]),
+    });
+  });
+  await page.route('**/api/workspaces/root/plans/two%2F.gestalt%2Fsecond.org', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kind: 'org-source',
+        planName: 'two/.gestalt/second.org',
+        title: 'Second repository',
+        source: '#+TITLE: Second repository\n\n* Notes',
+      }),
+    }),
+  );
+  await page.goto('/');
+  const navigation = page.getByLabel('Primary');
+  await navigation.getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: /First repository.*one\/\.gestalt/ }),
+  ).toBeVisible();
+  const second = page.getByRole('button', { name: /Second repository.*two\/\.gestalt/ });
+  await expect(second).toBeVisible();
+  expect(childRequests).toBe(0);
+  await second.click();
+  await expect(page.getByRole('heading', { name: 'Second repository' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close plan and return to list' }).click();
+  await expect.poll(() => rootRequests).toBe(2);
+  await expect(second).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Updating plans' })).toBeVisible();
+  release();
+  await expect(page.getByRole('button', { name: /Updated second repository/ })).toBeVisible();
+  // The visible catalog discovers external changes without another tab click.
+  await expect.poll(() => rootRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(3);
+  await expect(page.getByRole('button', { name: /Updated second repository/ })).toBeVisible();
+  await expect(
+    page.getByText('Workspace Org files could not be listed. Try opening the Plan tab again.'),
+  ).toBeVisible();
+  expect(childRequests).toBe(0);
+});
+
 const completedPlan = {
   title: 'Responsive plan',
   subtitle: 'A retained plan for mobile navigation',
@@ -312,7 +425,13 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
     await bootstrapGate;
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ workspaces: [], profiles: [], sessions: [selected] }),
+      body: JSON.stringify({
+        workspaces: [
+          { id: 'workspace-1', name: '/', relativePath: '.', isGitRepository: false, children: [] },
+        ],
+        profiles: [],
+        sessions: [selected],
+      }),
     });
   });
   await routeSessionHistory(page, selected.id);
@@ -367,7 +486,8 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
         kind: 'org-source',
         planName: 'notes/free-form.org',
         title: 'Free-form notes',
-        source: '#+TITLE: Free-form notes\n\n* Notes',
+        source:
+          '#+TITLE: Free-form notes\n\n* WIP [#A] Notes\n- Goal :: Render this document clearly.',
       }),
     }),
   );
@@ -381,7 +501,7 @@ test('keeps the selected workspace plan or catalog visible across live plan upda
   await mockAuthenticatedStatus(page);
   await page.goto('/');
   await page.getByLabel('Primary').getByRole('button', { name: 'Plan' }).click();
-  await expect(page.getByText('Select a workspace to browse its local plans.')).toBeVisible();
+  await expect(page.getByText('Waiting for the application workspace…')).toBeVisible();
   releaseBootstrap();
   const roadmap = page.getByRole('button', { name: /Workspace roadmap.*plans\/roadmap.org/ });
   await expect(roadmap).toBeVisible();

@@ -39,21 +39,25 @@ describe('PlansView', () => {
       onopen: vi.fn(),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('Select a workspace to browse its local plans.')).toBeTruthy();
+    expect(screen.getByText('Waiting for the application workspace…')).toBeTruthy();
     rerender({
       catalog: { kind: 'loading', workspaceId: 'one' },
       state: null,
       onopen: vi.fn(),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('Loading workspace plans…')).toBeTruthy();
+    expect(screen.getByText('Finding Org plans…')).toBeTruthy();
     rerender({
       catalog: { kind: 'ready', workspaceId: 'one', entries: [] },
       state: null,
       onopen: vi.fn(),
       onclose: vi.fn(),
     });
-    expect(screen.getByText('No Org files were found below this workspace.')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'No .org files were found in .gestalt folders below the application workspace.',
+      ),
+    ).toBeTruthy();
     rerender({
       catalog: { kind: 'error', workspaceId: 'one', error: 'Offline' },
       state: null,
@@ -110,7 +114,9 @@ describe('PlansView', () => {
       onclose: vi.fn(),
     });
 
-    expect(screen.getByText('Org files below the selected workspace.')).toBeTruthy();
+    expect(
+      screen.getByText('Org plans in .gestalt folders below the application workspace.'),
+    ).toBeTruthy();
     await fireEvent.click(
       screen.getByRole('button', { name: /Roadmap.*plans\/releases\/roadmap.org/ }),
     );

@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { WorkspacePlanCatalogSource } from '../../features/plans/application/ports.js';
 import { parseSupervisedPlan } from '../../features/plans/application/parse-supervised-plan.js';
@@ -15,52 +15,125 @@ import type {
   WorkspacePlanReadResult,
 } from '../../features/plans/domain/workspace-plan-catalog.js';
 
+import { OrgPlanDiscovery } from './org-plan-discovery.js';
+
 const maximumBytes = 1_048_576;
 
-type Filesystem = Pick<
-  typeof import('node:fs/promises'),
-  'lstat' | 'readdir' | 'readFile' | 'realpath' | 'stat'
->;
+type Filesystem = Pick<typeof import('node:fs/promises'), 'lstat' | 'realpath' | 'stat'> & {
+  readFile(path: string, encoding: 'utf8'): Promise<string>;
+};
 
 type ReadCandidateResult =
   | Readonly<{ kind: 'readable'; source: string; canonicalPath: string }>
   | Readonly<{ kind: 'missing' }>
   | Readonly<{ kind: 'unavailable' }>;
 
-/**
- * Passive access to every regular `.org` file below a workspace. Symlinks are
- * never followed. Supported supervised plans include a browser preview; other
- * Org files remain visible in the catalog without one.
- */
+type CatalogCache = {
+  entries: readonly WorkspacePlanEntry[] | null;
+  files: Map<string, { signature: string; entry: WorkspacePlanEntry }>;
+  refreshedAt: number;
+  request: Promise<readonly WorkspacePlanEntry[]> | null;
+};
+
+/** Cached `.gestalt` Org discovery, with bounded parallel metadata checks. */
 export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSource {
+  private readonly caches = new Map<string, CatalogCache>();
+
   constructor(
-    private readonly filesystem: Filesystem = { lstat, readdir, readFile, realpath, stat },
+    private readonly filesystem: Filesystem = { lstat, readFile, realpath, stat },
+    private readonly discovery: Pick<OrgPlanDiscovery, 'list'> = new OrgPlanDiscovery(),
+    private readonly now: () => number = Date.now,
   ) {}
 
   async list(workspacePath: string): Promise<readonly WorkspacePlanEntry[]> {
     const workspace = await this.workspace(workspacePath);
     if (!workspace) return [];
-    const planNames = await this.discover(workspace);
-    const entries: WorkspacePlanEntry[] = [];
-    for (const planName of planNames) {
-      const candidate = await this.readCandidate(workspace, planName);
-      if (candidate.kind === 'missing') continue;
-      if (candidate.kind === 'unavailable') {
-        entries.push(toFallbackEntry(planName));
-        continue;
-      }
-      const parsed = parseSupervisedPlan({
-        source: candidate.source,
-        planPath: candidate.canonicalPath,
-        workspacePath: workspace,
-      });
-      entries.push(
-        parsed.kind === 'available'
-          ? toEntry(planName, parsed.plan)
-          : toFallbackEntry(planName, candidate.source),
-      );
+    let cache = this.caches.get(workspace);
+    if (!cache) {
+      cache = { entries: null, files: new Map(), refreshedAt: 0, request: null };
+      this.caches.set(workspace, cache);
     }
-    return entries;
+    if (cache.request) return cache.request;
+    if (cache.entries && this.now() - cache.refreshedAt < 1_000) return cache.entries;
+    const current = cache;
+    current.request = this.refresh(workspace, current).finally(() => {
+      current.request = null;
+    });
+    return current.request;
+  }
+
+  private async refresh(
+    workspace: string,
+    cache: CatalogCache,
+  ): Promise<readonly WorkspacePlanEntry[]> {
+    const planNames = [...new Set(await this.discovery.list(workspace))]
+      .filter((name) => isPlanPath(name) && name.split('/').slice(0, -1).includes('.gestalt'))
+      .sort((left, right) => left.localeCompare(right));
+    const entries = new Array<WorkspacePlanEntry | null>(planNames.length).fill(null);
+    const files: CatalogCache['files'] = new Map();
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(8, planNames.length) }, async () => {
+        while (next < planNames.length) {
+          const index = next++;
+          const name = planNames[index]!;
+          let signature: string;
+          try {
+            const metadata = await this.filesystem.lstat(resolve(workspace, ...name.split('/')));
+            if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
+            signature = [
+              metadata.dev,
+              metadata.ino,
+              metadata.size,
+              metadata.mtimeMs,
+              metadata.ctimeMs,
+            ].join(':');
+          } catch {
+            continue;
+          }
+          const previous = cache.files.get(name);
+          if (previous?.signature === signature) {
+            try {
+              const canonical = await this.filesystem.realpath(
+                resolve(workspace, ...name.split('/')),
+              );
+              if (
+                !isWithin(workspace, canonical) ||
+                toPlanName(relative(workspace, canonical)) !== name
+              )
+                continue;
+            } catch {
+              continue;
+            }
+            entries[index] = previous.entry;
+            files.set(name, previous);
+            continue;
+          }
+          const candidate = await this.readCandidate(workspace, name);
+          if (candidate.kind === 'missing') continue;
+          let entry: WorkspacePlanEntry;
+          if (candidate.kind === 'unavailable') {
+            entry = toFallbackEntry(name);
+          } else {
+            const parsed = parseSupervisedPlan({
+              source: candidate.source,
+              planPath: candidate.canonicalPath,
+              workspacePath: workspace,
+            });
+            entry =
+              parsed.kind === 'available'
+                ? toEntry(name, parsed.plan)
+                : toFallbackEntry(name, candidate.source);
+            files.set(name, { signature, entry });
+          }
+          entries[index] = entry;
+        }
+      }),
+    );
+    cache.files = files;
+    cache.entries = entries.filter((entry): entry is WorkspacePlanEntry => entry !== null);
+    cache.refreshedAt = this.now();
+    return cache.entries;
   }
 
   async read(workspacePath: string, planName: string): Promise<WorkspacePlanReadResult> {
@@ -79,43 +152,6 @@ export class FilesystemWorkspacePlanCatalog implements WorkspacePlanCatalogSourc
     } catch {
       return null;
     }
-  }
-
-  private async discover(workspace: string): Promise<string[]> {
-    const pending = [workspace];
-    const visited = new Set<string>();
-    const plans: string[] = [];
-
-    while (pending.length > 0) {
-      const directory = pending.pop()!;
-      try {
-        const before = await this.filesystem.lstat(directory);
-        if (!before.isDirectory() || before.isSymbolicLink()) continue;
-        const canonical = await this.filesystem.realpath(directory);
-        if (!isWithin(workspace, canonical)) continue;
-        const metadata = await this.filesystem.stat(canonical);
-        if (!metadata.isDirectory() || visited.has(canonical)) continue;
-        visited.add(canonical);
-
-        const children = await this.filesystem.readdir(canonical, {
-          encoding: 'utf8',
-          withFileTypes: true,
-        });
-        for (const child of children) {
-          if (child.isSymbolicLink()) continue;
-          const childPath = join(canonical, child.name);
-          if (child.isDirectory()) pending.push(childPath);
-          else if (child.isFile() && isPlanFilename(child.name)) {
-            const planName = toPlanName(relative(workspace, childPath));
-            if (isPlanPath(planName)) plans.push(planName);
-          }
-        }
-      } catch {
-        // A disappearing or unreadable branch does not hide plans elsewhere.
-      }
-    }
-
-    return plans.sort((left, right) => left.localeCompare(right));
   }
 
   private async readFromWorkspace(
