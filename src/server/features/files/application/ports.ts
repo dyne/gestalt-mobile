@@ -43,9 +43,18 @@ export type UploadInput = Readonly<{
 }>;
 export type DeleteInput = Readonly<{ path: string; recursive: true }>;
 
+export type FilePreview = Readonly<
+  | { kind: 'directory'; path: string }
+  | { kind: 'file'; path: string; content: string; size: number }
+>;
+export type FilePreviewResult =
+  | { kind: 'available'; preview: FilePreview }
+  | { kind: 'missing' | 'unreadable' | 'unsupported' | 'too-large' };
+
 /** Boundary for listing one already-authorized workspace directory. */
 export interface WorkspaceFileSource {
   list(workspaceRoot: string, input: ListWorkspaceDirectory): Promise<WorkspaceDirectoryResult>;
+  read?(workspaceRoot: string, path: string): Promise<FilePreviewResult>;
   copy?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;
   move?(workspaceRoot: string, input: CopyMoveInput): Promise<FileMutationResult>;
   upload?(workspaceRoot: string, input: UploadInput): Promise<FileMutationResult>;

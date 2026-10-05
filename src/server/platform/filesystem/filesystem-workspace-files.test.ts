@@ -287,3 +287,39 @@ describe('FilesystemWorkspaceFiles', () => {
     );
   });
 });
+
+describe('workspace file previews', () => {
+  it('reads bounded UTF-8 files and directories without following links or leaving the workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gestalt-preview-'));
+    await mkdir(join(root, 'docs'));
+    await mkdir(join(root, '.git'));
+    await writeFile(join(root, 'docs', 'notes.md'), '# Notes\n文');
+    await writeFile(join(root, 'binary'), Buffer.from([0, 1, 2]));
+    await writeFile(join(root, 'invalid-utf8'), Buffer.from([255]));
+    await writeFile(join(root, 'large'), Buffer.alloc(1024 * 1024 + 1, 65));
+    await symlink(join(root, 'docs'), join(root, 'alias'));
+    await symlink('/etc/passwd', join(root, 'escape'));
+    const files = new FilesystemWorkspaceFiles();
+    expect(await files.read(root, 'docs/notes.md')).toMatchObject({
+      kind: 'available',
+      preview: { kind: 'file', content: '# Notes\n文', path: 'docs/notes.md' },
+    });
+    expect(await files.read(root, join(root, 'docs/notes.md'))).toMatchObject({
+      kind: 'available',
+    });
+    expect(await files.read(root, '')).toEqual({
+      kind: 'available',
+      preview: { kind: 'directory', path: '' },
+    });
+    expect(await files.read(root, 'docs')).toEqual({
+      kind: 'available',
+      preview: { kind: 'directory', path: 'docs' },
+    });
+    for (const path of ['/etc/passwd', '../outside', '.git', 'alias', 'alias/notes.md', 'escape'])
+      expect(await files.read(root, path)).toEqual({ kind: 'unreadable' });
+    for (const path of ['binary', 'invalid-utf8'])
+      expect(await files.read(root, path)).toEqual({ kind: 'unsupported' });
+    expect(await files.read(root, 'large')).toEqual({ kind: 'too-large' });
+    expect(await files.read(root, 'missing')).toEqual({ kind: 'missing' });
+  });
+});

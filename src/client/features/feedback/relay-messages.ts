@@ -5,6 +5,15 @@
  */
 
 const relayMessages = {
+  FILE_PREVIEW_NOT_FOUND: 'This file or folder no longer exists. Check the path and try again.',
+  FILE_PREVIEW_UNREADABLE:
+    'This path could not be read. It must be inside the workspace and accessible without symbolic links.',
+  FILE_PREVIEW_UNSUPPORTED:
+    'Preview supports UTF-8 text files and folders. This item cannot be displayed.',
+  FILE_PREVIEW_TOO_LARGE:
+    'This file exceeds the 1 MiB preview limit. Open it locally to view its contents.',
+  INVALID_FILE_PREVIEW: 'This file reference is invalid. Check its path and try again.',
+
   RELAY_UNAVAILABLE: 'The relay is unavailable. Check the connection and try again.',
   SESSION_HISTORY_UNAVAILABLE:
     'Session history is unavailable. Check the relay connection and try opening the session again.',

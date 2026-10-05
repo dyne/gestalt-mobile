@@ -41,6 +41,8 @@ export function parseOrgDocument(source: string): OrgDocument {
     body: string[];
   } | null = null;
   let inProperties = false;
+  let descriptionIndex: number | null = null;
+  let blankLines = 0;
 
   const retainCurrent = (): void => {
     if (!current) return;
@@ -66,6 +68,8 @@ export function parseOrgDocument(source: string): OrgDocument {
         body: [],
       };
       inProperties = false;
+      descriptionIndex = null;
+      blankLines = 0;
       continue;
     }
 
@@ -82,6 +86,8 @@ export function parseOrgDocument(source: string): OrgDocument {
     }
     if (inProperties && line === ':END:') {
       inProperties = false;
+      descriptionIndex = null;
+      blankLines = 0;
       continue;
     }
     if (inProperties) {
@@ -90,8 +96,24 @@ export function parseOrgDocument(source: string): OrgDocument {
       continue;
     }
     const description = descriptionPattern.exec(line);
-    if (description) current.descriptions.push([description[1]!.trim(), description[2]!.trim()]);
-    else current.body.push(line);
+    if (description) {
+      current.descriptions.push([description[1]!.trim(), description[2]!.trim()]);
+      descriptionIndex = current.descriptions.length - 1;
+      blankLines = 0;
+    } else if (descriptionIndex !== null && /^[ \t]+\S/.test(line)) {
+      const [label, value] = current.descriptions[descriptionIndex]!;
+      current.descriptions[descriptionIndex] = [
+        label,
+        `${value}${'\n'.repeat(blankLines + 1)}${line.replace(/^(?:  |\t)/, '')}`,
+      ];
+      blankLines = 0;
+    } else if (descriptionIndex !== null && !line.trim()) {
+      blankLines += 1;
+    } else {
+      descriptionIndex = null;
+      blankLines = 0;
+      current.body.push(line);
+    }
   }
   retainCurrent();
 

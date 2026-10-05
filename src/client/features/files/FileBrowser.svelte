@@ -71,6 +71,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       key: string,
       signal?: AbortSignal,
     ) => Promise<{ path: string; kind: string }>;
+    onview?: (path: string) => void;
     onclose: () => void;
     onerror: (error: unknown) => void;
     onsuccess?: (message: string) => void;
@@ -85,6 +86,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     deleteEntry,
     uploadFile,
     onclose,
+    onview,
     onerror,
     onsuccess = () => {},
     onmutation = () => {},
@@ -379,6 +381,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {/if}
     {#if controller && transfer.phase === 'idle' && selectedEntry && selectedEntry.kind !== 'symlink'}
       <div class="browser-actions" aria-label="Selected file actions">
+        {#if onview}<button type="button" onclick={() => onview?.(selectedPath)}>View</button>{/if}
         <button type="button" onclick={() => beginTransfer('copy')}>Copy</button>
         <button type="button" onclick={() => beginTransfer('move')}>Move</button>
         <button type="button" onclick={() => void openDeleteConfirmation()}>Delete</button>

@@ -127,6 +127,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import AuthorizedDevicesView from './features/auth/AuthorizedDevicesView.svelte';
   import { createDeviceClient } from './features/auth/device-client.js';
   import Scratchpad from './features/scratchpad/Scratchpad.svelte';
+  import FileViewer from './features/files/FileViewer.svelte';
+  import { planFileReference, type FileViewerTarget } from './features/files/file-preview.js';
   import FileBrowser from './features/files/FileBrowser.svelte';
 
   const detachedSessionId = readDetachedChatSession(location.search);
@@ -135,6 +137,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let devicesOpen = $state(false);
   let notificationsOpen = $state(false);
   let scratchpadOpen = $state(false);
+  let fileViewerTarget = $state<FileViewerTarget | null>(null);
   let fileBrowserRoot = $state<WorkspaceOption | null>(null);
   let fileBrowserTrigger = $state<HTMLButtonElement | null>(null);
   let fileBrowserGitRefreshScheduled = false;
@@ -1262,6 +1265,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pushConfirmationOpen = false;
   }
 
+  function openPlanFileReference(path: string): void {
+    const sessionRelative = !passivePlanName || passivePlanSessionRelative;
+    const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
+    if (!workspaceId) return;
+    fileViewerTarget = {
+      workspaceId,
+      path: sessionRelative ? path : planFileReference(passivePlanName ?? '', path),
+    };
+  }
+
   function openFileBrowser(trigger: HTMLButtonElement): void {
     const selected = gitWorkspaceId ? findTreeNode(workspaceTree, gitWorkspaceId) : null;
     if (!selected) return;
@@ -1702,6 +1715,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onarchive={archiveWorkspacePlan}
           {archivingPlans}
           onclose={closePlanViewer}
+          onreference={openPlanFileReference}
         />
       {:else if tab === 'git'}
         <GitView
@@ -1814,6 +1828,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if fileBrowserRoot}
         <FileBrowser
           root={fileBrowserRoot}
+          onview={(path) => {
+            if (fileBrowserRoot) fileViewerTarget = { workspaceId: fileBrowserRoot.id, path };
+          }}
           listDirectory={relay.listWorkspaceDirectory}
           copyEntry={relay.copyWorkspaceEntry}
           moveEntry={relay.moveWorkspaceEntry}
@@ -1823,6 +1840,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
           onsuccess={(message) => toastQueue.enqueue({ kind: 'success', message })}
           onmutation={scheduleFileBrowserGitRefresh}
+        />
+      {/if}
+
+      {#if fileViewerTarget}
+        <FileViewer
+          target={fileViewerTarget}
+          readFile={relay.getWorkspaceFilePreview}
+          listDirectory={relay.listWorkspaceDirectory}
+          onclose={() => {
+            fileViewerTarget = null;
+          }}
+          onerror={(error) => reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED')}
         />
       {/if}
 

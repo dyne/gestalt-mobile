@@ -294,6 +294,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   return {
     quit: () => request<{ accepted: true }>('/api/maintenance/quit', {}),
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
+    getWorkspaceFilePreview: (workspaceId: string, path: string, signal?: AbortSignal) =>
+      get<import('../files/file-preview.js').FilePreview>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/files/preview?${new URLSearchParams({ path })}`,
+        signal,
+      ),
     listWorkspaceDirectory: (
       workspaceId: string,
       input: { directory?: string; cursor?: string; limit?: number } = {},

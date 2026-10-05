@@ -3630,6 +3630,18 @@ describe('production composition', () => {
         ['DELETE', '/api/sessions/:id/plan', '/api/sessions/session-1/plan', 'protected'],
         [
           'GET',
+          '/api/workspaces/:workspaceId/files/preview',
+          '/api/workspaces/workspace-1/files/preview?path=README.md',
+          'protected',
+        ],
+        [
+          'HEAD',
+          '/api/workspaces/:workspaceId/files/preview',
+          '/api/workspaces/workspace-1/files/preview?path=README.md',
+          'protected',
+        ],
+        [
+          'GET',
           '/api/workspaces/:workspaceId/files',
           '/api/workspaces/workspace-1/files',
           'protected',
