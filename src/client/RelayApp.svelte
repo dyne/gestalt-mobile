@@ -1265,6 +1265,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pushConfirmationOpen = false;
   }
 
+  async function checkPlanFileReferences(paths: string[], signal: AbortSignal): Promise<string[]> {
+    const sessionRelative = !passivePlanName || passivePlanSessionRelative;
+    const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
+    const planName = passivePlanName ?? '';
+    if (!workspaceId) return [];
+    const resolve = (path: string) => (sessionRelative ? path : planFileReference(planName, path));
+    const existing = new Set<string>();
+    try {
+      for (let index = 0; index < paths.length; index += 64) {
+        if (signal.aborted) return [];
+        const result = await relay.checkWorkspaceFileReferences(
+          workspaceId,
+          paths.slice(index, index + 64).map(resolve),
+          signal,
+        );
+        result.paths.forEach((path) => existing.add(path));
+      }
+      return paths.filter((path) => existing.has(resolve(path)));
+    } catch (error) {
+      if (!signal.aborted) reportRelayError(error, 'WORKSPACE_FILES_READ_FAILED');
+      return [];
+    }
+  }
+
   function openPlanFileReference(path: string): void {
     const sessionRelative = !passivePlanName || passivePlanSessionRelative;
     const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
@@ -1716,6 +1740,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {archivingPlans}
           onclose={closePlanViewer}
           onreference={openPlanFileReference}
+          checkreferences={checkPlanFileReferences}
         />
       {:else if tab === 'git'}
         <GitView

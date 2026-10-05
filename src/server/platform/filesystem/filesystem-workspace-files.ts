@@ -132,6 +132,37 @@ export class FilesystemWorkspaceFiles implements WorkspaceFileSource {
     }
   }
 
+  async exists(rootPath: string, requestedPath: string): Promise<boolean> {
+    const root = await this.canonicalDirectory(rootPath);
+    if (!root) return false;
+    const target = resolve(root, requestedPath);
+    if (!within(root, target)) return false;
+    const path = relative(root, target).split(sep).join('/');
+    if (path !== '' && !validRelative(path)) return false;
+    const parent = await anchoredDirectory(root, dirnameRelative(path));
+    if (!parent) return false;
+    try {
+      if (!(await stableAnchor(root, dirnameRelative(path), parent.path))) return false;
+      const handle = await open(
+        path ? join(parent.path, basename(path)) : `${parent.path}/.`,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      try {
+        const metadata = await handle.stat();
+        return (
+          (metadata.isFile() || metadata.isDirectory()) &&
+          within(root, await realpath(procPath(handle.fd)))
+        );
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return false;
+    } finally {
+      await parent.close();
+    }
+  }
+
   async read(rootPath: string, requestedPath: string): Promise<FilePreviewResult> {
     const root = await this.canonicalDirectory(rootPath);
     if (!root) return { kind: 'unreadable' };

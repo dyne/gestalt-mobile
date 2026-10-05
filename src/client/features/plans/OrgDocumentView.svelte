@@ -12,10 +12,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   type Props = {
     preview: WorkspaceOrgPreview;
     onclose: () => void;
+    verifiedReferences?: ReadonlySet<string>;
     onreference?: (path: string) => void;
   };
 
-  let { preview, onclose, onreference }: Props = $props();
+  let { preview, onclose, onreference, verifiedReferences = new Set<string>() }: Props = $props();
   let document = $derived(parseOrgDocument(preview.source));
   let metadata = $derived(document.metadata.filter(([key]) => key !== 'TITLE'));
 </script>
@@ -36,14 +37,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#each metadata as [label, value] (`${label}:${value}`)}
         <div>
           <dt>{label}</dt>
-          <dd><OrgNotes text={value || '—'} {onreference} /></dd>
+          <dd><OrgNotes text={value || '—'} {onreference} {verifiedReferences} /></dd>
         </div>
       {/each}
     </dl>
   {/if}
 
   {#each document.preamble as line, index (`preamble:${index}:${line}`)}
-    {#if line.trim()}<p>{line}</p>{/if}
+    {#if line.trim()}<p><OrgNotes text={line} {onreference} {verifiedReferences} /></p>{/if}
   {/each}
 
   {#if document.sections.length === 0}
@@ -68,13 +69,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {#each section.descriptions as [label, value] (`${label}:${value}`)}
                 <div>
                   <dt>{label}</dt>
-                  <dd><OrgNotes text={value || '—'} {onreference} /></dd>
+                  <dd><OrgNotes text={value || '—'} {onreference} {verifiedReferences} /></dd>
                 </div>
               {/each}
             </dl>
           {/if}
           {#each section.body as line, lineIndex (`${lineIndex}:${line}`)}
-            {#if line.trim()}<p class:list-item={line.trimStart().startsWith('- ')}>{line}</p>{/if}
+            {#if line.trim()}<p class:list-item={line.trimStart().startsWith('- ')}>
+                <OrgNotes text={line} {onreference} {verifiedReferences} />
+              </p>{/if}
           {/each}
           {#if section.properties.length}
             <details class="properties">
@@ -83,7 +86,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 {#each section.properties as [label, value] (`${label}:${value}`)}
                   <div>
                     <dt>{label}</dt>
-                    <dd><OrgNotes text={value || '—'} {onreference} /></dd>
+                    <dd><OrgNotes text={value || '—'} {onreference} {verifiedReferences} /></dd>
                   </div>
                 {/each}
               </dl>

@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { planFileReferences } from './plan-file-references.js';
   import AppControl from '../../components/AppControl.svelte';
   import PlanView from './PlanView.svelte';
   import OrgDocumentView from './OrgDocumentView.svelte';
@@ -27,6 +28,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     state: PlanState | WorkspaceOrgPreview | null;
     onopen: (planName: string) => void;
     onclose: () => void;
+    checkreferences?: (paths: string[], signal: AbortSignal) => Promise<string[]>;
     onreference?: (path: string) => void;
     onarchive?: (planName: string) => void;
     archivingPlans?: readonly string[];
@@ -39,8 +41,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onclose,
     onarchive,
     onreference,
+    checkreferences,
     archivingPlans = [],
   }: Props = $props();
+  let verifiedReferences = $state<ReadonlySet<string>>(new Set());
+  $effect(() => {
+    const paths = planFileReferences(planState);
+    const check = checkreferences;
+    const request = new AbortController();
+    verifiedReferences = new Set();
+    if (paths.length && check) {
+      void check(paths, request.signal)
+        .then((existing) => {
+          if (!request.signal.aborted) verifiedReferences = new Set(existing);
+        })
+        .catch(() => {
+          /* The caller reports transport failures; unchecked paths stay plain text. */
+        });
+    }
+    return () => request.abort();
+  });
   let heading = $state<HTMLHeadingElement | null>(null);
   let rows = $state<Partial<Record<string, HTMLLIElement>>>({});
   let lastArchived = $state<string | null>(null);
@@ -161,9 +181,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#if planState?.kind === 'org-source'}
-  <OrgDocumentView preview={planState} onclose={close} {onreference} />
+  <OrgDocumentView preview={planState} onclose={close} {onreference} {verifiedReferences} />
 {:else if planState}
-  <PlanView state={planState} onclose={close} {onreference} />
+  <PlanView state={planState} onclose={close} {onreference} {verifiedReferences} />
 {:else}
   <section class="plans" aria-labelledby="plans-title">
     <div class="catalog-heading">

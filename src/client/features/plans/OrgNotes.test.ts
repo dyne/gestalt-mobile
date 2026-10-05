@@ -15,15 +15,14 @@ it('preserves Notes line breaks and activates file references as safe local link
   const { container } = render(OrgNotes, {
     text: 'First =dir with spaces/file.md=\nSecond =javascript:alert(1)=',
     onreference,
+    verifiedReferences: new Set(['dir with spaces/file.md']),
   });
   expect(container.textContent).toBe('First dir with spaces/file.md\nSecond javascript:alert(1)');
   const link = screen.getByRole('link', { name: 'dir with spaces/file.md' });
   expect(link.getAttribute('href')).toMatch(/^#file-preview=/);
   await fireEvent.click(link);
   expect(onreference).toHaveBeenCalledWith('dir with spaces/file.md');
-  expect(
-    screen.getByRole('link', { name: 'javascript:alert(1)' }).getAttribute('href'),
-  ).not.toMatch(/^javascript:/);
+  expect(screen.queryByRole('link', { name: 'javascript:alert(1)' })).toBeNull();
 });
 it('retains raw Org Notes continuation lines and blank lines', () => {
   const result = parseOrgDocument(
@@ -33,4 +32,19 @@ it('retains raw Org Notes continuation lines and blank lines', () => {
     ['Notes', 'First =a=\nSecond\n\nFourth'],
     ['Goal', 'Separate'],
   ]);
+});
+
+it('keeps unchecked references as code until their existence is verified', async () => {
+  const { rerender } = render(OrgNotes, {
+    text: 'Read =existing.txt= and =missing.txt=',
+    onreference: vi.fn(),
+  });
+  expect(screen.queryAllByRole('link')).toHaveLength(0);
+  await rerender({
+    text: 'Read =existing.txt= and =missing.txt=',
+    onreference: vi.fn(),
+    verifiedReferences: new Set(['existing.txt']),
+  });
+  expect(screen.getByRole('link', { name: 'existing.txt' })).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'missing.txt' })).toBeNull();
 });

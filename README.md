@@ -332,7 +332,8 @@ server has pruned the gap, it reloads canonical Codex thread history.
 ## File previews
 
 Plan descriptions preserve line breaks and open file or directory references enclosed
-in `=equal signs=` in a shared read-only viewer. Relative catalog references resolve
+in `=equal signs=` in a shared read-only viewer only after a batched metadata check
+confirms the path exists. Missing or unchecked references remain inline code. Relative catalog references resolve
 from the project directory containing `.gestalt`; session plan references resolve
 from the session workspace. Absolute references must remain inside that workspace.
 The Git file browser uses the same viewer through its **View** action.
