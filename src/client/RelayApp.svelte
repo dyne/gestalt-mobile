@@ -1090,7 +1090,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       });
   }
 
-  function openWorkspacePlan(planName: string, sessionRelative = false): void {
+  function openWorkspacePlan(planName: string, sessionRelative = false, startAtTop = true): void {
     const workspaceId = sessionRelative ? selectedSession?.workspaceId : plansWorkspaceId;
     if (!workspaceId) return;
     passivePlanRequest?.abort();
@@ -1108,6 +1108,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         passivePlan = plan;
         passivePlanName = planName;
         hideLivePlan = false;
+        if (startAtTop)
+          void tick().then(() => {
+            requestAnimationFrame(() => {
+              if (generation === passivePlanGeneration && !request.signal.aborted && tab === 'plan')
+                window.scrollTo({ top: 0, behavior: 'instant' });
+            });
+          });
       })
       .catch(() => {
         if (generation !== passivePlanGeneration || request.signal.aborted) return;
@@ -1152,7 +1159,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function refreshPlanSurface(): void {
     if (sessionId) planController.refresh(sessionId);
-    if (passivePlanName) openWorkspacePlan(passivePlanName, passivePlanSessionRelative);
+    if (passivePlanName) openWorkspacePlan(passivePlanName, passivePlanSessionRelative, false);
     loadPlansCatalog(plansWorkspaceId, true);
   }
 

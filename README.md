@@ -94,7 +94,9 @@ The **ORG Plans** heading reserves space for an inline refresh indicator,
 and plan rows show compact paths, completion bars, and right-side **Open** and
 **Archive** actions. Archive adds the standard `ARCHIVE` Org file tag while
 preserving task state, existing tags, and content; tagged plans join
-**Completed and archived**. Opening a
+**Completed and archived**, where **Reopen** is the only action. Plan previews
+start at the top when opened; later live task changes can still scroll to the
+current task. Opening a
 catalog entry reads it relative to the application root; chat links retain their
 session-relative interpretation.
 

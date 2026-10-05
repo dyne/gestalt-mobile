@@ -9,6 +9,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { tick } from 'svelte';
+
 import type { PlanStep, SupervisedPlan } from './contracts.js';
 import PlanView from './PlanView.svelte';
 import type { PlanState } from './plan-controller.js';
@@ -146,18 +148,13 @@ describe('PlanView', () => {
     expect(screen.getByText('Measurements unavailable')).toBeTruthy();
   });
 
-  it('auto-opens and scrolls the initial nested current path without stealing focus', async () => {
+  it('auto-opens the initial nested current path without scrolling or stealing focus', async () => {
     const focusProbe = document.createElement('button');
     document.body.append(focusProbe);
     focusProbe.focus();
     render(PlanView, { state: ready({ currentStepId: l2.id }), onclose: vi.fn() });
-    await vi.waitFor(() =>
-      expect(scrollIntoView).toHaveBeenCalledWith({
-        behavior: 'auto',
-        block: 'nearest',
-        inline: 'nearest',
-      }),
-    );
+    await tick();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     expect(detail(l1.id).open).toBe(true);
     expect(detail(l2.id).open).toBe(true);
     expect(document.activeElement).toBe(focusProbe);
@@ -169,8 +166,8 @@ describe('PlanView', () => {
     const focusProbe = document.createElement('button');
     document.body.append(focusProbe);
     focusProbe.focus();
-    await vi.waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
-    scrollIntoView.mockClear();
+    await tick();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     const replacement: PlanStep = {
       ...l2,
       id: 'l2-replacement',

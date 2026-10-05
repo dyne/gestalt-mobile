@@ -59,8 +59,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     const currentStepId = plan?.currentStepId || null;
     if (!currentStepId) return;
     if (lastCurrentStepId === currentStepId) return;
+    const initialStep = lastCurrentStepId === null;
     lastCurrentStepId = currentStepId;
     const generation = ++scrollGeneration;
+    if (initialStep) return;
     void tick().then(() => {
       if (generation !== scrollGeneration || plan?.currentStepId !== currentStepId) return;
       detailsById[currentStepId]?.scrollIntoView({

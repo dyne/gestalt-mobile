@@ -69,11 +69,9 @@ describe('PlansView', () => {
     expect(
       screen.getByRole('list', { name: 'Completed and archived plans' }).textContent,
     ).toContain('Roadmap');
-    expect(screen.getByRole('button', { name: 'Archive Roadmap' }).hasAttribute('disabled')).toBe(
-      true,
-    );
+    expect(screen.queryByRole('button', { name: 'Archive Roadmap' })).toBeNull();
     await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open Roadmap' })),
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Reopen Roadmap' })),
     );
     expect(screen.getByRole('status', { hidden: true }).classList.contains('inactive')).toBe(true);
   });
