@@ -11,7 +11,7 @@ import { chatSnapshot } from './chat-snapshot-fixture.js';
 import { expectNoHorizontalOverflow } from './theme-evidence.js';
 import { THEME_STORAGE_KEY } from '../../src/client/features/theme/theme-registry.js';
 
-const evidence = '/tmp/gestalt-autopilot-evidence';
+const evidence = process.env.AUTOPILOT_EVIDENCE_DIR ?? '/tmp/gestalt-autopilot-evidence';
 type State =
   'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'safetyPaused' | 'completed';
 type ContinuationPhase = 'scheduled' | 'backoff';
@@ -269,7 +269,11 @@ test('renders a healthy controller as active without exposing its control identi
   await install(page, 'monitoring', undefined, false, undefined, false, undefined, false, true);
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
-  await expect(page.getByRole('status', { name: 'Autopilot continuation active' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Autopilot:/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(page.getByRole('status', { name: 'Autopilot continuation active' })).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('control-1');
   await page.screenshot({
     path: `${evidence}/session-liveness-healthy-working.png`,
@@ -289,7 +293,7 @@ test('Sessions keeps only active plan work below the Org title in the informatio
   const actions = card.getByLabel('Session actions');
   const actionControls = [
     actions.getByRole('button', { name: 'Open' }),
-    actions.getByRole('button', { name: 'Copy' }),
+    actions.getByLabel('Session menu'),
     actions.getByRole('button', { name: 'Autopilot: Monitoring' }),
     actions.getByText('Agents (2)', { exact: true }),
     actions.getByRole('button', { name: 'Close' }),
@@ -340,7 +344,7 @@ test('Sessions keeps only active plan work below the Org title in the informatio
   expect(actionsBox).not.toBeNull();
   expect(titleBox).not.toBeNull();
   expect(progressBox).not.toBeNull();
-  expect(progressBox!.x).toBeGreaterThanOrEqual(actionsBox!.x + actionsBox!.width);
+  expect(progressBox!.x + progressBox!.width).toBeLessThanOrEqual(actionsBox!.x);
   expect(progressBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
   await expectNoHorizontalOverflow(page);
 });
@@ -368,9 +372,8 @@ for (const item of [
       zoom: item.zoom,
     });
     await page.getByRole('button', { name: 'Sessions' }).click();
-    const expected =
-      item.state === 'monitoring' ? 'Autopilot continuation inactive' : 'Autopilot safety paused';
-    await expect(page.getByRole('status', { name: expected })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Autopilot:/ })).toBeVisible();
+    await expect(page.getByRole('status', { name: /Autopilot continuation/ })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
     await page.screenshot({
       path: `${evidence}/session-liveness-${item.name}.png`,

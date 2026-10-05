@@ -17,6 +17,8 @@ export type WorkspaceOption = {
 };
 
 export type Bootstrap = {
+  sessionDefaults?: import('../../../shared/contracts/session-defaults.js').SessionDefaults | null;
+  sessionDefaultsError?: boolean;
   workspaces: WorkspaceOption[];
   profiles: Array<{ name: string; state: 'ok' | 'not_logged_in' | 'error'; status: string }>;
   models?: Record<LlmProvider, string[]>;

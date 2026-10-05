@@ -141,7 +141,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let shellStatus = $state('Loading relay…');
   let theme = $state<ThemeId>(untrack(() => initialTheme));
   let workspaceTree = $state<WorkspaceOption[]>([]);
-  const defaultSessionModel = 'gpt-5.6-terra';
+  const defaultSessionModel = 'gpt-6.1-sol';
+  let sessionReasoningEffort =
+    $state<import('../shared/contracts/session-model-settings.js').ThinkingLevel>('medium');
+  let sessionExecutorModel = $state('gpt-5.6-terra');
+  let sessionExecutorReasoningEffort =
+    $state<import('../shared/contracts/session-model-settings.js').ThinkingLevel>('high');
   let sessionModels = $state.raw<Record<LlmProvider, string[]>>({
     codex: [defaultSessionModel],
     kimi: [],
@@ -165,6 +170,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let selectedSessionSkillProfile = $state('');
   let sessionSkillProfileError = $state('');
   let sessionWorkspaceId = $state('');
+  let savingSessionDefaults = $state(false);
+  let sessionAdvancedExpanded = $state(false);
   let sessionExpandedIds = $state<Set<string>>(new Set());
   let sessionId = $state<string | null>(null);
   let sessions = $state<RelaySession[]>([]);
@@ -449,6 +456,30 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         kimi: selectedSessionModels.kimi || (bootstrap.models?.kimi?.[0] ?? ''),
       };
       providerCapabilities = bootstrap.capabilities?.providers ?? null;
+      try {
+        if (bootstrap.sessionDefaultsError) throw new Error('SESSION_DEFAULTS_READ_FAILED');
+        const defaults = bootstrap.sessionDefaults;
+        if (defaults) {
+          sandbox = defaults.sandbox;
+          approvalPolicy = defaults.approvalPolicy;
+          selectedSessionSkillProfile = defaults.skillProfile;
+          sessionProvider = defaults.provider;
+          sessionReasoningEffort = defaults.reasoningEffort ?? 'medium';
+          sessionExecutorModel = defaults.executorModel ?? 'gpt-5.6-terra';
+          sessionExecutorReasoningEffort = defaults.executorReasoningEffort ?? 'high';
+          selectedSessionModels = { ...selectedSessionModels, [defaults.provider]: defaults.model };
+          if (findTreeNode(bootstrap.workspaces, defaults.workspaceId))
+            sessionWorkspaceId = defaults.workspaceId;
+          if (!sessionModels[defaults.provider].includes(defaults.model)) {
+            sessionModels = {
+              ...sessionModels,
+              [defaults.provider]: [defaults.model, ...sessionModels[defaults.provider]],
+            };
+          }
+        }
+      } catch (error) {
+        reportRelayError(error, 'SESSION_DEFAULTS_READ_FAILED');
+      }
       componentVersions = bootstrap.versions ?? [];
       headerIconUrl = bootstrap.branding?.headerIconUrl ?? null;
       if (!detachedSessionId) await refreshSkillProfiles();
@@ -603,6 +634,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       sandbox,
       approvalPolicy,
       model: selectedSessionModels[provider] || undefined,
+      ...(provider === 'codex'
+        ? {
+            reasoningEffort: sessionReasoningEffort,
+            executorModel: sessionExecutorModel,
+            executorReasoningEffort: sessionExecutorReasoningEffort,
+          }
+        : {}),
       skillProfile: selectedSessionSkillProfile || undefined,
     });
     if (!session) {
@@ -753,7 +791,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       await refreshSessionLists();
       shellStatus = 'Session closed.';
     } catch (error) {
-      shellStatus = `Could not close session: ${errorMessage(error)}`;
+      shellStatus = reportRelayError(error, 'SESSION_CLOSE_FAILED');
+    }
+  }
+
+  async function saveSessionDefaults() {
+    savingSessionDefaults = true;
+    try {
+      const response = await authorizedFetch('/api/session-defaults', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: sessionWorkspaceId,
+          skillProfile: selectedSessionSkillProfile,
+          provider: activeSessionProvider,
+          model: selectedSessionModels[activeSessionProvider],
+          reasoningEffort: sessionReasoningEffort,
+          executorModel: sessionExecutorModel,
+          executorReasoningEffort: sessionExecutorReasoningEffort,
+          sandbox,
+          approvalPolicy,
+        }),
+      });
+      if (!response.ok) throw new Error('SESSION_DEFAULTS_SAVE_FAILED');
+      shellStatus = 'Session defaults saved.';
+      toastQueue.enqueue({ kind: 'success', message: 'Session defaults saved.' });
+    } catch (error) {
+      reportRelayError(error, 'SESSION_DEFAULTS_SAVE_FAILED');
+    } finally {
+      savingSessionDefaults = false;
     }
   }
 
@@ -1107,7 +1173,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   async function closeProfileManager(returnFocus = true): Promise<void> {
     sessionSubview = 'list';
     await tick();
-    if (returnFocus) document.getElementById('manage-skill-profiles')?.focus();
+    if (returnFocus) {
+      const trigger = document.getElementById('manage-skill-profiles');
+      const advanced = trigger?.closest<HTMLDetailsElement>('.advanced-settings');
+      if (advanced) advanced.open = true;
+      trigger?.focus();
+    }
   }
 
   function scrollTabIntoInitialPosition(target: Tab): void {
@@ -1625,6 +1696,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {approvalPolicy}
             models={sessionModels[activeSessionProvider]}
             selectedModel={selectedSessionModels[activeSessionProvider]}
+            reasoningEffort={sessionReasoningEffort}
+            executorModels={sessionModels.codex}
+            executorModel={sessionExecutorModel}
+            executorReasoningEffort={sessionExecutorReasoningEffort}
+            onreasoningchange={(value) => (sessionReasoningEffort = value)}
+            onexecutormodelchange={(value) => (sessionExecutorModel = value)}
+            onexecutorreasoningchange={(value) => (sessionExecutorReasoningEffort = value)}
             provider={activeSessionProvider}
             {kimiAvailable}
             modelsLoading={loadingSessionModels === activeSessionProvider}
@@ -1633,6 +1711,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             skillProfileError={sessionSkillProfileError}
             {startingSession}
             {openingSessionId}
+            savingDefaults={savingSessionDefaults}
+            bind:advancedExpanded={sessionAdvancedExpanded}
+            onsavedefaults={() => void saveSessionDefaults()}
             onworkspacechange={(value) => (sessionWorkspaceId = value)}
             onexpandedchange={(value) => (sessionExpandedIds = value)}
             onsandboxchange={(value) => (sandbox = value)}

@@ -7,6 +7,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { FilesystemSessionDefaults } from './platform/persistence/filesystem-session-defaults.js';
+import { SessionModelConfig } from './platform/codex/session-model-config.js';
 import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
@@ -567,6 +569,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     list: (provider) => (provider === 'kimi' ? kimiModels.listForSession() : models.list(provider)),
   };
   const skillProfiles = new FilesystemSkillProfileStore(options.homeDirectory ?? homedir());
+  const sessionDefaults = new FilesystemSessionDefaults(options.homeDirectory ?? homedir());
+  const sessionModelConfig = new SessionModelConfig(
+    process.env.CODEX_HOME ?? join(options.homeDirectory ?? homedir(), '.codex-gestalt'),
+    dirname(databasePath),
+  );
   // kimi discovery is workspace-scoped, not profile-scoped: the profile only
   // decides which discovered skills a session's server materializes.
   const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
@@ -1275,6 +1282,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         30_000,
         64,
         root,
+        (session) => sessionModelConfig.resolve(session),
       )
     : null;
   const handleKimiNotification = (
@@ -1551,7 +1559,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       staticDir: options.staticDir,
       pwaIcon: options.pwaIcon,
       recentThreads: recentThreadsForRelay,
+      sessionDefaults,
       bootstrap: {
+        sessionDefaults,
         workspaces,
         profiles: options.profiles,
         models,

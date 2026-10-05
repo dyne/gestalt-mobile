@@ -111,6 +111,7 @@ async function open(
     page.getByText('The selected skill set is fixed after this session is created.'),
   ).toHaveCount(0);
   if (state === 'session-form') return diagnostics;
+  await page.getByText('Advanced settings', { exact: true }).click();
   const manager = page.getByRole('button', { name: 'Manage skill profiles' });
   await manager.click();
   await expect(page.getByRole('heading', { name: 'Manage skill profiles' })).toBeFocused();
@@ -224,7 +225,7 @@ test('refreshes new-session profile choices after create, replace, and delete', 
   });
   await mockAuthenticatedStatus(page);
   await page.goto('/');
-
+  await page.getByText('Advanced settings', { exact: true }).click();
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
   await page.getByLabel('Save as').fill('fresh');
   await page.getByRole('button', { name: 'Save profile' }).click();

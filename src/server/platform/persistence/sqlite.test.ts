@@ -347,6 +347,11 @@ describe('SQLite relay persistence', () => {
       workspaceId: 'w',
       workspacePath: '/w',
       profile: 'default',
+      modelSettings: {
+        reasoningEffort: 'high',
+        executorModel: 'gpt-6.1-sol',
+        executorReasoningEffort: 'xhigh',
+      },
       provider: 'codex' as const,
       threadId: 'thread',
       state: 'ready',
@@ -366,6 +371,11 @@ describe('SQLite relay persistence', () => {
       id: 's',
       threadId: 'thread',
       state: 'ready',
+    });
+    expect(new SqliteSessionRepository(reopened).find('s')?.modelSettings).toEqual({
+      reasoningEffort: 'high',
+      executorModel: 'gpt-6.1-sol',
+      executorReasoningEffort: 'xhigh',
     });
     reopened.close();
   });

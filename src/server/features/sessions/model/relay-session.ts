@@ -7,6 +7,7 @@
 import { DomainError } from './errors.js';
 import type { RelaySessionEvent } from './events.js';
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
+import type { SessionModelSettings } from '../../../../shared/contracts/session-model-settings.js';
 import {
   createSkillSelection,
   normalizeSkillProfileName,
@@ -122,6 +123,7 @@ export function createEffectiveSkillSelection(
 }
 
 export type RelaySessionSnapshot = {
+  modelSettings?: SessionModelSettings;
   id: string;
   workspaceId: string;
   workspacePath: string;
@@ -153,6 +155,7 @@ export class RelaySession {
   ) {}
 
   static create(input: {
+    modelSettings?: SessionModelSettings;
     id: string;
     workspaceId: string;
     workspacePath: string;
@@ -172,6 +175,7 @@ export class RelaySession {
       provider: input.provider,
       profile: profileName(input.profile),
       ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.modelSettings === undefined ? {} : { modelSettings: { ...input.modelSettings } }),
       ...(input.branch === undefined ? {} : { branch: input.branch }),
       effectiveSkillSelection: createEffectiveSkillSelection(input.effectiveSkillSelection),
       executionPolicy: createSessionExecutionPolicy(input),
@@ -338,6 +342,7 @@ export class RelaySession {
 function copy(snapshot: RelaySessionSnapshot): RelaySessionSnapshot {
   return {
     ...snapshot,
+    ...(snapshot.modelSettings ? { modelSettings: { ...snapshot.modelSettings } } : {}),
     ...(snapshot.effectiveSkillSelection === undefined
       ? {}
       : {

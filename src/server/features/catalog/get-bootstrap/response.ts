@@ -11,6 +11,9 @@ import type {
   ProviderAvailability,
 } from '../../../../shared/contracts/llm-provider.js';
 export type BootstrapResponse = {
+  sessionDefaults?:
+    import('../../../../shared/contracts/session-defaults.js').SessionDefaults | null;
+  sessionDefaultsError?: boolean;
   workspaces: WorkspaceOption[];
   profiles: ProfileOption[];
   models: Record<LlmProvider, string[]>;

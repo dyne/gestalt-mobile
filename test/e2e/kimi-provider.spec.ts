@@ -90,14 +90,17 @@ test('starts a kimi session from the provider picker and adapts the form', async
   await page.getByRole('button', { name: 'Sessions' }).click();
 
   const provider = page.getByLabel('Provider');
+  await page.getByText('Advanced settings', { exact: true }).click();
   await expect(provider).toHaveValue('codex');
   await expect(page.getByLabel('Sandbox')).toBeVisible();
-  await expect(page.getByText(/Codex should use as its working directory/)).toBeVisible();
+  await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
 
   await provider.selectOption('kimi');
   await expect(page.getByLabel('Sandbox')).toHaveCount(0);
   await expect(page.getByLabel('Approval policy')).toHaveCount(0);
-  await expect(page.getByText(/Kimi should use as its working directory/)).toBeVisible();
+  await expect(page.getByRole('tree', { name: 'Session base' })).toBeVisible();
+  await expect(page.getByLabel('Model thinking')).toHaveCount(0);
+  await expect(page.getByLabel('Executor model')).toHaveCount(0);
   await expect(page.getByLabel('Model')).toHaveValue('k2-thinking');
   await expect(page.getByLabel('Model')).toContainText('k2-fast');
 
@@ -133,11 +136,12 @@ test('explains why kimi cannot be selected when it is not installed', async ({ p
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Sessions' }).click();
+  await page.getByText('Advanced settings', { exact: true }).click();
   await expect(page.getByLabel('Provider')).toHaveValue('codex');
   await expect(page.getByLabel('Provider').locator('option[value="kimi"]')).toBeDisabled();
-  await expect(page.getByText(/Kimi is unavailable because its CLI was not found/)).toBeVisible();
+  await expect(page.getByText(/Kimi is unavailable because its CLI was not found/)).toHaveCount(0);
   await expect(page.getByLabel('Sandbox')).toBeVisible();
-  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-5.6-terra');
+  await expect(page.getByLabel('Codex model')).toHaveValue('gpt-6.1-sol');
 });
 
 test('restricts chat model switching to the session provider and badges kimi sessions', async ({
@@ -248,7 +252,7 @@ test('hides the resume Copy action for kimi recent threads', async ({ page }) =>
   await page.getByRole('button', { name: 'Sessions' }).click();
   const recent = page.getByLabel('Recent sessions');
   await expect(recent.getByText('Kimi')).toBeVisible();
-  await expect(recent.getByRole('button', { name: 'Copy' })).toHaveCount(1);
+  await expect(recent.getByLabel('Session menu')).toHaveCount(1);
   await recent.getByRole('button', { name: 'Open' }).first().click();
   await expect
     .poll(() => recentOpenBody)

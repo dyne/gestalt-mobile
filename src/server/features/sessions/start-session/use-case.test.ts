@@ -24,6 +24,40 @@ const skills = {
 };
 
 describe('startSession', () => {
+  it('saves supervisor and executor model settings with the session before activation', async () => {
+    const modelSettings = {
+      reasoningEffort: 'high' as const,
+      executorModel: 'gpt-6.1-sol',
+      executorReasoningEffort: 'xhigh' as const,
+    };
+    const saved: unknown[] = [];
+    const result = await startSession(
+      {
+        workspaceId: 'w',
+        profile: 'default',
+        provider: 'codex',
+        model: 'gpt-6-sol',
+        ...modelSettings,
+      },
+      {
+        ...skills,
+        createId: () => 's',
+        now: () => 't',
+        save: (session) => {
+          saved.push(session);
+        },
+        workspaces: {
+          resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/workspace' }),
+        },
+        profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+        activate: async (session) => {
+          expect(saved[0]).toMatchObject({ modelSettings });
+          return session;
+        },
+      },
+    );
+    expect(result).toMatchObject({ model: 'gpt-6-sol', modelSettings });
+  });
   it('uses Kimi-owned discovery without requiring a Codex launcher profile', async () => {
     const requiredProfiles: string[] = [];
     const catalogProviders: string[] = [];

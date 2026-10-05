@@ -88,9 +88,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
   let liveStatus = $derived(`Autopilot status: ${status}. ${help}`);
   let enabled = $derived(autopilot?.enabled ?? false);
+  let hasError = $derived(
+    autopilot?.state === 'safetyPaused' || autopilot?.health?.phase === 'degraded',
+  );
 </script>
 
-<section class="autopilot-control" class:compact aria-label="Autopilot">
+<section
+  class="autopilot-control"
+  class:compact
+  class:has-error={indicatorOnly && hasError}
+  aria-label="Autopilot"
+>
   <p
     class="visually-hidden"
     data-testid="autopilot-live-status"
@@ -144,6 +152,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </section>
 
 <style>
+  .has-error :global(button[aria-pressed]) {
+    color: var(--theme-error);
+    border-color: var(--theme-error);
+    border-style: dashed;
+    background: var(--theme-surface);
+  }
   .autopilot-control {
     min-inline-size: 0;
     max-inline-size: 100%;
