@@ -329,6 +329,14 @@ The browser stores the selected session, its replay cursor, and per-session
 composer drafts. On a dropped connection it replays retained events; if the
 server has pruned the gap, it reloads canonical Codex thread history.
 
+Org-plan attachments are saved with the session in the relay's SQLite database,
+including their canonical path and attached state. Explicit plan attachment also
+publishes a session-private status file, so helper updates and manual attachments
+share the same live tracking. On restart, the relay reloads the current plan and
+its progress without starting a Codex writer. Open and saved sessions show **Org
+plan attached** and provide **Copy CLI** directly in their action column. Closing
+a completed plan clears its attached state while retaining its last-used name.
+
 ## File previews
 
 Plan descriptions preserve line breaks and open file or directory references enclosed

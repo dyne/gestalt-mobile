@@ -907,7 +907,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       if (session) {
         const updated = {
           ...session,
-          lastOrgPlan: { filename: basename(update.planPath), title: update.plan.title },
+          lastOrgPlan: {
+            filename: basename(update.planPath),
+            title: update.plan.title,
+            path: update.planPath,
+            attached: true,
+          },
           updatedAt: occurredAt,
         };
         sessions.save(updated);
@@ -1796,13 +1801,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const result = await workspacePlanCatalog.read(session.workspacePath, planName);
           if (result.kind === 'available') {
             const planPath = resolve(session.workspacePath, ...planName.split('/'));
-            acceptPlanUpdate(id, {
-              kind: 'updated',
-              plan: result.plan,
-              identity: createHash('sha256').update(planPath).digest('hex'),
-              planPath,
-              reason: 'supervision-start',
-            });
+            await planStatusSource.attach(session, planPath, (update) =>
+              acceptPlanUpdate(id, update),
+            );
           }
           return result;
         },
@@ -1810,6 +1811,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
         clear: (id) => supervisedPlans.clear(id),
         closed: (id) => {
+          const session = sessions.find(id);
+          if (session?.lastOrgPlan) {
+            const updated = {
+              ...session,
+              lastOrgPlan: { ...session.lastOrgPlan, attached: false },
+              updatedAt: new Date().toISOString(),
+            };
+            sessions.save(updated);
+            events.publish(journal.append(id, 'session.updated', updated, updated.updatedAt));
+          }
           autopilot.cancel(id, 'planRemoved');
           planMeasurementRefresh?.stop(id);
           const occurredAt = new Date().toISOString();
@@ -2075,6 +2086,27 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     // Kimi discovery owns a provider process, so passive relay startup must not
     // refresh it. Explicit session creation and user-requested skill refreshes
     // enter KimiSkillCatalog through their normal operation paths instead.
+    // Rehydrate durable attachments even when this relay does not launch Codex writers.
+    for (const session of sessions.list()) {
+      if (!persistedSessionIds.has(session.id) || session.provider === 'kimi') continue;
+      if (session.lastOrgPlan?.attached && session.lastOrgPlan.path) {
+        try {
+          await planStatusSource.open(session, (update) => acceptPlanUpdate(session.id, update));
+          if (!supervisedPlans.find(session.id)) {
+            await planStatusSource
+              .attach(
+                session,
+                session.lastOrgPlan.path,
+                (update) => acceptPlanUpdate(session.id, update),
+                'restored-attachment',
+              )
+              .catch(() => {});
+          }
+        } catch {
+          /* Keep the durable assignment when its workspace is temporarily unavailable. */
+        }
+      }
+    }
     await detachActiveSessions();
   });
   app.addHook('onClose', async () => {

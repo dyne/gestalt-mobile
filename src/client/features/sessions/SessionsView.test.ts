@@ -229,7 +229,7 @@ describe('SessionsView session base tree', () => {
     const control = (index: number, selector: string) =>
       actions[index]?.matches(selector) ? actions[index] : actions[index]?.querySelector(selector);
     expect(control(0, 'button')?.textContent?.trim()).toBe('Open');
-    expect(control(1, 'summary')?.getAttribute('aria-label')).toBe('Session menu');
+    expect(control(1, 'button')?.textContent?.trim()).toBe('Copy CLI');
     expect(control(2, 'button')?.getAttribute('aria-label')).toBe('Autopilot: Unavailable');
     expect(control(3, 'summary')?.textContent?.trim()).toBe('Agents (1)');
     expect(control(4, 'button')?.textContent?.trim()).toBe('Close');
@@ -556,6 +556,33 @@ describe('SessionsView session base tree', () => {
     expect(onselectopen).toHaveBeenCalledWith('open-b');
   });
 
+  it('shows durable plan attachments on saved sessions and keeps historical plans unmarked', () => {
+    renderView({
+      sessions: [
+        {
+          id: 'attached',
+          state: 'released',
+          workspacePath: '/work',
+          lastOrgPlan: {
+            filename: 'attached.org',
+            title: 'Attached plan',
+            attached: true,
+            path: '/work/attached.org',
+          },
+        },
+        {
+          id: 'closed-plan',
+          state: 'released',
+          workspacePath: '/other',
+          lastOrgPlan: { filename: 'closed.org', title: 'Closed plan', attached: false },
+        },
+      ],
+    });
+    expect(screen.getAllByText('Org plan attached')).toHaveLength(1);
+    expect(screen.getByText('attached.org')).toBeTruthy();
+    expect(screen.getByText('closed.org')).toBeTruthy();
+  });
+
   it('copies resume commands from open and saved adopted sessions', async () => {
     const oncopyresume = vi.fn();
     renderView({
@@ -576,10 +603,8 @@ describe('SessionsView session base tree', () => {
       ],
     });
 
-    document
-      .querySelectorAll<HTMLDetailsElement>('.session-menu')
-      .forEach((menu) => (menu.open = true));
-    const copyButtons = screen.getAllByRole('button', { name: 'Copy session to CLI' });
+    expect(document.querySelector('.session-menu')).toBeNull();
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy CLI' });
     expect(copyButtons).toHaveLength(2);
     await fireEvent.click(copyButtons[0]!);
     await fireEvent.click(copyButtons[1]!);
@@ -600,14 +625,7 @@ describe('SessionsView session base tree', () => {
     });
 
     expandAdvanced();
-    (document.querySelector('.session-menu') as HTMLDetailsElement).open = true;
-    for (const name of [
-      'Open',
-      'Copy session to CLI',
-      'Forget',
-      'Manage skill profiles',
-      'Create session',
-    ]) {
+    for (const name of ['Open', 'Copy CLI', 'Forget', 'Manage skill profiles', 'Create session']) {
       expect(screen.getByRole('button', { name }).classList.contains('app-control')).toBe(true);
     }
   });
@@ -694,7 +712,8 @@ describe('SessionsView provider selection', () => {
       ],
     });
 
-    expect(document.querySelectorAll('.session-menu')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Copy CLI' })).toHaveLength(1);
+    expect(document.querySelector('.session-menu')).toBeNull();
   });
 
   it('hides the resume Copy action for kimi recent threads', () => {

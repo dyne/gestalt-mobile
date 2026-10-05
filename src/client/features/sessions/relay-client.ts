@@ -66,7 +66,7 @@ export type RelaySession = {
     skills: Array<{ name: string; path: string; enabled: boolean }>;
     warnings?: string[];
   };
-  lastOrgPlan?: { filename: string; title: string };
+  lastOrgPlan?: { filename: string; title: string; path?: string; attached?: boolean };
   plan?: SupervisedPlan;
   agentActivity?: AgentActivitySnapshot;
   autopilot?: AutopilotSnapshot;

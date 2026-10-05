@@ -169,30 +169,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 </script>
 
-{#snippet sessionMenu(command: string)}
-  <details class="session-menu">
-    <summary aria-label="Session menu">
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg
-      >
-    </summary>
-    <div class="session-menu-items">
-      <AppControl
-        compact
-        onclick={(event) => {
-          oncopyresume(command);
-          const menu = event.currentTarget.closest('details');
-          if (menu) menu.open = false;
-        }}>Copy session to CLI</AppControl
-      >
+{#snippet sessionPlanContext(session: RelaySession)}
+  {#if session.plan || session.lastOrgPlan?.attached}
+    <span class="profile-badge">Org plan attached</span>
+  {/if}
+  {#if session.lastOrgPlan}
+    <span class="org-plan-metadata">
+      <span class="org-plan-title">{session.lastOrgPlan.title}</span>
+      <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
+    </span>
+  {/if}
+  {#if session.plan}
+    <div class="session-plan-progress">
+      <PlanProgress compact plan={session.plan} label={`Plan progress for ${session.plan.title}`} />
     </div>
-  </details>
+  {/if}
 {/snippet}
 
 <dialog
@@ -237,7 +228,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 onclick={() => onselectopen(session.id)}>Open</AppControl
               >
               {#if session.resumeCommand && session.provider !== 'kimi'}
-                {@render sessionMenu(session.resumeCommand)}
+                <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
+                  >Copy CLI</AppControl
+                >
               {/if}
               {#if session.provider !== 'kimi'}
                 <AutopilotControl
@@ -301,21 +294,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     >Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span
                   >
                 {/if}
-                {#if session.lastOrgPlan}
-                  <span class="org-plan-metadata">
-                    <span class="org-plan-title">{session.lastOrgPlan.title}</span>
-                    <span class="org-plan-filename">{session.lastOrgPlan.filename}</span>
-                  </span>
-                {/if}
-                {#if session.plan}
-                  <div class="session-plan-progress">
-                    <PlanProgress
-                      compact
-                      plan={session.plan}
-                      label={`Plan progress for ${session.plan.title}`}
-                    />
-                  </div>
-                {/if}
+                {@render sessionPlanContext(session)}
               </div>
               <AutopilotAttention
                 attention={autopilotAttention.get(session.id) ?? null}
@@ -352,7 +331,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               {openingSessionId === session.id ? 'Opening…' : 'Open'}
             </AppControl>
             {#if session.resumeCommand && session.provider !== 'kimi'}
-              {@render sessionMenu(session.resumeCommand)}
+              <AppControl compact full onclick={() => oncopyresume(session.resumeCommand!)}
+                >Copy CLI</AppControl
+              >
             {/if}
             <AppControl compact full onclick={() => onforget(session.id)}>Forget</AppControl>
           </div>
@@ -375,6 +356,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 >Skills profile: {session.effectiveSkillSelection.selectedProfileName}</span
               >
             {/if}
+            {@render sessionPlanContext(session)}
           </div>
         </li>
       {/each}
@@ -826,38 +808,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.75rem 1.25rem;
     font-size: 1.125rem;
   }
-  .session-menu {
-    position: relative;
-  }
-  .session-menu > summary {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    min-block-size: 44px;
-    min-inline-size: 44px;
-    border: 1px solid var(--theme-border);
-    border-radius: var(--theme-radius);
-    cursor: pointer;
-    list-style: none;
-  }
-  .session-menu > summary::-webkit-details-marker {
-    display: none;
-  }
   summary:focus-visible {
     outline: 3px solid var(--theme-accent);
     outline-offset: 2px;
-  }
-  .session-menu-items {
-    position: absolute;
-    inset-inline-end: 0;
-    inset-block-start: calc(100% + 0.25rem);
-    z-index: 10;
-    padding: 0.4rem;
-    background: var(--theme-surface);
-    border: 1px solid var(--theme-border);
-    border-radius: var(--theme-radius);
-    white-space: nowrap;
   }
   dialog {
     max-inline-size: min(26rem, calc(100% - 2rem));
