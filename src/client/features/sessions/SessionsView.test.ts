@@ -158,6 +158,28 @@ describe('SessionsView session base tree', () => {
     expect(onclose).toHaveBeenCalledWith('live');
   });
 
+  it('shows supervision controls only while an Org plan is assigned', async () => {
+    const session = { id: 'live', state: 'ready', workspacePath: '/work' };
+    const { rerender } = renderView({ sessions: [session] });
+    expect(screen.queryByRole('button', { name: /^Autopilot/ })).toBeNull();
+    expect(screen.queryByText(/^Agents \(/)).toBeNull();
+    await rerender({
+      sessions: [
+        { ...session, lastOrgPlan: { filename: 'plan.org', title: 'Plan', attached: true } },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /^Autopilot/ })).toBeTruthy();
+    expect(screen.getByText(/^Agents \(/)).toBeTruthy();
+    await rerender({
+      sessions: [
+        { ...session, lastOrgPlan: { filename: 'plan.org', title: 'Plan', attached: false } },
+      ],
+    });
+    expect(screen.getByText('Plan')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Autopilot/ })).toBeNull();
+    expect(screen.queryByText(/^Agents \(/)).toBeNull();
+  });
+
   it('updates the shared Agents popup when the session activity changes', async () => {
     const activity = {
       sessionId: 'live',
@@ -171,7 +193,14 @@ describe('SessionsView session base tree', () => {
       subagents: [],
     };
     const { rerender } = renderView({
-      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      sessions: [
+        {
+          id: 'live',
+          state: 'ready',
+          workspacePath: '/work',
+          lastOrgPlan: { filename: 'active.org', title: 'Active plan', attached: true },
+        },
+      ],
       activitySnapshots: new Map([['live', activity]]),
     });
     expect(screen.getByText('Agents (1)')).toBeTruthy();
@@ -216,6 +245,7 @@ describe('SessionsView session base tree', () => {
       sessions: [
         {
           id: 'live',
+          lastOrgPlan: { filename: 'active.org', title: 'Active plan', attached: true },
           state: 'ready',
           workspacePath: '/work',
           resumeCommand: 'codex resume live',
@@ -237,7 +267,14 @@ describe('SessionsView session base tree', () => {
 
   it('uses accent-pressed state without a visible on/off glyph for session Autopilot', () => {
     renderView({
-      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      sessions: [
+        {
+          id: 'live',
+          state: 'ready',
+          workspacePath: '/work',
+          lastOrgPlan: { filename: 'active.org', title: 'Active plan', attached: true },
+        },
+      ],
       autopilotSnapshots: new Map([
         [
           'live',
@@ -300,7 +337,14 @@ describe('SessionsView session base tree', () => {
   });
   it('keeps Autopilot liveness text out of the session action rail', () => {
     renderView({
-      sessions: [{ id: 'live', state: 'ready', workspacePath: '/work' }],
+      sessions: [
+        {
+          id: 'live',
+          state: 'ready',
+          workspacePath: '/work',
+          lastOrgPlan: { filename: 'active.org', title: 'Active plan', attached: true },
+        },
+      ],
       autopilotSnapshots: new Map([
         [
           'live',
@@ -686,7 +730,12 @@ describe('SessionsView provider selection', () => {
     renderView({
       sessions: [
         { id: 'kimi-live', state: 'ready', workspacePath: '/kimi', provider: 'kimi' },
-        { id: 'codex-live', state: 'ready', workspacePath: '/codex' },
+        {
+          id: 'codex-live',
+          state: 'ready',
+          workspacePath: '/codex',
+          lastOrgPlan: { filename: 'active.org', title: 'Active plan', attached: true },
+        },
       ],
     });
     expect(screen.getByText('Kimi')).toBeTruthy();

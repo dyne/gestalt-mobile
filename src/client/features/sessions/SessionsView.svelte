@@ -17,7 +17,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './relay-client.js';
   import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
   import { formatRelativeTime } from './relative-time.js';
-  import { displayWorkspacePath, managedSessionDetails } from './session-list.js';
+  import {
+    displayWorkspacePath,
+    hasAssignedOrgPlan,
+    managedSessionDetails,
+  } from './session-list.js';
   import AgentActivityIndicators from '../agent-activity/AgentActivityIndicators.svelte';
   import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
   import AutopilotControl from '../autopilot/AutopilotControl.svelte';
@@ -173,7 +177,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#snippet sessionPlanContext(session: RelaySession)}
-  {#if session.plan || session.lastOrgPlan?.attached}
+  {#if hasAssignedOrgPlan(session)}
     <span class="profile-badge">Org plan attached</span>
   {/if}
   {#if session.lastOrgPlan}
@@ -247,23 +251,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   >Copy CLI</AppControl
                 >
               {/if}
-              {#if session.provider !== 'kimi'}
-                <AutopilotControl
+              {#if hasAssignedOrgPlan(session)}
+                {#if session.provider !== 'kimi'}
+                  <AutopilotControl
+                    compact
+                    indicatorOnly
+                    autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
+                    controlId={`session-autopilot-${session.id}`}
+                    pending={autopilotPending.has(session.id)}
+                    ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+                  />
+                {/if}
+                <AgentActivityIndicators
                   compact
-                  indicatorOnly
-                  autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}
-                  controlId={`session-autopilot-${session.id}`}
-                  pending={autopilotPending.has(session.id)}
-                  ontoggle={(enabled) => onautopilottoggle(session.id, enabled)}
+                  activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
+                  rootModel={session.model ?? models?.[0]}
+                  plan={session.plan}
+                  onopen={() => onactivityopen(session.id)}
                 />
               {/if}
-              <AgentActivityIndicators
-                compact
-                activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
-                rootModel={session.model ?? models?.[0]}
-                plan={session.plan}
-                onopen={() => onactivityopen(session.id)}
-              />
               <AppControl compact full onclick={() => requestClose(session.id)}>Close</AppControl>
             </div>
             <div class="session-details">
