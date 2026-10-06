@@ -151,6 +151,16 @@ export class AgentActivityRegistry {
       next,
       children.some((child) => child.qualified === false) ? 'stale' : 'fresh',
     );
+    // The complete authoritative read is new observation evidence even when
+    // the semantic projector deduplicates an unchanged idle root and roster.
+    // Keep liveness separate from activity: a read must not manufacture work
+    // progress, but its old timestamp must not force Autopilot to reconcile
+    // the same successfully refreshed snapshot forever.
+    if (Date.parse(occurredAt) > Date.parse(next.root.observedAt))
+      next = Object.freeze({
+        ...next,
+        root: Object.freeze({ ...next.root, observedAt: occurredAt }),
+      });
     const current = this.snapshot(sessionId, occurredAt);
     if (next !== current) {
       this.#snapshots.set(sessionId, next);

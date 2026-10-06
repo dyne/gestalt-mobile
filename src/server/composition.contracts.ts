@@ -2771,6 +2771,72 @@ describe('production composition', () => {
       expect(starts()).toHaveLength(1);
     });
 
+    it('refreshes unchanged idle evidence so a stale handoff can continue', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      await fixture.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${fixture.sessionId}/autopilot`,
+        payload: { enabled: false },
+      });
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      const before = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .agentActivity;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const refreshedAt = new Date(Date.parse(before.root.observedAt) + 60_000).toISOString();
+      vi.setSystemTime(new Date(refreshedAt));
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      const after = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .agentActivity;
+      expect(after).toMatchObject({
+        confidence: 'fresh',
+        root: {
+          state: 'idle',
+          observedAt: refreshedAt,
+          lastActivityAt: before.root.lastActivityAt,
+        },
+      });
+      await fixture.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${fixture.sessionId}/autopilot`,
+        payload: { enabled: true },
+      });
+      const starts = () =>
+        fixture.handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start');
+      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await vi.waitFor(() =>
+          expect(
+            starts().length > 0 ||
+              timers.some((candidate) => !candidate.cancelled && !candidate.fired),
+          ).toBe(true),
+        );
+      }
+      expect(starts()).toHaveLength(1);
+    });
+
     it('production incompatible reconcile remains supervised and schedules reinspection', async () => {
       let reconciliations = 0;
       const timers: Array<() => void> = [];
