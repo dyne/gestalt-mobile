@@ -53,6 +53,63 @@ const plan = (reviewStatus: 'REVIEWED' | 'UNREVIEWED' = 'UNREVIEWED'): Supervise
 });
 
 describe('autopilot policy', () => {
+  it('allows a fresh canonical unloaded executor to resume while retaining freshness and interaction gates', () => {
+    const base = createAgentActivitySnapshot('s', now);
+    const activity: AgentActivitySnapshot = {
+      ...base,
+      confidence: 'fresh',
+      root: { ...base.root, state: 'idle' },
+      aggregateSubagents: 'disconnected',
+      subagents: [
+        {
+          id: 'executor',
+          threadId: 'executor',
+          taskPath: '/root/l1',
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          state: 'disconnected',
+          reason: 'processExited',
+          observedAt: now,
+          lastActivityAt: now,
+        },
+      ],
+    };
+    const input = {
+      state: {
+        ...disabledAutopilot('s', now),
+        state: 'monitoring' as const,
+        requestedEnabled: true,
+      },
+      plan: plan(),
+      activity,
+      hasPendingInteraction: false,
+      now,
+      policy: defaultAutopilotPolicy,
+    };
+    expect(decideAutopilot(input)).toMatchObject({ kind: 'scheduleContinuation' });
+    expect(decideAutopilot({ ...input, hasPendingInteraction: true })).toEqual({ kind: 'observe' });
+    expect(decideAutopilot({ ...input, activity: { ...activity, confidence: 'stale' } })).toEqual({
+      kind: 'reconcile',
+    });
+    expect(
+      decideAutopilot({
+        ...input,
+        activity: { ...activity, root: { ...activity.root, state: 'disconnected' } },
+      }),
+    ).toEqual({ kind: 'reconcile' });
+    expect(
+      decideAutopilot({ ...input, state: { ...input.state, requestedEnabled: false } }),
+    ).toEqual({ kind: 'disable', reason: 'manualDisabled' });
+    expect(
+      decideAutopilot({
+        ...input,
+        activity: {
+          ...activity,
+          subagents: [{ ...activity.subagents[0]!, canonicalPosition: undefined }],
+        },
+      }),
+    ).toEqual({ kind: 'reconcile' });
+  });
   it('requires reviewed L1s for execution completion', () => {
     expect(executionComplete(plan())).toBe(false);
     expect(executionComplete(plan('REVIEWED'))).toBe(true);

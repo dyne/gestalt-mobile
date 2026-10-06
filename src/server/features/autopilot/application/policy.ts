@@ -133,8 +133,16 @@ function classifySupervisedActivity(
     );
     return !historical || supervisedProcess;
   });
+  // A fresh authoritative roster can retain the current executor while its
+  // runtime is unloaded. Re-reading that same status cannot load it: allow the
+  // coordinator's fenced continuation to resume the existing physical thread.
+  const resumable = (child: AgentActivitySnapshot['subagents'][number]) =>
+    child.canonicalPosition === `L${position}` &&
+    Boolean(child.taskPath && child.canonicalTaskName) &&
+    child.state === 'disconnected';
   // An aggregate-only observation cannot prove which child is historical.
-  if (retained.length === activity.subagents.length) return classifyAgentActivity(activity);
+  if (retained.length === activity.subagents.length && !retained.some(resumable))
+    return classifyAgentActivity(activity);
   if (
     activity.root.state === 'awaitingHuman' ||
     retained.some((child) => child.state === 'awaitingHuman')
@@ -156,7 +164,7 @@ function classifySupervisedActivity(
     return 'active';
   if (
     activity.root.state === 'disconnected' ||
-    retained.some((child) => child.state === 'disconnected')
+    retained.some((child) => child.state === 'disconnected' && !resumable(child))
   )
     return 'reconcile';
   const rootSettled =
@@ -164,7 +172,7 @@ function classifySupervisedActivity(
     activity.root.state === 'blocked' ||
     activity.root.state === 'awaitingAgent';
   const childrenSettled = retained.every(
-    (child) => child.state === 'idle' || child.state === 'blocked',
+    (child) => child.state === 'idle' || child.state === 'blocked' || resumable(child),
   );
   return rootSettled && childrenSettled ? 'settled' : 'observe';
 }

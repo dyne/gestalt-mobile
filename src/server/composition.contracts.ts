@@ -2683,6 +2683,92 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
+    it('continues the same unloaded executor once after authoritative roster recovery', async () => {
+      const handles: LiveServerHandle[] = [];
+      const launch = liveAppServer(handles);
+      let unavailable = true;
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        launchAppServer: () => {
+          const server = launch();
+          handles.at(-1)!.respond = (method) => {
+            if (method === 'thread/list' && unavailable) throw new Error('RPC_DOWN');
+            if (method === 'thread/list')
+              return {
+                data: [
+                  {
+                    id: 'preserved-executor',
+                    status: { type: 'notLoaded' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                  },
+                ],
+              };
+            if (method === 'thread/backgroundTerminals/list')
+              throw new CodexJsonRpcError(-32600, 'thread not found: preserved-executor');
+            return undefined;
+          };
+          return server;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      await vi.waitFor(async () => {
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+        ).toMatchObject({ autopilot: { enabled: true, reason: 'reconcileFailed' } });
+      });
+      unavailable = false;
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      const starts = () =>
+        handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      await vi.waitFor(async () => {
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+        ).toMatchObject({
+          agentActivity: {
+            confidence: 'fresh',
+            subagents: [
+              {
+                id: 'preserved-executor',
+                canonicalPosition: 'L1',
+              },
+            ],
+          },
+          autopilot: { enabled: true },
+        });
+        expect(timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true);
+      });
+      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await vi.waitFor(() =>
+          expect(
+            starts().length > 0 ||
+              timers.some((candidate) => !candidate.cancelled && !candidate.fired),
+          ).toBe(true),
+        );
+      }
+      expect(starts()).toHaveLength(1);
+      expect(starts()[0]!.params).toMatchObject({ threadId: 'preserved-executor' });
+      for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
+      await Promise.resolve();
+      expect(starts()).toHaveLength(1);
+    });
+
     it('production incompatible reconcile remains supervised and schedules reinspection', async () => {
       let reconciliations = 0;
       const timers: Array<() => void> = [];
@@ -4800,7 +4886,7 @@ describe('production composition', () => {
       await vi.waitFor(() => expect(closed).toBe(5));
     });
 
-    it('reconciles an interaction cleared upstream as no longer pending', async () => {
+    it('reconciles cleared interactions and unloaded child rosters through later activity', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
       ownTemporaryPaths(root, dataDir);
@@ -4813,6 +4899,7 @@ describe('production composition', () => {
       }> = [];
       const activityCallbacks: Array<() => void> = [];
       const activityDiagnostic = vi.fn();
+      let includeUnloadedChild = false;
       const app = await composeAuthorizedApp({
         root,
         dataDir,
@@ -4840,6 +4927,20 @@ describe('production composition', () => {
                   if (handle.failReads) throw new Error('READ_DOWN');
                   return { thread: { id: 'thread-1', status: { type: 'idle' }, turns: [] } };
                 }
+                if (method === 'thread/list')
+                  return {
+                    data: includeUnloadedChild
+                      ? [
+                          {
+                            id: 'l4',
+                            status: { type: 'notLoaded' },
+                            source: { subAgent: { thread_spawn: { agent_path: '/root/l4' } } },
+                          },
+                        ]
+                      : [],
+                  };
+                if (method === 'thread/backgroundTerminals/list')
+                  throw new CodexJsonRpcError(-32600, 'thread not found: l4');
                 if (method === 'model/list') return { data: [{ id: 'gpt-5.6-terra' }] };
                 if (method === 'skills/list')
                   return {
@@ -4880,6 +4981,19 @@ describe('production composition', () => {
         state: 'ready',
         agentActivity: { confidence: 'fresh' },
       });
+      // A durable child may be absent from the writer's process registry.
+      // Its process RPC must not prevent roster publication or future refreshes.
+      includeUnloadedChild = true;
+      await app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/activity/refresh` });
+      await vi.waitFor(async () => {
+        expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+          agentActivity: {
+            confidence: 'fresh',
+            subagents: [{ id: 'l4', canonicalPosition: 'L4', state: 'disconnected' }],
+          },
+        });
+      });
+      expect(activityDiagnostic).not.toHaveBeenCalled();
       const reconciliationCalls = handle!.calls.filter(
         (method) => method === 'thread/read' || method === 'thread/list',
       );
@@ -4981,7 +5095,10 @@ describe('production composition', () => {
         params: { thread: { id: 'thread-1', status: { type: 'active' } } },
       });
       expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
-        agentActivity: { root: { state: 'working' }, subagents: [] },
+        agentActivity: {
+          root: { state: 'working' },
+          subagents: [{ id: 'l4', canonicalPosition: 'L4', state: 'disconnected' }],
+        },
       });
       const pending = handle!.request!({
         id: 7,

@@ -34,7 +34,11 @@ import {
   WriterAcquisitionError,
   type WriterAcquisition,
 } from '../../features/sessions/application/writer-acquisition.js';
-import { isCodexThreadWriterBusy, isMissingCodexThreadRollout } from './json-rpc-client.js';
+import {
+  CodexJsonRpcError,
+  isCodexThreadWriterBusy,
+  isMissingCodexThreadRollout,
+} from './json-rpc-client.js';
 import { resolvedServerRequestId } from './server-request.js';
 
 export type AppServer = {
@@ -679,11 +683,32 @@ export class CodexSessionRuntime {
   /** Reads only bounded process metadata; command text and output never enter lifecycle state. */
   async inspectChildProcesses(
     session: RelaySessionSnapshot,
-    child: Pick<DirectChildThread, 'id' | 'taskPath'>,
+    child: Pick<DirectChildThread, 'id' | 'taskPath' | 'status' | 'qualified'>,
   ): Promise<readonly OwnedChildProcess[]> {
     const owned = this.sessions.get(session.id);
     if (!owned) return [];
-    const active = await this.listChildBackgroundTerminals(owned, child);
+    let active: readonly OwnedChildProcess[];
+    try {
+      active = await this.listChildBackgroundTerminals(owned, child);
+    } catch (error) {
+      // Durable topology includes children absent from this app-server's live
+      // registry. Its process RPC then reports "thread not found"; that does
+      // not invalidate the roster or prove that previously observed work exited.
+      if (
+        child.status !== 'notLoaded' ||
+        child.qualified === false ||
+        !(error instanceof CodexJsonRpcError) ||
+        error.code !== -32600 ||
+        error.message !== `thread not found: ${child.id}`
+      )
+        throw error;
+      return [...owned.ownedChildProcesses.values()].filter(
+        (process) =>
+          process.ownerThreadId === child.id &&
+          process.state !== 'result-consumed' &&
+          process.state !== 'terminated-for-budget',
+      );
+    }
     const activeIds = new Set(active.map((process) => process.processId));
     for (const process of active)
       owned.ownedChildProcesses.set(childProcessKey(child.id, process.processId), process);

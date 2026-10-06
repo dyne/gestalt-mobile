@@ -620,6 +620,58 @@ describe('CodexSessionRuntime', () => {
       { id: 'child-2' },
     ]);
   });
+  it('preserves process evidence for unloaded children while rejecting unrelated RPC failures', async () => {
+    let failure: Error | undefined;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          if (method === 'thread/start') return { thread: { id: 'root' } };
+          if (method === 'thread/backgroundTerminals/list') {
+            if (failure) throw failure;
+            return { data: [{ itemId: 'item', processId: 'process' }] };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = await runtime.start(
+      RelaySession.create({
+        id: 'unloaded',
+        provider: 'codex',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot,
+      't',
+    );
+    const child = { id: 'l4', status: 'notLoaded', taskPath: '/root/l4' };
+    failure = new CodexJsonRpcError(-32600, 'thread not found: l4');
+    await expect(runtime.inspectChildProcesses(session, child)).resolves.toEqual([]);
+    failure = undefined;
+    const prior = await runtime.inspectChildProcesses(session, { ...child, status: 'active' });
+    failure = new CodexJsonRpcError(-32600, 'thread not found: l4');
+    await expect(runtime.inspectChildProcesses(session, child)).resolves.toEqual(prior);
+    for (const status of ['active', 'idle', undefined])
+      await expect(runtime.inspectChildProcesses(session, { ...child, status })).rejects.toBe(
+        failure,
+      );
+    await expect(
+      runtime.inspectChildProcesses(session, { ...child, qualified: false }),
+    ).rejects.toBe(failure);
+    for (failure of [
+      new CodexJsonRpcError(-32600, 'thread not found: other'),
+      new CodexJsonRpcError(-32600, 'invalid request'),
+      new CodexJsonRpcError(-32601, 'method not found'),
+      new Error('transport lost'),
+    ])
+      await expect(runtime.inspectChildProcesses(session, child)).rejects.toBe(failure);
+    runtime.stopAll();
+  });
   it('owns, observes, consumes, and exactly terminates a child background process', async () => {
     let active = true;
     const calls: Array<{ method: string; params: unknown }> = [];
