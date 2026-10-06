@@ -6,6 +6,10 @@
 
 import type { RecentSession, RelaySession } from './relay-client.js';
 
+export function hasAssignedOrgPlan(session: RelaySession | null | undefined): boolean {
+  return Boolean(session?.plan || session?.lastOrgPlan?.attached);
+}
+
 export function managedSessionDetails(session: {
   threadId?: string | null;
   workspacePath?: string;

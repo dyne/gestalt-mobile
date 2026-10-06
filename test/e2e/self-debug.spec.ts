@@ -97,10 +97,15 @@ for (const viewport of [
       }),
     );
     await page.goto('/');
+    await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+    await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Open configuration' }).click();
     await expect(page.getByRole('button', { name: 'DEBUG', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Open configuration' }).click();
     await page.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+    await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Open configuration' }).click();
     await page.getByRole('button', { name: 'DEBUG', exact: true }).click();
     const confirmation = page.getByRole('dialog', {
@@ -124,6 +129,8 @@ for (const viewport of [
     await expect(confirmation).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
     expect(creates).toBe(1);
+    await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+    await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
     await page.getByRole('button', { name: 'Sessions', exact: true }).click();
     await page.getByText('Self DEBUG', { exact: true }).click();
     await page.getByRole('button', { name: 'Redacted diagnostic trace (JSON)' }).click();
