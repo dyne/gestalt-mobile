@@ -13,6 +13,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
 import { buildApp } from './app.js';
+import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
+import { createSelfDebugSession } from './features/self-debug/create-session.js';
+import { startSession } from './features/sessions/start-session/use-case.js';
 import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
 import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-workspace-files.js';
@@ -566,6 +569,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   options.onAutopilotCoordinator?.(autopilot);
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const workspaceFiles = new FilesystemWorkspaceFiles();
+  const debugHome = options.homeDirectory ?? homedir();
+  const debugWorkspace = new SelfDebugWorkspace(
+    join(debugHome, '.gestalt', 'self-debug'),
+    join(process.env.CODEX_HOME ?? join(debugHome, '.codex'), 'agents', 'org-plan-executor.toml'),
+    databasePath,
+  );
   const homeDirectory = options.homeDirectory ?? homedir();
   // Constructing the manager is cheap (no spawn until `ensure`); building it
   // before the model catalog lets the catalog reuse the gestalt-owned servers.
@@ -1654,6 +1663,127 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         protocolCompatible: protocol.compatible,
         providers: providerAvailability,
       },
+      selfDebug: runtime
+        ? {
+            find: (id) => sessions.find(id),
+            createId: randomUUID,
+            now: () => new Date().toISOString(),
+            context: (source) => {
+              const control = autopilotStore.find(source.id);
+              return {
+                handoffTrace: control?.checkpoints?.activeHandoffId ?? null,
+                control: control?.lastControlId ?? null,
+                mobileSession: source.id,
+                codexThread: source.provider === 'codex' ? source.threadId! : null,
+                sourceThread: source.threadId!,
+                provider: source.provider,
+                capturedAt: new Date().toISOString(),
+                versions: options.componentVersions ?? [],
+              };
+            },
+            readTrace: (debug) => debugWorkspace.readTrace(debug),
+            create: (context) =>
+              createSelfDebugSession(context, {
+                createId: randomUUID,
+                now: () => new Date().toISOString(),
+                settings: async () => {
+                  const installed = await debugWorkspace.settings();
+                  const source = sessions.find(context.mobileSession);
+                  const defaults = await sessionDefaults.read();
+                  return {
+                    ...installed,
+                    model:
+                      source?.modelSettings?.executorModel ??
+                      defaults?.executorModel ??
+                      installed.model,
+                    reasoningEffort:
+                      source?.modelSettings?.executorReasoningEffort ??
+                      defaults?.executorReasoningEffort ??
+                      installed.reasoningEffort,
+                  };
+                },
+                capture: async (id, capturedContext, agent) => {
+                  const captured = await debugWorkspace.capture(id, capturedContext, agent);
+                  return {
+                    ...captured,
+                    absoluteTracePath: join(captured.root, captured.debug.tracePath),
+                  };
+                },
+                askSource: async (id, context, debug) => {
+                  const source = sessions.find(context.mobileSession);
+                  if (source && source.threadId === (context.sourceThread ?? context.codexThread))
+                    await debugWorkspace.askSource(id, source, debug, async (prompt) => {
+                      const sourceRuntime = ownerRuntime(source);
+                      // Never resume or replace the source writer merely to ask for diagnostics.
+                      if (!sourceRuntime?.ownsWriter(source.id))
+                        throw new Error('DEBUG_SOURCE_UNAVAILABLE');
+                      if (source.state === 'turnActive' && source.activeTurnId)
+                        await sourceRuntime.queueTurnInput(
+                          source,
+                          source.activeTurnId,
+                          prompt,
+                          `self-debug-${id}`,
+                        );
+                      else if (source.state === 'ready') {
+                        const started = await sourceRuntime.startTurn(
+                          source,
+                          prompt,
+                          `self-debug-${id}`,
+                          new Date().toISOString(),
+                        );
+                        saveSession(started);
+                        activity.observe({
+                          sessionId: source.id,
+                          occurredAt: started.updatedAt,
+                          kind: 'turnStarted',
+                          threadId: started.threadId!,
+                          turnId: started.activeTurnId!,
+                        });
+                      } else throw new Error('DEBUG_SOURCE_UNAVAILABLE');
+                    });
+                },
+                createSession: async (id, root, agent) => {
+                  await debugWorkspace.prepare();
+                  const debugCatalog = new FilesystemWorkspaceCatalog(root);
+                  const [workspace] = await debugCatalog.list();
+                  return startSession(
+                    {
+                      workspaceId: workspace!.id,
+                      profile: 'default',
+                      provider: 'codex',
+                      model: agent.model,
+                      reasoningEffort: agent.reasoningEffort,
+                      sandbox: 'workspace-git',
+                      approvalPolicy: 'never',
+                    },
+                    {
+                      createId: () => id,
+                      now: () => new Date().toISOString(),
+                      save: saveSession,
+                      workspaces: debugCatalog,
+                      profiles: options.profiles,
+                      skillProfiles,
+                      skillCatalog,
+                      sessionModels,
+                    },
+                  );
+                },
+                start: (session) => runtime.start(session, new Date().toISOString()),
+                startTurn: (session, prompt, messageId) =>
+                  runtime.startTurn(session, prompt, messageId, new Date().toISOString()),
+                find: (id) => sessions.find(id),
+                save: saveSession,
+                onStarted: (session) =>
+                  activity.observe({
+                    sessionId: session.id,
+                    occurredAt: session.updatedAt,
+                    kind: 'turnStarted',
+                    threadId: session.threadId!,
+                    turnId: session.activeTurnId!,
+                  }),
+              }),
+          }
+        : undefined,
       sessionRoutes: {
         createId: randomUUID,
         now: () => new Date().toISOString(),

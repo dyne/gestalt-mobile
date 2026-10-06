@@ -409,6 +409,12 @@ app-server afterwards, and always removes its temporary state. It reports
 
 ## Control-plane traces
 
+When an existing Chat is selected, the header menu offers **DEBUG**. Its confirmation shows the source session's live identifiers and installed component versions. Confirming captures a redacted JSON trace immediately, then makes a bounded attempt to obtain structural diagnostic observations from the source agent; an unavailable source agent does not block the investigation.
+
+Self DEBUG starts an independent root thread in `~/.gestalt/self-debug`, using the source session's configured Org executor settings, saved executor defaults, or the installed `org-plan-executor` profile. The workspace reuses existing clones of `dyne/gestalt`, `dyne/gestalt-mobile`, and `dyne/gestalt-agents`, or clones missing repositories. Existing clones are never reset or updated automatically. Source agents get up to two seconds to accept the diagnostic request and eight seconds to write a structured response.
+
+The Sessions tab retains a **Self DEBUG** section with source identifiers, versions, and a JSON preview link. The diagnostic agent is instructed to ask for missing reproduction details, investigate and test a fix, then request confirmation before opening a pull request or issue through authorized GitHub access. Trace exports retain at most the latest 5,000 structural control-plane events and omit free-form conversation and sensitive payload fields.
+
 Export the durable Org Plan, Autopilot, and agent-projection timeline for one relay session without starting the server:
 
 ```sh

@@ -24,6 +24,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
+  import DebugDialog from './features/self-debug/DebugDialog.svelte';
+  import { visibleHeaderActions } from './features/sessions/header-actions.js';
+  import type { DebugConfirmation } from '../shared/contracts/self-debug.js';
   import ActivityList from './features/chat/ActivityList.svelte';
   import AgentActivityIndicators from './features/agent-activity/AgentActivityIndicators.svelte';
   import AgentActivityEvidence from './features/agent-activity/AgentActivityEvidence.svelte';
@@ -138,6 +141,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let notificationsOpen = $state(false);
   let scratchpadOpen = $state(false);
   let fileViewerTarget = $state<FileViewerTarget | null>(null);
+  let debugConfirmation = $state.raw<DebugConfirmation | null>(null);
+  let debugLoading = $state(false);
+  let debugTraceSession = $state.raw<RelaySession | null>(null);
+  let debugTraceTrigger: HTMLButtonElement | null = null;
+  let debugRequestGeneration = 0;
   let fileBrowserRoot = $state<WorkspaceOption | null>(null);
   let fileBrowserTrigger = $state<HTMLButtonElement | null>(null);
   let fileBrowserGitRefreshScheduled = false;
@@ -228,6 +236,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     sessions.find((session) => session.id === sessionId)?.workspacePath ?? null,
   );
   let selectedSession = $derived(sessions.find((session) => session.id === sessionId) ?? null);
+  let headerActions = $derived(
+    visibleHeaderActions(
+      [
+        {
+          id: 'debug',
+          label: 'DEBUG',
+          tab: 'chat',
+          available: (session) => Boolean(session.threadId),
+          run: () => void openDebug(),
+        },
+      ],
+      tab,
+      selectedSession,
+    ),
+  );
   let selectedSessionPath = $derived(displayWorkspacePath(selectedSession?.workspacePath ?? ''));
   let selectedSessionModelLabel = $derived(
     selectedSession
@@ -676,6 +699,55 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     } catch (error) {
       shellStatus = reportRelayError(error, 'SESSION_START_FAILED');
     }
+  }
+
+  async function openDebug(): Promise<void> {
+    if (!selectedSession?.threadId || debugLoading) return;
+    const id = selectedSession.id;
+    const generation = ++debugRequestGeneration;
+    debugLoading = true;
+    try {
+      const confirmation = await relay.debugConfirmation(id);
+      if (generation === debugRequestGeneration && sessionId === id && tab === 'chat')
+        debugConfirmation = confirmation;
+    } catch (error) {
+      reportRelayError(error, 'DEBUG_CONTEXT_FAILED');
+    } finally {
+      if (generation === debugRequestGeneration) debugLoading = false;
+    }
+  }
+
+  function closeDebug(): void {
+    debugConfirmation = null;
+    queueMicrotask(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
+  }
+
+  async function confirmDebug(): Promise<void> {
+    const confirmation = debugConfirmation;
+    if (!confirmation) return;
+    try {
+      const debug = await relay.startSelfDebug(
+        confirmation.context.mobileSession,
+        confirmation.confirmationId,
+      );
+      debugConfirmation = null;
+      await refreshSessions();
+      await openSession(debug.id);
+    } catch (error) {
+      reportRelayError(error, 'DEBUG_START_FAILED');
+      void refreshSessionLists();
+      throw error;
+    }
+  }
+
+  function openDebugTrace(session: RelaySession, trigger: HTMLButtonElement): void {
+    debugTraceTrigger = trigger;
+    debugTraceSession = session;
+  }
+
+  function closeDebugTrace(): void {
+    debugTraceSession = null;
+    queueMicrotask(() => debugTraceTrigger?.focus());
   }
 
   async function refreshSessions() {
@@ -1588,6 +1660,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         weeklyQuotaRemaining={weeklyQuotaRemainingValue}
         brandIconUrl={headerIconUrl}
         {componentVersions}
+        contextualActions={headerActions}
         {passkeyAuthEnabled}
         {onlock}
         ondevices={() => (devicesOpen = true)}
@@ -1847,8 +1920,41 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onforget={(id) => void forgetSession(id)}
             oncopyresume={(command) => void copyResumeCommand(command)}
             onstart={() => void startSession()}
+            ondebugtrace={(session, trigger) => void openDebugTrace(session, trigger)}
           />
         {/if}
+      {/if}
+      {#if debugConfirmation}
+        <DebugDialog
+          confirmation={debugConfirmation}
+          onconfirm={confirmDebug}
+          onclose={closeDebug}
+        />
+      {/if}
+      {#if debugTraceSession?.selfDebug}
+        {@const debugSession = debugTraceSession}
+        <FileViewer
+          target={{
+            workspaceId: debugSession.workspaceId ?? debugSession.id,
+            path: debugSession.selfDebug!.tracePath,
+          }}
+          readFile={async (_workspaceId, path, signal) => {
+            const content = JSON.stringify(
+              await relay.readDebugTrace(debugSession.id, signal),
+              null,
+              2,
+            );
+            return {
+              kind: 'file',
+              path,
+              content,
+              size: new TextEncoder().encode(content).byteLength,
+            };
+          }}
+          listDirectory={relay.listWorkspaceDirectory}
+          onclose={closeDebugTrace}
+          onerror={(error) => reportRelayError(error, 'DEBUG_TRACE_FAILED')}
+        />
       {/if}
       {#if fileBrowserRoot}
         <FileBrowser

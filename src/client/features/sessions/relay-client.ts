@@ -10,6 +10,7 @@ import type {
   SafeInteractionOutcome,
 } from '../../../shared/contracts/chat-snapshot.js';
 import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
+import type { DebugConfirmation, SelfDebugSession } from '../../../shared/contracts/self-debug.js';
 import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 import type { AutopilotSnapshot } from '../autopilot/contracts.js';
 
@@ -67,6 +68,7 @@ export type RelaySession = {
     warnings?: string[];
   };
   lastOrgPlan?: { filename: string; title: string; path?: string; attached?: boolean };
+  selfDebug?: SelfDebugSession;
   plan?: SupervisedPlan;
   agentActivity?: AgentActivitySnapshot;
   autopilot?: AutopilotSnapshot;
@@ -292,6 +294,12 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
+    debugConfirmation: (id: string) =>
+      get<DebugConfirmation>(`/api/sessions/${encodeURIComponent(id)}/debug`),
+    startSelfDebug: (id: string, confirmationId: string) =>
+      request<RelaySession>(`/api/sessions/${encodeURIComponent(id)}/debug`, { confirmationId }),
+    readDebugTrace: (id: string, signal?: AbortSignal) =>
+      get<unknown>(`/api/sessions/${encodeURIComponent(id)}/debug/trace`, signal),
     quit: () => request<{ accepted: true }>('/api/maintenance/quit', {}),
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
     checkWorkspaceFileReferences: (workspaceId: string, paths: string[], signal?: AbortSignal) =>

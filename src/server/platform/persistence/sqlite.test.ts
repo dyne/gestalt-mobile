@@ -19,6 +19,44 @@ import { SqlitePendingInteractionStore } from './sqlite-pending-interaction-stor
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 
 describe('SQLite relay persistence', () => {
+  it('retains Self DEBUG identifiers and trace metadata through lifecycle transitions and reopening the database', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-debug-db-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = openRelayDatabase(path);
+    migrate(database);
+    const sessions = new SqliteSessionRepository(database);
+    const snapshot = RelaySession.create({
+      id: 'debug',
+      workspaceId: 'w',
+      workspacePath: '/debug',
+      provider: 'codex',
+      profile: 'default',
+      effectiveSkillSelection: { skills: [] },
+      now: 't',
+    }).snapshot;
+    const selfDebug = {
+      context: {
+        mobileSession: 'source',
+        codexThread: 'source-thread',
+        handoffTrace: 'handoff-1',
+        control: 'control-1',
+        versions: [],
+        capturedAt: 't',
+      },
+      tracePath: 'traces/debug.json',
+      agent: { name: 'org-plan-executor' as const, model: 'configured-model' },
+    };
+    sessions.save(
+      RelaySession.rehydrate({ ...snapshot, selfDebug })
+        .bindThread('debug-thread', 't')
+        .stop('t').snapshot,
+    );
+    database.close();
+    const reopened = openRelayDatabase(path);
+    expect(new SqliteSessionRepository(reopened).find('debug')?.selfDebug).toEqual(selfDebug);
+    reopened.close();
+  });
   const directories: string[] = [];
   afterEach(async () =>
     Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true }))),

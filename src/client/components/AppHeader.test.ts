@@ -54,6 +54,18 @@ describe('AppHeader', () => {
       ).disabled,
     ).toBe(true);
   });
+  it('renders supplied contextual actions and closes the popover when invoked', async () => {
+    const run = vi.fn();
+    render(AppHeader, {
+      theme: 'dyne-org',
+      onthemechange: () => {},
+      contextualActions: [{ id: 'debug', label: 'DEBUG', run }],
+    });
+    const debug = screen.getByRole('button', { name: 'DEBUG', hidden: true });
+    expect(debug.getAttribute('popovertargetaction')).toBe('hide');
+    await fireEvent.click(debug);
+    expect(run).toHaveBeenCalledOnce();
+  });
   it('substitutes a configured install icon while preserving the Gestalt logotype', () => {
     const { container } = render(AppHeader, {
       theme: 'dyne-org',

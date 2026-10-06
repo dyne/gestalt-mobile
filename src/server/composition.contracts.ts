@@ -5,6 +5,8 @@
  */
 
 import { once } from 'node:events';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -4276,6 +4278,91 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('starts Self DEBUG as an independent root with the installed executor settings and persists its incident packet', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-debug-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-debug-state-'));
+      const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-debug-home-'));
+      ownTemporaryPaths(root, dataDir, homeDirectory);
+      await mkdir(join(root, 'workspace'));
+      const debugRoot = join(homeDirectory, '.gestalt', 'self-debug');
+      await mkdir(debugRoot, { recursive: true });
+      const exec = promisify(execFile);
+      for (const name of ['gestalt', 'gestalt-mobile', 'gestalt-agents']) {
+        await exec('git', ['init', join(debugRoot, name)]);
+        await exec('git', [
+          '-C',
+          join(debugRoot, name),
+          'remote',
+          'add',
+          'origin',
+          `https://github.com/dyne/${name}.git`,
+        ]);
+      }
+      // Isolate the same profile path production resolves, including an explicit CODEX_HOME.
+      const codexHome = join(homeDirectory, '.codex');
+      vi.stubEnv('CODEX_HOME', codexHome);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      await mkdir(join(codexHome, 'agents'), { recursive: true });
+      await writeFile(
+        join(codexHome, 'agents', 'org-plan-executor.toml'),
+        'model = "configured-debug-model"\nmodel_reasoning_effort = "high"\n',
+      );
+      const handles: LiveServerHandle[] = [];
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        homeDirectory,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: liveAppServer(handles),
+        componentVersions: [{ id: 'codex', label: 'Codex', version: '0.144.3' }],
+        sessionModelCatalog: { list: async () => ['gpt-5.6-terra', 'configured-debug-model'] },
+        profiles: {
+          list: async () => [],
+          require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+        },
+      });
+      onTestFinished(() => app.close());
+      const sourceId = await createComposedSession(app);
+      await app.inject({ method: 'POST', url: `/api/sessions/${sourceId}/stop`, payload: {} });
+      const confirmation = (await app.inject(`/api/sessions/${sourceId}/debug`)).json();
+      expect(confirmation.context.mobileSession).toBe(sourceId);
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sourceId}/debug`,
+        payload: { confirmationId: confirmation.confirmationId },
+      });
+      expect(response.statusCode).toBe(202);
+      const debug = response.json();
+      expect(debug.id).not.toBe(sourceId);
+      expect(debug.workspacePath).toBe(debugRoot);
+      expect(debug.model).toBe('configured-debug-model');
+      expect(debug.threadId).not.toBe(confirmation.context.codexThread);
+      const request = handles
+        .flatMap((handle) => handle.requests)
+        .find(
+          (request) =>
+            request.method === 'turn/start' &&
+            (request.params as { threadId?: string }).threadId === debug.threadId,
+        );
+      expect(request?.params).toMatchObject({
+        model: 'configured-debug-model',
+        effort: 'high',
+        input: [{ type: 'text', text: expect.stringContaining('User detected an error') }],
+      });
+      expect(
+        (await app.inject('/api/sessions'))
+          .json()
+          .find((session: { id: string }) => session.id === debug.id).selfDebug,
+      ).toEqual(debug.selfDebug);
+      expect((await app.inject(`/api/sessions/${debug.id}/debug/trace`)).json()).toMatchObject({
+        context: confirmation.context,
+        sourceAgent: { status: 'unavailable' },
+      });
+    });
     it('does not resolve a Git operation target outside the configured root', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const outside = await mkdtemp(join(tmpdir(), 'gestalt-mobile-outside-'));

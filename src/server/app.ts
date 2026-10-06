@@ -64,9 +64,11 @@ import type { WorkspaceFileSource } from './features/files/application/ports.js'
 import { registerMaintenanceRoutes } from './features/maintenance/register-routes.js';
 import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
+import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
 
 export type AppDependencies = {
   sessionDefaults?: SessionDefaultsStore;
+  selfDebug?: SelfDebugDependencies;
   health: HealthReader;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
@@ -266,6 +268,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerAuthRoutes(app, deps);
   registerCatalogRoutes(app, { bootstrap: deps.bootstrap, sessionDefaults: deps.sessionDefaults });
   registerSessionRoutes(app, deps);
+  if (deps.selfDebug) registerSelfDebug(app, deps.selfDebug);
   if (deps.autopilot)
     registerAutopilotRoutes(
       app,

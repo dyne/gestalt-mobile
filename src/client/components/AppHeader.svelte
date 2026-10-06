@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import type { ComponentVersion } from '../../shared/contracts/component-version.js';
+  import type { HeaderAction } from '../features/sessions/header-actions.js';
   import { themes, type ThemeId } from '../features/theme/theme-registry.js';
 
   let {
@@ -16,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     brandIconUrl = null,
     passkeyAuthEnabled = true,
     componentVersions = [],
+    contextualActions = [],
     onthemechange,
     onlock = () => {},
     ondevices = () => {},
@@ -33,6 +35,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     brandIconUrl?: string | null;
     passkeyAuthEnabled?: boolean;
     componentVersions?: readonly ComponentVersion[];
+    contextualActions?: readonly HeaderAction[];
     onthemechange: (theme: ThemeId) => void;
     onlock?: () => void;
     ondevices?: (trigger: HTMLButtonElement) => void;
@@ -141,6 +144,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/each}
     </select>
   </label>
+  {#each contextualActions as action (action.id)}
+    <button
+      type="button"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
+      onclick={action.run}>{action.label}</button
+    >
+  {/each}
   <button
     type="button"
     popovertarget="configuration-panel"
