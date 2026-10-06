@@ -434,16 +434,32 @@ Run `npm run check`, `npm test`, `npm run lint`, and `npm run build`.
 
 ### Test lanes
 
-The aggregate commands remain the default required checks: `npm test` runs every
-Vitest test and `npm run test:e2e` runs every browser test except the isolated
-real-auth journey. The additive lanes make ownership inspectable without changing
-those defaults:
+Pull requests and pushes to `main` run Quality, the full Vitest suite, and Package
+smoke. Package smoke includes a production build, so CI does not build it again
+in a separate job. New commits cancel superseded PR runs; main release runs are
+not cancelled.
+
+Playwright functional shards, real authentication, visual evidence, and
+authorization stress run weekly (Monday 03:23 UTC) or through **Actions → CI → Run
+workflow**. They do not gate ordinary PRs or releases. Browser regressions can
+therefore be detected later; run the relevant browser suite locally when changing
+browser behavior.
+
+These choices follow successful CI run `37347775035`: browser jobs consumed
+483 of 652 total pre-release runner seconds. Removing them from ordinary runs
+and removing the redundant 18-second Build job leaves a 153-second baseline
+across three jobs instead of nine. These are measured runner durations, not a
+guarantee about elapsed time or GitHub's runner allocation queue. The full Vitest
+job took 77 seconds and remains in the default gate.
+
+Local aggregate commands remain unchanged: `npm test` runs every Vitest test and
+`npm run test:e2e` runs every browser test except the isolated real-auth journey.
 
 - `npm run test:vitest` — all Vitest tests.
 - `npm run test:coverage` — all Vitest tests with a V8 JSON summary at
   `coverage/vitest/coverage-summary.json` (the generated directory is ignored).
-- `npm run test:e2e:functional` — browser-functional specs excluding the exhaustive
-  visual-evidence files and real-auth journey.
+- `npm run test:e2e:functional` — browser-functional specs, including checks in
+  visual-evidence files, excluding the real-auth journey.
 - `npm run test:e2e:evidence` — the exhaustive visual/responsive evidence files.
 - `npm run test:auth:stress` — the existing multi-process authorization contention
   repetitions.

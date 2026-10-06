@@ -13,7 +13,7 @@ const documentation = await readFile('docs/releasing.md', 'utf8');
 describe('release operations documentation', () => {
   it.each([
     'Protect `main`',
-    '`Verify` and `Package smoke`',
+    '`Quality`, `Vitest`, and `Package smoke`',
     'npm trusted publishing',
     'workflow filename to `ci.yml`',
     'Do not configure an npm token',

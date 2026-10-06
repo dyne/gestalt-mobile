@@ -1,15 +1,19 @@
 # npm release operations
 
 Gestalt Mobile releases are produced only by the `Release` job in
-`.github/workflows/ci.yml` after the exact `main` commit passes both required
-jobs. Maintainers do not publish or create release tags from local clones.
+`.github/workflows/ci.yml` after the exact `main` commit passes Quality, Vitest,
+and Package smoke (which includes the production build). Browser and stress
+jobs run on the weekly schedule or manual dispatch and do not gate releases.
+Maintainers do not publish or create release tags from local clones.
 
 ## Repository configuration checklist
 
 Configure the canonical `dyne/gestalt-mobile` repository as follows:
 
 - Protect `main` and require pull requests.
-- Require the stable `Verify` and `Package smoke` status checks before merge.
+- Require the stable `Quality`, `Vitest`, and `Package smoke` status checks before
+  merge. Remove obsolete `Verify`, `Build`, and browser check requirements if
+  present; deferred jobs are not default PR gates.
 - Do not permit administrators or other roles to bypass failed required checks.
 - Allow GitHub Actions to create releases and tags. The release job itself has
   only `contents: write` and `id-token: write`; all other jobs have
