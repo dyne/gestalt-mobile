@@ -1750,6 +1750,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               oncopyresult={reportCodeCopy}
             />
             <Composer
+              newEmpty={chatView?.newEmpty ?? false}
               status={chatView?.status ?? shellStatus}
               {message}
               activeTurnId={chatView?.activeTurnId ?? null}

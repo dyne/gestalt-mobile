@@ -28,7 +28,9 @@ import {
 } from './chat-projection.js';
 
 type Timer = ReturnType<typeof setTimeout>;
-export type ChatViewState = Readonly<ChatProjection & { status: string; starting: boolean }>;
+export type ChatViewState = Readonly<
+  ChatProjection & { status: string; starting: boolean; newEmpty: boolean }
+>;
 export type ChatSelectionOptions = Readonly<{ history?: 'load' | 'empty' }>;
 export type ChatRelay = Readonly<{
   getHistory(sessionId: string): Promise<unknown>;
@@ -167,6 +169,7 @@ export class ChatController {
   #historyFailures = 0;
   #historyErrorReported = false;
   #historyKnownEmpty = false;
+  #newEmptySessions = new Set<string>();
   #reconnect: Timer | null = null;
   #attempt = 0;
   #disposed = false;
@@ -208,6 +211,7 @@ export class ChatController {
       ...this.#projection,
       status: deriveStatus(this.#projection),
       starting: this.#projection.lifecycle === 'starting',
+      newEmpty: this.#historyKnownEmpty && !hasConversationContent(this.#projection),
     });
   }
   canSubmit(kind: 'send' | 'queue' | 'interrupt-send'): boolean {
@@ -221,7 +225,8 @@ export class ChatController {
     if (this.#disposed || this.#sessionId === sessionId) return;
     this.#stop();
     this.#sessionId = sessionId;
-    this.#historyKnownEmpty = sessionId !== null && options.history === 'empty';
+    if (sessionId && options.history === 'empty') this.#newEmptySessions.add(sessionId);
+    this.#historyKnownEmpty = sessionId !== null && this.#newEmptySessions.has(sessionId);
     const generation = ++this.#generation;
     this.#projection = createChatProjection(sessionId);
     this.#publish();
@@ -237,7 +242,7 @@ export class ChatController {
     try {
       const turn = await this.#options.relay.startTurn(id, text.trim(), operationId);
       if (this.#current(id, generation)) {
-        this.#historyKnownEmpty = false;
+        this.#conversationStarted(id);
         this.#set(promotePrompt(this.#projection, operationId, turn.activeTurnId ?? null));
       }
       // Settlement belongs to the captured session even when its view was replaced.
@@ -434,7 +439,6 @@ export class ChatController {
       return;
     }
     if (envelope.type === 'relay.resyncRequired') {
-      this.#historyKnownEmpty = false;
       void this.#takeSnapshot(id, generation);
       return;
     }
@@ -447,7 +451,21 @@ export class ChatController {
       !this.#validEvent(event)
     )
       return;
-    this.#historyKnownEmpty = false;
+    if (
+      [
+        'agentMessageDelta',
+        'agentMessageStarted',
+        'agentMessageCompleted',
+        'activity.updated',
+        'interaction.requested',
+        'interaction.resolved',
+        'turnCompleted',
+        'turnInterrupted',
+      ].includes(event.type) ||
+      (event.type === 'session.updated' &&
+        typeof (event.payload as { activeTurnId?: unknown }).activeTurnId === 'string')
+    )
+      this.#conversationStarted(id);
     const next = applyProjectionEvent(this.#projection, event);
     this.#set(next);
     this.#options.onRelayEvent?.(event);
@@ -539,7 +557,7 @@ export class ChatController {
           this.#set({ ...this.#projection, snapshotting: false, lifecycle: 'recoverable' });
           const delay = historyRetryDelays[this.#historyFailures++];
           if (delay !== undefined) this.#scheduleHistoryRetry(id, generation, delay);
-          else if (!this.#historyErrorReported) {
+          else if (!this.#historyKnownEmpty && !this.#historyErrorReported) {
             this.#historyErrorReported = true;
             this.#options.onHistoryError?.(error);
           }
@@ -573,6 +591,7 @@ export class ChatController {
     this.#open(id, generation);
   }
   #set(next: ChatProjection): void {
+    if (this.#sessionId && hasConversationContent(next)) this.#conversationStarted(this.#sessionId);
     this.#projection = next;
     this.#publish();
     if (this.#sessionId)
@@ -580,6 +599,10 @@ export class ChatController {
   }
   #publish(): void {
     this.#options.publish(this.view);
+  }
+  #conversationStarted(id: string): void {
+    this.#newEmptySessions.delete(id);
+    if (this.#sessionId === id) this.#historyKnownEmpty = false;
   }
   #current(id: string, generation: number): boolean {
     return !this.#disposed && this.#sessionId === id && this.#generation === generation;
@@ -618,6 +641,16 @@ export class ChatController {
     this.#socket = null;
     socket?.close();
   }
+}
+
+function hasConversationContent(view: ChatProjection): boolean {
+  return Boolean(
+    view.activeTurnId ||
+    view.messages.length ||
+    view.activities.length ||
+    view.prompts.length ||
+    view.interactions.length,
+  );
 }
 
 function hasCode(error: unknown, code: string): boolean {

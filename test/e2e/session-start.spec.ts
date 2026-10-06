@@ -178,90 +178,108 @@ async function openChat(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
 }
 
-test('starts a selected workspace session and opens chat', async ({ page }) => {
-  let historyReads = 0;
-  const session = {
-    id: 'session-1',
-    threadId: 'codex-thread-1',
-    state: 'ready',
-    workspaceId: 'workspace-1',
-    profile: 'work',
-    activeTurnId: null,
-  };
-  await page.route('**/api/bootstrap', (route) =>
-    route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        workspaces: workspaceTree(),
-        profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
-        sessions: [],
+for (const width of [1280, 390]) {
+  test(`starts a selected workspace session with a large empty input at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let historyReads = 0;
+    const session = {
+      id: 'session-1',
+      threadId: 'codex-thread-1',
+      state: 'ready',
+      workspaceId: 'workspace-1',
+      profile: 'work',
+      activeTurnId: null,
+    };
+    await page.route('**/api/bootstrap', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          workspaces: workspaceTree(),
+          profiles: [{ name: 'work', state: 'ok', status: 'ready' }],
+          sessions: [],
+        }),
       }),
-    }),
-  );
-  await page.route('**/api/sessions', async (route) => {
-    if (route.request().method() === 'POST') {
-      expect(route.request().postDataJSON()).toEqual({
-        workspaceId: 'workspace-1',
-        profile: 'default',
-        provider: 'codex',
-        model: 'gpt-6.1-sol',
-        reasoningEffort: 'medium',
-        executorModel: 'gpt-5.6-terra',
-        executorReasoningEffort: 'high',
-        sandbox: 'workspace-git',
-        approvalPolicy: 'on-request',
+    );
+    await page.route('**/api/sessions', async (route) => {
+      if (route.request().method() === 'POST') {
+        expect(route.request().postDataJSON()).toEqual({
+          workspaceId: 'workspace-1',
+          profile: 'default',
+          provider: 'codex',
+          model: 'gpt-6.1-sol',
+          reasoningEffort: 'medium',
+          executorModel: 'gpt-5.6-terra',
+          executorReasoningEffort: 'high',
+          sandbox: 'workspace-git',
+          approvalPolicy: 'on-request',
+        });
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify([session]) });
+    });
+    await page.route('**/api/sessions/session-1/turns', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ text: 'Inspect this workspace' });
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ activeTurnId: 'turn-1' }),
       });
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) });
-      return;
-    }
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify([session]) });
-  });
-  await page.route('**/api/sessions/session-1/turns', async (route) => {
-    expect(route.request().postDataJSON()).toEqual({ text: 'Inspect this workspace' });
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ activeTurnId: 'turn-1' }),
     });
-  });
-  await page.route('**/api/sessions/session-1/history', (route) => {
-    historyReads += 1;
-    return route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(chatSnapshot()),
+    await page.route('**/api/sessions/session-1/history', (route) => {
+      historyReads += 1;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(chatSnapshot()),
+      });
     });
+    await page.route('**/api/sessions/session-1/activity/refresh', (route) =>
+      route.fulfill({ status: 204 }),
+    );
+    await page.route('**/api/sessions/session-1', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) }),
+    );
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Sessions' }).click();
+    await page.getByText('Advanced settings', { exact: true }).click();
+    await page.getByLabel('Approval policy').selectOption({ label: 'Ask out of workspace' });
+    await page.getByRole('button', { name: 'Create session' }).click();
+
+    await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
+    expect(historyReads).toBe(0);
+    const prompt = page.getByRole('textbox', { name: 'Prompt' });
+    const emptyHeight = (await prompt.boundingBox())!.height;
+    expect(emptyHeight).toBeGreaterThan(450);
+    expect(emptyHeight).toBeLessThanOrEqual(675);
+    const sendBox = (await page.getByRole('button', { name: 'Send prompt' }).boundingBox())!;
+    const navigationBox = (await page.getByLabel('Primary').boundingBox())!;
+    expect(sendBox.y + sendBox.height).toBeLessThanOrEqual(navigationBox.y);
+    await page.screenshot({ path: `output/playwright/new-empty-chat-${width}.png` });
+    await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await page.getByRole('button', { name: 'Chat', exact: true }).click();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect(historyReads).toBe(0);
+    await expect(page.getByLabel('Notifications')).not.toContainText(
+      'Session history could not be read',
+    );
+    await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+    await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
+    await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(
+      'Inspect this workspace\n',
+    );
+    await expect(page.getByText('Inspect this workspace')).not.toBeVisible();
+    await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
+    await page.getByRole('textbox', { name: 'Prompt' }).press('Control+Enter');
+    await expect(page.getByText('Inspect this workspace')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
+    expect((await prompt.boundingBox())!.height).toBeLessThan(emptyHeight / 2);
   });
-  await page.route('**/api/sessions/session-1/activity/refresh', (route) =>
-    route.fulfill({ status: 204 }),
-  );
-  await page.route('**/api/sessions/session-1', (route) =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify(session) }),
-  );
-
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Sessions' }).click();
-  await page.getByText('Advanced settings', { exact: true }).click();
-  await page.getByLabel('Approval policy').selectOption({ label: 'Ask out of workspace' });
-  await page.getByRole('button', { name: 'Create session' }).click();
-
-  await expect(page.getByRole('button', { name: 'Chat', pressed: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
-  expect(historyReads).toBe(0);
-  await expect(page.getByLabel('Notifications')).not.toContainText(
-    'Session history could not be read',
-  );
-  await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
-  await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
-  await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
-  await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(
-    'Inspect this workspace\n',
-  );
-  await expect(page.getByText('Inspect this workspace')).not.toBeVisible();
-  await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
-  await page.getByRole('textbox', { name: 'Prompt' }).press('Control+Enter');
-  await expect(page.getByText('Inspect this workspace')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
-});
+}
 
 test('sends a selected named skill profile only when creating a new session', async ({ page }) => {
   let requestBody: unknown;

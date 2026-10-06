@@ -17,6 +17,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     message: string;
     activeTurnId: string | null;
     starting: boolean;
+    newEmpty?: boolean;
     detached?: boolean;
     retryMessage?: string | null;
     retryable?: boolean;
@@ -37,6 +38,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     message,
     activeTurnId,
     starting,
+    newEmpty = false,
     detached = false,
     retryMessage = null,
     retryable = false,
@@ -191,6 +193,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {/if}
   <div class="prompt-row">
     <textarea
+      class:new-empty={newEmpty}
       id="message"
       aria-label="Prompt"
       placeholder="Prompt"
@@ -312,6 +315,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex: 1 1 auto;
     min-block-size: 2.75rem;
     resize: vertical;
+  }
+  textarea.new-empty {
+    block-size: min(75dvh, max(2.75rem, calc(100dvh - 16rem)));
   }
   .prompt-row > button,
   .prompt-action > button {
