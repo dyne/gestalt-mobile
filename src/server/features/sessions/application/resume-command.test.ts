@@ -8,12 +8,12 @@ import { describe, expect, it } from 'vitest';
 import { buildResumeCommand } from './resume-command.js';
 
 describe('buildResumeCommand', () => {
-  it('quotes every shell argument', () => {
+  it('resumes through the Gestalt launcher and quotes every shell argument', () => {
     expect(
       buildResumeCommand({
         workspacePath: "/a b/it's",
         threadId: 't',
       }),
-    ).toBe("'codex' 'resume' 't' '-C' '/a b/it'\"'\"'s' '--include-non-interactive'");
+    ).toBe("'gestalt' 'cli' '--' 'resume' 't' '-C' '/a b/it'\"'\"'s' '--include-non-interactive'");
   });
 });

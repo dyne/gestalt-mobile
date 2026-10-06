@@ -7,6 +7,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
+import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 
 export const autopilotAuditEventTypes = [
   'autopilot.turn-started',
@@ -122,6 +123,24 @@ export class SqliteEventJournal {
       occurredAt: row.occurred_at,
       payload: JSON.parse(row.payload_json),
     }));
+  }
+
+  /** Same-turn root final only: never borrow another session, child, or commentary. */
+  attentionReport(sessionId: string, turnId: string, requestedAt: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `
+      SELECT substr(json_extract(payload_json, '$.text'), 1, 4001) AS text
+      FROM session_events
+      WHERE session_id = ? AND type = 'agentMessageCompleted' AND occurred_at >= ?
+        AND json_extract(payload_json, '$.turnId') = ?
+        AND json_extract(payload_json, '$.phase') = 'final_answer'
+        AND json_type(payload_json, '$.text') = 'text'
+      ORDER BY sequence DESC LIMIT 1
+    `,
+      )
+      .get(sessionId, requestedAt, turnId) as { text: string } | undefined;
+    return boundedAttentionReport(row?.text);
   }
 
   /** Bounded chronological tail for redacted timeline projections. */

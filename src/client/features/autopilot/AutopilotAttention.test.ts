@@ -21,6 +21,33 @@ const attention = {
   },
 };
 describe('AutopilotAttention', () => {
+  it('explains a compact blocker in the alert and sends recovery guidance', async () => {
+    const onresolve = vi.fn();
+    render(AutopilotAttention, {
+      attention: {
+        ...attention,
+        supervisorReport:
+          'The checkpoint cannot identify L1.2. Refresh the plan state before retrying.',
+        attention: {
+          reason: 'hardBlock',
+          summary: 'Supervised execution requires human attention (hardBlock).',
+          requestedAction:
+            'Satisfy the externalStateChanged resume condition, then resume or disable Autopilot.',
+          resumeCondition: 'externalStateChanged',
+        },
+      },
+      onresolve,
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('The checkpoint cannot identify L1.2.');
+    expect(alert.textContent).not.toContain('externalStateChanged');
+    expect(alert.textContent).not.toContain('hardBlock');
+    await fireEvent.input(screen.getByLabelText('Optional guidance for the resumed work'), {
+      target: { value: 'Refresh the plan and retry the checkpoint.' },
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(onresolve).toHaveBeenCalledWith('resume', 'Refresh the plan and retry the checkpoint.');
+  });
   it('keeps a labelled persistent alert with explicit safe actions', async () => {
     const onresolve = vi.fn();
     render(AutopilotAttention, { attention, onresolve });

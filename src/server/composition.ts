@@ -258,9 +258,25 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const planMeasurementHelperPath =
     options.planMeasurementHelperPath ?? process.env.GESTALT_MOBILE_ORG_PLAN_HELPER;
+  const pendingInteractionsWithReports = (sessionId: string) =>
+    interactions.list(sessionId).map((interaction) => ({
+      ...interaction,
+      ...(interaction.kind === 'orgPlanAttention' && interaction.turnId && interaction.requestedAt
+        ? {
+            supervisorReport: journal.attentionReport(
+              sessionId,
+              interaction.turnId,
+              interaction.requestedAt,
+            ),
+          }
+        : {}),
+    }));
   const withPendingInteractions = (
     session: import('./features/sessions/model/relay-session.js').RelaySessionSnapshot | null,
-  ) => (session ? { ...session, pendingInteractions: interactions.list(session.id) } : null);
+  ) =>
+    session
+      ? { ...session, pendingInteractions: pendingInteractionsWithReports(session.id) }
+      : null;
   const events = new SessionEventBus();
   let notifyAutopilotActivity: (sessionId: string) => void = () => undefined;
   let publishSessionStatus: (sessionId: string, occurredAt: string) => void = () => undefined;
@@ -1037,8 +1053,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               journal.append(sessionId, 'session.updated', completedSession, occurredAt),
             );
         },
-        (sessionId, request, origin) => {
+        async (sessionId, request, origin) => {
           let rawInteraction = toPendingInteraction(request);
+          const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
+          if (compactCheckpointKind || rawInteraction?.kind === 'orgPlanCheckpoint') {
+            // A checkpoint is a read barrier, not a race against the debounced watcher.
+            const refreshed = await planStatusSource.refresh(sessionId);
+            if (refreshed?.kind !== 'updated')
+              return (
+                runtime?.resolveServerRequest(
+                  sessionId,
+                  String(request.id),
+                  checkpointFailureResponse('planProjectionUnavailable'),
+                ) === true
+              );
+          }
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
           if (isOrgPlanHealthCall(request)) {
@@ -1060,7 +1089,6 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               }) === true
             );
           }
-          const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
           if (!rawInteraction && compactCheckpointKind) {
             const retained = supervisedPlans.find(sessionId);
             const identity = supervisedPlans.identity(sessionId);
@@ -1904,9 +1932,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         exists: (id) => sessions.find(id) !== null,
         reader: {
           active: (sessionId) => {
-            const interaction = interactions
-              .list(sessionId)
-              .find((item) => item.kind === 'orgPlanAttention');
+            const interaction = pendingInteractionsWithReports(sessionId).find(
+              (item) => item.kind === 'orgPlanAttention',
+            );
             const attention = interaction ? parseOrgPlanAttention(interaction.payload) : null;
             return interaction && attention
               ? {
@@ -1914,6 +1942,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                   turnId: interaction.turnId ?? null,
                   requestedAt: interaction.requestedAt ?? null,
                   attention,
+                  ...(interaction.supervisorReport
+                    ? { supervisorReport: interaction.supervisorReport }
+                    : {}),
                 }
               : null;
           },

@@ -46,6 +46,46 @@ const deferred = <T>() => {
 };
 
 describe('AutopilotController', () => {
+  it('adds only the blocked root turn final to the alert and restores it from snapshots', () => {
+    let published = capture();
+    const controller = new AutopilotController(
+      {
+        getSession: async () => ({}),
+        setAutopilot: async () => ({ autopilot: snapshot() }),
+        resolveAttention: async () => ({}),
+      },
+      (state) => (published = capture(state)),
+    );
+    controller.bootstrap([{ id: 'a', pendingInteractions: [attention], currentSequence: 1 }]);
+    controller.observe('a', {
+      sequence: 2,
+      type: 'agentMessageCompleted',
+      payload: { turnId: 'other', phase: 'final_answer', text: 'Unrelated' },
+    });
+    controller.observe('a', {
+      sequence: 3,
+      type: 'agentMessageCompleted',
+      payload: { turnId: 'turn-1', phase: 'commentary', text: 'Still working' },
+    });
+    expect(published.attention.get('a')?.supervisorReport).toBeUndefined();
+    controller.observe('a', {
+      sequence: 4,
+      type: 'agentMessageCompleted',
+      payload: {
+        turnId: 'turn-1',
+        phase: 'final_answer',
+        text: 'The checkpoint failed. Refresh the plan.',
+      },
+    });
+    expect(published.attention.get('a')?.supervisorReport).toBe(
+      'The checkpoint failed. Refresh the plan.',
+    );
+    controller.applyAuthoritative('a', {
+      currentSequence: 5,
+      pendingInteractions: [{ ...attention, supervisorReport: 'Persisted explanation.' }],
+    });
+    expect(published.attention.get('a')?.supervisorReport).toBe('Persisted explanation.');
+  });
   it('announces persisted checkpoint recovery through shared notifications and clears it on recovery', () => {
     let published = capture();
     const controller = new AutopilotController(

@@ -10,6 +10,7 @@ export type ActiveOrgPlanAttention = Readonly<{
   requestId: string;
   turnId: string | null;
   requestedAt: string | null;
+  supervisorReport?: string;
   attention: OrgPlanAttention;
 }>;
 

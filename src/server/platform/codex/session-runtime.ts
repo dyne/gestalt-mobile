@@ -206,7 +206,7 @@ export class CodexSessionRuntime {
       sessionId: string,
       request: { id: number; method: string; params: unknown },
       origin: NotificationOrigin,
-    ) => boolean,
+    ) => boolean | Promise<boolean>,
     private readonly onProcessExit?: (sessionId: string) => void,
     private readonly resolveSkills?: (
       session: RelaySessionSnapshot,
@@ -1007,20 +1007,24 @@ export class CodexSessionRuntime {
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_DUPLICATE'));
     return new Promise((resolve, reject) => {
       resource.pendingRequests.set(requestId, { resolve, reject });
-      let accepted = false;
+      const unsupported = () => {
+        if (resource.pendingRequests.delete(requestId))
+          reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
+      };
       try {
-        accepted =
-          this.onServerRequest?.(
-            resource.sessionId,
-            request,
-            this.resolveNotificationOrigin(resource, request),
-          ) === true;
+        const accepted = this.onServerRequest?.(
+          resource.sessionId,
+          request,
+          this.resolveNotificationOrigin(resource, request),
+        );
+        void Promise.resolve(accepted).then((value) => {
+          if (value !== true) unsupported();
+        }, unsupported);
       } catch {
         // Publication failures are protocol failures, not permission to retain
         // an unreachable app-server request.
+        unsupported();
       }
-      if (!accepted && resource.pendingRequests.delete(requestId))
-        reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
     });
   }
 

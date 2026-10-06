@@ -12,7 +12,9 @@ export function buildResumeCommand(
 ): string {
   if (!session.threadId) throw new Error('THREAD_REQUIRED');
   return [
-    'codex',
+    'gestalt',
+    'cli',
+    '--',
     'resume',
     session.threadId,
     '-C',
