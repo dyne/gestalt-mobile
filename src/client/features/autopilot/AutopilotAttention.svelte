@@ -18,6 +18,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onresolve?: (action: 'resume' | 'disableAutopilot', guidance?: string) => void;
   } = $props();
   let guidance = $state('');
+  const reasons: Record<string, string> = {
+    planChange: 'Plan change needs approval',
+    hardBlock: 'Work is blocked',
+    missingDependency: 'A required capability is missing',
+    permissionRequired: 'Permission is needed',
+    externalState: 'An external condition changed',
+    materialAmbiguity: 'A decision is needed',
+  };
+  const resumeConditions: Record<string, string> = {
+    userGuidance: 'You have provided the decision or guidance below.',
+    planRevision: 'You have approved or revised the plan.',
+    dependencyInstalled: 'The required capability is available.',
+    permissionGranted: 'The required permission has been granted.',
+    externalStateChanged:
+      'The blocker has been resolved, or you have provided a way forward below.',
+  };
+  let compact = $derived(
+    attention?.attention.summary.startsWith('Supervised execution requires human attention ('),
+  );
   let guidanceError = $derived(
     guidance.trim().length > 600 ? 'Guidance must be 600 characters or fewer.' : '',
   );
@@ -29,19 +48,44 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <dl>
       <div>
         <dt>Reason</dt>
-        <dd>{attention.attention.reason}</dd>
+        <dd>{reasons[attention.attention.reason] ?? 'Supervised work needs attention'}</dd>
       </div>
       <div>
         <dt>What happened</dt>
-        <dd>{attention.attention.summary}</dd>
+        <dd>
+          {compact
+            ? 'The supervisor has paused work and needs your help to continue.'
+            : attention.attention.summary}
+        </dd>
       </div>
+      {#if attention.supervisorReport}
+        <div>
+          <dt>Supervisor explanation</dt>
+          <dd class="supervisor-report">{attention.supervisorReport}</dd>
+        </div>
+      {:else if compact}
+        <div>
+          <dt>Supervisor explanation</dt>
+          <dd>
+            The supervisor has not supplied an explanation yet. You can ask for details in the
+            guidance below.
+          </dd>
+        </div>
+      {/if}
       <div>
         <dt>Requested action</dt>
-        <dd>{attention.attention.requestedAction}</dd>
+        <dd>
+          {compact
+            ? 'Resolve the blocker or describe a way forward below, then choose Resume. You can also disable Autopilot.'
+            : attention.attention.requestedAction}
+        </dd>
       </div>
       <div>
         <dt>Resume when</dt>
-        <dd>{attention.attention.resumeCondition}</dd>
+        <dd>
+          {resumeConditions[attention.attention.resumeCondition] ??
+            'You are ready for the supervisor to continue.'}
+        </dd>
       </div>
     </dl>
     <label for={`${controlId}-guidance`}>Optional guidance for the resumed work</label>
@@ -97,6 +141,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   dd {
     margin: 0;
+  }
+  .supervisor-report {
+    white-space: pre-wrap;
   }
   .actions {
     display: flex;

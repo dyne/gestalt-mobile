@@ -1327,6 +1327,81 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
+    it('refreshes the published L2 boundary before selecting among multiple DONE children', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(async () =>
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+        ).toEqual(expect.any(String)),
+      );
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const handle = fixture.handles.find((candidate) =>
+        candidate.requests.some((request) => request.method === 'turn/start'),
+      )!;
+      const planPath = join(fixture.workspacePath, 'autopilot.org');
+      await writeFile(
+        planPath,
+        `${autopilotPlanText('DONE')}
+** DONE [#A] Newly completed child
+:PROPERTIES:
+:ID: second-child
+:END:
+- Why :: Verify a resumed plan with earlier completed work.
+- Change :: Preserve the publication target.
+- Tests :: Checkpoint immediately after writing the signal.
+- Done when :: L1.2 is recorded exactly once.
+`,
+      );
+      await writeFile(
+        planStatusFilePath(
+          planStatusDirectoryPath(fixture.workspacePath, fixture.sessionId),
+          planPath,
+        ),
+        JSON.stringify({
+          schemaVersion: 1,
+          planPath,
+          reason: 'l2:second-child:DONE',
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      // No watcher wait or GET /plan refresh: the checkpoint itself is the barrier.
+      await expect(
+        handle.request!({
+          id: 818,
+          method: 'item/tool/call',
+          params: {
+            threadId: session.threadId,
+            turnId: session.activeTurnId,
+            tool: 'gestalt_org_plan_checkpoint',
+            arguments: { kind: 'l2Completed' },
+          },
+        }),
+      ).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+      const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const rows = db
+        .prepare(
+          "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'org-plan.step-checkpointed'",
+        )
+        .all(fixture.sessionId) as { payload_json: string }[];
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(rows[0]!.payload_json)).toMatchObject({
+        l2Id: 'second-child',
+        position: 'L1.2',
+      });
+      db.close();
+      await fixture.app.close();
+    });
+
     it('records and idempotently replays accepted L1 after REVIEWED advances to the next TODO L1', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
@@ -2752,6 +2827,73 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('attention', () => {
+    it('includes the same blocked root turn explanation in attention and session reloads', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(async () =>
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+        ).toEqual(expect.any(String)),
+      );
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const handle = fixture.handles.find((candidate) =>
+        candidate.requests.some((request) => request.method === 'turn/start'),
+      )!;
+      await expect(
+        handle.request!({
+          id: 698,
+          method: 'item/tool/call',
+          params: {
+            threadId: session.threadId,
+            turnId: session.activeTurnId,
+            tool: 'gestalt_org_plan_attention',
+            arguments: { reason: 'hardBlock', resumeCondition: 'externalStateChanged' },
+          },
+        }),
+      ).resolves.toEqual(toOrgPlanAttentionAcknowledgement());
+      const report = 'The checkpoint cannot identify L1.2. Refresh plan state, then retry.';
+      handle.notify!({
+        method: 'item/completed',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          item: { id: 'blocker-final', type: 'agentMessage', phase: 'final_answer', text: report },
+        },
+      });
+      handle.notify!({
+        method: 'item/completed',
+        params: {
+          threadId: session.threadId,
+          turnId: 'another-turn',
+          item: {
+            id: 'unrelated-final',
+            type: 'agentMessage',
+            phase: 'final_answer',
+            text: 'Unrelated report',
+          },
+        },
+      });
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/attention`)).json(),
+      ).toMatchObject({ supervisorReport: report });
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().pendingInteractions,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ requestId: '698', supervisorReport: report }),
+        ]),
+      );
+      await fixture.app.close();
+    });
     it('bounds a wedged attention acknowledgement writer without losing durable attention', async () => {
       const fixture = await createProductionAutopilotFixture({
         attentionAcknowledgementDeadlineMs: 100,

@@ -5,6 +5,7 @@
  */
 
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
+import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
 import {
   isAutopilotSnapshot,
@@ -125,6 +126,22 @@ export class AutopilotController {
     // journal stream. This projection must never start a second refresh.
     if (event.type === 'autopilot.updated') this.#applySnapshot(id, event.payload);
     if (event.type === 'org-plan.attention-required') this.#applyAttention(id, event.payload);
+    if (
+      event.type === 'agentMessageCompleted' &&
+      event.payload &&
+      typeof event.payload === 'object'
+    ) {
+      const message = event.payload as { turnId?: unknown; phase?: unknown; text?: unknown };
+      const attention = this.#attention.get(id);
+      const report = boundedAttentionReport(message.text);
+      if (
+        attention?.turnId &&
+        attention.turnId === message.turnId &&
+        message.phase === 'final_answer' &&
+        report
+      )
+        this.#attention.set(id, { ...attention, supervisorReport: report });
+    }
     if (event.type === 'org-plan.attention-resolved') {
       if (
         event.payload &&

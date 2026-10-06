@@ -67,6 +67,7 @@ export type OrgPlanAttention = Readonly<{
   requestId: string;
   turnId: string | null;
   requestedAt: string | null;
+  supervisorReport?: string;
   attention: Readonly<{
     reason: string;
     summary: string;
@@ -86,6 +87,7 @@ export type OrgPlanAttentionEnvelope = Readonly<{
   kind: 'orgPlanAttention';
   turnId: string | null;
   requestedAt: string | null;
+  supervisorReport?: string;
   payload: OrgPlanAttention['attention'];
 }>;
 
@@ -190,6 +192,7 @@ export function isOrgPlanAttention(value: unknown): value is OrgPlanAttention {
     text(item.requestId, 256) &&
     (item.turnId === null || text(item.turnId, 256)) &&
     (item.requestedAt === null || text(item.requestedAt, 64)) &&
+    (item.supervisorReport === undefined || text(item.supervisorReport, 4_000)) &&
     text(fields.reason, 64) &&
     text(fields.summary) &&
     text(fields.requestedAction) &&
@@ -219,6 +222,7 @@ export function isOrgPlanAttentionEnvelope(value: unknown): value is OrgPlanAtte
       turnId: item.turnId ?? null,
       requestedAt: item.requestedAt ?? null,
       attention: item.payload,
+      supervisorReport: item.supervisorReport,
     })
   );
 }
@@ -229,5 +233,6 @@ export function toOrgPlanAttention(value: OrgPlanAttentionEnvelope): OrgPlanAtte
     turnId: value.turnId,
     requestedAt: value.requestedAt,
     attention: value.payload,
+    ...(value.supervisorReport ? { supervisorReport: value.supervisorReport } : {}),
   };
 }

@@ -149,6 +149,7 @@ async function install(
   includePlan = false,
   healthyController = false,
   checkpointRecovery = false,
+  supervisorReport?: string,
 ) {
   const session = {
     id: 'session-1',
@@ -189,7 +190,25 @@ async function install(
     autopilot: checkpointRecovery
       ? checkpointRecoveryAutopilot()
       : autopilot(state, reason, continuationPhase, healthyController),
-    pendingInteractions: hasAttention ? [attention] : [],
+    pendingInteractions: hasAttention
+      ? [
+          {
+            ...attention,
+            ...(supervisorReport
+              ? {
+                  supervisorReport,
+                  payload: {
+                    reason: 'hardBlock',
+                    summary: 'Supervised execution requires human attention (hardBlock).',
+                    requestedAction:
+                      'Satisfy the externalStateChanged resume condition, then resume or disable Autopilot.',
+                    resumeCondition: 'externalStateChanged',
+                  },
+                }
+              : {}),
+          },
+        ]
+      : [],
     ...(includePlan
       ? {
           plan: activePlan,
@@ -870,6 +889,21 @@ test('selected Chat receives live autopilot and attention journal events without
   await expect(page.getByRole('alert', { name: 'Autopilot needs your attention' })).toBeVisible();
   await expect(page.getByLabel('Chat messages')).toContainText('Needs attention');
   await expect(page.getByText('Autopilot needs your attention.')).toHaveCount(1);
+  const report = 'The checkpoint cannot identify L1.2. Refresh the plan state before retrying.';
+  socket!.send(
+    JSON.stringify({
+      type: 'relay.event',
+      event: {
+        sequence: 3,
+        type: 'agentMessageCompleted',
+        occurredAt: '2026-08-20T00:00:03.000Z',
+        payload: { itemId: 'blocker-final', turnId: 'turn-1', phase: 'final_answer', text: report },
+      },
+    }),
+  );
+  await expect(page.getByRole('alert', { name: 'Autopilot needs your attention' })).toContainText(
+    report,
+  );
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
 });
@@ -878,6 +912,44 @@ for (const viewport of [
   { name: 'mobile', width: 320, height: 568 },
   { name: 'desktop', width: 1440, height: 900 },
 ]) {
+  test(`blocked-work explanation survives reload and remains actionable on ${viewport.name}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    const report =
+      'Supervision is blocked: the checkpoint could not identify the completed L1.2 milestone.\n\nThe implementation and tests passed. Refresh plan state, then retry the checkpoint with the same executor.';
+    await install(
+      page,
+      'attentionRequired',
+      undefined,
+      true,
+      undefined,
+      false,
+      undefined,
+      false,
+      false,
+      false,
+      report,
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Chat' }).click();
+    const alert = page.getByRole('alert', { name: 'Autopilot needs your attention' });
+    await expect(alert).toContainText('checkpoint could not identify the completed L1.2');
+    await page.reload();
+    await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');
+    await page.getByRole('button', { name: 'Chat', exact: true }).click();
+    await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');
+    await expect(alert.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
+    await expect(alert.getByRole('button', { name: 'Disable Autopilot' })).toBeEnabled();
+    await expect(page.getByLabel('Optional guidance for the resumed work')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await mkdir(evidence, { recursive: true });
+    await page.screenshot({
+      path: `${evidence}/blocker-explanation-${viewport.name}.png`,
+      fullPage: true,
+    });
+  });
+
   test(`checkpoint handoff recovery is truthful and clears after automatic recovery on ${viewport.name}`, async ({
     page,
   }) => {
