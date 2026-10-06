@@ -469,7 +469,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {revision}
           destinationMode={transfer.phase === 'picking'}
           ondestinationselect={chooseDestination}
-          onselectionchange={(path) => (selectedPath = path)}
+          onselectionchange={async (path) => {
+            selectedPath = path;
+            const parent = path.split('/').slice(0, -1).join('/');
+            const entry = controller?.state(parent).entries.find((item) => item.path === path);
+            if (entry?.kind !== 'file' || !onview || deleteConfirmation) return;
+            await tick();
+            if (selectedPath !== path || transfer.phase !== 'idle' || !dialog?.open) return;
+            dialog?.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"]')?.focus();
+            onview(path);
+          }}
         />
       {/key}
     {/if}

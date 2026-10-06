@@ -44,6 +44,8 @@ async function openBrowser(page: Page): Promise<void> {
         entries: [
           { name: 'nested', path: 'nested', kind: 'directory' },
           { name: 'note.txt', path: 'note.txt', kind: 'file' },
+          { name: 'data.json', path: 'data.json', kind: 'file' },
+          { name: 'README.md', path: 'README.md', kind: 'file' },
         ],
       }),
     }),
@@ -132,7 +134,7 @@ test('pauses an upload collision and sends the selected conflict disposition', a
   await expect.poll(() => conflicts).toEqual(['reject', 'keep-both']);
 });
 
-test('opens the same read-only preview from Git browsing and restores the selected action', async ({
+test('selecting a file opens the shared preview from Git and restores focus to that file', async ({
   page,
 }) => {
   await openBrowser(page);
@@ -142,13 +144,39 @@ test('opens the same read-only preview from Git browsing and restores the select
     }),
   );
   await page.getByRole('treeitem', { name: /note.txt/ }).click();
-  await page.getByRole('button', { name: 'View', exact: true }).click();
   const viewer = page.getByRole('dialog', { name: 'note.txt' });
   await expect(viewer.locator('pre')).toHaveText('First line\nSecond line');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Files in ~/repo' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'View', exact: true })).toBeFocused();
+  await expect(page.getByRole('treeitem', { name: /note.txt/ })).toBeFocused();
+  await page.getByRole('treeitem', { name: /note.txt/ }).press('Enter');
+  await expect(page.getByRole('dialog', { name: 'note.txt' })).toBeVisible();
 });
+
+for (const width of [390, 1280]) {
+  test(`selecting Markdown from Git opens the advanced renderer at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openBrowser(page);
+    const content =
+      '# Project\n\n**Important** notes\n\n| Name | Value |\n| --- | --- |\n| Ready | Yes |';
+    await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
+      route.fulfill({ json: { kind: 'file', path: 'README.md', content, size: content.length } }),
+    );
+    await page.getByRole('treeitem', { name: /nested/ }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(1);
+    await page.getByRole('treeitem', { name: /README.md/ }).click();
+    const viewer = page.getByRole('dialog', { name: 'README.md' });
+    await expect(viewer.getByRole('heading', { name: 'Project', exact: true })).toBeVisible();
+    await expect(viewer.locator('strong')).toHaveText('Important');
+    await expect(viewer.getByRole('table')).toContainText('Ready');
+    await viewer.getByRole('button', { name: 'Show source' }).click();
+    await expect(viewer.locator('pre')).toHaveText(content);
+    await viewer.getByRole('button', { name: 'Close file preview' }).click();
+    await expect(page.getByRole('treeitem', { name: /README.md/ })).toBeFocused();
+  });
+}
 
 test('JSON starts folded and supports one-level controls and global folding', async ({ page }) => {
   await openBrowser(page);
@@ -161,8 +189,7 @@ test('JSON starts folded and supports one-level controls and global folding', as
   await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
     route.fulfill({ json: { kind: 'file', path: 'data.json', content, size: content.length } }),
   );
-  await page.getByRole('treeitem', { name: /note.txt/ }).click();
-  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await page.getByRole('treeitem', { name: /data.json/ }).click();
   const viewer = page.getByRole('dialog', { name: 'data.json' });
   const tree = viewer.getByLabel('JSON contents');
   await expect(viewer.getByRole('button', { name: 'Unfold all JSON' })).toHaveText('Folded');
