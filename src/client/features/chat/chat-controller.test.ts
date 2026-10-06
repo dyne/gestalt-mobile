@@ -116,6 +116,24 @@ describe('ChatController', () => {
     socket.onopen?.();
     await Promise.resolve();
 
+    socket.emit({
+      type: 'relay.event',
+      event: { sequence: 1, type: 'session.updated', payload: { activeTurnId: null } },
+    });
+    socket.emit({
+      type: 'relay.event',
+      event: {
+        sequence: 2,
+        type: 'session.status.updated',
+        payload: { state: 'idle', reason: 'unknown' },
+      },
+    });
+    controller.refresh();
+    controller.select(null);
+    controller.select('new-session');
+    socket.onopen?.();
+    controller.refresh();
+    expect(controller.view.newEmpty).toBe(true);
     expect(history).not.toHaveBeenCalled();
     expect(onHistoryError).not.toHaveBeenCalled();
     expect(controller.view).toMatchObject({
@@ -124,6 +142,52 @@ describe('ChatController', () => {
       lifecycle: 'finished',
       messages: [],
     });
+    controller.dispose();
+  });
+
+  it('keeps missing history quiet for a new empty chat until conversation activity starts', async () => {
+    const timers: Array<() => void> = [];
+    const settle = async () => {
+      for (let index = 0; index < 6; index++) await Promise.resolve();
+    };
+    const socket = new Socket();
+    const onHistoryError = vi.fn();
+    const history = vi.fn().mockRejectedValue(new Error('history not created'));
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory: history,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => socket as unknown as WebSocket,
+      setTimeout: (callback) => {
+        timers.push(callback);
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: vi.fn(),
+      onHistoryError,
+    });
+    controller.select('new', { history: 'empty' });
+    socket.emit({ type: 'relay.resyncRequired' });
+    await settle();
+    for (let index = 0; index < 3; index++) {
+      timers.at(-1)?.();
+      await settle();
+    }
+    expect(history).toHaveBeenCalledTimes(4);
+    expect(onHistoryError).not.toHaveBeenCalled();
+    expect(controller.view.newEmpty).toBe(true);
+    socket.emit({
+      type: 'relay.event',
+      event: { sequence: 1, type: 'session.updated', payload: { activeTurnId: 'turn' } },
+    });
+    expect(controller.view.newEmpty).toBe(false);
+    controller.refresh();
+    await settle();
+    expect(onHistoryError).toHaveBeenCalledOnce();
     controller.dispose();
   });
 
