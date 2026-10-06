@@ -160,6 +160,7 @@ async function install(
     profile: 'default',
     model: 'gpt-5.6-sol',
     activeTurnId: null,
+    lastOrgPlan: { title: activePlan.title, filename: 'compact-session-plan.org', attached: true },
     ...(awaitingChild
       ? {
           agentActivity: {

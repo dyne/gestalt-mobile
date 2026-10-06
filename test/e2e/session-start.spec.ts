@@ -249,11 +249,8 @@ test('starts a selected workspace session and opens chat', async ({ page }) => {
   await expect(page.getByLabel('Notifications')).not.toContainText(
     'Session history could not be read',
   );
-  await expect(page.getByText('Agents (1)')).toBeVisible();
-  await page.getByText('Agents (1)').click();
-  await expect(page.getByLabel('Agent activity')).toContainText('l0');
-  await expect(page.getByLabel('Agent activity')).toContainText('activity unavailable');
-  await page.getByText('Agents (1)').click();
+  await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Prompt' }).fill('Inspect this workspace');
   await page.getByRole('textbox', { name: 'Prompt' }).press('Enter');
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(

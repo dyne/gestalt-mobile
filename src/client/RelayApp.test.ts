@@ -646,8 +646,18 @@ describe('RelayApp chat controller composition', () => {
                   profiles: [],
                   models: { codex: [], kimi: [] },
                   sessions: [
-                    { id: 'a', state: 'ready', workspacePath: '/a' },
-                    { id: 'b', state: 'ready', workspacePath: '/b' },
+                    {
+                      id: 'a',
+                      state: 'ready',
+                      workspacePath: '/a',
+                      lastOrgPlan: { filename: 'a.org', title: 'Plan A', attached: true },
+                    },
+                    {
+                      id: 'b',
+                      state: 'ready',
+                      workspacePath: '/b',
+                      lastOrgPlan: { filename: 'b.org', title: 'Plan B', attached: true },
+                    },
                   ],
                 }
               : String(input) === '/api/skill-profiles'

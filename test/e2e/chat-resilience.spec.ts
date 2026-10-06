@@ -946,26 +946,24 @@ for (const shot of [
     ).toBe(true);
     await waitForSettledScroll(page);
     if (shot.fontScale === 200) {
-      const chatControls = page.getByLabel('Chat controls');
-      await chatControls.scrollIntoViewIfNeeded();
+      await expect(page.getByLabel('Chat controls')).toHaveCount(0);
+      await expect(page.getByText(/^Agents \(/)).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
+      await page.getByRole('textbox', { name: 'Prompt' }).scrollIntoViewIfNeeded();
       await waitForSettledScroll(page);
-      const [promptBox, sendBox, controlsBox, navigationBox] = await Promise.all([
+      const [promptBox, sendBox, navigationBox] = await Promise.all([
         page.getByRole('textbox', { name: 'Prompt' }).boundingBox(),
         page.getByRole('button', { name: 'Send prompt' }).boundingBox(),
-        chatControls.boundingBox(),
         page.getByLabel('Primary').boundingBox(),
       ]);
       expect(promptBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
-      expect(controlsBox).not.toBeNull();
       expect(navigationBox).not.toBeNull();
       expect(page.getByText('finished screenshot')).toBeVisible();
       expect(promptBox!.y).toBeGreaterThanOrEqual(0);
       expect(sendBox!.y).toBeGreaterThanOrEqual(0);
       expect(promptBox!.y + promptBox!.height).toBeLessThanOrEqual(navigationBox!.y);
       expect(sendBox!.y + sendBox!.height).toBeLessThanOrEqual(navigationBox!.y);
-      expect(controlsBox!.y).toBeGreaterThanOrEqual(promptBox!.y + promptBox!.height);
-      expect(controlsBox!.y + controlsBox!.height).toBeLessThanOrEqual(navigationBox!.y);
       await centerEvidence(
         page,
         page.getByText('finished screenshot').locator('xpath=ancestor::section[1]'),

@@ -123,6 +123,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import BottomNavigation from './features/sessions/BottomNavigation.svelte';
   import {
     displayWorkspacePath,
+    hasAssignedOrgPlan,
     retainForgottenSession,
   } from './features/sessions/session-list.js';
   import SkillsView from './features/skills/SkillsView.svelte';
@@ -1774,25 +1775,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               onretry={() => void retrySend()}
               oninterrupt={() => void interruptTurn()}
             />
-            <div class="chat-controls" aria-label="Chat controls">
-              {#if selectedSession?.provider !== 'kimi'}
-                <AutopilotControl
+            {#if hasAssignedOrgPlan(selectedSession)}
+              <div class="chat-controls" aria-label="Chat controls">
+                {#if selectedSession?.provider !== 'kimi'}
+                  <AutopilotControl
+                    compact
+                    autopilot={autopilotState.snapshots.get(sessionId) ?? null}
+                    controlId={`chat-autopilot-${sessionId}`}
+                    pending={autopilotState.pending.has(sessionId)}
+                    ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+                  />
+                {/if}
+                <AgentActivityIndicators
                   compact
-                  autopilot={autopilotState.snapshots.get(sessionId) ?? null}
-                  controlId={`chat-autopilot-${sessionId}`}
-                  pending={autopilotState.pending.has(sessionId)}
-                  ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+                  activity={activitySnapshots.get(sessionId) ?? null}
+                  rootModel={sessions.find((session) => session.id === sessionId)?.model ??
+                    defaultSessionModel}
+                  plan={sessions.find((session) => session.id === sessionId)?.plan}
+                  onopen={() => sessionId && void activityController.resync(sessionId)}
                 />
-              {/if}
-              <AgentActivityIndicators
-                compact
-                activity={activitySnapshots.get(sessionId) ?? null}
-                rootModel={sessions.find((session) => session.id === sessionId)?.model ??
-                  defaultSessionModel}
-                plan={sessions.find((session) => session.id === sessionId)?.plan}
-                onopen={() => sessionId && void activityController.resync(sessionId)}
-              />
-            </div>
+              </div>
+            {/if}
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
           {:else}
             <p>
