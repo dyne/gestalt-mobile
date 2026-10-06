@@ -196,6 +196,22 @@ describe('agent activity registry', () => {
     ]);
     expect(JSON.stringify(next)).not.toContain('command');
   });
+  it('coalesces a refresh requested synchronously by a reconciliation observer', async () => {
+    const reconcile = vi.fn(async () => true);
+    let observedRefresh: Promise<void> | undefined;
+    const registry = new AgentActivityRegistry(
+      (snapshot) => {
+        if (snapshot.confidence === 'reconciling') observedRefresh = registry.refresh('s');
+      },
+      { now: () => at, reconcile },
+    );
+    const refresh = registry.refresh('s');
+    expect(observedRefresh).toBe(refresh);
+    await refresh;
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(registry.snapshot('s', at).confidence).toBe('fresh');
+  });
+
   it('coalesces concurrent manual refreshes per session', async () => {
     let release: (() => void) | undefined;
     let calls = 0;

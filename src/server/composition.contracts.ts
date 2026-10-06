@@ -1044,6 +1044,139 @@ describe('production composition', () => {
       await accepted.app.close();
     });
 
+    it('resumes the same executor after a checkpoint while activity is refreshed', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const checkpoint = await holdCheckpointRequest(fixture, timers, 8901);
+      checkpoint.handle.responseSettled!({ id: 8901, outcome: 'resultWritten' });
+      await expect(checkpoint.response).resolves.toEqual(
+        toOrgPlanCheckpointToolResponse('recorded'),
+      );
+      let rootActive = true;
+      let holdRoster = false;
+      const releaseRoster: Array<() => void> = [];
+      for (const handle of fixture.handles)
+        handle.respond = (method, params) => {
+          if (method === 'thread/read')
+            return {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                status: { type: rootActive ? 'active' : 'idle' },
+                turns: [],
+              },
+            };
+          if (method === 'thread/list') {
+            const result = {
+              data: [
+                {
+                  id: 'checkpoint-executor',
+                  status: { type: 'idle' },
+                  source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                },
+              ],
+            };
+            if (holdRoster)
+              return new Promise((resolve) => {
+                releaseRoster.push(() => resolve(result));
+              });
+            return result;
+          }
+          return undefined;
+        };
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      rootActive = false;
+      checkpoint.handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: checkpoint.threadId,
+          turn: { id: checkpoint.turnId, status: 'completed' },
+        },
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().agentActivity.root
+            .state,
+        ).toBe('idle'),
+      );
+      const settled = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .agentActivity;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const refreshedAt = new Date(Date.parse(settled.root.observedAt) + 60_000).toISOString();
+      vi.setSystemTime(new Date(refreshedAt));
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      holdRoster = true;
+      const refreshing = fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      void refreshing.then(() => {});
+      await vi.waitFor(() => expect(releaseRoster.length).toBeGreaterThan(0));
+      for (const timer of timers.filter((candidate) => !candidate.cancelled && !candidate.fired)) {
+        timer.fired = true;
+        timer.callback();
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      holdRoster = false;
+      expect(releaseRoster).toHaveLength(1);
+      for (const release of releaseRoster) release();
+      await refreshing;
+      const starts = () =>
+        fixture.handles
+          .flatMap((handle) => handle.requests)
+          .filter(
+            (request) =>
+              request.method === 'turn/start' &&
+              (request.params as { threadId: string }).threadId === 'checkpoint-executor',
+          );
+      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+        await vi.waitFor(() =>
+          expect(
+            starts().length > 0 || timers.some((timer) => !timer.cancelled && !timer.fired),
+          ).toBe(true),
+        );
+        if (starts().length > 0) break;
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
+        timer.fired = true;
+        timer.callback();
+        await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await vi.waitFor(() => expect(starts()).toHaveLength(1));
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const events = database
+        .prepare(
+          "SELECT type FROM session_events WHERE session_id = ? AND type IN ('org-plan.step-reported', 'autopilot.executor-resumed') ORDER BY sequence",
+        )
+        .all(fixture.sessionId);
+      database.close();
+      expect(events).toEqual([
+        { type: 'org-plan.step-reported' },
+        { type: 'autopilot.executor-resumed' },
+      ]);
+    });
+
     it('acknowledges a checkpoint before scheduling and drops an obsolete executor wait lease', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       let coordinator:
