@@ -57,6 +57,16 @@ async function openBrowser(
       }),
     }),
   );
+  await page.route('**/api/workspaces/repo/files/preview?**', (route) =>
+    route.fulfill({
+      json: {
+        kind: 'file',
+        path: 'very-long-file-name-that-must-wrap-safely.txt',
+        content: 'File contents',
+        size: 13,
+      },
+    }),
+  );
   const diagnostics = await openThemeEvidence(page, {
     theme,
     fontScale,
@@ -91,6 +101,7 @@ for (const { viewport, fontScale } of cases)
         await expect(dialog).toBeVisible();
         if (state === 'destination') {
           await page.getByRole('treeitem', { name: /very-long-file/ }).click();
+          await page.getByRole('button', { name: 'Close file preview' }).click();
           await page.getByRole('button', { name: 'Copy' }).click();
         } else if (state === 'delete') {
           await page.getByRole('treeitem', { name: /nested-folder/ }).click();
