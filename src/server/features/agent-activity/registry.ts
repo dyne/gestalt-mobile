@@ -93,10 +93,16 @@ export class AgentActivityRegistry {
     if (existing) return existing;
     const generation = (this.#generation.get(sessionId) ?? 0) + 1;
     this.#generation.set(sessionId, generation);
-    const running = this.#attempt(sessionId, generation, 1).finally(() => {
+    const completion = Promise.withResolvers<void>();
+    const running = completion.promise.finally(() => {
       if (this.#inFlight.get(sessionId) === running) this.#inFlight.delete(sessionId);
     });
+    // Publishing "reconciling" synchronously notifies Autopilot, which can
+    // request this refresh again. Install the shared promise before publishing
+    // so that reentrant observers cannot launch a second authoritative read
+    // and supersede the generation of the first one.
     this.#inFlight.set(sessionId, running);
+    void this.#attempt(sessionId, generation, 1).then(completion.resolve, completion.reject);
     return running;
   }
   /** Replaces the observed direct-child set; absent children are disconnected. */
