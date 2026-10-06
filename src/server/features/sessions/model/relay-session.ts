@@ -8,6 +8,7 @@ import { DomainError } from './errors.js';
 import type { RelaySessionEvent } from './events.js';
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 import type { SessionModelSettings } from '../../../../shared/contracts/session-model-settings.js';
+import type { SelfDebugSession } from '../../../../shared/contracts/self-debug.js';
 import {
   createSkillSelection,
   normalizeSkillProfileName,
@@ -146,6 +147,7 @@ export type RelaySessionSnapshot = {
   /** Missing is reserved for rows created before execution policy was durable. */
   executionPolicy?: SessionExecutionPolicy;
   lastOrgPlan?: LastOrgPlan;
+  selfDebug?: SelfDebugSession;
   pendingInteractions: PendingInteraction[];
   createdAt: string;
   updatedAt: string;
@@ -346,6 +348,7 @@ function copy(snapshot: RelaySessionSnapshot): RelaySessionSnapshot {
   return {
     ...snapshot,
     ...(snapshot.modelSettings ? { modelSettings: { ...snapshot.modelSettings } } : {}),
+    ...(snapshot.selfDebug ? { selfDebug: structuredClone(snapshot.selfDebug) } : {}),
     ...(snapshot.effectiveSkillSelection === undefined
       ? {}
       : {

@@ -24,6 +24,66 @@ export type ControlPlaneTrace = Readonly<{
 
 const relevant = /^(?:org-plan\.|autopilot\.|agent\.activity\.|session\.status\.)/;
 
+// Export structural telemetry only. Event types alone do not imply payload safety.
+const diagnosticFields = new Set([
+  'traceId',
+  'handoffId',
+  'controlId',
+  'turnId',
+  'requestId',
+  'threadId',
+  'sessionId',
+  'generation',
+  'sequence',
+  'state',
+  'status',
+  'reason',
+  'code',
+  'enabled',
+  'requestedEnabled',
+  'desiredState',
+  'stopReason',
+  'failureCount',
+  'noProgressCount',
+  'canonicalPosition',
+  'taskPath',
+  'taskName',
+  'continuationGeneration',
+  'activeHandoffId',
+  'lastControlId',
+  'lastTurnId',
+  'confidence',
+  'observedAt',
+  'root',
+  'subagents',
+  'processes',
+  'aggregateSubagents',
+  'aggregateProcesses',
+  'kind',
+  'id',
+  'parentThreadId',
+  'running',
+  'completed',
+  'pending',
+  'count',
+]);
+
+export function redactDiagnosticPayload(value: unknown, depth = 0): unknown {
+  if (depth > 8) return null;
+  if (typeof value === 'string')
+    return value.length <= 200 && /^[a-zA-Z0-9_./:@+-]*$/.test(value) ? value : '[redacted]';
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'boolean' || value === null) return value;
+  if (Array.isArray(value))
+    return value.slice(0, 100).map((item) => redactDiagnosticPayload(item, depth + 1));
+  if (!value || typeof value !== 'object') return null;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => diagnosticFields.has(key))
+      .map(([key, item]) => [key, redactDiagnosticPayload(item, depth + 1)]),
+  );
+}
+
 function objectPayload(value: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -82,7 +142,7 @@ export function exportControlPlaneTrace(
   try {
     const rows = database
       .prepare(
-        'SELECT sequence,occurred_at,type,payload_json FROM session_events WHERE session_id = ? ORDER BY sequence',
+        "SELECT sequence,occurred_at,type,payload_json FROM session_events WHERE session_id = ? AND (type LIKE 'org-plan.%' OR type LIKE 'autopilot.%' OR type LIKE 'agent.activity.%' OR type LIKE 'session.status.%') ORDER BY sequence DESC LIMIT 5000",
       )
       .all(sessionId) as Array<{
       sequence: number;
@@ -91,9 +151,13 @@ export function exportControlPlaneTrace(
       payload_json: string;
     }>;
     const events = rows
+      .reverse()
       .filter((row) => relevant.test(row.type))
       .map((row) => {
-        const payload = objectPayload(row.payload_json);
+        const payload = redactDiagnosticPayload(objectPayload(row.payload_json)) as Record<
+          string,
+          unknown
+        >;
         return {
           sequence: row.sequence,
           occurredAt: row.occurred_at,

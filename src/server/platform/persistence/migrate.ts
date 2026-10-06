@@ -50,6 +50,8 @@ export function migrate(database: DatabaseSync): void {
     database.exec('ALTER TABLE relay_sessions ADD COLUMN last_org_plan_json TEXT');
   if (!columns.some((column) => column.name === 'model_settings_json'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN model_settings_json TEXT');
+  if (!columns.some((column) => column.name === 'self_debug_json'))
+    database.exec('ALTER TABLE relay_sessions ADD COLUMN self_debug_json TEXT');
   if (!columns.some((column) => column.name === 'model'))
     database.exec('ALTER TABLE relay_sessions ADD COLUMN model TEXT');
   if (!columns.some((column) => column.name === 'branch'))

@@ -51,6 +51,15 @@ const relayMessages = {
   GIT_CLONE_FAILED: 'Clone failed.',
   WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
   QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
+  DEBUG_CONTEXT_FAILED: 'Session diagnostics could not be read. Reopen DEBUG to try again.',
+  DEBUG_START_FAILED:
+    'Self DEBUG could not start. Check Sessions for a saved debug session before trying again.',
+  DEBUG_TRACE_FAILED:
+    'The diagnostic trace could not be opened. Check that the saved JSON file is still available.',
+  DEBUG_CONFIRMATION_EXPIRED:
+    'The debug confirmation expired. Reopen DEBUG to confirm current session details.',
+  DEBUG_SOURCE_CHANGED:
+    'The source session changed. Reopen DEBUG to confirm current session details.',
 } as const;
 
 export type RelayFeedbackCode = keyof typeof relayMessages;

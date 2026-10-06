@@ -37,7 +37,14 @@ describe('control-plane trace export', () => {
       2,
       '2026-01-01T00:00:01.000Z',
       'autopilot.continuation-scheduled',
-      JSON.stringify({ traceId: 'handoff-1', controlId: 'c1' }),
+      JSON.stringify({
+        traceId: 'handoff-1',
+        controlId: 'c1',
+        prompt: 'private prompt',
+        token: 'secret',
+        environment: { KEY: 'credential' },
+        root: { state: 'working', text: 'private response', label: 'private label' },
+      }),
     );
     insert.run(
       's1',
@@ -49,6 +56,12 @@ describe('control-plane trace export', () => {
     database.close();
     const trace = exportControlPlaneTrace(path, 's1', '2026-01-01T00:01:00.000Z');
     expect(trace.events).toHaveLength(2);
+    expect(trace.events[1]!.payload).toEqual({
+      traceId: 'handoff-1',
+      controlId: 'c1',
+      root: { state: 'working' },
+    });
+    expect(JSON.stringify(trace)).not.toMatch(/private|credential|secret/);
     expect(trace.events.map((event) => event.traceId)).toEqual(['handoff-1', 'handoff-1']);
     expect(trace.diagnoses).toContain(
       'continuation scheduled, but no control or executor dispatch was observed',

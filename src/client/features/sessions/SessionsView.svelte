@@ -31,6 +31,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     thinkingLevels,
     type ThinkingLevel,
   } from '../../../shared/contracts/session-model-settings.js';
+  import DebugIdentifiers from '../self-debug/DebugIdentifiers.svelte';
 
   type Props = {
     sessions: RelaySession[];
@@ -89,6 +90,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     savingDefaults?: boolean;
     advancedExpanded?: boolean;
     onsavedefaults?: () => void;
+    ondebugtrace?: (session: RelaySession, trigger: HTMLButtonElement) => void;
   };
 
   let {
@@ -142,6 +144,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     savingDefaults = false,
     advancedExpanded = $bindable(false),
     onsavedefaults = () => {},
+    ondebugtrace = () => {},
   }: Props = $props();
 
   let openSessions = $derived(
@@ -205,6 +208,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </div>
 </dialog>
 
+{#snippet debugDetails(session: RelaySession)}
+  {#if session.selfDebug}
+    <details class="self-debug-details">
+      <summary>Self DEBUG</summary>
+      <DebugIdentifiers context={session.selfDebug.context} />
+      <button type="button" onclick={(event) => ondebugtrace(session, event.currentTarget)}
+        >Redacted diagnostic trace (JSON)</button
+      >
+    </details>
+  {/if}
+{/snippet}
+
 <section aria-labelledby="sessions-title">
   <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
   {#if openSessions.length}
@@ -252,6 +267,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               <AppControl compact full onclick={() => requestClose(session.id)}>Close</AppControl>
             </div>
             <div class="session-details">
+              {@render debugDetails(session)}
               <div class="session-summary">
                 {#if sessionStatus}
                   <details
@@ -338,6 +354,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <AppControl compact full onclick={() => onforget(session.id)}>Forget</AppControl>
           </div>
           <div class="session-details">
+            {@render debugDetails(session)}
             {#if details.updatedAt !== null}
               <time datetime={new Date(details.updatedAt).toISOString()}>
                 {formatRelativeTime(details.updatedAt)}
