@@ -215,7 +215,7 @@ export type AppDependencies = {
     workspaces: GitWorkspaceResolver;
     inspect(path: string): Promise<GitSummary>;
     inspectForPush?(path: string): Promise<GitSummary>;
-    push(path: string, upstream: string): Promise<void>;
+    push(path: string, upstream: string | null): Promise<void>;
     refresh(path: string): Promise<void>;
     pull?(path: string): Promise<void>;
     checkout?(path: string, branch: string): Promise<void>;

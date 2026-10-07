@@ -49,6 +49,9 @@ export async function inspectGit(cwd: string): Promise<GitSummary> {
           .then((value) => value.trim())
           .catch(() => null)
       : null;
+    const originUrl = await git(cwd, ['remote', 'get-url', 'origin'])
+      .then((value) => value.trim().replace(/^(https?:\/\/)[^/]*@/i, '$1'))
+      .catch(() => null);
     const divergence = upstream
       ? parseDivergence(
           await git(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']),
@@ -74,6 +77,7 @@ export async function inspectGit(cwd: string): Promise<GitSummary> {
       branch,
       branches,
       upstream,
+      originUrl,
       ...divergence,
       dirty,
       commits,
@@ -94,7 +98,14 @@ export async function inspectGit(cwd: string): Promise<GitSummary> {
   }
 }
 
-export async function pushUpstream(cwd: string, upstream: string): Promise<void> {
+export async function pushUpstream(cwd: string, upstream: string | null): Promise<void> {
+  if (!upstream) {
+    const branch = (await git(cwd, ['symbolic-ref', '--short', 'HEAD'])).trim();
+    if (!branch) throw new Error('NO_BRANCH');
+    await git(cwd, ['remote', 'get-url', 'origin']);
+    await git(cwd, ['push', '--set-upstream', 'origin', `HEAD:refs/heads/${branch}`]);
+    return;
+  }
   const separator = upstream.indexOf('/');
   if (separator < 1 || separator === upstream.length - 1) throw new Error('NO_UPSTREAM');
   await git(cwd, [

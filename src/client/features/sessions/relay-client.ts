@@ -141,6 +141,7 @@ export type RelayGitSummary = {
   branch: string | null;
   branches?: string[];
   upstream: string | null;
+  originUrl?: string | null;
   ahead: number;
   behind: number;
   dirty: { staged: number; unstaged: number; untracked: number };

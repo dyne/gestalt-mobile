@@ -5,7 +5,7 @@
  */
 
 import fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { registerPushUpstream } from './endpoint.js';
 
@@ -31,6 +31,32 @@ describe('POST /api/git/repositories/:workspaceId/push', () => {
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ code: 'WORKSPACE_NOT_GIT_REPOSITORY' });
     expect(inspected).toBe(false);
+    await app.close();
+  });
+
+  it('publishes an untracked branch to origin through the Git adapter', async () => {
+    const app = fastify();
+    const push = vi.fn(async () => {});
+    registerPushUpstream(app, {
+      workspaces: {
+        resolveGitWorkspace: async (id) => ({ id, path: '/workspace', isGitRepository: true }),
+      },
+      inspect: async () => ({
+        available: true,
+        branch: 'topic',
+        upstream: null,
+        originUrl: '/remote.git',
+        ahead: 0,
+        behind: 0,
+        dirty: { staged: 0, unstaged: 0, untracked: 0 },
+        commits: [],
+        fetchedAt: null,
+      }),
+      push,
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/git/repositories/one/push' });
+    expect(response.statusCode).toBe(202);
+    expect(push).toHaveBeenCalledWith('/workspace', null);
     await app.close();
   });
 

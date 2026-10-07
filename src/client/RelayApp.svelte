@@ -293,6 +293,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let gitExpandedIds = $state<Set<string>>(new Set());
   let pushConfirmationOpen = $state(false);
   let gitCloning = $state(false);
+  let gitPushing = $state(false);
   let gitCloneStatus = $state<string | null>(null);
   let refreshRequestKey = $state<string | null>(null);
   let pushRequestKey = $state<string | null>(null);
@@ -1454,7 +1455,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   async function pushGit() {
     const workspaceId = gitWorkspaceId;
-    if (!workspaceId) return;
+    if (!workspaceId || gitPushing) return;
+    gitPushing = true;
     pushRequestKey ??= createIdempotencyKey();
     try {
       await relay.pushGit(workspaceId, pushRequestKey);
@@ -1463,6 +1465,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       pushRequestKey = null;
     } catch (error) {
       reportRelayError(error, 'GIT_PUSH_FAILED');
+    } finally {
+      gitPushing = false;
     }
   }
 
@@ -1839,6 +1843,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           refreshing={gitState.refreshing}
           checkingOut={gitState.checkingOut}
           cloning={gitCloning}
+          pushing={gitPushing}
           error={gitState.error}
           cloneStatus={gitCloneStatus}
           confirmingPush={pushConfirmationOpen}
