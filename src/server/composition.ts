@@ -712,6 +712,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     sessionId: string,
     acknowledge: () => boolean,
   ) => boolean = () => false;
+  const capacityRecoveries = new Set<string>();
+  const capacityRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const capacityRecoveryTasks = new Map<string, Promise<void>>();
   let planMeasurementRefresh: PlanMeasurementRefresh | undefined;
   const publishInteractionResolved = (
     sessionId: string,
@@ -1568,12 +1571,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const ownerRuntime = (session: Readonly<{ provider: LlmProvider }>) =>
     session.provider === 'kimi' ? kimiRuntime : runtime;
   if (runtime) {
-    const capacityRecoveries = new Set<string>();
     scheduleAgentCapacityRecovery = (sessionId, acknowledge) => {
-      if (capacityRecoveries.has(sessionId) || !acknowledge()) return false;
+      if (closing || capacityRecoveries.has(sessionId) || !acknowledge()) return false;
       capacityRecoveries.add(sessionId);
-      setTimeout(() => {
-        void (async () => {
+      const timer = setTimeout(() => {
+        capacityRecoveryTimers.delete(sessionId);
+        const task = Promise.resolve().then(async () => {
           try {
             if (closing) return;
             const session = sessions.find(sessionId);
@@ -1595,9 +1598,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             }
           } finally {
             capacityRecoveries.delete(sessionId);
+            capacityRecoveryTasks.delete(sessionId);
           }
-        })();
+        });
+        capacityRecoveryTasks.set(sessionId, task);
       }, 500);
+      capacityRecoveryTimers.set(sessionId, timer);
       return true;
     };
     const supervisor = new SessionSupervisor(
@@ -2380,6 +2386,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     closing = true;
+    for (const [sessionId, timer] of capacityRecoveryTimers) {
+      clearTimeout(timer);
+      capacityRecoveries.delete(sessionId);
+    }
+    capacityRecoveryTimers.clear();
+    // Capacity recovery owns an app-server recycle that can still persist its
+    // result after an await. Drain accepted operations before stopping runtimes
+    // or closing the session database they use.
+    await Promise.allSettled([...capacityRecoveryTasks.values()]);
     planMeasurementRefresh?.stopAll();
     for (const session of sessions.list()) {
       autopilot.dispose(session.id);
