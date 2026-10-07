@@ -12,4 +12,15 @@ describe('mayPush', () => {
       allowed: false,
       reason: 'BEHIND_UPSTREAM',
     }));
+  it('allows first publication only with a local branch and origin', () => {
+    expect(
+      mayPush({ branch: 'topic', originUrl: '/remote', upstream: null, ahead: 0, behind: 0 }),
+    ).toEqual({ allowed: true });
+    expect(mayPush({ branch: 'topic', upstream: null, ahead: 0, behind: 0 }).reason).toBe(
+      'NO_ORIGIN',
+    );
+    expect(
+      mayPush({ branch: null, originUrl: '/remote', upstream: null, ahead: 0, behind: 0 }).reason,
+    ).toBe('NO_BRANCH');
+  });
 });

@@ -71,6 +71,7 @@ const summary = {
   branch: 'responsive-layout-verification-with-a-long-name',
   branches: ['responsive-layout-verification-with-a-long-name', 'main'],
   upstream: 'origin/responsive-layout-verification-with-a-long-name',
+  originUrl: 'git@example.test:owner/responsive-repository.git',
   ahead: 2,
   behind: 0,
   dirty: { staged: 3, unstaged: 4, untracked: 5 },
@@ -105,6 +106,8 @@ async function openGit(
     route.fulfill({ contentType: 'application/json', body: JSON.stringify(summary) }),
   );
   await page.route('**/api/git/clone', async (route) => {
+    if (route.request().postDataJSON().address.includes('invalid-target'))
+      return route.fulfill({ status: 503, json: { code: 'GIT_CLONE_FAILED' } });
     cloned = true;
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
@@ -253,7 +256,7 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     await ordinary.click();
     await expect(ordinary).toHaveAttribute('aria-selected', 'true');
     await expect(ordinary).toBeFocused();
-    await expect(page.getByRole('button', { name: 'Clone' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Clone' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
     await capture(page, 'ordinary-selected', viewport, fontScale, theme, ordinary, testInfo);
 
@@ -264,6 +267,13 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     await expect(primary).toContainText('Git');
     const pull = page.getByRole('button', { name: 'Pull' });
     await expect(pull).toBeEnabled();
+    await expect(page.getByLabel('Git address')).toHaveValue(summary.originUrl);
+    await expect(page.getByRole('button', { name: 'Clone' })).toBeDisabled();
+    const browse = page.getByRole('button', { name: 'Browse files' });
+    const browseBox = await browse.boundingBox();
+    const treeBox = await page.locator('.git-tree').boundingBox();
+    expect(Math.abs(browseBox!.width - treeBox!.width)).toBeLessThan(2);
+    expect(browseBox!.height).toBeGreaterThanOrEqual(56);
     expect(
       await page
         .getByRole('tree', { name: 'Git repository and clone destination' })
@@ -289,13 +299,13 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     );
 
     await page.getByRole('button', { name: 'Expand many-repository-siblings' }).click();
-    await primary.click();
+    await ordinary.click();
     await page.getByLabel('Git address').fill('https://example.test/invalid-target.git');
     await page.getByRole('button', { name: 'Clone' }).click();
     const errorToast = page
       .getByLabel('Notifications')
       .getByRole('alert')
-      .filter({ hasText: 'Select a non-repository folder before cloning.' });
+      .filter({ hasText: 'Clone failed.' });
     await expect(errorToast).toBeVisible();
     const cloneButton = page.getByRole('button', { name: 'Clone' });
     const navigation = page.getByLabel('Primary');
@@ -332,5 +342,49 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     await capture(page, 'clone-success', viewport, fontScale, theme, clonedRepository, testInfo);
 
     expectCleanThemeDiagnostics(diagnostics);
+  });
+}
+
+for (const width of [390, 1280]) {
+  test(`publishes a branch to origin on first Push at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await openGit(page, evidenceThemes[0]!, 100);
+    let published = false;
+    let pushes = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(/\/api\/git\/repositories\/primary-repository$/, (route) =>
+      route.fulfill({
+        json: {
+          ...summary,
+          branch: 'new-topic',
+          branches: ['new-topic'],
+          upstream: published ? 'origin/new-topic' : null,
+          ahead: 0,
+          behind: 0,
+        },
+      }),
+    );
+    await page.route('**/api/git/repositories/primary-repository/push', async (route) => {
+      pushes += 1;
+      await gate;
+      published = true;
+      await route.fulfill({ status: 202, json: { accepted: true } });
+    });
+    await page.getByRole('treeitem', { name: /^primary-repository/ }).click();
+    const push = page.getByRole('button', { name: 'Push', exact: true });
+    await expect(push).toBeEnabled();
+    await push.click();
+    await expect(page.getByRole('region', { name: 'Confirm push' })).toContainText(
+      'Publish new-topic to origin and set its upstream?',
+    );
+    await page.getByRole('button', { name: 'Confirm push', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Pushing…', exact: true })).toBeDisabled();
+    release();
+    await expect(page.getByText('Upstream: origin/new-topic', { exact: true })).toBeVisible();
+    await expect(push).toBeDisabled();
+    expect(pushes).toBe(1);
   });
 }

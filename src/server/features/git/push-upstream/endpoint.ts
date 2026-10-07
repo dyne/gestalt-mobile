@@ -16,7 +16,7 @@ export function registerPushUpstream(
   deps: {
     workspaces: GitWorkspaceResolver;
     inspect(path: string): Promise<GitSummary>;
-    push(path: string, upstream: string): Promise<void>;
+    push(path: string, upstream: string | null): Promise<void>;
     idempotency?: {
       get(scope: string, key: string): { statusCode: number; body: string } | null;
       put(scope: string, key: string, statusCode: number, body: string): void;
@@ -33,7 +33,7 @@ export function registerPushUpstream(
     if (!target.ok) return reply.code(target.statusCode).send({ code: target.code });
     const summary = await deps.inspect(target.path);
     const allowed = mayPush(summary);
-    if (!allowed.allowed || !summary.upstream)
+    if (!allowed.allowed)
       return reply.code(409).send({ code: allowed.reason ?? 'GIT_PUSH_UNAVAILABLE' });
     await deps.push(target.path, summary.upstream);
     const body = { accepted: true };

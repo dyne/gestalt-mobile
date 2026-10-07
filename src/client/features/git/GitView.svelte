@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { pushState } from './push-state.js';
   import { fetchAge } from './fetch-age.js';
   import { relativeTime } from './relative-time.js';
   import type { RelayGitSummary } from '../sessions/relay-client.js';
@@ -19,6 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     refreshing: boolean;
     checkingOut: boolean;
     cloning: boolean;
+    pushing?: boolean;
     error: string | null;
     cloneStatus: string | null;
     confirmingPush: boolean;
@@ -41,6 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     refreshing,
     checkingOut,
     cloning,
+    pushing = false,
     error,
     cloneStatus,
     confirmingPush,
@@ -59,9 +62,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     selectedWorkspace && !selectedWorkspace.isGitRepository ? selectedWorkspace : null,
   );
 
+  let repositorySelected = $derived(Boolean(selectedWorkspace?.isGitRepository));
+  let displayedAddress = $derived(repositorySelected ? (summary?.originUrl ?? '') : cloneAddress);
+  let pushAvailability = $derived(summary ? pushState(summary) : { enabled: false, reason: null });
+
   function submitClone(event: SubmitEvent): void {
     event.preventDefault();
-    if (!cloneAddress.trim() || cloning) return;
+    if (!cloneDestination || !cloneAddress.trim() || cloning) return;
     onclone(cloneAddress.trim());
   }
 </script>
@@ -93,31 +100,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </section>
   <form class="clone-form" onsubmit={submitClone}>
     <div class="clone-controls">
-      <div class="clone-field clone-destination">
-        <span class="field-label">Destination</span>
-        <output aria-live="polite">
-          {cloneDestination
-            ? `~/${cloneDestination.relativePath}`
-            : 'Select a non-repository folder'}
-        </output>
-      </div>
       <div class="clone-field">
         <label for="git-clone-address">Git address</label>
         <input
           id="git-clone-address"
           name="address"
-          bind:value={cloneAddress}
-          required
+          value={displayedAddress}
+          oninput={(event) => (cloneAddress = event.currentTarget.value)}
+          readonly={repositorySelected}
+          required={!repositorySelected}
           autocomplete="url"
           inputmode="url"
           enterkeyhint="done"
-          placeholder="https://example.com/owner/repository.git"
+          placeholder={repositorySelected
+            ? 'No origin remote'
+            : 'https://example.com/owner/repository.git'}
           aria-describedby="clone-help"
         />
       </div>
-      <button type="submit" disabled={cloning}>{cloning ? 'Cloning…' : 'Clone'}</button>
+      <button type="submit" disabled={cloning || !cloneDestination || !cloneAddress.trim()}
+        >{cloning ? 'Cloning…' : 'Clone'}</button
+      >
     </div>
-    <p id="clone-help">The repository is cloned inside the selected workspace.</p>
+    <p id="clone-help">
+      {repositorySelected
+        ? summary?.originUrl
+          ? 'Origin remote. Select a folder to clone another repository.'
+          : 'No origin remote is configured for this repository.'
+        : selectedWorkspace
+          ? `Clone into ${selectedWorkspace.name}.`
+          : 'Select a folder to clone a repository.'}
+    </p>
     {#if cloneStatus}<p class="clone-status" role="status">{cloneStatus}</p>{/if}
   </form>
   <section class="repository-details" aria-labelledby="repository-details-title">
@@ -138,8 +151,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   <option value={branch}>{branch}</option>
                 {/each}
               </select>
-              <p>Upstream: {summary.upstream ?? 'none'}</p>
-              <p>Ahead {summary.ahead}; behind {summary.behind}.</p>
+              <p>Upstream: {summary.upstream ?? 'not configured'}</p>
+              {#if summary.upstream}<p>Ahead {summary.ahead}; behind {summary.behind}.</p>{/if}
               <p>
                 <time datetime={summary.fetchedAt ?? undefined}>{fetchAge(summary.fetchedAt)}</time>
               </p>
@@ -151,23 +164,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <div class="git-actions">
               <button
                 type="button"
-                disabled={refreshing ||
-                  checkingOut ||
-                  !summary.upstream ||
-                  summary.ahead < 1 ||
-                  summary.behind > 0}
+                disabled={refreshing || checkingOut || pushing || !pushAvailability.enabled}
+                aria-describedby={!pushAvailability.enabled ? 'git-push-help' : undefined}
                 onclick={onopenpushconfirmation}><span aria-hidden="true">↑</span> Push</button
               >
-              <button type="button" disabled={refreshing || checkingOut} onclick={onpull}
+              <button
+                type="button"
+                disabled={refreshing || checkingOut || pushing || !summary.upstream}
+                onclick={onpull}
                 ><span aria-hidden="true">↓</span> {refreshing ? 'Pulling…' : 'Pull'}</button
               >
+              {#if !pushAvailability.enabled && pushAvailability.reason}<p
+                  id="git-push-help"
+                  class="action-help"
+                >
+                  {pushAvailability.reason}
+                </p>{/if}
             </div>
           </div>
           {#if confirmingPush}
             <section aria-label="Confirm push">
-              <p>Push HEAD to {summary.upstream}?</p>
-              <button type="button" onclick={onpush}>Confirm push</button>
-              <button type="button" onclick={oncancelpush}>Cancel</button>
+              <p>
+                {summary.upstream
+                  ? `Push ${summary.branch ?? 'HEAD'} to ${summary.upstream}?`
+                  : `Publish ${summary.branch} to origin and set its upstream?`}
+              </p>
+              <button type="button" disabled={pushing} onclick={onpush}
+                >{pushing ? 'Pushing…' : 'Confirm push'}</button
+              >
+              <button type="button" disabled={pushing} onclick={oncancelpush}>Cancel</button>
             </section>
           {/if}
           {#if summary.commits.length}
@@ -237,6 +262,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-block: 0 0.75rem;
     color: var(--theme-text-muted);
   }
+  #browse-files {
+    inline-size: 100%;
+    min-block-size: 3.5rem;
+    margin-block-start: 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .action-help {
+    margin: 0;
+    max-inline-size: 18ch;
+    font-size: 0.8rem;
+    color: var(--theme-text-muted);
+  }
   .clone-form {
     display: grid;
     gap: 0.35rem;
@@ -244,7 +282,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .clone-controls {
     display: grid;
-    grid-template-columns: minmax(10rem, 0.45fr) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.5rem;
     align-items: end;
   }
@@ -253,15 +291,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     min-inline-size: 0;
     gap: 0.35rem;
   }
-  .field-label {
+  .clone-field label {
     font-weight: 600;
-  }
-  .clone-destination output {
-    min-block-size: 2.75rem;
-    padding: 0.65rem 0.75rem;
-    overflow-wrap: anywhere;
-    border: 1px solid var(--theme-border);
-    border-radius: 0.35rem;
   }
   .clone-controls button {
     min-inline-size: 5.75rem;

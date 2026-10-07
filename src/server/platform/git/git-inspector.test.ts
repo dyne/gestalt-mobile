@@ -94,6 +94,44 @@ describe('git inspector', () => {
     });
   });
 
+  it('publishes a new branch on origin and sets tracking', async () => {
+    const root = await createTemporaryDirectory();
+    const remote = join(root, 'remote.git');
+    const local = join(root, 'local');
+    await git(root, 'init', '--bare', remote);
+    await git(root, 'clone', remote, local);
+    await configureAuthor(local);
+    await git(local, 'checkout', '-b', 'feature/topic');
+    await writeFile(join(local, 'README.md'), 'published branch\n');
+    await git(local, 'add', '.');
+    await git(local, 'commit', '-m', 'First publication');
+    expect(await inspectGit(local)).toMatchObject({
+      branch: 'feature/topic',
+      upstream: null,
+      originUrl: remote,
+    });
+    await pushUpstream(local, null);
+    expect(await inspectGit(local)).toMatchObject({
+      upstream: 'origin/feature/topic',
+      ahead: 0,
+      behind: 0,
+    });
+    const published = await execFileAsync('git', ['show', 'refs/heads/feature/topic:README.md'], {
+      cwd: remote,
+    });
+    expect(published.stdout).toBe('published branch\n');
+  });
+  it('redacts inline HTTP credentials from origin addresses', async () => {
+    const local = await createTemporaryDirectory();
+    await git(local, 'init');
+    await configureAuthor(local);
+    await writeFile(join(local, 'README.md'), 'local\n');
+    await git(local, 'add', '.');
+    await git(local, 'commit', '-m', 'Local');
+    await git(local, 'remote', 'add', 'origin', 'https://user:secret@example.test/repository.git');
+    expect((await inspectGit(local)).originUrl).toBe('https://example.test/repository.git');
+  });
+
   it('reports divergence from an upstream and handles detached HEAD', async () => {
     const root = await createTemporaryDirectory();
     const remote = join(root, 'remote.git');
