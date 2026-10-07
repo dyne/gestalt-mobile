@@ -33,7 +33,9 @@ describe('Scratchpad', () => {
 
     const field = (await screen.findByLabelText('Scratchpad text')) as HTMLTextAreaElement;
     expect(field.value).toBe('Remember this');
-    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close scratchpad' })),
+    );
 
     await fireEvent.input(field, { target: { value: 'Remember this\nand that' } });
     expect(localStorage.getItem(SCRATCHPAD_STORAGE_KEY)).toBe('Remember this\nand that');
