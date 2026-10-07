@@ -4065,6 +4065,82 @@ describe('production composition', () => {
       await app.close();
     });
 
+    it('drains an in-flight capacity recovery before closing its session database', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
+      const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
+      ownTemporaryPaths(root, dataDir);
+      await mkdir(join(root, 'workspace'));
+      const handles: LiveServerHandle[] = [];
+      const launch = liveAppServer(handles);
+      let blockResume = false;
+      let resumeStarted!: () => void;
+      let releaseResume!: () => void;
+      const resumeStarting = new Promise<void>((resolve) => (resumeStarted = resolve));
+      const resumeGate = new Promise<void>((resolve) => (releaseResume = resolve));
+      const app = await composeAuthorizedApp({
+        root,
+        dataDir,
+        relyingParty,
+        installedCodexVersion: 'codex-cli 0.144.3',
+        startAppServers: true,
+        launchAppServer: () => {
+          const server = launch();
+          const handle = handles.at(-1)!;
+          handle.respond = async (method, params) => {
+            if (!blockResume || method !== 'thread/resume') return undefined;
+            resumeStarted();
+            await resumeGate;
+            return { thread: { id: (params as { threadId: string }).threadId } };
+          };
+          return server;
+        },
+        profiles: {
+          list: async () => [],
+          require: async () => ({
+            name: 'default',
+            state: 'ok' as const,
+            status: 'ready' as const,
+          }),
+        },
+      });
+      const sessionId = await createComposedSession(app);
+      const first = handles.find((candidate) => candidate.calls.includes('thread/start'))!;
+      const started = await app.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/turns`,
+        payload: { text: 'continue supervised work' },
+      });
+      const turnId = started.json().activeTurnId as string;
+      const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+      first.notify?.({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+      blockResume = true;
+
+      await expect(
+        first.request!({
+          id: 92,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_agent_capacity_recovery',
+            arguments: { version: 1, reason: 'agentThreadLimit' },
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await resumeStarting;
+
+      let closed = false;
+      const close = app.close().then(() => {
+        closed = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const closedBeforeRecoverySettled = closed;
+      releaseResume();
+      await close;
+
+      expect(closedBeforeRecoverySettled).toBe(false);
+    });
+
     it('publishes an idle websocket status after saving a completed turn', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
