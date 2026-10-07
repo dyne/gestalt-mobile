@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CachedSkillCatalog } from './cached-skill-catalog.js';
 
 describe('CachedSkillCatalog', () => {
-  it('invalidates retrieval availability without another discovery and isolates managed homes', async () => {
+  it('revalidates retrieval through ready, unavailable and ready without another discovery', async () => {
     const result = {
       skills: [{ name: 'gestalt:xerj', path: '/xerj/SKILL.md', enabled: true }],
       errors: [],
@@ -26,6 +26,8 @@ describe('CachedSkillCatalog', () => {
     await catalog.refresh('codex', 'default', '/workspace');
     available = false;
     expect((await catalog.list('codex', 'default', '/workspace')).skills[0].enabled).toBe(false);
+    available = true;
+    expect((await catalog.list('codex', 'default', '/workspace')).skills[0].enabled).toBe(true);
     expect(discover).toHaveBeenCalledOnce();
     expect(
       (await new CachedSkillCatalog(discover).list('codex', 'default', '/workspace')).skills,

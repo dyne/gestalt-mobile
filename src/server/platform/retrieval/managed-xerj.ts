@@ -25,7 +25,11 @@ export class ManagedXerj implements RetrievalCapabilityPort {
     const manager = await this.manager();
     if (!manager) return { status: 'absent' };
     const remaining = input.deadline - Date.now();
-    if (remaining <= 0) return { status: 'unavailable', reason: 'readiness-timeout' };
+    // The shipped manager rejects sub-100ms operations because it reserves
+    // cleanup time inside the overall deadline. Do not spend the remaining
+    // budget spawning a request that cannot satisfy that contract.
+    if (remaining < minimumXerjTimeoutMs)
+      return { status: 'unavailable', reason: 'readiness-timeout' };
     return new Promise((resolve) => {
       const child = spawn(manager, ['xerj', input.start ? 'ensure-ready' : 'probe'], {
         cwd: input.cwd,
@@ -109,6 +113,14 @@ export function xerjDeadline(environment: NodeJS.ProcessEnv = process.env): numb
   const configured = Number(environment.XERJ_READY_TIMEOUT_MS);
   return (
     Date.now() +
-    (Number.isInteger(configured) && configured > 0 && configured <= 300_000 ? configured : 5_000)
+    (Number.isInteger(configured) &&
+    configured >= minimumXerjTimeoutMs &&
+    configured <= maximumXerjTimeoutMs
+      ? configured
+      : defaultXerjTimeoutMs)
   );
 }
+
+const minimumXerjTimeoutMs = 100;
+const maximumXerjTimeoutMs = 60_000;
+const defaultXerjTimeoutMs = 5_000;
