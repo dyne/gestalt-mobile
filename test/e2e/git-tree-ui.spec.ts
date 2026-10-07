@@ -341,7 +341,10 @@ for (const { viewport, fontScale, theme } of evidenceConfigurations()) {
     await expectNoOverlap(successToast, page.getByLabel('Primary'));
     await capture(page, 'clone-success', viewport, fontScale, theme, clonedRepository, testInfo);
 
-    expectCleanThemeDiagnostics(diagnostics);
+    const cloneFailureConsole =
+      'Failed to load resource: the server responded with a status of 503 (Service Unavailable)';
+    expect(diagnostics.consoleErrors).toEqual([cloneFailureConsole]);
+    expectCleanThemeDiagnostics(diagnostics, { expectedConsoleErrors: [cloneFailureConsole] });
   });
 }
 

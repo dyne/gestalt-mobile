@@ -53,6 +53,22 @@ const plan = (reviewStatus: 'REVIEWED' | 'UNREVIEWED' = 'UNREVIEWED'): Supervise
 });
 
 describe('autopilot policy', () => {
+  it('retains safetyPaused when a late checkpoint final requests evaluation', () => {
+    expect(
+      decideAutopilot({
+        state: {
+          ...disabledAutopilot('s', now),
+          state: 'safetyPaused',
+          stopReason: 'safetyPaused',
+        },
+        plan: plan(),
+        activity: null,
+        hasPendingInteraction: false,
+        now,
+        policy: defaultAutopilotPolicy,
+      }),
+    ).toEqual({ kind: 'observe' });
+  });
   it('allows a fresh canonical unloaded executor to resume while retaining freshness and interaction gates', () => {
     const base = createAgentActivitySnapshot('s', now);
     const activity: AgentActivitySnapshot = {

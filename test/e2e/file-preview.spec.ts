@@ -7,7 +7,9 @@ import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 for (const width of [390, 1280]) {
-  test(`plan Notes opens shared previews and file trees at ${width}px`, async ({ page }) => {
+  test(`plan Notes opens shared previews and file trees at ${width}px`, async ({
+    page,
+  }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
     await mockAuthenticatedStatus(page);
     const planName = 'repo/.gestalt/plans/roadmap.org';
@@ -122,7 +124,7 @@ for (const width of [390, 1280]) {
     viewer = page.getByRole('dialog', { name: 'docs', exact: true });
     await expect(viewer.getByRole('treeitem', { name: /README.md/ })).toBeVisible();
     await expect.poll(() => viewer.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-    await page.screenshot({ path: `/tmp/mobile-file-preview-${width}.png` });
+    await page.screenshot({ path: testInfo.outputPath(`file-preview-${width}.png`) });
     await page.keyboard.press('Escape');
     await expect(page.getByRole('link', { name: 'docs', exact: true })).toBeFocused();
     await expect(page.getByRole('link', { name: 'missing.txt' })).toHaveCount(0);

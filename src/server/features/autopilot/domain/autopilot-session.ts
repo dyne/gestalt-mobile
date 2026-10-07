@@ -66,6 +66,8 @@ export type AutopilotSession = Readonly<{
     pendingKind?: 'l2Completed' | 'l1Accepted' | 'terminalReviewAccepted' | null;
     /** A checkpoint transport response was not acknowledged within its bounded deadline. */
     checkpointHandoffFailed?: boolean;
+    /** A reported boundary must return to the root before mechanical executor work. */
+    rootContinuationFromTurnId?: string;
     terminalReviewAccepted: boolean;
     /** Semantic plan revision accepted by terminal review; legacy rows omit it. */
     terminalReviewFingerprint?: string;

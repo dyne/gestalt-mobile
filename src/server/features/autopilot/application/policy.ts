@@ -192,6 +192,9 @@ export function decideAutopilot(input: {
   policy: AutopilotPolicy;
 }): AutopilotDecision {
   const { state, plan, activity, hasPendingInteraction, now, policy } = input;
+  // A late checkpoint final must not relabel a terminal safety pause as Off.
+  // Only an explicit enable/recovery transition can grant new authority.
+  if (state.state === 'safetyPaused') return { kind: 'observe' };
   if (input.hasActiveAttention)
     return {
       kind: 'requestAttention',

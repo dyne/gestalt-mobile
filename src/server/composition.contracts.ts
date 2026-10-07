@@ -1044,7 +1044,139 @@ describe('production composition', () => {
       await accepted.app.close();
     });
 
-    it('resumes the same executor after a checkpoint while activity is refreshed', async () => {
+    it('continues the root after a checkpoint with a completed assigned executor', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      let coordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const checkpoint = await holdCheckpointRequest(fixture, timers, 8900);
+      checkpoint.handle.responseSettled!({ id: 8900, outcome: 'resultWritten' });
+      await expect(checkpoint.response).resolves.toEqual(
+        toOrgPlanCheckpointToolResponse('recorded'),
+      );
+      let rootActive = true;
+      for (const handle of fixture.handles)
+        handle.respond = (method, params) => {
+          if (method === 'thread/read')
+            return {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                status: { type: rootActive ? 'active' : 'idle' },
+                turns: [],
+              },
+            };
+          if (method === 'thread/list')
+            return {
+              data: [
+                {
+                  id: 'checkpoint-executor',
+                  status: { type: 'idle' },
+                  source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                },
+              ],
+            };
+          return undefined;
+        };
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      // The final callback may run before the activity projection drops the
+      // original turn. Its stale working observation cannot release this fence.
+      expect(coordinator!.turnCompleted(fixture.sessionId, checkpoint.turnId)).toBe(true);
+      coordinator!.activityChanged(fixture.sessionId);
+      const beforeFinal = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        const row = beforeFinal
+          .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+          .get(fixture.sessionId) as { lifecycle_json: string };
+        expect(JSON.parse(row.lifecycle_json).checkpoints.rootContinuationFromTurnId).toBe(
+          checkpoint.turnId,
+        );
+      } finally {
+        beforeFinal.close();
+      }
+      rootActive = false;
+      checkpoint.handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: checkpoint.threadId,
+          turn: { id: checkpoint.turnId, status: 'completed' },
+        },
+      });
+      await vi.waitFor(async () =>
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().agentActivity.root
+            .state,
+        ).toBe('idle'),
+      );
+      const starts = () =>
+        fixture.handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      for (let attempt = 0; attempt < 8 && starts().length < 2; attempt++) {
+        const ready = timers.filter((timer) => !timer.cancelled && !timer.fired);
+        expect(ready.length).toBeGreaterThan(0);
+        for (const timer of ready) {
+          timer.fired = true;
+          timer.callback();
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await vi.waitFor(() => expect(starts()).toHaveLength(2));
+      expect(starts().map((request) => (request.params as { threadId: string }).threadId)).toEqual([
+        checkpoint.threadId,
+        checkpoint.threadId,
+      ]);
+      coordinator!.evaluate(fixture.sessionId);
+      coordinator!.turnCompleted(fixture.sessionId, checkpoint.turnId);
+      for (const timer of timers.filter((timer) => !timer.cancelled && !timer.fired)) {
+        timer.fired = true;
+        timer.callback();
+        timer.callback();
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts()).toHaveLength(2);
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        const row = database
+          .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+          .get(fixture.sessionId) as { lifecycle_json: string };
+        expect(
+          JSON.parse(row.lifecycle_json).checkpoints.rootContinuationFromTurnId,
+        ).toBeUndefined();
+        const counts = database
+          .prepare(
+            "SELECT type, count(*) AS count FROM session_events WHERE session_id = ? AND type IN ('org-plan.step-checkpointed', 'org-plan.step-reported', 'autopilot.executor-resumed', 'autopilot.operation-failed', 'autopilot.turn-started') GROUP BY type",
+          )
+          .all(fixture.sessionId);
+        expect(counts).toEqual(
+          expect.arrayContaining([
+            { type: 'org-plan.step-checkpointed', count: 1 },
+            { type: 'org-plan.step-reported', count: 1 },
+            { type: 'autopilot.turn-started', count: 2 },
+          ]),
+        );
+        expect(counts).toHaveLength(3);
+      } finally {
+        database.close();
+      }
+    });
+
+    it('continues the root after a checkpoint while activity is refreshed', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
         activitySchedule: () => () => {},
@@ -1129,31 +1261,36 @@ describe('production composition', () => {
         url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
       });
       void refreshing.then(() => {});
-      await vi.waitFor(() => expect(releaseRoster.length).toBeGreaterThan(0));
-      for (const timer of timers.filter((candidate) => !candidate.cancelled && !candidate.fired)) {
-        timer.fired = true;
-        timer.callback();
+      try {
+        await vi.waitFor(() => expect(releaseRoster.length).toBeGreaterThan(0));
+        for (const timer of timers.filter(
+          (candidate) => !candidate.cancelled && !candidate.fired,
+        )) {
+          timer.fired = true;
+          timer.callback();
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(releaseRoster).toHaveLength(1);
+      } finally {
+        holdRoster = false;
+        for (const release of releaseRoster) release();
+        await refreshing;
       }
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      holdRoster = false;
-      expect(releaseRoster).toHaveLength(1);
-      for (const release of releaseRoster) release();
-      await refreshing;
       const starts = () =>
         fixture.handles
           .flatMap((handle) => handle.requests)
           .filter(
             (request) =>
               request.method === 'turn/start' &&
-              (request.params as { threadId: string }).threadId === 'checkpoint-executor',
+              (request.params as { threadId: string }).threadId === checkpoint.threadId,
           );
-      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+      for (let attempt = 0; attempt < 8 && starts().length < 2; attempt += 1) {
         await vi.waitFor(() =>
           expect(
-            starts().length > 0 || timers.some((timer) => !timer.cancelled && !timer.fired),
+            starts().length > 1 || timers.some((timer) => !timer.cancelled && !timer.fired),
           ).toBe(true),
         );
-        if (starts().length > 0) break;
+        if (starts().length > 1) break;
         const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
         timer.fired = true;
         timer.callback();
@@ -1163,7 +1300,7 @@ describe('production composition', () => {
         });
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
-      await vi.waitFor(() => expect(starts()).toHaveLength(1));
+      await vi.waitFor(() => expect(starts()).toHaveLength(2));
       const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
       const events = database
         .prepare(
@@ -1171,10 +1308,7 @@ describe('production composition', () => {
         )
         .all(fixture.sessionId);
       database.close();
-      expect(events).toEqual([
-        { type: 'org-plan.step-reported' },
-        { type: 'autopilot.executor-resumed' },
-      ]);
+      expect(events).toEqual([{ type: 'org-plan.step-reported' }]);
     });
 
     it('acknowledges a checkpoint before scheduling and drops an obsolete executor wait lease', async () => {
