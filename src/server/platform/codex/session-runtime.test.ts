@@ -151,6 +151,159 @@ describe('CodexSessionRuntime', () => {
     runtime.stopAll();
   });
 
+  it('loads an executor missing from the live registry before retrying its rejected turn', async () => {
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let loaded = false;
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method, params) => {
+          requests.push({ method, params });
+          if (method === 'thread/start') return { thread: { id: 'root-thread' } };
+          if (method === 'thread/resume') {
+            loaded = true;
+            return { thread: { id: 'executor-thread' } };
+          }
+          if (method === 'turn/start') {
+            if (!loaded) throw new CodexJsonRpcError(-32600, 'thread not found: executor-thread');
+            return { turn: { id: 'executor-turn' } };
+          }
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = await runtime.start(
+      RelaySession.create({
+        id: 'unloaded-executor',
+        provider: 'codex',
+        model: 'supervisor-model',
+        modelSettings: { executorModel: 'executor-model', executorReasoningEffort: 'high' },
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot,
+      't',
+    );
+    requests.length = 0;
+    try {
+      await expect(
+        runtime.startExecutorTurn(session, 'executor-thread', 'continue', 'command-1'),
+      ).resolves.toBe('executor-turn');
+      expect(requests.map(({ method }) => method)).toEqual([
+        'turn/start',
+        'thread/resume',
+        'turn/start',
+      ]);
+      expect(requests[1]?.params).toEqual({ threadId: 'executor-thread' });
+      expect(requests[2]?.params).toEqual(requests[0]?.params);
+      expect(session.activeTurnId).toBeNull();
+    } finally {
+      runtime.stopAll();
+    }
+  });
+
+  it.each([
+    ['transport loss', new Error('CODEX_CONNECTION_LOST')],
+    ['generic RPC failure', new CodexJsonRpcError(-32603, 'internal error')],
+    ['wrong thread', new CodexJsonRpcError(-32600, 'thread not found: another-thread')],
+    ['wrong code', new CodexJsonRpcError(-32603, 'thread not found: executor-thread')],
+    [
+      'missing rollout',
+      new CodexJsonRpcError(-32600, 'no rollout found for thread id executor-thread'),
+    ],
+    [
+      'busy writer',
+      new CodexJsonRpcError(-32600, 'thread executor-thread already has an active writer'),
+    ],
+  ])('does not reload or replay an executor after %s', async (_label, failure) => {
+    const requests: string[] = [];
+    const runtime = new CodexSessionRuntime(() => ({
+      rpc: {
+        request: async (method) => {
+          requests.push(method);
+          if (method === 'thread/start') return { thread: { id: 'root-thread' } };
+          if (method === 'turn/start') throw failure;
+          return {};
+        },
+        onNotification: () => () => {},
+        onServerRequest: () => () => {},
+      },
+      close: () => {},
+    }));
+    const session = await runtime.start(
+      RelaySession.create({
+        id: 'rejected-executor',
+        provider: 'codex',
+        workspaceId: 'w',
+        workspacePath: '/w',
+        profile: 'default',
+        effectiveSkillSelection: { skills: [] },
+        now: 't',
+      }).snapshot,
+      't',
+    );
+    requests.length = 0;
+    try {
+      await expect(
+        runtime.startExecutorTurn(session, 'executor-thread', 'continue', 'command-1'),
+      ).rejects.toBe(failure);
+      expect(requests).toEqual(['turn/start']);
+    } finally {
+      runtime.stopAll();
+    }
+  });
+
+  it.each(['load', 'retry'] as const)(
+    'propagates executor %s failure without another retry',
+    async (stage) => {
+      const requests: string[] = [];
+      const failure = new CodexJsonRpcError(-32600, 'thread not found: executor-thread');
+      const runtime = new CodexSessionRuntime(() => ({
+        rpc: {
+          request: async (method) => {
+            requests.push(method);
+            if (method === 'thread/start') return { thread: { id: 'root-thread' } };
+            if (method === 'turn/start' || (method === 'thread/resume' && stage === 'load'))
+              throw failure;
+            return {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close: () => {},
+      }));
+      const session = await runtime.start(
+        RelaySession.create({
+          id: 'bounded-retry',
+          provider: 'codex',
+          workspaceId: 'w',
+          workspacePath: '/w',
+          profile: 'default',
+          effectiveSkillSelection: { skills: [] },
+          now: 't',
+        }).snapshot,
+        't',
+      );
+      requests.length = 0;
+      try {
+        await expect(
+          runtime.startExecutorTurn(session, 'executor-thread', 'continue', 'command-1'),
+        ).rejects.toBe(failure);
+        expect(requests).toEqual(
+          stage === 'load'
+            ? ['turn/start', 'thread/resume']
+            : ['turn/start', 'thread/resume', 'turn/start'],
+        );
+      } finally {
+        runtime.stopAll();
+      }
+    },
+  );
+
   it.each([
     ['interrupts an active executor', [{ id: 'turn', status: 'inProgress', items: [] }], false],
     ['does nothing for an idle executor', [], false],
