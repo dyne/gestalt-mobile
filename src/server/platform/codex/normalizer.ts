@@ -18,6 +18,26 @@ export function normalizeCodexNotification(
   activeTurnId?: string | null,
   origin: NotificationOrigin = { kind: 'root' },
 ): SessionEvent | null {
+  const connection = record(notification.params);
+  if (
+    notification.method === 'mcpServer/statusUpdated' &&
+    connection?.name === 'gestalt-xerj' &&
+    ['failed', 'cancelled'].includes(String(connection.status))
+  ) {
+    return {
+      sessionId,
+      sequence,
+      occurredAt,
+      type: 'activity.updated',
+      payload: {
+        id: 'gestalt-xerj-availability',
+        label: 'Xerj unavailable',
+        detail:
+          'Retrieval is unavailable. Check gestalt xerj status. Use rg and current source reads; readiness will be checked when the runtime resumes.',
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
+      },
+    };
+  }
   const decoded = decodeNotification(notification);
   if (!decoded) return null;
   if (decoded.method === 'item/agentMessage/delta') {

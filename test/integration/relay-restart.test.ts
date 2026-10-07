@@ -160,10 +160,12 @@ test('keeps a persisted thread detached after an HTTP relay restart', async () =
   });
   await second.listen({ host: '127.0.0.1', port: 0 });
   await expect.poll(() => restoredCalls, { timeout: 1_000 }).toEqual(['initialize', 'skills/list']);
-  expect((await second.inject(`/api/sessions/${created.id}`)).json()).toMatchObject({
-    threadId: 'thread-1',
-    state: 'stopped',
-  });
+  await expect
+    .poll(async () => (await second.inject(`/api/sessions/${created.id}`)).json())
+    .toMatchObject({
+      threadId: 'thread-1',
+      state: 'stopped',
+    });
   expect(
     (await second.inject({ method: 'POST', url: `/api/sessions/${created.id}/restore` }))
       .statusCode,
@@ -308,6 +310,7 @@ test('uses the original snapshot only when a detached session sends after profil
       { path: '/skills/alpha/SKILL.md', enabled: true },
       { path: '/skills/beta/SKILL.md', enabled: false },
       { path: '/skills/new/SKILL.md', enabled: false },
+      { name: 'gestalt:xerj', enabled: false },
     ]);
   await second.close();
 });

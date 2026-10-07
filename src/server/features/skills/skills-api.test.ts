@@ -27,6 +27,7 @@ describe('skills REPR endpoints', () => {
             },
             { name: 'Same', path: '/skills/b/SKILL.md', enabled: true, description: 'b' },
             { name: 'Same', path: '/skills/a/SKILL.md', enabled: false, description: 'a' },
+            { name: 'gestalt:xerj', path: '/xerj/SKILL.md', enabled: false },
           ],
           errors: [{ message: 'manifest warning' }],
         }),

@@ -20,3 +20,13 @@ export interface SkillProfileStore {
 export interface SkillCatalog {
   list(workspace: string): Promise<SkillCatalogResult>;
 }
+
+/** Optional retrieval: availability must be recomputed at runtime boundaries. */
+export type RetrievalCapability =
+  | { status: 'absent' }
+  | { status: 'unavailable'; reason: string }
+  | { status: 'ready'; manager: string; endpoint: string };
+
+export interface RetrievalCapabilityPort {
+  check(input: { cwd: string; deadline: number; start: boolean }): Promise<RetrievalCapability>;
+}

@@ -93,6 +93,9 @@ import { promoteRecentThread } from './features/sessions/promote-recent-thread/u
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
+import { ManagedXerj, xerjDeadline } from './platform/retrieval/managed-xerj.js';
+import { CodexXerj } from './platform/retrieval/codex-xerj.js';
+import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
 import type { PlanStatusUpdate } from './features/plans/application/ports.js';
@@ -177,6 +180,7 @@ export type ComposeRelayAppOptions = {
     cwd: string;
     environment?: Readonly<Record<string, string>>;
   }) => AppServer;
+  retrievalCapability?: RetrievalCapabilityPort;
   /** Test-only explicit-session model resolver; production uses provider runtimes below. */
   sessionModelCatalog?: ModelCatalog;
   /** Test seam; production constructs the manager when the kimi CLI is installed. */
@@ -606,12 +610,42 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   // kimi discovery is workspace-scoped, not profile-scoped: the profile only
   // decides which discovered skills a session's server materializes.
   const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
+  const retrievalCapability = options.retrievalCapability ?? new ManagedXerj();
+  const xerj = new CodexXerj(retrievalCapability);
   const skillCatalog = (provider: LlmProvider, profile: string) =>
     provider === 'kimi'
       ? kimiSkillCatalog
       : new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
-  const editorSkillCatalog = new CachedSkillCatalog((provider, profile, workspace) =>
-    skillCatalog(provider, profile).list(workspace),
+  const editorSkillCatalog = new CachedSkillCatalog(
+    (provider, profile, workspace) =>
+      provider === 'codex'
+        ? new CodexSkillCatalog(
+            profile,
+            options.launchAppServer ?? launchCodexAppServer,
+            5_000,
+            xerj,
+          ).list(workspace)
+        : kimiSkillCatalog.list(workspace),
+    async (provider, _profile, workspace, result) => {
+      if (
+        provider !== 'codex' ||
+        !result.skills.some((skill) => skill.name === 'gestalt:xerj' && skill.enabled)
+      )
+        return result;
+      const current = await retrievalCapability.check({
+        cwd: workspace,
+        deadline: xerjDeadline(),
+        start: false,
+      });
+      return current.status === 'ready'
+        ? result
+        : {
+            ...result,
+            skills: result.skills.map((skill) =>
+              skill.name === 'gestalt:xerj' ? { ...skill, enabled: false } : skill,
+            ),
+          };
+    },
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
   const planArchiver = new FilesystemPlanArchiver();
@@ -1358,7 +1392,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           dismissPendingInteractions(sessionId, new Date().toISOString(), 'failed');
           recoverExitedSession(sessionId);
         },
-        resolveSkills,
+        undefined,
         planStatusSource,
         acceptPlanUpdate,
         options.planMeasurementBaseUrl,
@@ -1366,6 +1400,32 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         64,
         root,
         (session) => sessionModelConfig.resolve(session),
+        {
+          prepare: async (session, rpc, config, deadline) => {
+            const catalog = await new CodexSkillCatalog(
+              session.profile,
+              options.launchAppServer ?? launchCodexAppServer,
+              Math.max(1, deadline - Date.now()),
+            ).list(session.workspacePath);
+            const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
+            const selected = compileSkillOverride({
+              discovered: catalog.skills,
+              explicit:
+                session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
+              project: project?.skills,
+            });
+            return xerj.prepare({
+              cwd: session.workspacePath,
+              rpc,
+              config,
+              deadline,
+              skills: catalog.skills,
+              skillsConfig: selected.skillsConfig,
+              start: true,
+            });
+          },
+          verify: (rpc, threadId, state) => xerj.verify(rpc, threadId, state),
+        },
       )
     : null;
   const handleKimiNotification = (

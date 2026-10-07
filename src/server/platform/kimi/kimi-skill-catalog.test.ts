@@ -25,6 +25,25 @@ function catalogWith(getRoutes: Map<string, unknown> | (() => Error)): KimiSkill
 }
 
 describe('KimiSkillCatalog', () => {
+  it('excludes conditional retrieval when web offers no native session readiness gate', async () => {
+    const catalog = catalogWith(
+      new Map([
+        ['/api/v1/workspaces', { items: [{ id: 'w', root: '/repo' }] }],
+        [
+          '/api/v1/workspaces/w/skills',
+          {
+            skills: [
+              { name: 'gestalt:xerj', path: '/xerj/SKILL.md' },
+              { name: 'gestalt:org-plan', path: '/org/SKILL.md' },
+            ],
+          },
+        ],
+      ]),
+    );
+    const result = await catalog.list('/repo');
+    expect(result.skills.map((skill) => skill.name)).toEqual(['gestalt:org-plan']);
+    expect(result.errors[0].message).toContain('native session readiness is unsupported');
+  });
   it('returns nothing when kimi is unavailable', async () => {
     const catalog = new KimiSkillCatalog(null, false);
     expect(await catalog.list('/repo')).toEqual({ skills: [], errors: [] });

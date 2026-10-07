@@ -13,6 +13,9 @@ import {
 } from '../../features/skills/model/skill-profile.js';
 import { SkillProfileError } from '../../features/skills/model/errors.js';
 import { launchCodexAppServer, type CodexProcess } from '../codex/codex-process-launcher.js';
+import type { CodexXerj } from '../retrieval/codex-xerj.js';
+import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import { threadSkillConfig } from '../codex/session-runtime.js';
 
 type AppServer = Pick<CodexProcess, 'close'> & {
   rpc: { request(method: string, params: unknown): Promise<unknown> };
@@ -63,9 +66,11 @@ export class CodexSkillCatalog implements SkillCatalog {
     private readonly profile: string,
     private readonly launch: Launch = launchCodexAppServer,
     private readonly timeoutMs = 5_000,
+    private readonly retrieval?: CodexXerj,
   ) {}
 
   async list(workspace: string): Promise<SkillCatalogResult> {
+    const deadline = Math.min(xerjDeadline(), Date.now() + this.timeoutMs);
     const canonicalWorkspace = resolve(workspace);
     const server = this.launch({ profile: this.profile, cwd: canonicalWorkspace });
     try {
@@ -74,9 +79,11 @@ export class CodexSkillCatalog implements SkillCatalog {
           clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
           capabilities: null,
         }),
+        deadline,
       );
       const result = await this.withTimeout(
         server.rpc.request('skills/list', { cwds: [canonicalWorkspace], forceReload: true }),
+        deadline,
       );
       const parsed = resultSchema.safeParse(result);
       if (!parsed.success)
@@ -94,8 +101,40 @@ export class CodexSkillCatalog implements SkillCatalog {
         const stable = availableSkillSchema.safeParse(skill);
         if (!stable.success)
           throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
-        return stable.data;
+        return stable.data.name === 'gestalt:xerj'
+          ? { ...stable.data, enabled: false }
+          : stable.data;
       });
+      if (this.retrieval && skills.some((skill) => skill.name === 'gestalt:xerj')) {
+        const state = await this.retrieval.prepare({
+          cwd: canonicalWorkspace,
+          deadline,
+          rpc: server.rpc,
+          skills,
+          skillsConfig: skills.map(({ path, enabled }) => ({ path, enabled })),
+          config: {},
+          start: false,
+        });
+        if (state.ready) {
+          try {
+            const result = (await this.withTimeout(
+              server.rpc.request('thread/start', {
+                cwd: canonicalWorkspace,
+                ...threadSkillConfig(state.skillsConfig, state.config),
+                ephemeral: true,
+              }),
+              deadline,
+            )) as { thread?: { id?: string } };
+            const ready =
+              result.thread?.id &&
+              (await this.retrieval.verify(server.rpc, result.thread.id, state));
+            for (const skill of skills)
+              if (skill.name === 'gestalt:xerj') skill.enabled = Boolean(ready);
+          } catch {
+            /* Discovery remains usable without optional retrieval. */
+          }
+        }
+      }
       return {
         skills,
         errors: entry.errors.map((error) => ({
@@ -116,13 +155,16 @@ export class CodexSkillCatalog implements SkillCatalog {
     }
   }
 
-  private async withTimeout<T>(promise: Promise<T>): Promise<T> {
+  private async withTimeout<T>(promise: Promise<T>, deadline: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         promise,
         new Promise<T>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('timeout')), this.timeoutMs);
+          timer = setTimeout(
+            () => reject(new Error('timeout')),
+            Math.max(0, deadline - Date.now()),
+          );
         }),
       ]);
     } finally {
