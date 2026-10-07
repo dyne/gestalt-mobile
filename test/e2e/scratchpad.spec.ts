@@ -57,6 +57,8 @@ async function openScratchpad(page: Page) {
   await page.getByRole('button', { name: 'Scratchpad', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Scratchpad' });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Scratchpad text')).not.toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'Close scratchpad' })).toBeFocused();
   return { dialog, menu, text: dialog.getByLabel('Scratchpad text') };
 }
 

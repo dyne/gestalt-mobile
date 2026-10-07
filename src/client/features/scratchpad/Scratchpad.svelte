@@ -29,6 +29,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let dialog = $state<HTMLDialogElement | null>(null);
   let textarea = $state<HTMLTextAreaElement | null>(null);
+  let closeButton = $state<HTMLButtonElement | null>(null);
   let cancelClearButton = $state<HTMLButtonElement | null>(null);
   let text = $state('');
   let confirmingClear = $state(false);
@@ -38,7 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text = readScratchpad(storage);
     await tick();
     dialog?.showModal();
-    textarea?.focus();
+    closeButton?.focus({ preventScroll: true });
   });
 
   function persist(value: string): void {
@@ -101,6 +102,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <p id="scratchpad-help">Saved automatically in this browser.</p>
       </div>
       <button
+        bind:this={closeButton}
         type="button"
         class="close"
         aria-label="Close scratchpad"
