@@ -116,7 +116,8 @@ export class CodexXerj {
           [xerjServerName]: {
             command: ready.manager,
             args: ['xerj', 'mcp', '--url', ready.endpoint],
-            env_vars: ['GESTALT_HOME', 'XERJ_API_KEY', 'XERJ_AUTH'],
+            cwd: input.cwd,
+            env_vars: ['CODEX_HOME', 'GESTALT_HOME', 'XERJ_API_KEY', 'XERJ_AUTH'],
             enabled: true,
             required: false,
             startup_readiness: 'connection',

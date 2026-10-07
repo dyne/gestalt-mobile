@@ -5,12 +5,14 @@
  */
 
 import type { ProfileOption, WorkspaceOption } from '../application/ports.js';
+import type { XerjStatus } from '../../../../shared/contracts/xerj-status.js';
 import type { ComponentVersion } from '../../../../shared/contracts/component-version.js';
 import type {
   LlmProvider,
   ProviderAvailability,
 } from '../../../../shared/contracts/llm-provider.js';
 export type BootstrapResponse = {
+  xerj?: XerjStatus;
   sessionDefaults?:
     import('../../../../shared/contracts/session-defaults.js').SessionDefaults | null;
   sessionDefaultsError?: boolean;

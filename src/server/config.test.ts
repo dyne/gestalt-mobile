@@ -11,6 +11,15 @@ import { describe, expect, it } from 'vitest';
 import { CliUsageError, normalizePublicOrigin, parseConfig } from './config.js';
 
 describe('parseConfig', () => {
+  it('selects root-wide automatic, manual or disabled retrieval without permission changes', () => {
+    for (const mode of ['auto', 'manual', 'off']) {
+      expect(parseConfig(['--xerj', mode, '--cwd', 'universe'], '/caller')).toMatchObject({
+        xerj: mode,
+        root: '/caller/universe',
+      });
+    }
+    expect(() => parseConfig(['--xerj', 'unknown'])).toThrow('--xerj must be auto, manual, or off');
+  });
   it('uses safe production defaults', () => {
     expect(parseConfig([], '/caller')).toEqual({
       host: '127.0.0.1',
@@ -23,6 +32,7 @@ describe('parseConfig', () => {
       },
       root: resolve('/caller'),
       dataDir: undefined,
+      xerj: 'manual',
     });
   });
 
@@ -56,6 +66,7 @@ describe('parseConfig', () => {
       },
       root: resolve('/caller/work'),
       dataDir: './state',
+      xerj: 'manual',
       iconPath: resolve('/caller/subdirectory/brand.png'),
     });
   });

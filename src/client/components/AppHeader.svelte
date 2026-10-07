@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import type { XerjStatus } from '../../shared/contracts/xerj-status.js';
   import type { ComponentVersion } from '../../shared/contracts/component-version.js';
   import type { HeaderAction } from '../features/sessions/header-actions.js';
   import { themes, type ThemeId } from '../features/theme/theme-registry.js';
@@ -17,6 +18,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     brandIconUrl = null,
     passkeyAuthEnabled = true,
     componentVersions = [],
+    xerj,
+    onconfigurationchange = () => {},
     contextualActions = [],
     onthemechange,
     onlock = () => {},
@@ -35,6 +38,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     brandIconUrl?: string | null;
     passkeyAuthEnabled?: boolean;
     componentVersions?: readonly ComponentVersion[];
+    xerj?: XerjStatus;
+    onconfigurationchange?: (open: boolean) => void;
     contextualActions?: readonly HeaderAction[];
     onthemechange: (theme: ThemeId) => void;
     onlock?: () => void;
@@ -126,7 +131,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   </div>
 </header>
 
-<div id="configuration-panel" class="configuration-panel" popover="auto">
+<div
+  id="configuration-panel"
+  class="configuration-panel"
+  popover="auto"
+  ontoggle={(event) => onconfigurationchange(event.newState === 'open')}
+>
   <div class="configuration-brand" aria-label="Dyne">
     <img class="configuration-logo light-asset" src="/branding/dyne-logotype-black.svg" alt="" />
     <img class="configuration-logo dark-asset" src="/branding/dyne-logotype-white.svg" alt="" />
@@ -187,6 +197,42 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       popovertargetaction="hide"
       onclick={onlock}>Lock Gestalt Mobile</button
     >
+  {/if}
+  {#if xerj}
+    <section class="component-versions xerj-status" aria-labelledby="xerj-status-title">
+      <h2 id="xerj-status-title">Source discovery</h2>
+      <dl>
+        <div>
+          <dt>XERJ</dt>
+          <dd>{xerj.state}</dd>
+        </div>
+        <div>
+          <dt>Root</dt>
+          <dd class="xerj-root">{xerj.root}</dd>
+        </div>
+        {#if xerj.phase}<div>
+            <dt>Phase</dt>
+            <dd>
+              {xerj.phase}{xerj.percent === undefined ? '' : ` · ${Math.round(xerj.percent)}%`}
+            </dd>
+          </div>{/if}
+        {#if xerj.files !== undefined}<div>
+            <dt>Files</dt>
+            <dd>{xerj.files.toLocaleString()}</dd>
+          </div>{/if}
+        {#if xerj.records !== undefined}<div>
+            <dt>Records</dt>
+            <dd>{xerj.records.toLocaleString()}</dd>
+          </div>{/if}
+        {#if xerj.lastUpdate}<div>
+            <dt>Last update</dt>
+            <dd>
+              <time datetime={xerj.lastUpdate}>{new Date(xerj.lastUpdate).toLocaleString()}</time>
+            </dd>
+          </div>{/if}
+      </dl>
+      {#if xerj.message}<p>{xerj.message}</p>{/if}
+    </section>
   {/if}
   {#if componentVersions.length}
     <section class="component-versions" aria-labelledby="component-versions-title">
@@ -330,6 +376,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     text-align: end;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .xerj-status dl > div {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .xerj-status .xerj-root {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .xerj-status p {
+    margin-block: 0.5rem 0;
+    color: var(--theme-text-muted);
+    font-size: 0.75rem;
   }
 
   .maintenance-actions button {

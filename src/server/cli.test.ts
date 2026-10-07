@@ -197,6 +197,7 @@ describe('runCli', () => {
           GESTALT_MANAGER_VERSION: '0.1.0',
           GESTALT_AGENTS_VERSION: '2.9.0',
           GESTALT_CONTEXT_MODE_VERSION: '2.9.0',
+          GESTALT_XERJ_VERSION: '1.0.0-rc.87',
         },
       }),
     ).toBe(0);
@@ -211,6 +212,7 @@ describe('runCli', () => {
           { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
           { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
           { id: 'codex', label: 'Codex CLI', version: 'codex-cli 1.2.3' },
+          { id: 'xerj', label: 'xerj', version: '1.0.0-rc.87' },
         ],
         relyingParty: {
           publicOrigin: 'http://localhost:43210',
