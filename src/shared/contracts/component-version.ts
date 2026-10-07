@@ -5,7 +5,7 @@
  */
 
 export type ComponentVersion = Readonly<{
-  id: 'gestalt' | 'gestalt-mobile' | 'gestalt-agents' | 'context-mode' | 'codex';
+  id: 'gestalt' | 'gestalt-mobile' | 'gestalt-agents' | 'context-mode' | 'codex' | 'xerj';
   label: string;
   version: string | null;
 }>;

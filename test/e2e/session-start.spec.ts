@@ -2168,3 +2168,61 @@ test('captures the configuration popover across the named theme accessibility ma
     }
   }
 });
+
+test('shows live root-wide XERJ progress only while configuration is open', async ({
+  page,
+}, testInfo) => {
+  let requests = 0;
+  const status = {
+    mode: 'auto',
+    state: 'indexing',
+    root: '/sources/engineering/bitcoin-forks',
+    phase: 'index',
+    percent: 42,
+    files: 1234,
+    records: 5678,
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      json: {
+        workspaces: [],
+        profiles: [],
+        sessions: [],
+        xerj: status,
+        versions: [{ id: 'xerj', label: 'xerj', version: '1.0.0-rc.87' }],
+      },
+    }),
+  );
+  await page.route('**/api/xerj', (route) => {
+    requests += 1;
+    return route.fulfill({ json: status });
+  });
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Open configuration' })).toBeVisible();
+  expect(requests).toBe(0);
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  const region = page.getByRole('region', { name: 'Source discovery' });
+  await expect(region).toContainText('42%');
+  await expect(region).toContainText('bitcoin-forks');
+  await expect.poll(() => requests).toBe(1);
+  for (const scale of [100, 200]) {
+    await page.locator('html').evaluate((root, size) => {
+      root.style.fontSize = `${size}%`;
+    }, scale);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await region.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`xerj-menu-${scale}.png`) });
+  }
+  await page.keyboard.press('Escape');
+  await expect(region).toBeHidden();
+  const closedRequests = requests;
+  await page.waitForTimeout(5200);
+  expect(requests).toBe(closedRequests);
+  Object.assign(status, { state: 'error', message: 'XERJ needs an index rebuild.' });
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await expect(page.getByRole('status')).toContainText('XERJ needs an index rebuild.');
+});

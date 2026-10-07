@@ -81,6 +81,31 @@ async function setup(status: 'ready' | 'absent' | 'unavailable' = 'ready') {
 }
 
 describe('native runtime retrieval', () => {
+  it('preserves the active workspace permission boundary when enabling global retrieval', async () => {
+    const f = await setup();
+    const permissions = {
+      sandbox_mode: 'workspace-write',
+      sandbox_workspace_write: { writable_roots: [f.root] },
+      approval_policy: 'never',
+    };
+    const state = await f.adapter.prepare({
+      cwd: f.root,
+      deadline: Date.now() + 1000,
+      rpc: f.rpc,
+      skills: f.skills,
+      skillsConfig: [],
+      config: permissions,
+      start: true,
+    });
+    expect(state.ready).toBe(true);
+    for (const [key, value] of Object.entries(permissions))
+      expect(state.config[key]).toEqual(value);
+    expect(state.config).not.toHaveProperty('permissions');
+    state.fallback();
+    for (const [key, value] of Object.entries(permissions))
+      expect(state.config[key]).toEqual(value);
+  });
+
   it('reports connection loss through existing chat activity without relaying raw provider errors', () => {
     const event = normalizeCodexNotification('s', 1, 't', {
       method: 'mcpServer/statusUpdated',
@@ -103,7 +128,12 @@ describe('native runtime retrieval', () => {
       model_reasoning_effort: 'high',
       mcp_servers: {
         alias: { enabled: false },
-        [xerjServerName]: { enabled: true, enabled_tools: xerjTools },
+        [xerjServerName]: {
+          enabled: true,
+          enabled_tools: xerjTools,
+          cwd: f.root,
+          env_vars: ['CODEX_HOME', 'GESTALT_HOME', 'XERJ_API_KEY', 'XERJ_AUTH'],
+        },
       },
     });
     expect(state.config.developer_instructions).toContain('Keep user guidance.');

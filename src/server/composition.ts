@@ -93,6 +93,8 @@ import { promoteRecentThread } from './features/sessions/promote-recent-thread/u
 import { FilesystemSkillProfileStore } from './platform/skills/filesystem-skill-profile-store.js';
 import { CodexSkillCatalog } from './platform/skills/codex-skill-catalog.js';
 import { CachedSkillCatalog } from './platform/skills/cached-skill-catalog.js';
+import { XerjIndexer } from './platform/retrieval/xerj-indexer.js';
+import type { XerjStatus } from '../shared/contracts/xerj-status.js';
 import { ManagedXerj, xerjDeadline } from './platform/retrieval/managed-xerj.js';
 import { CodexXerj } from './platform/retrieval/codex-xerj.js';
 import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
@@ -149,6 +151,7 @@ export type ComposeRelayAppOptions = {
   installedKimiVersion?: string | null;
   componentVersions?: readonly ComponentVersion[];
   startAppServers?: boolean;
+  xerj?: XerjStatus['mode'];
   activityDiagnostic?: (sessionId: string, code: 'reconcileExhausted') => void;
   activitySchedule?: (callback: () => void, delayMs: number) => () => void;
   /** Test-only deterministic seam around the production coordinator timer. */
@@ -610,7 +613,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   // kimi discovery is workspace-scoped, not profile-scoped: the profile only
   // decides which discovered skills a session's server materializes.
   const kimiSkillCatalog = new KimiSkillCatalog(kimiManager ?? null, kimiManager != null);
-  const retrievalCapability = options.retrievalCapability ?? new ManagedXerj();
+  const retrievalCapability =
+    options.xerj === 'off'
+      ? { check: async () => ({ status: 'absent' as const }) }
+      : (options.retrievalCapability ?? new ManagedXerj());
+  const xerjIndexer = new XerjIndexer(root, options.xerj ?? 'manual', retrievalCapability);
   const xerj = new CodexXerj(retrievalCapability);
   const skillCatalog = (provider: LlmProvider, profile: string) =>
     provider === 'kimi'
@@ -1710,6 +1717,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       recentThreads: recentThreadsForRelay,
       sessionDefaults,
       bootstrap: {
+        xerj: () => xerjIndexer.status(),
         sessionDefaults,
         workspaces,
         profiles: options.profiles,
@@ -2356,6 +2364,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
   };
   app.addHook('onListen', async () => {
+    if (options.xerj) xerjIndexer.start();
     const profile = (await options.profiles.list()).find((item) => item.state === 'ok')?.name;
     if (profile) await editorSkillCatalog.refresh('codex', profile, root);
     // Kimi discovery owns a provider process, so passive relay startup must not
@@ -2386,6 +2395,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   });
   app.addHook('onClose', async () => {
     closing = true;
+    await xerjIndexer.close();
     for (const [sessionId, timer] of capacityRecoveryTimers) {
       clearTimeout(timer);
       capacityRecoveries.delete(sessionId);

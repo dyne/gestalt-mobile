@@ -24,6 +24,46 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('shows root-wide indexing progress and durable recovery guidance', async () => {
+    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
+    const { rerender } = render(AppHeader, {
+      ...props,
+      xerj: {
+        mode: 'auto',
+        state: 'indexing',
+        root: '/sources/engineering',
+        phase: 'index',
+        percent: 42,
+      },
+    });
+    const status = screen.getByRole('region', { name: 'Source discovery', hidden: true });
+    expect(status.textContent).toContain('/sources/engineering');
+    expect(status.textContent).toContain('42%');
+    await rerender({
+      ...props,
+      xerj: {
+        mode: 'auto',
+        state: 'watching',
+        root: '/sources/engineering',
+        files: 300,
+        records: 500,
+      },
+    });
+    expect(status.textContent).toContain('watching');
+    expect(status.textContent).toContain('300');
+    expect(status.textContent).not.toContain('42%');
+    await rerender({
+      ...props,
+      xerj: {
+        mode: 'auto',
+        state: 'error',
+        root: '/sources/engineering',
+        message: 'Run gestalt doctor.',
+      },
+    });
+    expect(status.textContent).toContain('Run gestalt doctor.');
+  });
+
   it('adds and removes the contextual CLI copy action and closes the menu after copying', async () => {
     const oncopytocli = vi.fn();
     const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
@@ -164,6 +204,7 @@ describe('AppHeader', () => {
         { id: 'gestalt-agents', label: 'Gestalt Agents', version: '2.9.0' },
         { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
+        { id: 'xerj', label: 'xerj', version: 'v1.0.0-rc.87' },
       ],
     });
 
@@ -179,6 +220,7 @@ describe('AppHeader', () => {
       ['Gestalt Agents', '2.9.0'],
       ['Context Mode', '2.9.0'],
       ['Codex CLI', 'codex-cli 0.144.3'],
+      ['xerj', 'v1.0.0-rc.87'],
     ]);
   });
 

@@ -6,9 +6,11 @@
 
 import type { ModelCatalog, ProfileCatalog, WorkspaceCatalog } from '../application/ports.js';
 import type { BootstrapResponse } from './response.js';
+import type { XerjStatus } from '../../../../shared/contracts/xerj-status.js';
 import type { ComponentVersion } from '../../../../shared/contracts/component-version.js';
 import type { ProviderAvailability } from '../../../../shared/contracts/llm-provider.js';
 export type BootstrapDependencies = {
+  xerj?: () => XerjStatus;
   sessionDefaults?: import('../../../../shared/contracts/session-defaults.js').SessionDefaultsStore;
   workspaces: Pick<WorkspaceCatalog, 'list'>;
   profiles: Pick<ProfileCatalog, 'list'>;
@@ -37,6 +39,7 @@ export async function getBootstrap(deps: BootstrapDependencies): Promise<Bootstr
   }
   return {
     ...(deps.sessionDefaults ? { sessionDefaults, sessionDefaultsError } : {}),
+    ...(deps.xerj ? { xerj: deps.xerj() } : {}),
     workspaces,
     profiles,
     models: { codex: codexModels, kimi: kimiModels },
