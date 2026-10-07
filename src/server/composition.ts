@@ -2025,7 +2025,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         },
       },
       workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
-      workspaceFileRoutes: { workspaces, files: workspaceFiles },
+      workspaceFileRoutes: {
+        workspaces,
+        files: workspaceFiles,
+        readLinkedFile: async (root, path) => {
+          const preview = await workspaceFiles.read(path.startsWith('/') ? '/' : root, path);
+          return preview.kind === 'available' && path.startsWith('/')
+            ? { ...preview, preview: { ...preview.preview, path } }
+            : preview;
+        },
+      },
       autopilot,
       ...(runtime
         ? {

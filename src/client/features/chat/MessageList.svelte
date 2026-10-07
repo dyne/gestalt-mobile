@@ -17,6 +17,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { renderCommentary, type CommentaryPart } from './rendering.js';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
+  import {
+    localFilePathFromHref,
+    localFileReferenceFromHref,
+  } from '../../../shared/contracts/local-file-link.js';
   import { isLocalOrgHref } from '../plans/org-plan-link.js';
   import { copyText } from '../sessions/clipboard.js';
 
@@ -35,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondecision?(id: string, decision: 'accept' | 'decline'): void;
     onretry?(interaction: ProjectedInteraction): void;
     onopenorg?(href: string): void;
+    onopenfile?(path: string, line?: number): void;
     oncopyresult?(copied: boolean): void;
   };
   let {
@@ -52,6 +57,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondecision = () => {},
     onretry = () => {},
     onopenorg,
+    onopenfile,
     oncopyresult = () => {},
   }: Props = $props();
   let groups = $derived(groupMessages(messages));
@@ -169,6 +175,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if part.kind === 'link'}
       {#if onopenorg && isLocalOrgHref(part.href)}
         <a href={part.href} onclick={(event) => openOrg(event, part.href)}>{part.text}</a>
+      {:else if onopenfile && localFilePathFromHref(part.href)}
+        <a
+          href={part.href}
+          onclick={(event) => {
+            event.preventDefault();
+            const reference = localFileReferenceFromHref(part.href)!;
+            if (reference.line) onopenfile?.(reference.path, reference.line);
+            else onopenfile?.(reference.path);
+          }}>{part.text}</a
+        >
       {:else}
         <a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>
       {/if}

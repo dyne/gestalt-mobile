@@ -64,6 +64,34 @@ describe('MessageList', () => {
     expect(onopenorg).toHaveBeenCalledWith('/projects/one/plans/roadmap.org:12');
   });
 
+  it('opens local files in the viewer and keeps web links external', async () => {
+    const onopenfile = vi.fn();
+    render(MessageList, {
+      messages: [
+        {
+          id: 'links',
+          role: 'assistant',
+          complete: true,
+          text: '[Trace](/tmp/trace.json) [Report](</home/me/My Report.md:12>) [Docs](./docs/README.md) [Web](https://example.com)',
+        },
+      ],
+      activities: [],
+      onopenfile,
+    });
+    for (const [name, path] of [
+      ['Trace', '/tmp/trace.json'],
+      ['Report', '/home/me/My Report.md'],
+      ['Docs', './docs/README.md'],
+    ]) {
+      const link = screen.getByRole('link', { name });
+      expect(link.getAttribute('target')).toBeNull();
+      await fireEvent.click(link);
+      if (name === 'Report') expect(onopenfile).toHaveBeenLastCalledWith(path, 12);
+      else expect(onopenfile).toHaveBeenLastCalledWith(path);
+    }
+    expect(screen.getByRole('link', { name: 'Web' }).getAttribute('target')).toBe('_blank');
+  });
+
   it('renders Markdown headings and strong emphasis as semantic elements', () => {
     render(MessageList, {
       messages: [

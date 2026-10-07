@@ -1747,6 +1747,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ondecision={(id, decision) => void resolveInteraction(id, decision)}
               onretry={retryInteraction}
               onopenorg={openLinkedOrgPlan}
+              onopenfile={(path, line) => {
+                if (selectedSession?.workspaceId)
+                  fileViewerTarget = {
+                    workspaceId: selectedSession.workspaceId,
+                    sessionId: selectedSession.id,
+                    path,
+                    line,
+                  };
+              }}
               oncopyresult={reportCodeCopy}
             />
             <Composer
@@ -1981,7 +1990,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if fileViewerTarget}
         <FileViewer
           target={fileViewerTarget}
-          readFile={relay.getWorkspaceFilePreview}
+          readFile={(workspaceId, path, signal) =>
+            fileViewerTarget?.sessionId
+              ? relay.getSessionFilePreview(fileViewerTarget.sessionId, path, signal)
+              : relay.getWorkspaceFilePreview(workspaceId, path, signal)}
           listDirectory={relay.listWorkspaceDirectory}
           onclose={() => {
             fileViewerTarget = null;

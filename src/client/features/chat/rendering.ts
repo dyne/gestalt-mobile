@@ -106,7 +106,7 @@ function isTableDivider(cell: string): boolean {
 function linkParts(text: string): CommentaryPart[] {
   const parts: CommentaryPart[] = [];
   const pattern =
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|codex:\/\/[^\s)]+|\/[^\s)]+)\)|`([^`]+)`|\*\*([^*\n]+)\*\*/g;
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+|codex:\/\/[^\s)]+|file:\/\/[^\s)]+|\/[^\s)]+|\.{1,2}\/[^\s)]+|[^\s:()]+\.[a-zA-Z\d]+(?::\d+(?::\d+)?)?(?:#L\d+(?:C\d+)?)?|<(?:https?:\/\/|codex:\/\/|file:\/\/|\/|\.{1,2}\/)[^>\n]+>)\)|`([^`]+)`|\*\*([^*\n]+)\*\*/g;
   let cursor = 0;
   for (const match of text.matchAll(pattern)) {
     const before = text.slice(cursor, match.index);
@@ -116,7 +116,7 @@ function linkParts(text: string): CommentaryPart[] {
         ? { kind: 'code', text: match[3] }
         : match[4]
           ? { kind: 'strong', parts: linkParts(match[4]) }
-          : { kind: 'link', text: match[1] ?? '', href: match[2] ?? '' },
+          : { kind: 'link', text: match[1] ?? '', href: (match[2] ?? '').replace(/^<|>$/g, '') },
     );
     cursor = (match.index ?? 0) + match[0].length;
   }

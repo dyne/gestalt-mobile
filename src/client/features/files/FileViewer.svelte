@@ -6,6 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import AppControl from '../../components/AppControl.svelte';
+  import FileSource from './FileSource.svelte';
+  import {
+    fileLineReference,
+    localFileReferenceFromHref,
+    type FileLineReference,
+  } from '../../../shared/contracts/local-file-link.js';
   import JsonTree from './JsonTree.svelte';
   import FileTree from './FileTree.svelte';
   import { FileBrowserController, type DirectoryReader } from './file-browser-controller.js';
@@ -39,8 +45,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let jsonUnfolded = $state(false);
   let revision = $state(0);
   let tree = $state<FileBrowserController | null>(null);
-  let history = $state<string[]>([]);
+  let history = $state<FileLineReference[]>([]);
+  let selectedLine = $state<number | undefined>();
   let currentPath = $state('');
+  let sourceLineCount = $derived(preview?.kind === 'file' ? preview.content.split('\n').length : 0);
   let formatted = $derived(preview ? formatFile(preview) : { format: 'text', text: '' });
   let html = $derived(
     formatted.format === 'markdown' && !source ? markdownPreview(formatted.text) : '',
@@ -48,8 +56,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let request: AbortController | null = null;
   let trigger: HTMLElement | null = null;
 
-  async function load(path: string, remember = true): Promise<void> {
-    if (remember && preview) history = [...history, preview.path];
+  async function load(reference: string, remember = true, line?: number): Promise<void> {
+    const parsed = fileLineReference(reference);
+    const path = parsed.path;
+    if (remember && preview) history = [...history, { path: preview.path, line: selectedLine }];
+    selectedLine = Number.isSafeInteger(line) && line! > 0 ? line : parsed.line;
     request?.abort();
     tree?.close();
     tree = null;
@@ -59,7 +70,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     loading = true;
     failed = false;
     preview = null;
-    source = false;
+    source = Boolean(selectedLine);
     jsonUnfolded = false;
     try {
       const result = await readFile(target.workspaceId, path, active.signal);
@@ -86,22 +97,37 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       if (!active.signal.aborted) {
         loading = false;
         await tick();
-        heading?.focus();
+        heading?.focus({ preventScroll: true });
+        centerSelectedLine();
       }
     }
+  }
+  function centerSelectedLine(): void {
+    if (!selectedLine || !preview || preview.kind !== 'file') return;
+    dialog.querySelector<HTMLElement>(`[data-line="${selectedLine}"]`)?.scrollIntoView({
+      block: 'center',
+      inline: 'nearest',
+      behavior: 'instant',
+    });
+  }
+  async function toggleSource(): Promise<void> {
+    source = !source;
+    await tick();
+    if (source) centerSelectedLine();
   }
   function back(): void {
     const path = history.at(-1);
     if (path === undefined) return;
     history = history.slice(0, -1);
-    void load(path, false);
+    void load(path.path, false, path.line);
   }
   function markdownLink(event: MouseEvent): void {
     const anchor = event.target instanceof Element ? event.target.closest('a') : null;
     const href = anchor?.getAttribute('href');
     if (!href || /^(?:https?:|mailto:|#)/i.test(href)) return;
     event.preventDefault();
-    void load(relativeFileReference(currentPath, href));
+    const reference = localFileReferenceFromHref(href) ?? fileLineReference(href);
+    void load(relativeFileReference(currentPath, reference.path), true, reference.line);
   }
   // Delegate clicks from native anchors in sanitized Markdown, including keyboard activation.
   function markdownLinks(element: HTMLElement) {
@@ -111,7 +137,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   onMount(() => {
     trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.showModal();
-    void load(target.path, false);
+    void load(target.path, false, target.line);
     return () => {
       request?.abort();
       tree?.close();
@@ -142,11 +168,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   <nav aria-label="Preview controls">
     <AppControl onclick={back} disabled={!history.length}>Back</AppControl>
     {#if preview?.kind === 'file' && formatted.format !== 'text'}
-      <AppControl
-        onclick={() => {
-          source = !source;
-        }}
-        pressed={source}>{source ? 'Show formatted' : 'Show source'}</AppControl
+      <AppControl onclick={() => void toggleSource()} pressed={source}
+        >{source ? 'Show formatted' : 'Show source'}</AppControl
       >
     {/if}
     {#if formatted.format === 'json' && !source}
@@ -159,6 +182,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         >{jsonUnfolded ? 'Unfolded' : 'Folded'}</AppControl
       >
     {/if}
+    {#if selectedLine && preview?.kind === 'file'}<span class="line-target" role="status">
+        {selectedLine <= sourceLineCount
+          ? `Line ${selectedLine}`
+          : `Line ${selectedLine} unavailable (${sourceLineCount} lines)`}
+      </span>{/if}
     {#if preview?.kind === 'file'}<span class="format"
         >{formatted.format.toUpperCase()} · {preview.size.toLocaleString()} bytes</span
       >{/if}
@@ -167,7 +195,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     {#if loading}<p role="status">Loading preview…</p>{:else if failed}<p>
         This item could not be opened.
       </p>
-      <AppControl onclick={() => void load(currentPath, false)}>Retry</AppControl>
+      <AppControl onclick={() => void load(currentPath, false, selectedLine)}>Retry</AppControl>
     {:else if preview?.kind === 'directory' && tree}
       <FileTree
         controller={tree}
@@ -190,9 +218,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <div class="markdown" use:markdownLinks>{@html html}</div>
       {:else if formatted.format === 'json' && !source}
         <JsonTree text={formatted.text} unfolded={jsonUnfolded} />
-      {:else}<pre class:json={formatted.format === 'json'}><code
-            >{source ? preview.content : formatted.text}</code
-          ></pre>{/if}
+      {:else}<FileSource
+          text={source ? preview.content : formatted.text}
+          line={selectedLine}
+        />{/if}
     {/if}
   </div>
 </dialog>
@@ -244,6 +273,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     padding: 0.6rem 1.25rem 1rem;
     border-bottom: 1px solid var(--theme-border);
   }
+  .line-target {
+    font-size: 0.8rem;
+    color: var(--theme-text-muted);
+  }
   .format {
     margin-inline-start: auto;
     color: var(--theme-text-muted);
@@ -255,15 +288,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     overflow: auto;
     overscroll-behavior: contain;
     padding: 1.25rem;
-  }
-  pre {
-    margin: 0;
-    font-size: 0.85rem;
-    line-height: 1.6;
-    tab-size: 2;
-  }
-  pre.json {
-    color: var(--theme-accent);
   }
   .markdown {
     max-width: 75ch;

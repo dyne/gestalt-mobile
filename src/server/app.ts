@@ -175,6 +175,10 @@ export type AppDependencies = {
   workspaceFileRoutes?: {
     workspaces: Pick<WorkspaceCatalog, 'resolve'>;
     files: WorkspaceFileSource;
+    readLinkedFile?(
+      root: string,
+      path: string,
+    ): Promise<import('./features/files/application/ports.js').FilePreviewResult>;
   };
   planMeasurementRoutes?: {
     exists(id: string): boolean;
