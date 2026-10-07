@@ -71,6 +71,16 @@ export class KimiSkillCatalog implements SkillCatalog {
       for (const wire of wireSkills) {
         const skill = wire as WireSkill;
         if (!skill || typeof skill !== 'object' || typeof skill.name !== 'string') continue;
+        // kimi web workers accept only global MCP configuration and expose no
+        // per-session native connection readiness gate. Never materialize
+        // conditional retrieval guidance without that verified connection.
+        if (skill.name === 'gestalt:xerj') {
+          errors.push({
+            message:
+              'Xerj retrieval is unavailable for Kimi web: native session readiness is unsupported.',
+          });
+          continue;
+        }
         // The shared catalog contract canonicalizes skill paths as absolute
         // filesystem paths (profile snapshots and overrides resolve against
         // them). kimi built-ins report no path and cannot be materialized per

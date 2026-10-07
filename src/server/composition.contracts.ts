@@ -5323,19 +5323,10 @@ describe('production composition', () => {
         payload: { workspaceId: workspace!.id, profile: 'default', provider: 'codex' },
       });
       expect(created.statusCode).toBe(202);
-      expect(firstCalls).toEqual([
-        'initialize',
-        'model/list',
-        'initialize',
-        'model/list',
-        'initialize',
-        'skills/list',
-        'initialize',
-        'skills/list',
-        'initialize',
-        'thread/start',
-        'thread/read',
-      ]);
+      expect(firstCalls.filter((method) => method === 'thread/start')).toHaveLength(1);
+      expect(firstCalls).not.toContain('thread/resume');
+      expect(firstCalls.indexOf('skills/list')).toBeLessThan(firstCalls.indexOf('thread/start'));
+      expect(firstCalls.indexOf('config/read')).toBeLessThan(firstCalls.indexOf('thread/start'));
       await first.close();
 
       const secondCalls: string[] = [];
@@ -5353,12 +5344,13 @@ describe('production composition', () => {
       await expect
         .poll(() => secondCalls, { timeout: 1_000 })
         .toEqual(['initialize', 'skills/list']);
-      const restored = await second.inject(`/api/sessions/${created.json().id}`);
-      expect(restored.json()).toMatchObject({
-        threadId: 'thread-1',
-        state: 'stopped',
-        agentActivity: { confidence: 'stale', root: { state: 'disconnected' } },
-      });
+      await expect
+        .poll(async () => (await second.inject(`/api/sessions/${created.json().id}`)).json())
+        .toMatchObject({
+          threadId: 'thread-1',
+          state: 'stopped',
+          agentActivity: { confidence: 'stale', root: { state: 'disconnected' } },
+        });
       await second.close();
     });
 

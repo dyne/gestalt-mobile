@@ -40,6 +40,8 @@ import {
   isMissingCodexThreadRollout,
 } from './json-rpc-client.js';
 import { resolvedServerRequestId } from './server-request.js';
+import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
+import { xerjDeadline } from '../retrieval/managed-xerj.js';
 
 export type AppServer = {
   rpc: {
@@ -72,11 +74,14 @@ export function threadSkillConfig(
   skillsConfig?: readonly { path: string; enabled: boolean }[],
   modelConfig: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  const conditional = (modelConfig.skills as { config?: unknown[] } | undefined)?.config ?? [];
   return {
     config: {
       ...modelConfig,
       'tools.update_plan.enabled': true,
-      ...(skillsConfig === undefined ? {} : { skills: { config: skillsConfig } }),
+      ...(skillsConfig === undefined
+        ? {}
+        : { skills: { config: [...skillsConfig, ...conditional] } }),
     },
   };
 }
@@ -150,13 +155,17 @@ class SessionResource {
   constructor(
     readonly sessionId: string,
     readonly process: AppServer,
-    readonly skillsConfig: readonly { path: string; enabled: boolean }[] | undefined,
-    readonly modelConfig: Record<string, unknown>,
+    public skillsConfig: readonly { path: string; enabled: boolean }[] | undefined,
+    public modelConfig: Record<string, unknown>,
     readonly planStatusLease: PlanStatusLease | undefined,
     readonly planMeasurementToken: string,
     private unregister: readonly (() => void)[],
     private readonly onDisposed: () => void,
   ) {}
+
+  retrieval: CodexRetrievalState | undefined;
+  retrievalFailureReported = false;
+  readinessDeadline = xerjDeadline();
 
   dispose(): boolean {
     if (this.disposed) return false;
@@ -228,6 +237,15 @@ export class CodexSessionRuntime {
     private readonly resolveModelConfig?: (
       session: RelaySessionSnapshot,
     ) => Promise<Record<string, unknown>>,
+    private readonly retrieval?: {
+      prepare(
+        session: RelaySessionSnapshot,
+        rpc: AppServer['rpc'],
+        config: Record<string, unknown>,
+        deadline: number,
+      ): Promise<CodexRetrievalState>;
+      verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
+    },
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -247,6 +265,7 @@ export class CodexSessionRuntime {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
+      await this.prepareRetrieval(resource, session);
       const startedThreadId = await this.startThread(
         resource.process,
         session,
@@ -254,11 +273,15 @@ export class CodexSessionRuntime {
         resource.modelConfig,
       );
       resource.threadId = startedThreadId;
+      await this.verifyRetrieval(resource, session, true);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return RelaySession.rehydrate(session)
-        .bindThread(startedThreadId, now)
-        .supportsAttentionTool(now).snapshot;
+      return this.withEffectiveRetrieval(
+        RelaySession.rehydrate(session)
+          .bindThread(resource.threadId!, now)
+          .supportsAttentionTool(now).snapshot,
+        resource,
+      );
     } catch (error) {
       resource.dispose();
       throw error;
@@ -959,7 +982,9 @@ export class CodexSessionRuntime {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
+      await this.prepareRetrieval(resource, session);
       let result: RestoreSessionResult;
+      let missingRollout: unknown;
       try {
         await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
@@ -985,6 +1010,7 @@ export class CodexSessionRuntime {
         };
       } catch (error) {
         if (!canRebindMissingRollout(session, error)) throw error;
+        missingRollout = error;
         const replacementThreadId = await this.startThread(
           resource.process,
           session,
@@ -994,10 +1020,13 @@ export class CodexSessionRuntime {
         result = rebindMissingRollout(session, error, replacementThreadId, now);
       }
       resource.threadId = result.session.threadId!;
+      await this.verifyRetrieval(resource, session, result.replacementCreated);
+      if (result.replacementCreated && resource.threadId !== result.session.threadId)
+        result = rebindMissingRollout(session, missingRollout, resource.threadId!, now);
       this.sessions.get(session.id)?.dispose();
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return result;
+      return { ...result, session: this.withEffectiveRetrieval(result.session, resource) };
     } catch (error) {
       resource.dispose();
       throw error;
@@ -1114,6 +1143,7 @@ export class CodexSessionRuntime {
   }
 
   private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+    const deadline = xerjDeadline();
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(
           { id: session.id, workspacePath: session.workspacePath },
@@ -1155,6 +1185,7 @@ export class CodexSessionRuntime {
           if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
         },
       );
+      resource.readinessDeadline = deadline;
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =
@@ -1168,6 +1199,16 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (notification.method === 'mcpServer/statusUpdated') {
+          const status = notification.params as { name?: string; status?: string } | null;
+          if (
+            status?.name === 'gestalt-xerj' &&
+            ['failed', 'cancelled'].includes(status.status ?? '')
+          ) {
+            if (resource.retrievalFailureReported) return;
+            resource.retrievalFailureReported = true;
+          }
+        }
         const childModel = decodeThreadSettingsModel(notification);
         if (
           childModel &&
@@ -1218,6 +1259,98 @@ export class CodexSessionRuntime {
       lease?.close();
       throw error;
     }
+  }
+
+  private withEffectiveRetrieval(
+    session: RelaySessionSnapshot,
+    resource: SessionResource,
+  ): RelaySessionSnapshot {
+    if (!resource.retrieval || !session.effectiveSkillSelection) return session;
+    return {
+      ...session,
+      effectiveSkillSelection: {
+        ...session.effectiveSkillSelection,
+        skills: session.effectiveSkillSelection.skills.map((skill) =>
+          skill.name === 'gestalt:xerj' ? { ...skill, enabled: resource.retrieval!.ready } : skill,
+        ),
+      },
+    };
+  }
+
+  private async prepareRetrieval(
+    resource: SessionResource,
+    session: RelaySessionSnapshot,
+  ): Promise<void> {
+    if (!this.retrieval) return;
+    const state = await this.retrieval.prepare(
+      session,
+      resource.process.rpc,
+      resource.modelConfig,
+      resource.readinessDeadline,
+    );
+    resource.retrieval = state;
+    resource.skillsConfig = state.skillsConfig;
+    resource.modelConfig = state.config;
+    if (state.diagnostic && !resource.retrievalFailureReported) {
+      resource.retrievalFailureReported = true;
+      this.onNotification?.(
+        session.id,
+        {
+          method: 'mcpServer/statusUpdated',
+          params: { name: 'gestalt-xerj', status: 'failed' },
+        },
+        { kind: 'root' },
+      );
+    }
+  }
+
+  private async verifyRetrieval(
+    resource: SessionResource,
+    session: RelaySessionSnapshot,
+    fresh = false,
+  ): Promise<void> {
+    const state = resource.retrieval;
+    if (!state?.ready || !resource.threadId || !this.retrieval) return;
+    if (await this.retrieval.verify(resource.process.rpc, resource.threadId, state)) return;
+    state.fallback();
+    if (!resource.retrievalFailureReported) {
+      resource.retrievalFailureReported = true;
+      this.onNotification?.(
+        session.id,
+        {
+          method: 'mcpServer/statusUpdated',
+          params: {
+            name: 'gestalt-xerj',
+            status: 'failed',
+          },
+        },
+        { kind: 'root' },
+      );
+    }
+    resource.skillsConfig = state.skillsConfig;
+    resource.modelConfig = state.config;
+    // A fresh Codex thread has no durable rollout until its first turn, so it
+    // cannot be resumed. Release its connection and create the fallback root
+    // before publishing a thread ID. Persisted resumes retain their identity.
+    if (fresh) {
+      await resource.process.rpc.request('thread/unsubscribe', { threadId: resource.threadId });
+      resource.threadId = await this.startThread(
+        resource.process,
+        session,
+        resource.skillsConfig,
+        resource.modelConfig,
+      );
+      return;
+    }
+    await resource.process.rpc.request('thread/resume', {
+      threadId: resource.threadId,
+      cwd: session.workspacePath,
+      ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
+      ...(session.executionPolicy?.approvalPolicy
+        ? { approvalPolicy: session.executionPolicy.approvalPolicy }
+        : {}),
+      ...this.permissionParams(session),
+    });
   }
 
   private resolveNotificationOrigin(

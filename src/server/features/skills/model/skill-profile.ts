@@ -78,8 +78,8 @@ export type SkillDiscoveryError = { message: string };
 export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscoveryError[] };
 
 /** Gestalt workflow skills are session infrastructure, not optional profile entries. */
-export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name'>): boolean {
-  return isGestaltSkillName(skill.name);
+export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name' | 'enabled'>): boolean {
+  return isGestaltSkillName(skill.name) && (skill.name !== 'gestalt:xerj' || skill.enabled);
 }
 
 export function isGestaltSkillName(name: string): boolean {
@@ -214,7 +214,12 @@ export function applySkillSelectionSnapshot(
   );
   return catalog.map((skill) => ({
     ...skill,
-    enabled: isAlwaysAdvertisedSkill(skill) ? true : (enabledByPath.get(skill.path) ?? false),
+    enabled:
+      skill.name === 'gestalt:xerj'
+        ? skill.enabled
+        : isAlwaysAdvertisedSkill(skill)
+          ? true
+          : (enabledByPath.get(skill.path) ?? false),
   }));
 }
 

@@ -123,10 +123,36 @@ configuration or skill files. Exact skill paths remain authoritative, while
 paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
 path still match. Skills named `$gestalt:*` are session infrastructure: Mobile
-always enables and advertises every freshly discovered one, including skills
+always enables and advertises the fixed workflow skills, including skills
 added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
+
+`gestalt:xerj` is conditional retrieval infrastructure. For Codex, Mobile checks
+the manager's shared readiness contract and the owning thread's native MCP
+connection before accepting its first turn. Ready retrieval is mandatory even
+when a saved profile excluded it; unavailable retrieval is excluded even when
+a legacy selection enabled it. Fresh runtimes, resumes and process recovery
+repeat the check. Native child agents inherit their parent's configuration and
+open their own MCP connections. A connection failure appears in the existing
+chat activity; use `rg` and current source reads until the next runtime check.
+Instructions already delivered during a turn cannot be retroactively removed.
+
+Managed launch provides `GESTALT_MANAGER_BIN`. Direct Mobile launch discovers
+`gestalt` on `PATH`, or accepts an absolute executable path through that same
+environment variable. Without a manager or installed xerj, chat starts normally.
+`XERJ_READY_TIMEOUT_MS` bounds optional readiness, including discovery and the
+actual connection, with a five-second default. Startup never installs xerj,
+downloads models or indexes repositories. Install explicitly with
+`gestalt xerj install`; inspect readiness with `gestalt xerj status`.
+
+The manager owns one authenticated loopback backend shared by CLI and Mobile.
+Closing either client closes only its native MCP proxies. Use
+`gestalt xerj stop` for explicit managed shutdown; a later eligible runtime can
+start the installed backend again. An empty index remains ready: index only
+repositories you explicitly select, verify repository identity and freshness,
+and confirm retrieval results against current source. See the manager's
+[xerj setup and lifetime documentation](https://github.com/dyne/gestalt/blob/main/start/install.md).
 
 ## Kimi provider
 
@@ -156,6 +182,14 @@ enabled never share a runtime. Authentication is shared by symlinking it from
 
 Kimi sessions stay on core chat: org-plan/autopilot tooling (the Plan tab,
 autopilot controls) remains Codex-only and is hidden for Kimi sessions.
+
+Xerj retrieval is unavailable through Mobile's supported `kimi web` path.
+Although the terminal CLI accepts ad-hoc MCP configuration, web workers load
+only their global MCP file and expose no native per-session connection-readiness
+gate. Mobile does not materialize the conditional skill or add a tool bridge.
+Profile runtimes and authentication isolation remain unchanged. This limitation
+is grounded in the provider's [web command](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/cli/web.py)
+and [worker MCP loading](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/web/runner/worker.py).
 
 Kimi threads have no CLI resume command, so recent Kimi threads offer **Open**
 but no **Copy**, and the session card carries a **Kimi** badge instead.
