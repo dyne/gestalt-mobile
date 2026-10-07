@@ -387,19 +387,35 @@ export class CodexSessionRuntime {
   ): Promise<string> {
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
-    const result = decodeTurnStart(
-      await resource.process.rpc.request('turn/start', {
-        threadId: childThreadId,
-        input: [{ type: 'text', text, text_elements: [] }],
-        clientUserMessageId,
-        ...(session.modelSettings?.executorModel
-          ? { model: session.modelSettings.executorModel }
-          : {}),
-        ...(session.modelSettings?.executorReasoningEffort
-          ? { effort: session.modelSettings.executorReasoningEffort }
-          : {}),
-      }),
-    );
+    const params = {
+      threadId: childThreadId,
+      input: [{ type: 'text', text, text_elements: [] }],
+      clientUserMessageId,
+      ...(session.modelSettings?.executorModel
+        ? { model: session.modelSettings.executorModel }
+        : {}),
+      ...(session.modelSettings?.executorReasoningEffort
+        ? { effort: session.modelSettings.executorReasoningEffort }
+        : {}),
+    };
+    let response: unknown;
+    try {
+      response = await resource.process.rpc.request('turn/start', params);
+    } catch (error) {
+      // Codex 0.160 rejects a durable child absent from this writer's live
+      // registry. Load that same thread without overriding its role/config.
+      // Only this exact rejection permits one retry; transport loss may hide
+      // accepted work and must retain the durable issued fence.
+      if (
+        !(error instanceof CodexJsonRpcError) ||
+        error.code !== -32600 ||
+        error.message !== `thread not found: ${childThreadId}`
+      )
+        throw error;
+      await resource.process.rpc.request('thread/resume', { threadId: childThreadId });
+      response = await resource.process.rpc.request('turn/start', params);
+    }
+    const result = decodeTurnStart(response);
     if (resource.turnThreads.has(result) || resource.turnThreads.size < 256)
       resource.turnThreads.set(result, childThreadId);
     return result;
