@@ -828,6 +828,10 @@ export class AutopilotCoordinator {
             pendingTarget: undefined,
             pendingKind: null,
             checkpointHandoffFailed: false,
+            rootContinuationFromTurnId:
+              pendingKind !== 'terminalReviewAccepted'
+                ? state.checkpoints.pendingTurnId!
+                : undefined,
           },
           updatedAt: occurredAt,
         },
@@ -1173,7 +1177,7 @@ export class AutopilotCoordinator {
   }
   /** Reacts only to fresh actor status; plan mutations are not scheduling signals. */
   activityChanged(sessionId: string): void {
-    const prior = this.deps.store.find(sessionId);
+    let prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled) return;
     const activity = this.deps.activity(sessionId);
     // A stale or absent activity projection is itself a mandatory wake input.
@@ -1181,6 +1185,20 @@ export class AutopilotCoordinator {
     if (!activity || activity.confidence !== 'fresh') {
       this.evaluate(sessionId);
       return;
+    }
+    if (
+      prior.checkpoints?.rootContinuationFromTurnId &&
+      this.deps.session(sessionId)?.activeTurnId &&
+      this.deps.session(sessionId)?.activeTurnId !== prior.checkpoints.rootContinuationFromTurnId &&
+      activity.root.state === 'working'
+    ) {
+      this.persist({
+        ...prior,
+        checkpoints: { ...prior.checkpoints, rootContinuationFromTurnId: undefined },
+        stopReason: null,
+        updatedAt: this.deps.now(),
+      });
+      prior = this.deps.store.find(sessionId) ?? prior;
     }
     // Reuse the canonical semantic projection: child order, timestamps, and
     // activity prose cannot manufacture an extra wake, while a child-only
@@ -1765,6 +1783,7 @@ export class AutopilotCoordinator {
   }
 
   private requiresRootBoundary(state: AutopilotSession, plan: SupervisedPlan): boolean {
+    if (state.checkpoints?.rootContinuationFromTurnId) return true;
     const reportedL2 = new Set(state.checkpoints?.reportedL2Ids ?? []);
     const reportedL1 = new Set(state.checkpoints?.reportedL1Ids ?? []);
     const epochs = new Map(
@@ -2186,7 +2205,15 @@ export class AutopilotCoordinator {
       }
     } catch (error) {
       // The command remains issued: the same idempotency key is the only retry.
-      this.containOperationFailure(sessionId, error);
+      this.containOperationFailure(
+        sessionId,
+        error,
+        kind === 'consume'
+          ? 'processConsume'
+          : kind === 'transfer'
+            ? 'processTransfer'
+            : 'processTerminate',
+      );
       return false;
     }
     const latest = this.processActionCurrent(sessionId, issued);
@@ -2680,7 +2707,7 @@ export class AutopilotCoordinator {
             // Only an explicit app-server rejection is safe to retry. A lost
             // response may conceal accepted work, so retain its issued fence.
             if (!explicitExecutorRejection(error)) {
-              this.containOperationFailure(sessionId, error);
+              this.containOperationFailure(sessionId, error, 'executorResume');
               this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
               return;
             }
@@ -2787,7 +2814,21 @@ export class AutopilotCoordinator {
       updatedAt: this.deps.now(),
     };
     const occurredAt = this.deps.now();
+    const state = this.deps.store.find(sessionId);
     this.commit({
+      ...(status === 'started' &&
+      turnId &&
+      state?.checkpoints?.rootContinuationFromTurnId &&
+      turnId !== state.checkpoints.rootContinuationFromTurnId
+        ? {
+            state: {
+              ...state,
+              checkpoints: { ...state.checkpoints, rootContinuationFromTurnId: undefined },
+              stopReason: null,
+              updatedAt: occurredAt,
+            },
+          }
+        : {}),
       control: updated,
       events: eventType
         ? [
@@ -3140,7 +3181,16 @@ export class AutopilotCoordinator {
    * outbox publication failure must not recursively manufacture another
    * rejected promise before a later journal flush can replay the event.
    */
-  private containOperationFailure(sessionId: string, error: unknown): void {
+  private containOperationFailure(
+    sessionId: string,
+    error: unknown,
+    operation:
+      | 'queuedOperation'
+      | 'executorResume'
+      | 'processConsume'
+      | 'processTransfer'
+      | 'processTerminate' = 'queuedOperation',
+  ): void {
     const code = operationFailureCode(error);
     try {
       this.deps.diagnostic?.(sessionId, `operationFailed:${code}`);
@@ -3184,7 +3234,7 @@ export class AutopilotCoordinator {
           {
             sessionId,
             type: 'autopilot.operation-failed',
-            payload: { code },
+            payload: { code, kind: operation, reason: operationErrorKind(error) },
             occurredAt: now,
           },
         ],
@@ -3268,6 +3318,22 @@ function operationFailureCode(error: unknown): 'PERSISTENCE' | 'PUBLICATION' | '
   if (/PERSIST|SQLITE|DATABASE|STORE/i.test(code)) return 'PERSISTENCE';
   if (/PUBLISH|OUTBOX|JOURNAL/i.test(code)) return 'PUBLICATION';
   return 'OPERATION';
+}
+
+/** Fixed protocol categories only; exception prose and arbitrary codes stay private. */
+function operationErrorKind(error: unknown): string {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'kind' in error &&
+    ['CODEX_THREAD_NOT_FOUND', 'CODEX_THREAD_WRITER_BUSY', 'CODEX_JSON_RPC_ERROR'].includes(
+      String(error.kind),
+    )
+  )
+    return String(error.kind);
+  if (error instanceof TypeError) return 'TYPE_ERROR';
+  if (error instanceof RangeError) return 'RANGE_ERROR';
+  return 'UNKNOWN';
 }
 
 function fingerprint(plan: SupervisedPlan): string {

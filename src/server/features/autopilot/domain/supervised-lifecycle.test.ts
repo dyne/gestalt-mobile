@@ -181,6 +181,27 @@ describe('supervised Org Plan lifecycle', () => {
     });
   });
 
+  it('round-trips the root continuation fence and rejects malformed turn identity', () => {
+    const checkpoints = {
+      protocolVersion: 1,
+      planIdentity: 'plan',
+      reportedL1Ids: [],
+      acceptedKeys: [],
+      pendingTurnId: null,
+      terminalReviewAccepted: false,
+      rootContinuationFromTurnId: 'reported-turn',
+    };
+    expect(
+      parsePersistedSupervisedLifecycle({ checkpoints })?.checkpoints?.rootContinuationFromTurnId,
+    ).toBe('reported-turn');
+    for (const invalid of [false, '', null, 123])
+      expect(
+        parsePersistedSupervisedLifecycle({
+          checkpoints: { ...checkpoints, rootContinuationFromTurnId: invalid },
+        }),
+      ).toBeUndefined();
+  });
+
   it('round-trips reconstructed target-local completion epochs', () => {
     expect(
       parsePersistedSupervisedLifecycle({

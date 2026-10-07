@@ -7,7 +7,9 @@ import { expect, test } from '@playwright/test';
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 
 for (const width of [320, 1280]) {
-  test(`shows restored attachments and direct Copy CLI actions at ${width}px`, async ({ page }) => {
+  test(`shows restored attachments and direct Copy CLI actions at ${width}px`, async ({
+    page,
+  }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
     await mockAuthenticatedStatus(page);
     await page.addInitScript(() => {
@@ -97,6 +99,6 @@ for (const width of [320, 1280]) {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
       .toBe(true);
-    await page.screenshot({ path: `/tmp/mobile-session-attachments-${width}.png` });
+    await page.screenshot({ path: testInfo.outputPath(`session-attachments-${width}.png`) });
   });
 }

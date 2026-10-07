@@ -1066,7 +1066,7 @@ test('switches Git operations between repository tree targets without a session'
   await page.getByRole('button', { name: 'Pull' }).click();
   await expect(page.getByRole('button', { name: 'Push' })).toBeEnabled();
   await page.getByRole('button', { name: 'Push' }).click();
-  await expect(page.getByText('Push HEAD to origin/main?')).toBeVisible();
+  await expect(page.getByText('Push topic to origin/main?')).toBeVisible();
   await page.getByRole('button', { name: 'Confirm push' }).click();
   await page.getByLabel('Branch').selectOption('main');
   await expect.poll(() => branches.get('repo-two')).toBe('main');
@@ -1115,6 +1115,7 @@ test('refreshes and selects the catalog after a successful clone', async ({ page
         branch: 'main',
         branches: ['main'],
         upstream: null,
+        originUrl: 'https://example.test/cloned-repo.git',
         ahead: 0,
         behind: 0,
         dirty: { staged: 0, unstaged: 0, untracked: 0 },
@@ -1148,9 +1149,7 @@ test('refreshes and selects the catalog after a successful clone', async ({ page
   await expect(page.getByLabel('Git address')).toHaveValue('https://example.test/cloned-repo.git');
 });
 
-test('explains and dismisses invalid clone destinations without a relay request', async ({
-  page,
-}) => {
+test('disables invalid clone destinations without a relay request', async ({ page }) => {
   let cloneRequests = 0;
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
@@ -1186,22 +1185,12 @@ test('explains and dismisses invalid clone destinations without a relay request'
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
   await page.getByLabel('Git address').fill('https://example.test/repository.git');
-  await page.getByRole('button', { name: 'Clone' }).click();
-  const noSelectionAlert = page.getByRole('alert').filter({
-    hasText: 'Select a non-repository folder before cloning.',
-  });
-  await expect(noSelectionAlert).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clone' })).toBeDisabled();
   expect(cloneRequests).toBe(0);
-  await noSelectionAlert.getByRole('button', { name: 'Dismiss error notification' }).click();
-  await expect(noSelectionAlert).toBeHidden();
 
   await page.getByRole('treeitem', { name: /^repository/ }).click();
-  await page.getByRole('button', { name: 'Clone' }).click();
-  await expect(
-    page.getByRole('alert').filter({
-      hasText: 'Select a non-repository folder before cloning.',
-    }),
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clone' })).toBeDisabled();
+  await expect(page.getByLabel('Git address')).toHaveAttribute('readonly', '');
   expect(cloneRequests).toBe(0);
 });
 
@@ -1459,8 +1448,9 @@ test('reconciles terminal-originated history while Chat is visible', async ({ pa
   await expect(page.getByText('Terminal answer')).toBeVisible();
 });
 
-test('shows Git pull progress and disables push without an upstream', async ({ page }) => {
+test('shows Git pull progress and disables actions after losing the upstream', async ({ page }) => {
   let completeRefresh: (() => void) | undefined;
+  let upstream: string | null = 'origin/topic';
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -1478,7 +1468,7 @@ test('shows Git pull progress and disables push without an upstream', async ({ p
         available: true,
         branch: 'topic',
         branches: ['main', 'topic'],
-        upstream: null,
+        upstream,
         ahead: 1,
         behind: 0,
         dirty: { staged: 0, unstaged: 0, untracked: 0 },
@@ -1491,17 +1481,24 @@ test('shows Git pull progress and disables push without an upstream', async ({ p
     await new Promise<void>((resolve) => {
       completeRefresh = resolve;
     });
+    upstream = null;
     await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
   });
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Git' }).click();
   await page.getByRole('treeitem', { name: /^repository/ }).click();
-  await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Pull' }).click();
-  await expect(page.getByRole('button', { name: 'Pulling…' })).toBeDisabled();
-  completeRefresh?.();
-  await expect(page.getByRole('button', { name: 'Pull' })).toBeEnabled();
+  try {
+    await expect(page.getByRole('button', { name: 'Push' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Pull' }).click();
+    await expect.poll(() => typeof completeRefresh).toBe('function');
+    await expect(page.getByRole('button', { name: 'Pulling…' })).toBeDisabled();
+    completeRefresh!();
+    await expect(page.getByRole('button', { name: 'Pull' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Push' })).toBeDisabled();
+  } finally {
+    completeRefresh?.();
+  }
 });
 
 test('renders and resolves a relay approval request', async ({ page }) => {

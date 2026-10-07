@@ -1897,12 +1897,16 @@ describe('AutopilotCoordinator', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-  it('restores a checkpointed root boundary without a duplicate report, then resumes one executor', async () => {
+  it('restores a checkpointed root boundary without a duplicate report, then continues the root once', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-checkpoint-executor-restart-'));
     const path = join(directory, 'relay.sqlite');
     const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
     const resume = vi.fn(async () => undefined);
+    const rootStart = vi.fn(async () => {
+      session = { ...session, activeTurnId: 'continued-root' };
+    });
     const published: string[] = [];
+    const payloads: Array<{ type: string; payload: unknown }> = [];
     let session = {
       state: 'ready',
       threadId: 'root',
@@ -1987,8 +1991,8 @@ describe('AutopilotCoordinator', () => {
             timer.cancelled = true;
           };
         },
-        nextControlId: () => 'unexpected-root-control',
-        turnStarter: { start: async () => {} },
+        nextControlId: () => 'root-control',
+        turnStarter: { start: rootStart },
         executorController: {
           resume,
           refresh: async () => {},
@@ -1997,7 +2001,10 @@ describe('AutopilotCoordinator', () => {
           consumeProcess: () => {},
           terminateProcess: async () => false,
         },
-        publish: (_sessionId, type) => published.push(type),
+        publish: (_sessionId, type, payload) => {
+          published.push(type);
+          payloads.push({ type, payload });
+        },
       });
     try {
       const first = new DatabaseSync(path);
@@ -2032,8 +2039,9 @@ describe('AutopilotCoordinator', () => {
       const continuation = timers.find((timer) => !timer.cancelled)!;
       continuation.callback();
       continuation.callback();
-      await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
-      expect(resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      await vi.waitFor(() => expect(rootStart).toHaveBeenCalledTimes(1));
+      expect(resume).not.toHaveBeenCalled();
+      expect(rootStart).toHaveBeenCalledWith('s', 'root-control', expect.any(Number), undefined);
       expect(new SqliteAutopilotStore(reopened).find('s')?.checkpoints).toMatchObject({
         pendingTurnId: null,
         pendingKind: null,
@@ -2057,6 +2065,7 @@ describe('AutopilotCoordinator', () => {
     });
     const consumeProcess = vi.fn();
     const published: string[] = [];
+    const payloads: Array<{ type: string; payload: unknown }> = [];
     let session = { state: 'ready', threadId: 'root', activeTurnId: null as string | null };
     const nextL1Plan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
       title: 'next L1',
@@ -2141,7 +2150,10 @@ describe('AutopilotCoordinator', () => {
           consumeProcess,
           terminateProcess: async () => false,
         },
-        publish: (_sessionId, type) => published.push(type),
+        publish: (_sessionId, type, payload) => {
+          published.push(type);
+          payloads.push({ type, payload });
+        },
       });
     const fireNext = async () => {
       const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
@@ -3014,6 +3026,7 @@ describe('AutopilotCoordinator', () => {
       const terminateProcess = vi.fn(async () => true);
       const rootStart = vi.fn(async () => undefined);
       const published: string[] = [];
+      const payloads: Array<{ type: string; payload: unknown }> = [];
       const diagnostic = vi.fn();
       const controls = new Map<string, import('./ports.js').AutopilotControl>();
       let planIdentity = 'p';
@@ -3107,7 +3120,10 @@ describe('AutopilotCoordinator', () => {
           consumeProcess,
           terminateProcess,
         },
-        publish: (_sessionId, type) => published.push(type),
+        publish: (_sessionId, type, payload) => {
+          published.push(type);
+          payloads.push({ type, payload });
+        },
         diagnostic,
       });
       const runNext = async () => {
@@ -3134,6 +3150,7 @@ describe('AutopilotCoordinator', () => {
         rootStart,
         timers,
         published,
+        payloads,
         diagnostic,
         get state() {
           return state;
@@ -3698,6 +3715,33 @@ describe('AutopilotCoordinator', () => {
         expect(
           fixture.published.filter((type) => type === 'autopilot.operation-failed'),
         ).toHaveLength(1);
+      },
+    );
+
+    it.each(['CODEX_THREAD_WRITER_BUSY', 'CODEX_JSON_RPC_ERROR', 'SECRET_ARBITRARY_KIND'])(
+      'records bounded resume-stage diagnostics for %s without error prose',
+      async (kind) => {
+        const fixture = subject();
+        fixture.resume.mockRejectedValueOnce(
+          Object.assign(new Error('secret prompt token /private/path'), { kind, code: -32600 }),
+        );
+        fixture.coordinator.activitySettled('s', 'rootFinalAttempt');
+        await fixture.runNext();
+        await fixture.runNext();
+        await vi.waitFor(() =>
+          expect(
+            fixture.payloads.filter((event) => event.type === 'autopilot.operation-failed'),
+          ).toHaveLength(1),
+        );
+        const failed = fixture.payloads.find(
+          (event) => event.type === 'autopilot.operation-failed',
+        )!;
+        expect(failed.payload).toEqual({
+          code: 'OPERATION',
+          kind: 'executorResume',
+          reason: kind === 'SECRET_ARBITRARY_KIND' ? 'UNKNOWN' : kind,
+        });
+        expect(JSON.stringify(failed)).not.toMatch(/secret|prompt|token|private|SECRET/);
       },
     );
 

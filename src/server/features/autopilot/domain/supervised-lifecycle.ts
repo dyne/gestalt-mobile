@@ -644,6 +644,11 @@ function parseCheckpoints(
   )
     return undefined;
   if (typeof value.terminalReviewAccepted !== 'boolean') return undefined;
+  if (
+    value.rootContinuationFromTurnId !== undefined &&
+    !boundedText(value.rootContinuationFromTurnId)
+  )
+    return undefined;
   const terminalReviewFingerprint =
     value.terminalReviewFingerprint === undefined
       ? undefined
@@ -703,6 +708,9 @@ function parseCheckpoints(
       ? {}
       : { checkpointHandoffFailed: value.checkpointHandoffFailed }),
     terminalReviewAccepted: value.terminalReviewAccepted,
+    ...(value.rootContinuationFromTurnId === undefined
+      ? {}
+      : { rootContinuationFromTurnId: value.rootContinuationFromTurnId as string }),
     ...(terminalReviewFingerprint ? { terminalReviewFingerprint } : {}),
   };
 }

@@ -138,6 +138,8 @@ describe('checkpoint continuation across SQLite', () => {
       };
       expect(coordinator.checkpointAccepted('s', checkpoint, 'terminal', now)).toBe('recorded');
       coordinator.turnCompleted('s', 'terminal');
+      expect(store.find('s')?.checkpoints?.rootContinuationFromTurnId).toBeUndefined();
+      expect(store.find('s')).toMatchObject({ state: 'completed', requestedEnabled: false });
       coordinator.disable('s');
       expect(store.find('s')?.checkpoints?.terminalReviewFingerprint).toBeDefined();
       currentPlan = { ...currentPlan, title: 'Presentation-only refinement' };
@@ -250,6 +252,9 @@ describe('checkpoint continuation across SQLite', () => {
       let activeTurnId: string | null = 'boundary';
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
       const resume = vi.fn(async () => {});
+      const rootStart = vi.fn(async () => {
+        activeTurnId = 'continued-root';
+      });
       const publish = vi.fn();
       const activity: AgentActivitySnapshot = {
         ...createAgentActivitySnapshot('s', now),
@@ -282,7 +287,7 @@ describe('checkpoint continuation across SQLite', () => {
               timer.cancelled = true;
             };
           },
-          turnStarter: { start: async () => {} },
+          turnStarter: { start: rootStart },
           executorController: {
             resume,
             refresh: async () => {},
@@ -328,7 +333,16 @@ describe('checkpoint continuation across SQLite', () => {
           expect(coordinator.checkpointAccepted('s', checkpoint, 'boundary', now)).toBe(
             'alreadyRecorded',
           );
-        if (seed % 4 === 0) coordinator.disable('s');
+        if (seed % 4 === 0) {
+          if (seed >= 8)
+            store.save({
+              ...store.find('s')!,
+              state: 'safetyPaused',
+              requestedEnabled: false,
+              stopReason: 'safetyPaused',
+            });
+          else coordinator.disable('s');
+        }
         activeTurnId = null;
         coordinator.turnCompleted('s', 'boundary');
         await settle();
@@ -338,14 +352,24 @@ describe('checkpoint continuation across SQLite', () => {
           makeCoordinator().restore('s');
           await settle();
         }
-        if (seed % 4 === 1) coordinator.disable('s');
+        if (seed % 4 === 1) {
+          if (seed >= 8)
+            store.save({
+              ...store.find('s')!,
+              state: 'safetyPaused',
+              requestedEnabled: false,
+              stopReason: 'safetyPaused',
+            });
+          else coordinator.disable('s');
+        }
         // Deliver stale cancelled callbacks too, and repeat delivery as a hostile scheduler.
         for (const timer of [...timers]) {
           timer.callback();
           timer.callback();
         }
         await settle();
-        expect(resume).toHaveBeenCalledTimes(seed % 4 <= 1 ? 0 : 1);
+        expect(resume).not.toHaveBeenCalled();
+        expect(rootStart).toHaveBeenCalledTimes(seed % 4 <= 1 ? 0 : 1);
         expect(
           publish.mock.calls.filter((call) => call[1] === 'org-plan.step-reported'),
         ).toHaveLength(1);
@@ -353,7 +377,7 @@ describe('checkpoint continuation across SQLite', () => {
         if (seed % 4 <= 1)
           expect(store.find('s')).toMatchObject({
             requestedEnabled: false,
-            stopReason: 'manualDisabled',
+            stopReason: seed >= 8 ? 'safetyPaused' : 'manualDisabled',
           });
       } finally {
         await settle();
@@ -449,7 +473,7 @@ describe('checkpoint continuation across SQLite', () => {
     },
   );
   it.each([false, true])(
-    'reports a realistic plan checkpoint and resumes the same executor exactly once (acceptance write fails: %s)',
+    'reports a realistic checkpoint and starts root exactly once (post-acceptance failure: %s)',
     async (failAcceptance) => {
       const db = database();
       try {
@@ -495,13 +519,18 @@ describe('checkpoint continuation across SQLite', () => {
         };
         const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
         const resume = vi.fn(async () => {});
+        let activeTurnId: string | null = null;
+        const rootStart = vi.fn(async () => {
+          activeTurnId = 'continued-root';
+          if (failAcceptance) throw new Error('PERSISTENCE_UNAVAILABLE');
+        });
         const publish = vi.fn();
         const coordinator = new AutopilotCoordinator({
           store,
           now: () => now,
           policy: defaultAutopilotPolicy,
           plan: () => ({ plan, identity: 'plan' }),
-          session: () => ({ state: 'ready', threadId: 'root', activeTurnId: null }),
+          session: () => ({ state: 'ready', threadId: 'root', activeTurnId }),
           activity: () => activity,
           pendingInteraction: () => false,
           reconcile: async () => ({ compatible: true }),
@@ -513,7 +542,7 @@ describe('checkpoint continuation across SQLite', () => {
               timer.cancelled = true;
             };
           },
-          turnStarter: { start: async () => {} },
+          turnStarter: { start: rootStart },
           executorController: {
             resume,
             refresh: async () => {},
@@ -523,19 +552,6 @@ describe('checkpoint continuation across SQLite', () => {
             terminateProcess: async () => true,
           },
           publish,
-        });
-        const save = store.save.bind(store);
-        let failed = false;
-        vi.spyOn(store, 'save').mockImplementation((next) => {
-          save(next);
-          if (
-            failAcceptance &&
-            !failed &&
-            next.executor?.commands?.some((command) => command.status === 'accepted')
-          ) {
-            failed = true;
-            throw new Error('PERSISTENCE_UNAVAILABLE');
-          }
         });
         coordinator.turnCompleted('s');
         await settle();
@@ -547,25 +563,24 @@ describe('checkpoint continuation across SQLite', () => {
         await settle();
         scheduled[0]!.callback();
         await settle();
-        expect(resume).toHaveBeenCalledTimes(1);
-        expect(resume.mock.calls[0]).toEqual(expect.arrayContaining(['s', 'child']));
+        expect(resume).not.toHaveBeenCalled();
+        expect(rootStart).toHaveBeenCalledTimes(1);
+        expect(store.findControl('s', 'control')).toMatchObject({
+          status: 'started',
+          turnId: 'continued-root',
+        });
         expect(store.find('s')).toMatchObject({
-          executor: {
-            threadId: 'child',
-            assignment: executorAssignment(executor),
-            continuationCount: failAcceptance ? 0 : 1,
-            commands: [
-              expect.objectContaining({
-                planFingerprint: fingerprint,
-                status: failAcceptance ? 'issued' : 'accepted',
-              }),
-            ],
-          },
+          executor: { threadId: 'child', assignment: executorAssignment(executor) },
           checkpoints: { acceptedKeys: ['key'] },
         });
+        expect(store.find('s')?.executor?.commands).toBeUndefined();
+        expect(store.find('s')?.checkpoints?.rootContinuationFromTurnId).toBeUndefined();
         expect(
           publish.mock.calls.filter((call) => call[1] === 'autopilot.executor-resumed'),
-        ).toHaveLength(failAcceptance ? 0 : 1);
+        ).toHaveLength(0);
+        expect(
+          publish.mock.calls.filter((call) => call[1] === 'autopilot.turn-started'),
+        ).toHaveLength(1);
       } finally {
         db.close();
       }
