@@ -309,6 +309,11 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
         {},
         signal,
       ),
+    getSessionFilePreview: (sessionId: string, path: string, signal?: AbortSignal) =>
+      get<import('../files/file-preview.js').FilePreview>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/files/preview?${new URLSearchParams({ path })}`,
+        signal,
+      ),
     getWorkspaceFilePreview: (workspaceId: string, path: string, signal?: AbortSignal) =>
       get<import('../files/file-preview.js').FilePreview>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/files/preview?${new URLSearchParams({ path })}`,

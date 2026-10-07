@@ -10,7 +10,12 @@ export type FilePreview = Readonly<
   | { kind: 'directory'; path: string }
   | { kind: 'file'; path: string; content: string; size: number }
 >;
-export type FileViewerTarget = Readonly<{ workspaceId: string; path: string }>;
+export type FileViewerTarget = Readonly<{
+  workspaceId: string;
+  path: string;
+  sessionId?: string;
+  line?: number;
+}>;
 
 export function formatFile(preview: FilePreview): {
   format: 'markdown' | 'json' | 'text';
