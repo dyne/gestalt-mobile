@@ -76,7 +76,16 @@ export class CodexSerena {
           skills: { config: [{ name: 'gestalt:serena', enabled: false }] },
           mcp_servers: {
             ...mcp,
-            [serenaServerName]: { ...reserved, enabled: false, required: false },
+            // Disabled entries still require a transport in Codex. Keep this
+            // override on resume so a previous thread connection stays disabled.
+            [serenaServerName]: {
+              ...reserved,
+              ...(reserved.command || reserved.url
+                ? {}
+                : { command: 'gestalt', args: ['serena', 'mcp', '--cwd', input.cwd] }),
+              enabled: false,
+              required: false,
+            },
           },
           developer_instructions: `${instructions}\n<gestalt_serena_unavailable>\nSerena is unavailable in this runtime. Earlier Serena guidance is inactive; use native code tools.\n</gestalt_serena_unavailable>`,
         };

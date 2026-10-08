@@ -112,6 +112,46 @@ async function fixture() {
 }
 
 describe('workspace-bound Serena capability', () => {
+  it.each(['missing installation', 'excluded skill', 'undiscovered skill'])(
+    'keeps session configuration valid with %s and no native Serena server',
+    async (scenario) => {
+      const f = await fixture();
+      f.native.mcp_servers = {};
+      await rm(f.descriptorPath);
+      const skills = scenario === 'undiscovered skill' ? [] : f.input.skills;
+      const skillsConfig = compileSkillOverride({
+        discovered: skills,
+        explicit:
+          scenario === 'excluded skill'
+            ? skills.map((skill) => ({ ...skill, enabled: false }))
+            : undefined,
+      }).skillsConfig;
+      const pair = new CodexCapabilities(
+        new CodexXerj({ check: async () => ({ status: 'absent' }) }),
+        f.adapter,
+      );
+      const state = await pair.prepare({ ...f.input, skills, skillsConfig });
+      expect(state.ready).toBe(false);
+      // Codex validates transport even for disabled servers. The override also
+      // disables an earlier thread connection when these settings are resumed.
+      expect(state.config).toMatchObject({
+        mcp_servers: {
+          [serenaServerName]: {
+            command: 'gestalt',
+            args: ['serena', 'mcp', '--cwd', f.root],
+            enabled: false,
+            required: false,
+          },
+        },
+      });
+      expect(state.skillsConfig.find((skill) => skill.path === f.skillPath)?.enabled ?? false).toBe(
+        false,
+      );
+      expect(f.rpc.request.mock.calls.every(([method]) => method === 'config/read')).toBe(true);
+      await expect(access(join(f.root, '.gestalt'))).rejects.toThrow();
+    },
+  );
+
   it('validates shared immutable metadata without executing a manager or starting a language server', async () => {
     const f = await fixture();
     expect(await f.installed.check()).toEqual({
