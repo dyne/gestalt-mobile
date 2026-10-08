@@ -100,7 +100,10 @@ export class SkillsState {
       this.profiles = profiles.profiles.map((profile) =>
         'error' in profile
           ? profile
-          : { ...profile, skills: profile.skills.filter((skill) => !isGestaltSkill(skill.name)) },
+          : {
+              ...profile,
+              skills: profile.skills.filter((skill) => !isFixedGestaltSkill(skill.name)),
+            },
       );
       const invalid = profiles.profiles.find((profile) => 'error' in profile);
       if (invalid && 'error' in invalid)
@@ -328,8 +331,8 @@ export class SkillsState {
   }
 }
 
-function isGestaltSkill(name: string): boolean {
-  return name.startsWith('gestalt:');
+function isFixedGestaltSkill(name: string): boolean {
+  return name !== 'gestalt:serena' && name.startsWith('gestalt:');
 }
 
 function errorMessage(error: unknown): string {

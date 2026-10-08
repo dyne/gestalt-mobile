@@ -12,7 +12,13 @@ import { pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { installShutdownHandlers, packagedClientDir, runCli, usage } from './cli.js';
+import {
+  componentVersions,
+  installShutdownHandlers,
+  packagedClientDir,
+  runCli,
+  usage,
+} from './cli.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -198,6 +204,9 @@ describe('runCli', () => {
           GESTALT_AGENTS_VERSION: '2.9.0',
           GESTALT_CONTEXT_MODE_VERSION: '2.9.0',
           GESTALT_XERJ_VERSION: '1.0.0-rc.87',
+          GESTALT_SERENA_VERSION: '1.7.0',
+          GESTALT_UV_VERSION: '0.11.12',
+          GESTALT_SERENA_PYTHON_VERSION: '3.13.12',
         },
       }),
     ).toBe(0);
@@ -213,6 +222,9 @@ describe('runCli', () => {
           { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
           { id: 'codex', label: 'Codex CLI', version: 'codex-cli 1.2.3' },
           { id: 'xerj', label: 'xerj', version: '1.0.0-rc.87' },
+          { id: 'serena', label: 'Serena', version: '1.7.0' },
+          { id: 'uv', label: 'uv', version: '0.11.12' },
+          { id: 'serena-python', label: 'Serena Python', version: '3.13.12' },
         ],
         relyingParty: {
           publicOrigin: 'http://localhost:43210',
@@ -362,4 +374,21 @@ describe('installShutdownHandlers', () => {
 
     expect(close).toHaveBeenCalledTimes(1);
   });
+});
+
+it('reports missing or invalid Serena component metadata as unavailable', () => {
+  for (const environment of [
+    {},
+    {
+      GESTALT_SERENA_VERSION: 'latest',
+      GESTALT_UV_VERSION: 'private\nvalue',
+      GESTALT_SERENA_PYTHON_VERSION: '3.14.0',
+    },
+  ]) {
+    expect(
+      componentVersions('0.1.0', null, environment)
+        .filter((component) => ['serena', 'uv', 'serena-python'].includes(component.id))
+        .map((component) => component.version),
+    ).toEqual([null, null, null]);
+  }
 });

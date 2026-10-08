@@ -5,7 +5,16 @@
  */
 
 export type ComponentVersion = Readonly<{
-  id: 'gestalt' | 'gestalt-mobile' | 'gestalt-agents' | 'context-mode' | 'codex' | 'xerj';
+  id:
+    | 'gestalt'
+    | 'gestalt-mobile'
+    | 'gestalt-agents'
+    | 'context-mode'
+    | 'codex'
+    | 'xerj'
+    | 'serena'
+    | 'uv'
+    | 'serena-python';
   label: string;
   version: string | null;
 }>;

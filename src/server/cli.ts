@@ -65,6 +65,10 @@ function managedVersion(value: string | undefined): string | null {
   return value && /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,99}$/.test(value) ? value : null;
 }
 
+function semanticVersion(value: string | undefined): string | null {
+  return value && /^\d+\.\d+\.\d+$/.test(value) ? value : null;
+}
+
 export function componentVersions(
   mobileVersion: string,
   codexVersion: string | null,
@@ -89,6 +93,15 @@ export function componentVersions(
     },
     { id: 'codex', label: 'Codex CLI', version: codexVersion },
     { id: 'xerj', label: 'xerj', version: managedVersion(environment.GESTALT_XERJ_VERSION) },
+    { id: 'serena', label: 'Serena', version: semanticVersion(environment.GESTALT_SERENA_VERSION) },
+    { id: 'uv', label: 'uv', version: semanticVersion(environment.GESTALT_UV_VERSION) },
+    {
+      id: 'serena-python',
+      label: 'Serena Python',
+      version: /^3\.13\.\d+$/.test(environment.GESTALT_SERENA_PYTHON_VERSION ?? '')
+        ? environment.GESTALT_SERENA_PYTHON_VERSION!
+        : null,
+    },
   ];
 }
 

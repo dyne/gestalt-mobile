@@ -122,8 +122,8 @@ precedence over native configuration. Gestalt Mobile never rewrites Codex
 configuration or skill files. Exact skill paths remain authoritative, while
 paths inside Codex's versioned plugin cache are rebound to the currently
 discovered plugin version when their marketplace, plugin, and skill-relative
-path still match. Skills named `$gestalt:*` are session infrastructure: Mobile
-always enables and advertises the fixed workflow skills, including skills
+path still match. Fixed Gestalt workflow skills are session infrastructure: Mobile
+always enables and advertises them, including skills
 added after a profile was saved. The editor labels them **Always advertised**
 and does not offer a disable control. Refresh discovery and start a new session
 after upgrading Gestalt Agents; running sessions retain their startup catalog.
@@ -137,6 +137,47 @@ repeat the check. Native child agents inherit their parent's configuration and
 open their own MCP connections. A connection failure appears in the existing
 chat activity; use `rg` and current source reads until the next runtime check.
 Instructions already delivered during a turn cannot be retroactively removed.
+
+`gestalt:serena` is optional semantic navigation and editing for Codex sessions.
+It is enabled only when the selected profile permits the discovered skill,
+native hooks are enabled, the manager installation is valid, and the owning
+thread's MCP connection exposes the expected tools. XERJ and Serena have
+independent availability and fallback. A connected catalog proves the connection;
+language readiness remains unverified until a model-authorized
+`get_symbols_overview` call succeeds on a current source file. On failure, use
+native code tools. Connection failures appear in session activity and the shared
+warning notifications; resumes and process recovery recheck availability.
+Running sessions retain their selected profile; apply a changed profile by
+starting a new session.
+
+The manager launches Serena with native `--context codex --mode editing`.
+Read-only sessions still retain their actual native filesystem policy; neither
+Mobile nor a listed editing tool grants write authority. Native child agents
+inherit their own effective permissions and approval rules, and plan mode
+prohibits edits. Mobile does not install/update Serena, switch projects or modes,
+or automatically approve its tools. Codex's default tool approval is prompt:
+with approval policy `never`, prompted tools are denied. Operators may explicitly
+set `mcp_servers.gestalt-serena.default_tools_approval_mode = "approve"` for a
+trusted server while preserving native filesystem confinement. Per-tool rules,
+such as `tools.replace_symbol_body.approval_mode = "prompt"`, remain authoritative.
+
+Serena executables are shared under `$GESTALT_HOME/serena`; writable project
+state belongs to the canonical session workspace's `.gestalt/serena`, never
+Mobile's application root or another session's workspace. Each native thread
+owns its stdio connection; stopping Mobile closes only its owned processes.
+The configuration menu lists the validated manager-provided Serena, uv, and
+Python versions, or **Unavailable** when metadata is missing or invalid.
+
+Install or update explicitly with `gestalt serena install` and
+`gestalt serena update`; inspect versions with `gestalt serena version`.
+`gestalt serena doctor --cwd /absolute/project --json` checks installation and
+project language services with operator authority; its success does not prove a
+session's permission-constrained semantic readiness. `gestalt serena index --cwd
+/absolute/project` is an explicit operator action. Language services may need
+the language runtime and the project's dependencies/build configuration (for
+example Python dependencies or a TypeScript project's dependencies). Missing
+services or restricted session network/bootstrap access produce a fallback;
+permissions are never broadened to repair them. Kimi behavior is unchanged.
 
 Managed launch provides `GESTALT_MANAGER_BIN`. Direct Mobile launch discovers
 `gestalt` on `PATH`, or accepts an absolute executable path through that same

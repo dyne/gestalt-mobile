@@ -165,6 +165,7 @@ class SessionResource {
 
   retrieval: CodexRetrievalState | undefined;
   retrievalFailureReported = false;
+  readonly capabilityFailuresReported = new Set<string>();
   readinessDeadline = xerjDeadline();
 
   dispose(): boolean {
@@ -1202,6 +1203,13 @@ export class CodexSessionRuntime {
         if (notification.method === 'mcpServer/statusUpdated') {
           const status = notification.params as { name?: string; status?: string } | null;
           if (
+            status?.name === 'gestalt-serena' &&
+            ['failed', 'cancelled'].includes(status.status ?? '')
+          ) {
+            if (resource.capabilityFailuresReported.has(status.name)) return;
+            resource.capabilityFailuresReported.add(status.name);
+          }
+          if (
             status?.name === 'gestalt-xerj' &&
             ['failed', 'cancelled'].includes(status.status ?? '')
           ) {
@@ -1266,12 +1274,49 @@ export class CodexSessionRuntime {
     resource: SessionResource,
   ): RelaySessionSnapshot {
     if (!resource.retrieval || !session.effectiveSkillSelection) return session;
+    const serena = resource.retrieval.capabilities?.find(
+      (capability) => capability.skillName === 'gestalt:serena',
+    );
+    const warning =
+      'Serena is unavailable in this session. Use native code tools. Connection availability will be checked when the runtime resumes.';
+    const warnings =
+      session.effectiveSkillSelection.warnings?.filter((message) => message !== warning) ?? [];
+    if (serena?.diagnostic) warnings.push(warning);
     return {
       ...session,
       effectiveSkillSelection: {
         ...session.effectiveSkillSelection,
+        ...(serena &&
+        (serena.diagnostic || session.effectiveSkillSelection.warnings?.includes(warning))
+          ? { warnings }
+          : {}),
+        ...(resource.retrieval.capabilities &&
+        session.effectiveSkillSelection.skills.some((skill) => skill.name === 'gestalt:serena')
+          ? {
+              serenaSelected:
+                session.effectiveSkillSelection.serenaSelected ??
+                Boolean(
+                  session.effectiveSkillSelection.skills.find(
+                    (skill) => skill.name === 'gestalt:serena',
+                  )?.enabled,
+                ),
+            }
+          : {}),
         skills: session.effectiveSkillSelection.skills.map((skill) =>
-          skill.name === 'gestalt:xerj' ? { ...skill, enabled: resource.retrieval!.ready } : skill,
+          resource.retrieval!.capabilities?.some(
+            (capability) => capability.skillName === skill.name,
+          )
+            ? {
+                ...skill,
+                enabled: Boolean(
+                  resource.retrieval!.capabilities.find(
+                    (capability) => capability.skillName === skill.name,
+                  )?.ready,
+                ),
+              }
+            : skill.name === 'gestalt:xerj'
+              ? { ...skill, enabled: resource.retrieval!.ready }
+              : skill,
         ),
       },
     };
@@ -1291,6 +1336,7 @@ export class CodexSessionRuntime {
     resource.retrieval = state;
     resource.skillsConfig = state.skillsConfig;
     resource.modelConfig = state.config;
+    this.reportCapabilityFailures(resource, session);
     if (state.diagnostic && !resource.retrievalFailureReported) {
       resource.retrievalFailureReported = true;
       this.onNotification?.(
@@ -1304,6 +1350,22 @@ export class CodexSessionRuntime {
     }
   }
 
+  private reportCapabilityFailures(resource: SessionResource, session: RelaySessionSnapshot): void {
+    for (const capability of resource.retrieval?.capabilities ?? []) {
+      if (!capability.diagnostic || resource.capabilityFailuresReported.has(capability.serverName))
+        continue;
+      resource.capabilityFailuresReported.add(capability.serverName);
+      this.onNotification?.(
+        session.id,
+        {
+          method: 'mcpServer/statusUpdated',
+          params: { name: capability.serverName, status: 'failed' },
+        },
+        { kind: 'root' },
+      );
+    }
+  }
+
   private async verifyRetrieval(
     resource: SessionResource,
     session: RelaySessionSnapshot,
@@ -1311,9 +1373,25 @@ export class CodexSessionRuntime {
   ): Promise<void> {
     const state = resource.retrieval;
     if (!state?.ready || !resource.threadId || !this.retrieval) return;
-    if (await this.retrieval.verify(resource.process.rpc, resource.threadId, state)) return;
+    if (await this.retrieval.verify(resource.process.rpc, resource.threadId, state)) {
+      if (
+        state.capabilities?.some(
+          (capability) => capability.serverName === 'gestalt-serena' && capability.ready,
+        )
+      )
+        this.onNotification?.(
+          session.id,
+          {
+            method: 'mcpServer/statusUpdated',
+            params: { name: 'gestalt-serena', status: 'connected' },
+          },
+          { kind: 'root' },
+        );
+      return;
+    }
     state.fallback();
-    if (!resource.retrievalFailureReported) {
+    this.reportCapabilityFailures(resource, session);
+    if (!state.capabilities && !resource.retrievalFailureReported) {
       resource.retrievalFailureReported = true;
       this.onNotification?.(
         session.id,

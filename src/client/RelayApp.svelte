@@ -63,6 +63,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     browserNotificationHistoryStorage,
     createToastQueue,
   } from './features/feedback/toast-queue.js';
+  import { serenaAvailabilityFeedback } from './features/feedback/serena-feedback.js';
   import ToastEvidence from './features/feedback/ToastEvidence.svelte';
   import ToastViewport from './features/feedback/ToastViewport.svelte';
   import FilesystemTreeEvidence from './features/filesystem-tree/FilesystemTreeEvidence.svelte';
@@ -386,6 +387,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onSessionEvent: (event) => handleChatMetadataEvent(event),
     onRelayEvent: (event) => {
       if (sessionId) activityController.observe(sessionId, event);
+      const feedback = serenaAvailabilityFeedback(event);
+      if (feedback) toastQueue.enqueue(feedback);
     },
     onHistoryError: (error) => {
       shellStatus = reportRelayError(error, 'SESSION_HISTORY_READ_FAILED');

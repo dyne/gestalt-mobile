@@ -66,7 +66,7 @@ export class CodexSkillCatalog implements SkillCatalog {
     private readonly profile: string,
     private readonly launch: Launch = launchCodexAppServer,
     private readonly timeoutMs = 5_000,
-    private readonly retrieval?: CodexXerj,
+    private readonly retrieval?: Pick<CodexXerj, 'prepare' | 'verify'>,
   ) {}
 
   async list(workspace: string): Promise<SkillCatalogResult> {
@@ -105,7 +105,10 @@ export class CodexSkillCatalog implements SkillCatalog {
           ? { ...stable.data, enabled: false }
           : stable.data;
       });
-      if (this.retrieval && skills.some((skill) => skill.name === 'gestalt:xerj')) {
+      if (
+        this.retrieval &&
+        skills.some((skill) => ['gestalt:xerj', 'gestalt:serena'].includes(skill.name))
+      ) {
         const state = await this.retrieval.prepare({
           cwd: canonicalWorkspace,
           deadline,
@@ -115,6 +118,8 @@ export class CodexSkillCatalog implements SkillCatalog {
           config: {},
           start: false,
         });
+        const requestedSerena = skills.find((skill) => skill.name === 'gestalt:serena');
+        if (requestedSerena) requestedSerena.enabled = false;
         if (state.ready) {
           try {
             const result = (await this.withTimeout(
@@ -123,13 +128,20 @@ export class CodexSkillCatalog implements SkillCatalog {
                 ...threadSkillConfig(state.skillsConfig, state.config),
                 ephemeral: true,
               }),
-              deadline,
+              state.deadline,
             )) as { thread?: { id?: string } };
             const ready =
               result.thread?.id &&
               (await this.retrieval.verify(server.rpc, result.thread.id, state));
             for (const skill of skills)
-              if (skill.name === 'gestalt:xerj') skill.enabled = Boolean(ready);
+              if (['gestalt:xerj', 'gestalt:serena'].includes(skill.name))
+                skill.enabled = state.capabilities
+                  ? Boolean(result.thread?.id) &&
+                    Boolean(
+                      state.capabilities.find((capability) => capability.skillName === skill.name)
+                        ?.ready,
+                    )
+                  : Boolean(ready);
           } catch {
             /* Discovery remains usable without optional retrieval. */
           }
