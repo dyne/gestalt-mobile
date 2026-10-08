@@ -112,7 +112,6 @@ export class XerjIndexer {
       this.value = {
         ...this.value,
         state: 'absent',
-        message: 'Install with gestalt xerj install.',
       };
       return;
     }

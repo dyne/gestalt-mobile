@@ -187,6 +187,7 @@ describe('host-owned XERJ indexing', () => {
     const indexer = f.create();
     indexer.start();
     await vi.waitFor(() => expect(indexer.status().state).toBe(state));
+    if (state === 'absent') expect(indexer.status().message).toBeUndefined();
     await expect(f.args()).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

@@ -219,9 +219,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       onclick={onlock}>Lock Gestalt Mobile</button
     >
   {/if}
-  {#if xerj}
+  {#if xerj && xerj.state !== 'absent'}
     <section class="component-versions xerj-status" aria-labelledby="xerj-status-title">
-      <h2 id="xerj-status-title">Source discovery</h2>
+      <h2 id="xerj-status-title">Workspace discovery</h2>
       <dl>
         <div>
           <dt>XERJ</dt>
