@@ -24,6 +24,37 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AppHeader', () => {
+  it('confirms upgrade, prevents duplicate requests, and allows retry after failure', async () => {
+    let fail!: (error: Error) => void;
+    const onupgrade = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    render(AppHeader, { theme: 'dyne-org', onthemechange: () => {}, onupgrade });
+    const menu = document.getElementById('configuration-panel')!;
+    await fireEvent.click(within(menu).getByRole('button', { name: 'Upgrade', hidden: true }));
+    const dialog = screen.getByRole('dialog', { name: 'Upgrade Gestalt?' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await Promise.resolve();
+    expect(document.activeElement).toBe(cancel);
+    expect(onupgrade).not.toHaveBeenCalled();
+    await fireEvent.click(cancel);
+    expect(dialog.hasAttribute('open')).toBe(false);
+    await fireEvent.click(within(menu).getByRole('button', { name: 'Upgrade', hidden: true }));
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Upgrade and restart' }));
+    expect(onupgrade).toHaveBeenCalledOnce();
+    expect(dialog.getAttribute('aria-busy')).toBe('true');
+    expect((cancel as HTMLButtonElement).disabled).toBe(true);
+    expect(within(dialog).getByRole('status').textContent).toContain('reconnect');
+    fail(new Error('failed'));
+    await vi.waitFor(() => expect(dialog.getAttribute('aria-busy')).toBe('false'));
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    await fireEvent.click(cancel);
+    expect(screen.getByRole('button', { name: 'Open configuration' })).toBe(document.activeElement);
+  });
+
   it('shows root-wide indexing progress and durable recovery guidance', async () => {
     const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
     const { rerender } = render(AppHeader, {

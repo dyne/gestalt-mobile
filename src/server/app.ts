@@ -67,6 +67,7 @@ import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.
 import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
 
 export type AppDependencies = {
+  upgrade?: import('./features/maintenance/upgrade/endpoint.js').UpgradePort;
   sessionDefaults?: SessionDefaultsStore;
   selfDebug?: SelfDebugDependencies;
   health: HealthReader;
@@ -285,7 +286,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   registerFileRoutes(app, deps);
   registerGitRoutes(app, deps);
   registerSkillRoutes(app, deps);
-  registerMaintenanceRoutes(app);
+  registerMaintenanceRoutes(app, deps.upgrade);
   registerProblemHandler(app, Boolean(deps.staticDir));
   return app;
 }

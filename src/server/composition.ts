@@ -13,6 +13,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
 import { buildApp } from './app.js';
+import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
 import { createSelfDebugSession } from './features/self-debug/create-session.js';
 import { startSession } from './features/sessions/start-session/use-case.js';
@@ -1670,6 +1671,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let app;
   try {
     app = await buildApp({
+      upgrade: new ManagedUpgrade(options.root),
       ...(authorization
         ? {
             auth: {

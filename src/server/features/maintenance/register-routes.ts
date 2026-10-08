@@ -7,7 +7,9 @@
 import type { FastifyInstance } from 'fastify';
 
 import { registerQuit } from './quit/endpoint.js';
+import { registerUpgrade, type UpgradePort } from './upgrade/endpoint.js';
 
-export function registerMaintenanceRoutes(app: FastifyInstance): void {
+export function registerMaintenanceRoutes(app: FastifyInstance, upgrade?: UpgradePort): void {
   registerQuit(app);
+  registerUpgrade(app, upgrade);
 }
