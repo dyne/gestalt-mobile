@@ -4045,15 +4045,18 @@ describe('production composition', () => {
       });
 
       await expect.poll(() => handles.length).toBeGreaterThan(handlesBeforeRecovery);
-      const replacement = handles.find(
-        (candidate) =>
-          candidate !== first &&
-          candidate.requests.some((request) => request.method === 'thread/resume'),
-      );
-      expect(replacement?.requests).toContainEqual({
-        method: 'thread/resume',
-        params: expect.objectContaining({ threadId, cwd: join(root, 'workspace') }),
-      });
+      // Launching the replacement precedes its asynchronous thread resume.
+      // Wait for the recovery operation, not merely the new process handle.
+      await expect
+        .poll(() =>
+          handles
+            .filter((candidate) => candidate !== first)
+            .flatMap((candidate) => candidate.requests),
+        )
+        .toContainEqual({
+          method: 'thread/resume',
+          params: expect.objectContaining({ threadId, cwd: join(root, 'workspace') }),
+        });
       await expect
         .poll(async () => (await app.inject(`/api/sessions/${sessionId}`)).json().state)
         .toBe('ready');
