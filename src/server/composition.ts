@@ -1436,6 +1436,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             });
             return capabilities.prepare({
               cwd: session.workspacePath,
+              approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
               rpc,
               config,
               deadline,

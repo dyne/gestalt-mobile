@@ -93,6 +93,7 @@ async function fixture() {
     rpc,
     skills,
     skillsConfig: compileSkillOverride({ discovered: skills }).skillsConfig,
+    approvalPolicy: 'never',
     config: { approval_policy: 'never', sandbox_mode: 'read-only' },
     start: true,
   };
@@ -199,7 +200,7 @@ describe('workspace-bound Serena capability', () => {
       const config = (state.config.mcp_servers as Record<string, Record<string, unknown>>)[
         serenaServerName
       ];
-      expect(config).not.toHaveProperty('default_tools_approval_mode');
+      expect(config.default_tools_approval_mode).toBe('approve');
       expect(config).not.toHaveProperty('env');
       expect(config).not.toHaveProperty('enabled_tools');
       expect(await f.adapter.verify(f.rpc, 'native-thread', state)).toBe(true);
@@ -211,6 +212,27 @@ describe('workspace-bound Serena capability', () => {
     expect((await f.adapter.prepare(f.input)).config.developer_instructions).toContain(
       'do not prove language readiness',
     );
+  });
+  it.each(['on-request', 'untrusted'])(
+    'keeps interactive approvals for %s',
+    async (approvalPolicy) => {
+      const f = await fixture();
+      const state = await f.adapter.prepare({ ...f.input, approvalPolicy });
+      expect(
+        (state.config.mcp_servers as Record<string, Record<string, unknown>>)[serenaServerName],
+      ).not.toHaveProperty('default_tools_approval_mode');
+    },
+  );
+  it.each(['prompt', 'auto', 'writes'])('preserves explicit server approval %s', async (mode) => {
+    const f = await fixture();
+    (f.native.mcp_servers as Record<string, unknown>)[serenaServerName] = {
+      default_tools_approval_mode: mode,
+    };
+    const state = await f.adapter.prepare(f.input);
+    expect(
+      (state.config.mcp_servers as Record<string, Record<string, unknown>>)[serenaServerName]
+        .default_tools_approval_mode,
+    ).toBe(mode);
   });
   it('preserves explicit operator per-tool approvals without copying XERJ autoapproval', async () => {
     const f = await fixture();
