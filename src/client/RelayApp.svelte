@@ -24,6 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
+  import { waitForUpgrade } from './features/maintenance/upgrade.js';
   import DebugDialog from './features/self-debug/DebugDialog.svelte';
   import { visibleHeaderActions } from './features/sessions/header-actions.js';
   import type { DebugConfirmation } from '../shared/contracts/self-debug.js';
@@ -502,6 +503,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
+  const upgradeController = new AbortController();
+  async function upgrade(): Promise<void> {
+    try {
+      const started = await relay.upgrade();
+      await waitForUpgrade(started.instanceId, relay.upgradeStatus, upgradeController.signal);
+      window.location.reload();
+    } catch (error) {
+      if (!upgradeController.signal.aborted) reportRelayError(error, 'UPGRADE_FAILED');
+      throw error;
+    }
+  }
+
   onMount(async () => {
     if (
       evidenceContext === 'sessions' ||
@@ -659,6 +672,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   onDestroy(() => {
+    upgradeController.abort();
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
     tailScheduler.invalidate();
@@ -1720,6 +1734,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         onnotifications={() => (notificationsOpen = true)}
         onscratchpad={openScratchpad}
         onquit={quit}
+        onupgrade={upgrade}
         onthemechange={setTheme}
         ondetach={tab === 'chat' && sessionId ? detachChat : undefined}
         oncopytocli={tab === 'chat' && selectedSession

@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onnotifications = () => {},
     onscratchpad = () => {},
     onquit = async () => {},
+    onupgrade = async () => {},
     ondetach,
     oncopytocli,
     copyToCliAvailable = true,
@@ -47,6 +48,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onnotifications?: () => void;
     onscratchpad?: () => void;
     onquit?: () => Promise<void>;
+    onupgrade?: () => Promise<void>;
     ondetach?: () => void;
     oncopytocli?: () => void;
     copyToCliAvailable?: boolean;
@@ -56,6 +58,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let quitDialog = $state<HTMLDialogElement | null>(null);
   let quitCancel = $state<HTMLButtonElement | null>(null);
   let quitPending = $state(false);
+  let upgradeDialog = $state<HTMLDialogElement | null>(null);
+  let upgradeCancel = $state<HTMLButtonElement | null>(null);
+  let upgradePending = $state(false);
+
+  function openUpgrade(): void {
+    upgradeDialog?.showModal();
+    queueMicrotask(() => upgradeCancel?.focus());
+  }
+
+  async function confirmUpgrade(): Promise<void> {
+    if (upgradePending) return;
+    upgradePending = true;
+    try {
+      await onupgrade();
+    } catch {
+      // Failures are reported through the application's shared toast queue.
+      upgradePending = false;
+    }
+  }
 
   function openQuit(): void {
     quitDialog?.showModal();
@@ -77,7 +98,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function restoreMenuFocus(): void {
-    if (!quitPending) queueMicrotask(() => menuTrigger?.focus());
+    if (!quitPending && !upgradePending) queueMicrotask(() => menuTrigger?.focus());
   }
 </script>
 
@@ -254,7 +275,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       type="button"
       popovertarget="configuration-panel"
       popovertargetaction="hide"
+      disabled={upgradePending || quitPending}
+      onclick={openUpgrade}>Upgrade</button
+    >
+    <button
+      type="button"
+      popovertarget="configuration-panel"
+      popovertargetaction="hide"
       class="quit-relay"
+      disabled={upgradePending}
       onclick={openQuit}>Quit</button
     >
   </div>
@@ -283,6 +312,33 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       disabled={quitPending}
       onclick={() => void confirmQuit()}>{quitPending ? 'Quitting…' : 'Quit'}</button
     >
+  </div>
+</dialog>
+
+<dialog
+  bind:this={upgradeDialog}
+  aria-labelledby="upgrade-title"
+  aria-describedby="upgrade-description"
+  aria-busy={upgradePending}
+  oncancel={(event) => (upgradePending ? event.preventDefault() : restoreMenuFocus())}
+  onclose={restoreMenuFocus}
+>
+  <h2 id="upgrade-title">Upgrade Gestalt?</h2>
+  <p id="upgrade-description">
+    Update Gestalt and restart Mobile with its current settings. Running work will be interrupted
+    when Mobile restarts. Saved sessions are preserved, and this page will reconnect automatically.
+  </p>
+  {#if upgradePending}<p role="status">Updating and waiting for Mobile to reconnect…</p>{/if}
+  <div class="dialog-actions">
+    <button
+      bind:this={upgradeCancel}
+      type="button"
+      disabled={upgradePending}
+      onclick={() => upgradeDialog?.close()}>Cancel</button
+    >
+    <button type="button" disabled={upgradePending} onclick={() => void confirmUpgrade()}>
+      {upgradePending ? 'Upgrading…' : 'Upgrade and restart'}
+    </button>
   </div>
 </dialog>
 

@@ -448,6 +448,18 @@ dismissed with its keyboard-accessible close button.
 
 ## Versions and upgrades
 
+When started with `gestalt mobile`, choose **Upgrade** in the header configuration
+menu and confirm **Upgrade and restart**. Mobile schedules the manager's detached
+`gestalt update-restart` worker, which runs the normal `gestalt update` flow and
+restarts Mobile with its saved launch options after a successful update. Running
+session processes are interrupted during the restart; saved sessions remain.
+The page waits for the new server instance and reloads automatically.
+
+An update failure leaves the existing server running and appears through the
+notification system. Inspect `$GESTALT_HOME/update-restart.log` (normally
+`~/.gestalt/update-restart.log`) for details. Standalone `gestalt-mobile` launches
+have no managed restart descriptor; use the installation commands below instead.
+
 Inspect the executable and registry versions with:
 
 ```sh

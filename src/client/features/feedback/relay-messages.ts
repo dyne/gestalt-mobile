@@ -51,6 +51,9 @@ const relayMessages = {
   GIT_CLONE_FAILED: 'Clone failed.',
   WORKSPACE_FILES_READ_FAILED: 'Files could not be read. Try again.',
   QUIT_FAILED: 'Gestalt Mobile could not quit cleanly. Try again or stop it from the terminal.',
+  UPGRADE_FAILED:
+    'Gestalt could not complete the upgrade and reconnect. Check update-restart.log and reload when Mobile is ready.',
+  UPGRADE_UNAVAILABLE: 'Start Mobile with gestalt mobile to enable upgrades.',
   DEBUG_CONTEXT_FAILED: 'Session diagnostics could not be read. Reopen DEBUG to try again.',
   DEBUG_START_FAILED:
     'Self DEBUG could not start. Check Sessions for a saved debug session before trying again.',

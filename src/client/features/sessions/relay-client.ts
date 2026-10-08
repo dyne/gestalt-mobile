@@ -5,6 +5,7 @@
  */
 
 import type { SupervisedPlan } from '../plans/contracts.js';
+import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
 import type {
   ChatSnapshot,
   SafeInteractionOutcome,
@@ -302,6 +303,8 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
     readDebugTrace: (id: string, signal?: AbortSignal) =>
       get<unknown>(`/api/sessions/${encodeURIComponent(id)}/debug/trace`, signal),
     quit: () => request<{ accepted: true }>('/api/maintenance/quit', {}),
+    upgrade: () => request<UpgradeStatus>('/api/maintenance/upgrade', {}),
+    upgradeStatus: (signal: AbortSignal) => get<UpgradeStatus>('/api/maintenance/upgrade', signal),
     listSessions: (signal?: AbortSignal) => get<RelaySession[]>('/api/sessions', signal),
     checkWorkspaceFileReferences: (workspaceId: string, paths: string[], signal?: AbortSignal) =>
       request<{ paths: string[] }>(
