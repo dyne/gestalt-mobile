@@ -17,6 +17,12 @@ export type CodexRetrievalState = {
   skillsConfig: readonly { path: string; enabled: boolean }[];
   ready: boolean;
   diagnostic?: string;
+  capabilities?: readonly {
+    skillName: string;
+    serverName: string;
+    ready: boolean;
+    diagnostic?: string;
+  }[];
   deadline: number;
   fallback(): void;
 };

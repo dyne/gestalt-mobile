@@ -205,6 +205,9 @@ describe('AppHeader', () => {
         { id: 'context-mode', label: 'Context Mode', version: '2.9.0' },
         { id: 'codex', label: 'Codex CLI', version: 'codex-cli 0.144.3' },
         { id: 'xerj', label: 'xerj', version: 'v1.0.0-rc.87' },
+        { id: 'serena', label: 'Serena', version: '1.7.0' },
+        { id: 'uv', label: 'uv', version: '0.11.12' },
+        { id: 'serena-python', label: 'Serena Python', version: null },
       ],
     });
 
@@ -221,6 +224,9 @@ describe('AppHeader', () => {
       ['Context Mode', '2.9.0'],
       ['Codex CLI', 'codex-cli 0.144.3'],
       ['xerj', 'v1.0.0-rc.87'],
+      ['Serena', '1.7.0'],
+      ['uv', '0.11.12'],
+      ['Serena Python', 'Unavailable'],
     ]);
   });
 

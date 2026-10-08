@@ -59,6 +59,8 @@ export type PendingInteraction = {
  */
 export type EffectiveSkillSelection = {
   selectedProfileName?: string;
+  /** Preserve optional Serena selection across transient availability changes. */
+  serenaSelected?: boolean;
   skills: SkillSelection;
   warnings?: string[];
 };
@@ -121,6 +123,7 @@ export function createEffectiveSkillSelection(
     ...(input.selectedProfileName === undefined
       ? {}
       : { selectedProfileName: normalizeSkillProfileName(input.selectedProfileName) }),
+    ...(typeof input.serenaSelected === 'boolean' ? { serenaSelected: input.serenaSelected } : {}),
     skills: createSkillSelection(input.skills),
     ...(warnings.length > 0 ? { warnings: warnings.slice(0, 50) } : {}),
   };

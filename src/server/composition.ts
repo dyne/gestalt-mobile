@@ -97,6 +97,9 @@ import { XerjIndexer } from './platform/retrieval/xerj-indexer.js';
 import type { XerjStatus } from '../shared/contracts/xerj-status.js';
 import { ManagedXerj, xerjDeadline } from './platform/retrieval/managed-xerj.js';
 import { CodexXerj } from './platform/retrieval/codex-xerj.js';
+import { CodexSerena } from './platform/codex/codex-serena.js';
+import { ManagedSerena } from './platform/codex/managed-serena.js';
+import { CodexCapabilities } from './platform/codex/codex-capabilities.js';
 import type { RetrievalCapabilityPort } from './features/skills/application/ports.js';
 import { compileSkillOverride, type SkillProfile } from './features/skills/model/skill-profile.js';
 import { SupervisedPlanRegistry } from './features/plans/application/supervised-plan-registry.js';
@@ -619,6 +622,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       : (options.retrievalCapability ?? new ManagedXerj());
   const xerjIndexer = new XerjIndexer(root, options.xerj ?? 'manual', retrievalCapability);
   const xerj = new CodexXerj(retrievalCapability);
+  const serenaInstallation = new ManagedSerena();
+  const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
   const skillCatalog = (provider: LlmProvider, profile: string) =>
     provider === 'kimi'
       ? kimiSkillCatalog
@@ -630,28 +635,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             profile,
             options.launchAppServer ?? launchCodexAppServer,
             5_000,
-            xerj,
+            capabilities,
           ).list(workspace)
         : kimiSkillCatalog.list(workspace),
     async (provider, _profile, workspace, result) => {
-      if (
-        provider !== 'codex' ||
-        !result.skills.some((skill) => skill.name === 'gestalt:xerj' && skill.enabled)
-      )
-        return result;
-      const current = await retrievalCapability.check({
-        cwd: workspace,
-        deadline: xerjDeadline(),
-        start: false,
-      });
-      return current.status === 'ready'
-        ? result
-        : {
-            ...result,
-            skills: result.skills.map((skill) =>
-              skill.name === 'gestalt:xerj' ? { ...skill, enabled: false } : skill,
-            ),
-          };
+      if (provider !== 'codex') return result;
+      const [xerjStatus, serenaStatus] = await Promise.all([
+        result.skills.some((skill) => skill.name === 'gestalt:xerj' && skill.enabled)
+          ? retrievalCapability.check({ cwd: workspace, deadline: xerjDeadline(), start: false })
+          : undefined,
+        result.skills.some((skill) => skill.name === 'gestalt:serena' && skill.enabled)
+          ? serenaInstallation.check()
+          : undefined,
+      ]);
+      return {
+        ...result,
+        skills: result.skills.map((skill) =>
+          (skill.name === 'gestalt:xerj' && xerjStatus && xerjStatus.status !== 'ready') ||
+          (skill.name === 'gestalt:serena' && serenaStatus && serenaStatus.status !== 'installed')
+            ? { ...skill, enabled: false }
+            : skill,
+        ),
+      };
     },
   );
   const workspacePlanCatalog = new FilesystemWorkspacePlanCatalog();
@@ -1421,10 +1426,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const selected = compileSkillOverride({
               discovered: catalog.skills,
               explicit:
-                session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
+                session.effectiveSkillSelection?.skills.map((skill) =>
+                  skill.name === 'gestalt:serena' &&
+                  session.effectiveSkillSelection?.serenaSelected !== undefined
+                    ? { ...skill, enabled: session.effectiveSkillSelection.serenaSelected }
+                    : skill,
+                ) ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
             });
-            return xerj.prepare({
+            return capabilities.prepare({
               cwd: session.workspacePath,
               rpc,
               config,
@@ -1434,7 +1444,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               start: true,
             });
           },
-          verify: (rpc, threadId, state) => xerj.verify(rpc, threadId, state),
+          verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
         },
       )
     : null;

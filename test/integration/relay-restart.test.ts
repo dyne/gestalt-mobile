@@ -311,6 +311,7 @@ test('uses the original snapshot only when a detached session sends after profil
       { path: '/skills/beta/SKILL.md', enabled: false },
       { path: '/skills/new/SKILL.md', enabled: false },
       { name: 'gestalt:xerj', enabled: false },
+      { name: 'gestalt:serena', enabled: false },
     ]);
   await second.close();
 });

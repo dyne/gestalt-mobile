@@ -321,3 +321,37 @@ describe('SkillsState', () => {
     expect(state.status).toEqual({ kind: 'ready' });
   });
 });
+
+it('retains explicit Serena enable/disable choices through profile discovery and save', async () => {
+  const skill = {
+    name: 'gestalt:serena',
+    path: '/plugins/gestalt/skills/serena/SKILL.md',
+    nativeEnabled: true,
+    effectiveEnabled: true,
+    alwaysAdvertised: false,
+  };
+  const state = new SkillsState(
+    client({
+      listAvailableSkills: async () => ({ source: 'native', errors: [], skills: [skill] }),
+      listSkillProfiles: async () => ({
+        profiles: [
+          {
+            version: 1,
+            name: 'semantic',
+            path: '/profiles/semantic.yml',
+            skills: [{ name: skill.name, path: skill.path, enabled: true }],
+          },
+        ],
+      }),
+    }),
+  );
+  await state.load('workspace', 'default');
+  state.selectProfile('semantic');
+  expect(state.skills[0]?.enabled).toBe(true);
+  state.toggle(skill.path, false);
+  expect(state.savePayload('semantic').skills).toEqual([
+    { name: skill.name, path: skill.path, enabled: false },
+  ]);
+  state.selectProfile('semantic');
+  expect(state.skills[0]?.enabled).toBe(true);
+});

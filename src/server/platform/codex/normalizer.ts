@@ -38,6 +38,27 @@ export function normalizeCodexNotification(
       },
     };
   }
+  if (
+    notification.method === 'mcpServer/statusUpdated' &&
+    connection?.name === 'gestalt-serena' &&
+    ['connected', 'failed', 'cancelled'].includes(String(connection.status))
+  ) {
+    const connected = connection.status === 'connected';
+    return {
+      sessionId,
+      sequence,
+      occurredAt,
+      type: 'activity.updated',
+      payload: {
+        id: 'gestalt-serena-availability',
+        label: connected ? 'Serena connected' : 'Serena unavailable',
+        detail: connected
+          ? 'Connection verified. Before semantic editing, call get_symbols_overview on a current source file and verify success; language readiness is still unverified.'
+          : 'Serena is unavailable in this session. Use native code tools; connection availability will be checked when the runtime resumes. Operators can inspect installation with gestalt serena doctor.',
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
+      },
+    };
+  }
   const decoded = decodeNotification(notification);
   if (!decoded) return null;
   if (decoded.method === 'item/agentMessage/delta') {
