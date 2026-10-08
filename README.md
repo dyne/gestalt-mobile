@@ -138,9 +138,9 @@ open their own MCP connections. A connection failure appears in the existing
 chat activity; use `rg` and current source reads until the next runtime check.
 Instructions already delivered during a turn cannot be retroactively removed.
 
-`gestalt:serena` is optional semantic navigation and editing for Codex sessions.
-It is enabled only when the selected profile permits the discovered skill,
-native hooks are enabled, the manager installation is valid, and the owning
+`gestalt:serena` provides automatic semantic navigation and editing for Codex sessions.
+It is hidden from skill profiles and loaded when the session readiness check succeeds.
+It is enabled only when native hooks are enabled, the manager installation is valid, and the owning
 thread's MCP connection exposes the expected tools. XERJ and Serena have
 independent availability and fallback. A connected catalog proves the connection;
 language readiness remains unverified until a model-authorized

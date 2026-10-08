@@ -322,7 +322,7 @@ describe('SkillsState', () => {
   });
 });
 
-it('retains explicit Serena enable/disable choices through profile discovery and save', async () => {
+it('hides Serena and drops legacy profile choices through discovery and save', async () => {
   const skill = {
     name: 'gestalt:serena',
     path: '/plugins/gestalt/skills/serena/SKILL.md',
@@ -347,11 +347,10 @@ it('retains explicit Serena enable/disable choices through profile discovery and
   );
   await state.load('workspace', 'default');
   state.selectProfile('semantic');
-  expect(state.skills[0]?.enabled).toBe(true);
+  expect(state.skills).toEqual([]);
+  expect(state.missingSkills).toEqual([]);
   state.toggle(skill.path, false);
-  expect(state.savePayload('semantic').skills).toEqual([
-    { name: skill.name, path: skill.path, enabled: false },
-  ]);
-  state.selectProfile('semantic');
-  expect(state.skills[0]?.enabled).toBe(true);
+  expect(state.savePayload('semantic').skills).toEqual([]);
+  await state.refresh();
+  expect(state.skills).toEqual([]);
 });

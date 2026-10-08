@@ -1427,12 +1427,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             const selected = compileSkillOverride({
               discovered: catalog.skills,
               explicit:
-                session.effectiveSkillSelection?.skills.map((skill) =>
-                  skill.name === 'gestalt:serena' &&
-                  session.effectiveSkillSelection?.serenaSelected !== undefined
-                    ? { ...skill, enabled: session.effectiveSkillSelection.serenaSelected }
-                    : skill,
-                ) ?? options.explicitSkillProfile?.skills,
+                session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
             });
             return capabilities.prepare({

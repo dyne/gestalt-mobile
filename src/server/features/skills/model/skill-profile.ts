@@ -80,9 +80,8 @@ export type SkillCatalogResult = { skills: AvailableSkill[]; errors: SkillDiscov
 /** Gestalt workflow skills are session infrastructure, not optional profile entries. */
 export function isAlwaysAdvertisedSkill(skill: Pick<AvailableSkill, 'name' | 'enabled'>): boolean {
   return (
-    skill.name !== 'gestalt:serena' &&
     isGestaltSkillName(skill.name) &&
-    (skill.name !== 'gestalt:xerj' || skill.enabled)
+    (!['gestalt:xerj', 'gestalt:serena'].includes(skill.name) || skill.enabled)
   );
 }
 
@@ -218,12 +217,11 @@ export function applySkillSelectionSnapshot(
   );
   return catalog.map((skill) => ({
     ...skill,
-    enabled:
-      skill.name === 'gestalt:xerj'
-        ? skill.enabled
-        : isAlwaysAdvertisedSkill(skill)
-          ? true
-          : (enabledByPath.get(skill.path) ?? false),
+    enabled: ['gestalt:xerj', 'gestalt:serena'].includes(skill.name)
+      ? skill.enabled
+      : isAlwaysAdvertisedSkill(skill)
+        ? true
+        : (enabledByPath.get(skill.path) ?? false),
   }));
 }
 
@@ -318,11 +316,7 @@ export function createSkillProfile(input: {
     // Gestalt skills are mandatory thread infrastructure. Legacy profiles are
     // normalized on read so they cannot pin a stale plugin-cache version or
     // expose a meaningless enable/disable control in the editor.
-    skills: createSkillSelection(
-      input.skills.filter(
-        (skill) => skill.name === 'gestalt:serena' || !isGestaltSkillName(skill.name),
-      ),
-    ),
+    skills: createSkillSelection(input.skills.filter((skill) => !isGestaltSkillName(skill.name))),
   };
 }
 

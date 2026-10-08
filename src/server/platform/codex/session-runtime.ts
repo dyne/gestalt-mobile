@@ -1290,18 +1290,6 @@ export class CodexSessionRuntime {
         (serena.diagnostic || session.effectiveSkillSelection.warnings?.includes(warning))
           ? { warnings }
           : {}),
-        ...(resource.retrieval.capabilities &&
-        session.effectiveSkillSelection.skills.some((skill) => skill.name === 'gestalt:serena')
-          ? {
-              serenaSelected:
-                session.effectiveSkillSelection.serenaSelected ??
-                Boolean(
-                  session.effectiveSkillSelection.skills.find(
-                    (skill) => skill.name === 'gestalt:serena',
-                  )?.enabled,
-                ),
-            }
-          : {}),
         skills: session.effectiveSkillSelection.skills.map((skill) =>
           resource.retrieval!.capabilities?.some(
             (capability) => capability.skillName === skill.name,

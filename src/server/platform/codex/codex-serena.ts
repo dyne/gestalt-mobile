@@ -98,7 +98,6 @@ export class CodexSerena {
           include_instructions?: boolean;
         }
       | undefined;
-    const selected = input.skillsConfig.find((entry) => entry.path === skill?.path);
     const conflict =
       reserved.enabled === false ||
       (reserved.env && Object.keys(reserved.env).length) ||
@@ -110,7 +109,6 @@ export class CodexSerena {
     if (
       !compatible ||
       !skill ||
-      !selected?.enabled ||
       rules?.include_instructions === false ||
       (native.features as { hooks?: boolean } | undefined)?.hooks !== true ||
       rules?.config?.filter((rule) => rule.name === skill.name || rule.path === skill.path).at(-1)
@@ -150,7 +148,10 @@ export class CodexSerena {
         },
         developer_instructions: `${instructions}\n<gestalt_serena_capability>\nSerena is bound to this workspace. Connection and listed tools do not prove language readiness. First call get_symbols_overview on a current project source file and verify success before semantic editing; on failure use native code tools. Native session and child permissions and approvals apply. Plan mode prohibits edits. Do not switch projects or modes.\n${guidance}\n</gestalt_serena_capability>`,
       };
-      state.skillsConfig = input.skillsConfig;
+      state.skillsConfig = [
+        ...input.skillsConfig.filter((entry) => entry.path !== skill.path),
+        { path: skill.path, enabled: true },
+      ];
       state.ready = true;
     } catch {
       state.fallback();

@@ -229,7 +229,7 @@ test('starts a readonly session with optional Serena failure and keeps chat usab
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeEnabled();
 });
 
-test('preserves optional Serena profile selection in the existing skills editor', async ({
+test('hides automatic Serena from the skills editor and removes legacy profile entries', async ({
   page,
 }) => {
   await mockAuthenticatedStatus(page);
@@ -295,11 +295,7 @@ test('preserves optional Serena profile selection in the existing skills editor'
   await page.getByRole('button', { name: 'Manage skill profiles' }).click();
   await page.getByLabel('Skill profile', { exact: true }).selectOption('semantic');
   const checkbox = page.getByRole('checkbox', { name: /gestalt:serena/ });
-  await expect(checkbox).toBeEnabled();
-  await expect(checkbox).toBeChecked();
-  await checkbox.uncheck();
+  await expect(checkbox).toHaveCount(0);
   await page.getByRole('button', { name: 'Save profile', exact: true }).click();
-  await expect
-    .poll(() => saved)
-    .toMatchObject({ skills: [{ name: 'gestalt:serena', path, enabled: false }] });
+  await expect.poll(() => saved).toMatchObject({ skills: [] });
 });
