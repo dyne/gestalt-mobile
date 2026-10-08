@@ -55,6 +55,27 @@ describe('AppHeader', () => {
     expect(screen.getByRole('button', { name: 'Open configuration' })).toBe(document.activeElement);
   });
 
+  it('hides workspace discovery when Xerj is absent or not supplied', async () => {
+    const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
+    const { rerender } = render(AppHeader, props);
+    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
+    await rerender({
+      ...props,
+      xerj: {
+        mode: 'manual',
+        state: 'absent',
+        root: '/workspace',
+        message: 'Install with gestalt xerj install.',
+      },
+    });
+    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
+    expect(screen.queryByText(/gestalt xerj install/)).toBeNull();
+    await rerender({ ...props, xerj: { mode: 'manual', state: 'ready', root: '/workspace' } });
+    expect(screen.getByRole('region', { name: 'Workspace discovery', hidden: true })).toBeTruthy();
+    await rerender({ ...props, xerj: { mode: 'manual', state: 'absent', root: '/workspace' } });
+    expect(screen.queryByRole('region', { name: 'Workspace discovery', hidden: true })).toBeNull();
+  });
+
   it('shows root-wide indexing progress and durable recovery guidance', async () => {
     const props = { theme: 'dyne-org' as const, onthemechange: () => {} };
     const { rerender } = render(AppHeader, {
@@ -67,7 +88,7 @@ describe('AppHeader', () => {
         percent: 42,
       },
     });
-    const status = screen.getByRole('region', { name: 'Source discovery', hidden: true });
+    const status = screen.getByRole('region', { name: 'Workspace discovery', hidden: true });
     expect(status.textContent).toContain('/sources/engineering');
     expect(status.textContent).toContain('42%');
     await rerender({

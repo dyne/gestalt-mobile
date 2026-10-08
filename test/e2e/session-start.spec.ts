@@ -2203,7 +2203,7 @@ test('shows live root-wide XERJ progress only while configuration is open', asyn
   await expect(page.getByRole('button', { name: 'Open configuration' })).toBeVisible();
   expect(requests).toBe(0);
   await page.getByRole('button', { name: 'Open configuration' }).click();
-  const region = page.getByRole('region', { name: 'Source discovery' });
+  const region = page.getByRole('region', { name: 'Workspace discovery' });
   await expect(region).toContainText('42%');
   await expect(region).toContainText('bitcoin-forks');
   await expect.poll(() => requests).toBe(1);
@@ -2225,4 +2225,24 @@ test('shows live root-wide XERJ progress only while configuration is open', asyn
   Object.assign(status, { state: 'error', message: 'XERJ needs an index rebuild.' });
   await page.getByRole('button', { name: 'Open configuration' }).click();
   await expect(page.getByRole('status')).toContainText('XERJ needs an index rebuild.');
+});
+
+test('hides workspace discovery and installation advice when Xerj is absent', async ({ page }) => {
+  const xerj = {
+    mode: 'manual',
+    state: 'absent',
+    root: '/workspace',
+    message: 'Install with gestalt xerj install.',
+  };
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({ json: { workspaces: [], profiles: [], sessions: [], xerj } }),
+  );
+  await page.route('**/api/xerj', (route) => route.fulfill({ json: xerj }));
+  await page.route('**/api/skill-profiles', (route) => route.fulfill({ json: { profiles: [] } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open configuration' }).click();
+  await expect(
+    page.getByRole('region', { name: /Workspace discovery|Source discovery/ }),
+  ).toHaveCount(0);
+  await expect(page.getByText(/gestalt xerj install/)).toHaveCount(0);
 });
