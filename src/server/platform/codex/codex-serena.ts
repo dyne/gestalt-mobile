@@ -16,6 +16,19 @@ export const serenaServerName = 'gestalt-serena';
 type Input = Parameters<CodexXerj['prepare']>[0];
 type Rpc = Input['rpc'];
 
+// config/read includes unset defaults as null. Thread overrides cannot encode
+// those as TOML values; retain explicit settings, including tool approvals.
+function omitUnsetConfig(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitUnsetConfig);
+  if (value !== null && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== null && entry !== undefined)
+        .map(([key, entry]) => [key, omitUnsetConfig(entry)]),
+    );
+  return value;
+}
+
 /** Connection availability only. Native model calls establish effective sandbox authority. */
 export class CodexSerena {
   constructor(private readonly installation: Pick<ManagedSerena, 'check'> = new ManagedSerena()) {}
@@ -34,7 +47,10 @@ export class CodexSerena {
     } catch {
       /* Fail closed on an incompatible runtime. */
     }
-    const servers = (native.mcp_servers ?? {}) as Record<string, Record<string, unknown>>;
+    const servers = omitUnsetConfig(native.mcp_servers ?? {}) as Record<
+      string,
+      Record<string, unknown>
+    >;
     const reserved = servers[serenaServerName] ?? {};
     const mcp: Record<string, unknown> = {};
     for (const [name, server] of Object.entries(servers)) {

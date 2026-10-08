@@ -190,6 +190,39 @@ describe('workspace-bound Serena capability', () => {
       enabled: false,
     });
   });
+  it('omits unset native readback defaults from start and fallback while preserving approvals', async () => {
+    const f = await fixture();
+    const readback = {
+      command: f.manager,
+      args: ['serena', 'mcp', '--cwd', f.root],
+      environment_id: 'local',
+      enabled: true,
+      tool_timeout_sec: null,
+      env: null,
+      disabled_tools: undefined,
+      default_tools_approval_mode: 'approve',
+      tools: { replace_symbol_body: { enabled: null, approval_mode: 'prompt' } },
+    };
+    (f.native.mcp_servers as Record<string, unknown>)[serenaServerName] = readback;
+    (f.native.mcp_servers as Record<string, unknown>).alias = readback;
+    const state = await f.adapter.prepare(f.input);
+    expect(state.ready).toBe(true);
+    for (const fallback of [false, true]) {
+      if (fallback) state.fallback();
+      const servers = state.config.mcp_servers as Record<string, Record<string, unknown>>;
+      for (const name of [serenaServerName, 'alias']) {
+        expect(servers[name]).not.toHaveProperty('tool_timeout_sec');
+        expect(servers[name]).not.toHaveProperty('env');
+        expect(servers[name]).not.toHaveProperty('disabled_tools');
+        expect(servers[name].default_tools_approval_mode).toBe('approve');
+        expect(servers[name].tools).toEqual({ replace_symbol_body: { approval_mode: 'prompt' } });
+      }
+      expect(servers[serenaServerName].enabled).toBe(!fallback);
+      expect(servers.alias.enabled).toBe(false);
+    }
+    expect(readback.tool_timeout_sec).toBeNull();
+    expect(readback.tools.replace_symbol_body.enabled).toBeNull();
+  });
   it.each(['profile', 'native-rule', 'hooks', 'tool-conflict', 'instructions'])(
     'does not advertise capability when excluded by %s',
     async (exclusion) => {
