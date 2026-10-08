@@ -39,6 +39,7 @@ export class CodexXerj {
     skillsConfig: readonly { path: string; enabled: boolean }[];
     config: Record<string, unknown>;
     start: boolean;
+    approvalPolicy?: string;
   }): Promise<CodexRetrievalState> {
     const skill = input.skills.find((entry) => entry.name === 'gestalt:xerj');
     const state: CodexRetrievalState = {

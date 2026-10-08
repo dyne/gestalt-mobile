@@ -134,6 +134,10 @@ export class CodexSerena {
           ...mcp,
           [serenaServerName]: {
             ...reserved,
+            ...(input.approvalPolicy === 'never' &&
+            reserved.default_tools_approval_mode === undefined
+              ? { default_tools_approval_mode: 'approve' }
+              : {}),
             command: install.manager,
             args: ['serena', 'mcp', '--cwd', input.cwd],
             cwd: input.cwd,
