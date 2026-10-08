@@ -59,7 +59,7 @@ export type PendingInteraction = {
  */
 export type EffectiveSkillSelection = {
   selectedProfileName?: string;
-  /** Preserve optional Serena selection across transient availability changes. */
+  /** Legacy persisted field; Serena availability is now automatic. */
   serenaSelected?: boolean;
   skills: SkillSelection;
   warnings?: string[];

@@ -285,15 +285,10 @@ describe('workspace-bound Serena capability', () => {
     expect(readback.tool_timeout_sec).toBeNull();
     expect(readback.tools.replace_symbol_body.enabled).toBeNull();
   });
-  it.each(['profile', 'native-rule', 'hooks', 'tool-conflict', 'instructions'])(
+  it.each(['native-rule', 'hooks', 'tool-conflict', 'instructions'])(
     'does not advertise capability when excluded by %s',
     async (exclusion) => {
       const f = await fixture();
-      if (exclusion === 'profile')
-        f.input.skillsConfig = compileSkillOverride({
-          discovered: f.input.skills,
-          explicit: [],
-        }).skillsConfig;
       if (exclusion === 'native-rule')
         f.native.skills = { config: [{ name: 'gestalt:serena', enabled: false }] };
       if (exclusion === 'hooks') f.native.features = { hooks: false };
@@ -307,19 +302,23 @@ describe('workspace-bound Serena capability', () => {
       expect(state.config.developer_instructions).toContain('Earlier Serena guidance is inactive');
     },
   );
-  it('keeps Serena optional in profiles while fixed workflow skills remain active', async () => {
+  it('loads healthy Serena automatically even with empty or legacy disabled selections', async () => {
     const f = await fixture();
     const skills = [
       ...f.input.skills,
       { name: 'gestalt:org-plan', path: '/org/SKILL.md', enabled: true },
     ];
-    expect(createSkillProfile({ name: 'optional', skills }).skills).toContainEqual(
-      f.input.skills[0],
-    );
+    expect(createSkillProfile({ name: 'optional', skills }).skills).toEqual([]);
     expect(
       applySkillSelectionSnapshot(skills, []).find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,
-    ).toBe(false);
+    ).toBe(true);
+    for (const skillsConfig of [[], [{ path: f.skillPath, enabled: false }]]) {
+      const state = await f.adapter.prepare({ ...f.input, skillsConfig });
+      expect(state.ready).toBe(true);
+      expect(state.skillsConfig).toContainEqual({ path: f.skillPath, enabled: true });
+      expect(state.config.developer_instructions).toContain('<gestalt_serena_capability>');
+    }
     expect(
       applySkillSelectionSnapshot(skills, []).find((skill) => skill.name === 'gestalt:org-plan')
         ?.enabled,
@@ -480,14 +479,7 @@ describe('Serena runtime boundaries', () => {
         deadline,
         skillsConfig: compileSkillOverride({
           discovered: f.input.skills,
-          explicit: session.effectiveSkillSelection?.skills.map((skill) =>
-            skill.name === 'gestalt:serena'
-              ? {
-                  ...skill,
-                  enabled: session.effectiveSkillSelection?.serenaSelected ?? skill.enabled,
-                }
-              : skill,
-          ),
+          explicit: session.effectiveSkillSelection?.skills,
         }).skillsConfig,
       }),
     );
@@ -564,7 +556,7 @@ describe('Serena runtime boundaries', () => {
       recovered.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,
     ).toBe(false);
-    expect(recovered.effectiveSkillSelection?.serenaSelected).toBe(true);
+    expect(recovered.effectiveSkillSelection?.serenaSelected).toBeUndefined();
     expect(recovered.effectiveSkillSelection?.warnings).toContain(
       'Serena is unavailable in this session. Use native code tools. Connection availability will be checked when the runtime resumes.',
     );
@@ -587,25 +579,27 @@ describe('Serena runtime boundaries', () => {
     ).toBe(true);
     expect(availableAgain.effectiveSkillSelection?.warnings ?? []).toEqual([]);
     expect(prepare).toHaveBeenCalledTimes(4);
-    // A newly applied explicit profile replaces the immutable selection; it
-    // never copies a prior runtime's availability recovery marker.
+    // Empty and legacy disabled selections cannot suppress a healthy automatic capability.
     const excludedSelection = createEffectiveSkillSelection({
       selectedProfileName: 'exclude',
       skills: f.input.skills.map((skill) => ({ ...skill, enabled: false })),
     });
     expect(excludedSelection).not.toHaveProperty('serenaSelected');
     const excluded = await runtime.recycle(
-      { ...availableAgain, effectiveSkillSelection: excludedSelection },
+      {
+        ...availableAgain,
+        effectiveSkillSelection: { ...excludedSelection, serenaSelected: false },
+      },
       'y',
     );
-    expect(excluded.effectiveSkillSelection?.serenaSelected).toBe(false);
+    expect(excluded.effectiveSkillSelection?.serenaSelected).toBe(false); // Legacy metadata is ignored.
     expect(
       excluded.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       requests.filter((request) => request.method === 'thread/resume').at(-1)?.params,
-    ).toMatchObject({ config: { mcp_servers: { [serenaServerName]: { enabled: false } } } });
+    ).toMatchObject({ config: { mcp_servers: { [serenaServerName]: { enabled: true } } } });
     const enabledSelection = createEffectiveSkillSelection({
       selectedProfileName: 'include',
       skills: f.input.skills,
@@ -614,7 +608,7 @@ describe('Serena runtime boundaries', () => {
       { ...excluded, effectiveSkillSelection: enabledSelection },
       'z',
     );
-    expect(selectedAgain.effectiveSkillSelection?.serenaSelected).toBe(true);
+    expect(selectedAgain.effectiveSkillSelection?.serenaSelected).toBeUndefined();
     expect(
       selectedAgain.effectiveSkillSelection?.skills.find((skill) => skill.name === 'gestalt:serena')
         ?.enabled,

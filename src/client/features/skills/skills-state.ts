@@ -301,7 +301,9 @@ export class SkillsState {
     );
     const missingByPath = new Map(this.missingSkills.map((skill) => [skill.path, skill.enabled]));
     this.source = available.source;
-    const optionalSkills = available.skills.filter((skill) => !skill.alwaysAdvertised);
+    const optionalSkills = available.skills.filter(
+      (skill) => !skill.alwaysAdvertised && !isFixedGestaltSkill(skill.name),
+    );
     this.skills = optionalSkills.map((skill) => ({
       ...skill,
       enabled:
@@ -332,7 +334,7 @@ export class SkillsState {
 }
 
 function isFixedGestaltSkill(name: string): boolean {
-  return name !== 'gestalt:serena' && name.startsWith('gestalt:');
+  return name.startsWith('gestalt:');
 }
 
 function errorMessage(error: unknown): string {
