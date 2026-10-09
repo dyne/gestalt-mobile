@@ -9,6 +9,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportControlPlaneTrace, formatControlPlaneTrace } from './export-trace.js';
+import { toAgentActivityDto } from '../agent-activity/activity-dto.js';
+import { createAgentActivitySnapshot, projectAgentActivity } from '../agent-activity/model.js';
+import { migrate } from '../../platform/persistence/migrate.js';
+import { SqliteEventJournal } from '../../platform/persistence/sqlite-event-journal.js';
 
 const directories: string[] = [];
 afterEach(async () =>
@@ -16,6 +20,67 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('preserves owned process evidence from the activity projection through the journal', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-trace-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = new DatabaseSync(path);
+    migrate(database);
+    const at = '2026-01-01T00:00:00.000Z';
+    database
+      .prepare(
+        'INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      )
+      .run('s1', 'w', '/workspace', 'default', 'ready', 'active', at, at);
+    const snapshot = projectAgentActivity(createAgentActivitySnapshot('s1', at), {
+      sessionId: 's1',
+      occurredAt: at,
+      kind: 'collaboration',
+      childId: 'child',
+      childStatus: 'completed',
+      childTaskPath: '/root/l1',
+      childOwnedProcesses: [
+        {
+          processId: 'private-process',
+          itemId: 'private-item',
+          ownerThreadId: 'child',
+          ownerTaskPath: '/root/l1',
+          ownership: 'supervisor',
+          state: 'detached-active',
+          observedAt: at,
+          elapsedMs: 1,
+          cpuPercent: 99,
+          rssBytes: 99,
+        },
+      ],
+    });
+    const payload = {
+      ...toAgentActivityDto(snapshot),
+      prompt: 'private-prompt',
+      ownedProcesses: [
+        {
+          state: 'running',
+          ownership: 'executor',
+          command: 'private-command',
+          output: 'private-output',
+          environment: { TOKEN: 'private-token' },
+        },
+      ],
+    };
+    new SqliteEventJournal(database).append('s1', 'agent.activity.updated', payload, at);
+    database.close();
+    const trace = exportControlPlaneTrace(path, 's1', at);
+    expect(trace.events[0]?.payload).toMatchObject({
+      subagents: [
+        { ownedProcesses: [{ state: 'detached-active', ownership: 'supervisor', observedAt: at }] },
+      ],
+      ownedProcesses: [{ state: 'running', ownership: 'executor' }],
+    });
+    expect(JSON.stringify(trace)).not.toMatch(
+      /private-|cpuPercent|rssBytes|environment|command|output/,
+    );
+  });
+
   it('correlates events and diagnoses a scheduled handoff that never dispatched', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-trace-'));
     directories.push(directory);

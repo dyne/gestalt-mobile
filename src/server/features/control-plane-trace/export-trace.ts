@@ -57,6 +57,8 @@ const diagnosticFields = new Set([
   'root',
   'subagents',
   'processes',
+  'ownedProcesses',
+  'ownership',
   'aggregateSubagents',
   'aggregateProcesses',
   'kind',
