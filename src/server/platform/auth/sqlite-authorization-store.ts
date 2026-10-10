@@ -450,11 +450,15 @@ CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, device_id
       .run(hash(token), session.deviceId, session.expiresAt);
   }
   sessionDevice(token: AuthorizationSession['id'], now: string): AuthorizedDevice['id'] | null {
+    return this.sessionDeviceByHash(hash(token), now);
+  }
+  sessionDeviceByHash(tokenHash: string, now: string): AuthorizedDevice['id'] | null {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) return null;
     const row = this.statements
       .prepare(
         'SELECT device_id FROM auth_sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
       )
-      .get(hash(token), now) as { device_id: string | null } | undefined;
+      .get(tokenHash, now) as { device_id: string | null } | undefined;
     return row?.device_id ? authorizedDeviceId(row.device_id) : null;
   }
   revokeSession(token: AuthorizationSession['id'], now: string): boolean {
