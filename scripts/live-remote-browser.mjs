@@ -511,5 +511,6 @@ try {
 } finally {
   await browser.close();
   commands.close();
+  process.stdin.destroy();
   clearTimeout(deadline);
 }

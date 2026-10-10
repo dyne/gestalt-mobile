@@ -165,3 +165,36 @@ test('authorizes the actual HMR upgrade and closes its transport before revocati
   expect((await f.send('/')).status).toBe(401);
   expect(f.connections.size).toBe(0);
 });
+
+test('closes an active SSE and actual HMR listener without waiting for stream expiry', async () => {
+  const f = await fixture();
+  const peer = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/`, 'vite-hmr', {
+    headers: f.headers,
+  });
+  cleanup.push(() => peer.terminate());
+  await new Promise<void>((resolve, reject) => {
+    peer.once('open', resolve);
+    peer.once('error', reject);
+  });
+  const stream = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port: f.gatewayPort,
+        path: '/__gestalt_live/events',
+        headers: f.headers,
+      },
+      (response) => {
+        response.once('data', () => resolve(response));
+      },
+    );
+    req.once('error', reject);
+    req.end();
+  });
+  const streamClosed = new Promise<void>((resolve) => stream.once('close', resolve));
+  const peerClosed = new Promise<void>((resolve) => peer.once('close', () => resolve()));
+  stream.on('error', () => {});
+  await f.gateway.close();
+  await Promise.all([streamClosed, peerClosed]);
+  expect(f.connections.size).toBe(0);
+});

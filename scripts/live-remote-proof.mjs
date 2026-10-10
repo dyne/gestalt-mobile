@@ -794,7 +794,7 @@ try {
         browser.stdin.write('{"ok":false}\n');
       });
   });
-  const exit = await new Promise((done) => browser.once('exit', (code) => done(code)));
+  const exit = await new Promise((done) => browser.once('close', (code) => done(code)));
   await processing;
   await writeFile(
     join(evidence, 'cross-port-gateway-observations.json'),
@@ -829,12 +829,17 @@ try {
     'Trusted TLS / separate network / real passkey launch / published helper SSE / Vite HMR / revocation proof passed',
   );
 } finally {
+  let cleanupFailures = 0;
+  let cleanupStep = 0;
   for (const close of cleanup.reverse()) {
+    console.log(`Live fixture cleanup step ${cleanupStep++}`);
     try {
       await close();
     } catch {
-      /* Preserve original failure while removing owned resources. */
+      cleanupFailures++;
     }
   }
   await rm(root, { recursive: true, force: true });
+  assert.equal(cleanupFailures, 0, 'Owned fixture cleanup failed');
+  console.log('Owned fixture cleanup completed');
 }

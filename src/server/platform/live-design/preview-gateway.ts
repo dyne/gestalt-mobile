@@ -9,6 +9,7 @@ import fastify from 'fastify';
 import { request as upstreamRequest } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Readable } from 'node:stream';
+import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import type {
   PreviewGrantDependencies,
@@ -46,6 +47,21 @@ export async function createPreviewGateway(options: {
   const target = targets.read(registrationId, assignment.canonicalAppRoot);
   const authorization = new PreviewProxyAuthorization(deps, instance, connections);
   const app = fastify({ logger: false, trustProxy: false });
+  const inboundSockets = new Set<Socket>();
+  let closing = false;
+  app.server.on('connection', (socket) => {
+    if (closing) {
+      socket.destroy();
+      return;
+    }
+    inboundSockets.add(socket);
+    socket.once('close', () => inboundSockets.delete(socket));
+  });
+  // Includes denied and pending upgrades, which are not WebSocketServer clients.
+  app.addHook('preClose', async () => {
+    closing = true;
+    for (const socket of inboundSockets) socket.destroy();
+  });
   await app.register(cookie);
   registerPreviewExchange(app, {
     ...deps,
@@ -190,6 +206,7 @@ export async function createPreviewGateway(options: {
       const status = error instanceof LiveAuthError ? error.status : 503;
       socket.end(
         `HTTP/1.1 ${status} Denied\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n`,
+        () => socket.destroy(),
       );
     }
   });
