@@ -141,10 +141,7 @@ try {
     const grant = await response.json();
     const button = document.getElementById('launch');
     button.onclick = () => {
-      const peer = window.open(
-        `${grant.exchangeUrl}#grantId=${encodeURIComponent(grant.grantId)}&grant=${encodeURIComponent(grant.grant)}`,
-        'live-preview',
-      );
+      const peer = window.open(grant.exchangeUrl, 'live-preview');
       const receive = (event) => {
         if (
           event.source !== peer ||
@@ -213,9 +210,13 @@ try {
     true,
   );
   await ui.assertBottomBarIdle(preview);
+  const detectLoaded = preview.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/__gestalt_live/detect.js',
+  );
   await preview.evaluate(() =>
     window.__impeccableLiveQuery('#impeccable-live-detect-toggle').click(),
   );
+  assert.equal((await detectLoaded).status(), 200);
   await preview.waitForFunction(() =>
     Boolean(window.__impeccableLiveQuery('#impeccable-live-detect-toggle')),
   );
@@ -259,18 +260,29 @@ try {
   const denied = await anonymousContext.newPage();
   await denied.goto(`${config.previewOrigin}/__gestalt_live/auth`);
   const paths = [
-    '/',
-    '/@vite/client',
-    '/src/main.tsx',
-    '/src/App.tsx',
-    '/src/styles.css',
-    '/__gestalt_live/live.js',
-    '/__gestalt_live/detect.js',
-    '/__gestalt_live/modern-screenshot.js',
-    '/__gestalt_live/events',
-    '/__gestalt_live/status',
-    '/__gestalt_live/health',
-  ];
+    ...new Set([
+      '/',
+      '/@vite/client',
+      '/src/main.tsx',
+      '/src/App.tsx',
+      '/src/styles.css',
+      '/__gestalt_live/live.js',
+      '/__gestalt_live/detect.js',
+      '/__gestalt_live/modern-screenshot.js',
+      '/__gestalt_live/events',
+      '/__gestalt_live/status',
+      '/__gestalt_live/health',
+      ...[...destinations]
+        .filter((destination) => new URL(destination).host === new URL(config.previewOrigin).host)
+        .map((destination) => new URL(destination).pathname)
+        .filter(
+          (path) =>
+            !['/__gestalt_live/auth', '/__gestalt_live/exchange', '/__gestalt_live/lease'].includes(
+              path,
+            ),
+        ),
+    ]),
+  ].sort();
   const denials = await denied.evaluate(async (paths) => {
     const result = [];
     for (const path of paths) {
@@ -293,13 +305,17 @@ try {
   anonymous.push(...denials.result, { path: '/ (HMR upgrade)', denied: true });
   await anonymousContext.close();
   const sseErrorsBeforeRevocation = await preview.evaluate(() => window.__liveProofSseErrors);
+  const revokeStarted = Date.now();
   await command('revoke');
   await preview.waitForFunction(
     (before) => window.__liveProofSseErrors > before,
     sseErrorsBeforeRevocation,
+    { timeout: 3000 },
   );
   await preview.waitForTimeout(300);
   assert.equal(hmrClosed, true);
+  const revocationElapsedMs = Date.now() - revokeStarted;
+  assert.ok(revocationElapsedMs < 3000);
   const revokeNavigation = await preview.goto(`${config.previewOrigin}/`);
   assert.equal(revokeNavigation.status(), 401);
   await preview.getByRole('heading', { name: 'Preview unavailable' }).waitFor();
@@ -342,6 +358,7 @@ try {
     realPublishedHelperOverlay: true,
     helperSseConnectedAndErrorReply: true,
     helperSseClosedAfterRevocation: true,
+    revocationElapsedMs,
     actualViteHmr: { opened: hmrOpened, updates: hmrUpdates, closedAfterRevocation: hmrClosed },
     anonymous,
     revokeNavigationStatus: revokeNavigation.status(),
