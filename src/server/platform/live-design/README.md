@@ -211,3 +211,39 @@ proof; its explicit supported-runner gate must pass without skips. The existing
 isolated Caddy workflow supplies both pinned binaries and disposable-runner native
 prerequisites. Direct-launch fixtures prove lifecycle behavior, not production
 native confinement or overall Start readiness.
+
+`PollLiveEvents` uses the foreground `live-poll` CLI, including upstream
+preflight, its 600-second lease, accept/discard source locks and receipts,
+and canonical replies/completion. It never implements HTTP `/poll` itself.
+`SqliteLiveEventInbox` belongs in shared controller-private state outside the
+app. One durable app-inode reservation spans status, poll, relay turn and ack.
+A second process cannot take it over on timeout or process exit. Restart,
+lost stdout after canonical accept, lost reply, stale fences and expired leases
+retain recovery evidence and blocking ownership; reconciliation belongs to the
+Stop/Resume controller. Records contain identities, digests and the durable
+received/dispatched/applied/acknowledged history, without browser content or
+model output. A hard 256-record default bound fails closed and retains tombstones;
+controllers must explicitly reconcile completed history before capacity renewal.
+
+The pinned IDs identify sessions rather than individual actions. Keys include
+Live generation, upstream ID, event kind and a digest excluding poller-owned
+preflight enrichments. Different steering requests remain distinct. An identical
+steer or mount repair cannot be proved to be a new action, so it requires explicit
+recovery. Duplicate edit deliveries never start another turn; known terminal
+sessions are rejected before another canonical poll. Upstream accept receipts
+protect repeated deterministic operations; lost or ambiguous results still
+require journal/source reconciliation. This is not an exactly-once edit claim.
+ID-less prefetch/timeout/exit are advisory and cause no edits or replies; the
+pinned server removes ID-less queued events on lease. Exit is returned to the
+lifecycle controller for cleanup, never treated as a clean release.
+
+`RelayLiveEventTurns` sends work only to the existing owning Codex thread using
+its existing runtime and session model, reasoning effort, execution policy and
+skill selection. It waits for the actual turn's completion, validates the final
+structured result, and bounds it by the upstream lease deadline read through
+canonical status. It never reacquires a writer or launches another provider.
+Composition supplies this narrow factory to the trusted controller through
+`bindPollEvents`; this binding grants no readiness or production Start capability.
+The L7 guard verifies native collaboration confinement before side-effecting
+poll commands and each model turn, and fences every acknowledgement. All
+production admission requirements remain in force. Kimi Live remains unavailable.

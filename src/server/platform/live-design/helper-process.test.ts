@@ -199,6 +199,77 @@ describe('owned helper admission', () => {
 });
 
 describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
+  it('canonical poll journals generation preflight, leases, replies and handles discard', async () => {
+    const f = await fixture();
+    await f.helper.start();
+    const metadata = JSON.parse(readFileSync(join(f.app, '.impeccable/live/server.json'), 'utf8'));
+    const enqueue = async (event: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${metadata.port}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(event as object), token: metadata.token }),
+      });
+      expect(response.ok).toBe(true);
+    };
+    await enqueue({
+      type: 'generate',
+      id: '1234abcd',
+      action: 'distill',
+      count: 1,
+      element: { outerHTML: '<h1>Original</h1>', tagName: 'h1', classes: [] },
+    });
+    const generated = (await f.helper.poll(1000)) as {
+      type: string;
+      id: string;
+      scaffoldAttempted: boolean;
+    };
+    expect(generated.type).toBe('generate');
+    expect(generated.scaffoldAttempted).toBe(true);
+    const status = (await f.helper.status()) as {
+      liveServer: { pendingEvents: { id: string; leased: boolean }[] };
+    };
+    expect(status.liveServer.pendingEvents).toContainEqual(
+      expect.objectContaining({ id: '1234abcd', leased: true }),
+    );
+    await expect(
+      f.helper.reply({ id: '1234abcd', status: 'done', file: 'index.html' }),
+    ).resolves.toMatchObject({ ok: true, id: '1234abcd', status: 'done' });
+    await enqueue({ type: 'steer', id: '1234abcd', message: 'More room' });
+    await expect(f.helper.poll(1000)).resolves.toMatchObject({ type: 'steer', id: '1234abcd' });
+    await expect(
+      f.helper.reply({ id: '1234abcd', status: 'steer_done', file: 'index.html' }),
+    ).resolves.toMatchObject({ ok: true, status: 'steer_done' });
+    // The relay's source edit uses the pinned HTML wrapper contract; canonical discard
+    // owns deterministic source rollback and writes an upstream accept receipt.
+    writeFileSync(
+      join(f.app, 'variants.html'),
+      [
+        '<div data-impeccable-variants="1234abcd" data-impeccable-variant-count="1" style="display:contents">',
+        '<!-- impeccable-variants-start 1234abcd -->',
+        '<!-- Original -->',
+        '<div data-impeccable-variant="original">',
+        '<h1>Original</h1>',
+        '</div>',
+        '<!-- Variants: insert below this line -->',
+        '<div data-impeccable-variant="1">',
+        '<h1>Changed</h1>',
+        '</div>',
+        '<!-- impeccable-variants-end 1234abcd -->',
+        '</div>',
+      ].join('\n'),
+    );
+    await enqueue({ type: 'discard', id: '1234abcd' });
+    await expect(f.helper.poll(1000)).resolves.toMatchObject({
+      type: 'discard',
+      _acceptResult: { handled: true },
+      _completionAck: { ok: true, type: 'discarded' },
+    });
+    await expect(f.helper.poll(10)).resolves.toMatchObject({ type: 'timeout' });
+    expect(
+      f.calls.filter((c) => c.args[0] === 'live-poll').every((c) => !c.args.includes('--stream')),
+    ).toBe(true);
+    expect(JSON.stringify(f.helper.logs())).not.toMatch(/Original|More room|token/);
+  }, 15000);
   it('pins every CLI command to the admitted app despite a persisted parent-root manifest', async () => {
     const f = await fixture();
     const parentState = join(f.root, '.impeccable/live');
@@ -453,6 +524,7 @@ describe.runIf(binary && process.env.LIVE_TEST_CODEX)(
       const record = JSON.parse(readFileSync(join(f.stateDirectory, 'helper.json'), 'utf8'));
       expect(record.helper.pid).not.toBe(record.upstreamPid);
       expect(JSON.stringify(f.policy)).toBe(admittedPolicy);
+      await expect(f.helper.poll(10)).resolves.toMatchObject({ type: 'timeout' });
       await f.helper.stop();
       expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
     }, 30000);

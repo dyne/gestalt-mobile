@@ -50,7 +50,7 @@ const recordSchema = z.object({
   upstreamPid: z.number().int().positive().optional(),
   pendingCommand: z
     .object({
-      name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete']),
+      name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete', 'live-poll']),
       ambiguous: z.boolean(),
     })
     .optional(),
@@ -333,7 +333,7 @@ export class OwnedLiveHelper {
       probe.listen(this.options.port, '127.0.0.1', () => probe.close(() => resolve()));
     });
   }
-  private async command(args: string[]): Promise<unknown> {
+  private async command(args: string[], deadlineMs = 20000): Promise<unknown> {
     if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     this.verifyBinary();
     const record = this.read();
@@ -385,7 +385,7 @@ export class OwnedLiveHelper {
         failed = true;
         ambiguous();
         reject(new Error('LIVE_HELPER_COMMAND_TIMEOUT'));
-      }, 20000);
+      }, deadlineMs);
       child.once('error', () => {
         this.commandPending = false;
         clearTimeout(timer);
@@ -400,6 +400,9 @@ export class OwnedLiveHelper {
         clearTimeout(timer);
         this.log(args[0]!, code === 0 && !failed ? 'ok' : 'failed', bytes);
         if (code !== 0 || failed) {
+          // Poll may have journalled preflight, applied accept/discard or posted a reply
+          // before losing its response. An unsuccessful exit never permits replay.
+          if (args[0] === 'live-poll') ambiguous();
           settled();
           reject(new Error('LIVE_HELPER_COMMAND_FAILED'));
           return;
@@ -661,5 +664,43 @@ export class OwnedLiveHelper {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id))
       throw new Error('LIVE_HELPER_SESSION_INVALID');
     return this.command(['live-complete', '--id', id, ...(discarded ? ['--discarded'] : [])]);
+  }
+  /** Canonical foreground CLI owns preflight, upstream lease and accept/discard handling. */
+  async poll(timeoutMs = 600000): Promise<unknown> {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000)
+      throw new Error('LIVE_POLL_TIMEOUT_INVALID');
+    const record = this.read();
+    if (!record || record.phase !== 'ready') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    this.verifyOwned(record);
+    const result = await this.command(['live-poll', `--timeout=${timeoutMs}`], timeoutMs + 60000);
+    this.verifyOwned(record);
+    return result;
+  }
+  async reply(reply: {
+    id: string;
+    status: 'done' | 'steer_done' | 'error';
+    file?: string;
+    data?: { [key: string]: unknown };
+    message?: string;
+  }): Promise<unknown> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(reply.id))
+      throw new Error('LIVE_HELPER_SESSION_INVALID');
+    const record = this.read();
+    if (!record || record.phase !== 'ready') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    this.verifyOwned(record);
+    const result = await this.command(
+      [
+        'live-poll',
+        '--reply',
+        reply.id,
+        reply.status,
+        ...(reply.file ? ['--file', reply.file] : []),
+        ...(reply.data ? ['--data', JSON.stringify(reply.data)] : []),
+        ...(reply.message ? [reply.message] : []),
+      ],
+      330000,
+    );
+    this.verifyOwned(record);
+    return result;
   }
 }

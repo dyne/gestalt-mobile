@@ -5,6 +5,12 @@
  */
 
 import { LiveDispatchGuard } from './platform/live-design/live-dispatch.js';
+import { RelayLiveEventTurns } from './platform/live-design/relay-event-turns.js';
+import {
+  PollLiveEvents,
+  type CanonicalLivePoll,
+  type LiveEventInbox,
+} from './features/live-design/application/poll-events.js';
 import { AutopilotLiveControls } from './platform/live-design/autopilot-live-controls.js';
 import type { LiveControls } from './features/live-design/application/controls.js';
 import {
@@ -213,6 +219,10 @@ export type ComposeRelayAppOptions = {
   liveController?: ConstructorParameters<typeof LiveDispatchGuard>[0] & {
     /** Trusted controller binding only; this grants no Start capability/readiness. */
     bindControls?(controls: LiveControls): void;
+    /** Trusted controller receives existing-runtime dispatch only; no Start/admission grant. */
+    bindPollEvents?(
+      create: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => PollLiveEvents,
+    ): void;
   };
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
@@ -254,8 +264,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw error;
   }
   const sessions = new SqliteSessionRepository(database);
-  const liveDispatch: LiveDispatchPolicy | undefined = options.liveController
+  const liveEventAuthority = options.liveController
     ? new LiveDispatchGuard(options.liveController)
+    : undefined;
+  const liveDispatch: LiveDispatchPolicy | undefined = options.liveController
+    ? liveEventAuthority
     : options.liveOwnership
       ? {
           check() {
@@ -1669,6 +1682,27 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
+  if (options.liveController?.bindPollEvents && liveEventAuthority && runtime) {
+    const owners = options.liveController.owners;
+    const turns = new RelayLiveEventTurns({
+      owners,
+      sessions: { find: (id) => sessions.find(id), save: saveSession, list: () => sessions.list() },
+      runtime,
+      now: Date.now,
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    options.liveController.bindPollEvents(
+      (cli, inbox) =>
+        new PollLiveEvents({
+          owners,
+          inbox,
+          cli,
+          authority: liveEventAuthority,
+          turns,
+          now: Date.now,
+        }),
+    );
+  }
   if (kimiRuntime) {
     // A gestalt-owned kimi web process exited or its websocket dropped: stop
     // the durable session like the codex supervisor does, without a resume
