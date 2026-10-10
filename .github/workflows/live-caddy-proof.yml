@@ -1,0 +1,95 @@
+# Copyright (C) 2026 Dyne.org foundation
+# Designed by Denis Roio <jaromil@dyne.org>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Isolated Live Caddy proof (no deployment)
+on:
+  pull_request:
+    paths:
+      - src/server/platform/live-design/**
+      - src/server/features/live-design/application/**
+      - .github/workflows/live-caddy-proof.yml
+      - scripts/live-remote-*.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - name: Prepare pinned test tools in runner temporary state
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/live-proof-tools"
+          curl --fail --silent --show-error --location \
+            https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz"
+          printf '%s  %s\n' \
+            a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7 \
+            "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" | sha512sum --check --status
+          tar -xzf "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" caddy
+          npm install --prefix "$RUNNER_TEMP/live-proof-tools" --no-save --ignore-scripts @openai/codex@0.161.0
+          echo "LIVE_TEST_CADDY=$RUNNER_TEMP/live-proof-tools/caddy" >> "$GITHUB_ENV"
+          echo "LIVE_TEST_CODEX=$RUNNER_TEMP/live-proof-tools/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          curl --fail --silent --show-error --location \
+            https://github.com/dyne/gestalt/releases/download/impeccable-gestalt-live-1/impeccable-gestalt-live-1-x86_64-unknown-linux-musl.tar.gz \
+            --output "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz"
+          printf '%s  %s\n' \
+            65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 \
+            "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" | sha256sum --check --status
+          echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
+      - name: Prepare disposable browser trust and network prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --no-install-recommends libnss3-tools iproute2
+          npx playwright install --with-deps chromium
+      - name: Enable existing native sandbox prerequisites on disposable hosted runner
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -Eeuo pipefail
+          current_userns=$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)
+          if [[ -n $current_userns && $current_userns != 1 ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          current_apparmor=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)
+          if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Real temporary Caddy and actual same-UID managed project denial
+        env:
+          LIVE_NATIVE_CADDY_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          "$LIVE_TEST_CADDY" version
+          "$LIVE_TEST_CODEX" --version
+          npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
+            src/server/platform/live-design/caddy-admin-boundary.test.ts \
+            src/server/platform/live-design/caddy-route-store.test.ts \
+            src/server/platform/live-design/preview-gateway.test.ts \
+            --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Real helper browser proof in separate network with trusted TLS
+        timeout-minutes: 5
+        env:
+          LIVE_REMOTE_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          npm run build:server
+          node scripts/live-remote-proof.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: live-caddy-proof
+          path: test-results/live-caddy-proof
+          if-no-files-found: error
