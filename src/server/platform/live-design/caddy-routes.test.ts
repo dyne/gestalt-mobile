@@ -5,6 +5,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -77,6 +78,14 @@ describe.runIf(Boolean(process.env.LIVE_TEST_CADDY))('real isolated Caddy route 
       'LIVE_TARGET_UNREGISTERED',
     );
     expect(f.store.list()).toEqual([]);
+  }, 15000);
+  it('removes orphaned routes after an application directory disappeared, retaining its origin', async () => {
+    const f = await setup();
+    const assignment = await f.routes.activate(f.appRoots[0]!, f.ids[0]!);
+    await rm(f.appRoots[0]!, { recursive: true });
+    await f.routes.remove(f.appRoots[0]!);
+    expect((await f.raw('GET', `/id/${assignment.serverId}`)).status).toBe(404);
+    expect(f.store.read(f.appRoots[0]!)?.origin).toBe(assignment.origin);
   }, 15000);
   it('reconciles missing IDs, Caddyfile reload and restart using durable desired state', async () => {
     const f = await setup();

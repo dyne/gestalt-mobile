@@ -68,7 +68,8 @@ export class CaddyRoutes implements LivePreviewRoutes {
   }
   remove(appRoot: string): Promise<void> {
     return this.serialize(async () => {
-      const canonical = realpathSync(appRoot);
+      // Recovery must still remove an assigned route after its application directory disappeared.
+      const canonical = this.store.read(appRoot) ? appRoot : realpathSync(appRoot);
       if (!this.store.read(canonical)) return;
       this.store.desire(canonical, null);
       await this.sync(this.store.read(canonical)!);
@@ -116,7 +117,7 @@ export class CaddyRoutes implements LivePreviewRoutes {
                 (listener) =>
                   typeof listener !== 'string' ||
                   listener.includes('/') ||
-                  listener.endsWith(`:${row.port}`),
+                  listenerPortConflict(listener, row.port),
               )),
         )
       )
@@ -138,4 +139,10 @@ export class CaddyRoutes implements LivePreviewRoutes {
     }
     throw new Error('LIVE_CADDY_CONFLICT_RETRIES_EXHAUSTED');
   }
+}
+
+function listenerPortConflict(listener: string, port: number): boolean {
+  const match = /:(\d+)(?:-(\d+))?$/.exec(listener);
+  if (!match) return true; // Unknown address forms stay unavailable, rather than guessing free.
+  return port >= Number(match[1]) && port <= Number(match[2] ?? match[1]);
 }

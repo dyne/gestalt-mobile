@@ -32,6 +32,7 @@ export function protectCaddyControllerState(
   controllerDirectory: string,
 ): ManagedProjectSandboxState {
   const directory = realpathSync(controllerDirectory);
+  assertPrivateExclusion(inherited, directory);
   return {
     ...inherited,
     permissionProfile: {
@@ -45,6 +46,15 @@ export function protectCaddyControllerState(
       },
     },
   };
+}
+
+function assertPrivateExclusion(state: ManagedProjectSandboxState, directory: string): void {
+  for (const entry of state.permissionProfile.file_system.entries) {
+    if (entry.path.type !== 'path' || entry.access === 'deny') continue;
+    const suffix = relative(directory, entry.path.path);
+    if (suffix && suffix !== '..' && !suffix.startsWith(`..${sep}`) && !suffix.startsWith(sep))
+      throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
+  }
 }
 
 const projectProbe = `
@@ -96,6 +106,7 @@ export class ManagedCaddyAdminBoundary {
     const options = this.options;
     const privateRoot = realpathSync(options.controllerDirectory);
     const state = options.effectiveSandboxState();
+    assertPrivateExclusion(state, privateRoot);
     if (realpathSync(fileURLToPath(state.sandboxCwd)) !== realpathSync(options.projectDirectory))
       throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
     for (const path of [options.socketPath, options.credentialPath]) {

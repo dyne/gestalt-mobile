@@ -61,6 +61,7 @@ jobs:
           "$LIVE_TEST_CODEX" --version
           npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
             src/server/platform/live-design/caddy-admin-boundary.test.ts \
+            src/server/platform/live-design/caddy-route-store.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
