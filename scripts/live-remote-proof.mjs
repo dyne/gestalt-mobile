@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -63,6 +63,7 @@ for (const dir of [controller, project, published, browserHome, evidence])
   await mkdir(dir, { recursive: true, mode: 0o700 });
 await mkdir(browserTemporaryDirectory, { mode: 0o700 });
 const cleanup = [];
+const ownedTargetPorts = [];
 const namespace = `live-${process.pid}`;
 const hostInterface = `lvh${process.pid}`;
 const peerInterface = `lvb${process.pid}`;
@@ -82,18 +83,40 @@ function sudo(args) {
   return run('sudo', ['--non-interactive', ...args]);
 }
 function child(bin, args, options = {}) {
-  const processChild = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options });
+  // Give this owned launcher and its descendants a separate process group.
+  const processChild = spawn(bin, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...options,
+    detached: true,
+  });
   // No helper tokens, launch grants or raw upstream/browser logs enter evidence.
   processChild.stdout.on('data', () => {});
   processChild.stderr.on('data', () => {});
+  let closed = false;
+  const finished = new Promise((done) =>
+    processChild.once('close', () => {
+      closed = true;
+      done();
+    }),
+  );
+  const signalOwnedGroup = (signal) => {
+    try {
+      process.kill(-processChild.pid, signal);
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  };
   cleanup.push(async () => {
-    if (processChild.exitCode !== null) return;
-    processChild.kill('SIGTERM');
-    await Promise.race([
-      new Promise((done) => processChild.once('exit', done)),
-      new Promise((done) => setTimeout(done, 2000)),
-    ]);
-    if (processChild.exitCode === null) processChild.kill('SIGKILL');
+    if (!closed) {
+      signalOwnedGroup('SIGTERM');
+      await Promise.race([finished, new Promise((done) => setTimeout(done, 1000))]);
+      if (!closed) signalOwnedGroup('SIGKILL');
+      // A native sandbox daemon can retain inherited pipe descriptors after the launcher exits.
+      processChild.stdout.destroy();
+      processChild.stderr.destroy();
+      await Promise.race([finished, new Promise((done) => setTimeout(done, 1000))]);
+      assert.notEqual(processChild.exitCode ?? processChild.signalCode, null);
+    }
   });
   return processChild;
 }
@@ -237,6 +260,7 @@ try {
     ]).size,
     10,
   );
+  ownedTargetPorts.push(appPort, helperPort, secondAppPort, secondHelperPort);
   const previewOrigin = `https://${previewHost}:${previewPort}`;
   const secondPreviewOrigin = `https://${previewHost}:${secondPreviewPort}`;
   const mobileOrigin = `https://${mobileHost}:${mobilePort}`;
@@ -839,7 +863,40 @@ try {
       cleanupFailures++;
     }
   }
+  // Launcher exit alone is insufficient: each actual project listener must have stopped.
+  for (const port of ownedTargetPorts) {
+    await ready(
+      () =>
+        new Promise((done) => {
+          const socket = createConnection({ host: '127.0.0.1', port });
+          socket.once('connect', () => {
+            socket.destroy();
+            done(false);
+          });
+          socket.once('error', (error) => done(error.code === 'ECONNREFUSED'));
+          socket.setTimeout(300, () => {
+            socket.destroy();
+            done(false);
+          });
+        }),
+      'Stopped owned project listener',
+    );
+  }
   await rm(root, { recursive: true, force: true });
   assert.equal(cleanupFailures, 0, 'Owned fixture cleanup failed');
+  await new Promise((done) => setImmediate(done));
+  const resourcesAfterCleanup = {};
+  for (const type of process.getActiveResourcesInfo())
+    resourcesAfterCleanup[type] = (resourcesAfterCleanup[type] ?? 0) + 1;
+  await writeFile(
+    join(evidence, 'cleanup-proof.json'),
+    JSON.stringify({
+      cleanupFailures,
+      cleanupSteps: cleanupStep,
+      stoppedProjectListeners: ownedTargetPorts.length,
+      resourcesAfterCleanup,
+    }),
+  );
+  console.log(`Owned fixture resources after cleanup: ${JSON.stringify(resourcesAfterCleanup)}`);
   console.log('Owned fixture cleanup completed');
 }
