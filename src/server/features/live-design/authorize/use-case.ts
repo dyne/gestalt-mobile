@@ -99,7 +99,16 @@ export function authorizePreviewRequest(
   if (!safe && headers.origin !== instance.previewOrigin) return fail('ORIGIN_NOT_ALLOWED', 403);
   const navigation =
     safe && headers['sec-fetch-mode'] === 'navigate' && headers['sec-fetch-dest'] === 'document';
-  if (!navigation && headers['sec-fetch-site'] !== 'same-origin')
+  // Browsers do not attach Fetch Metadata to WebSocket handshakes. Their exact
+  // Origin was required above; this also denies sibling/cross-port upgrades.
+  // HTTP non-navigation reads still require browser Fetch Metadata (ADR § isolation).
+  const metadataRequired = !navigation && !request.websocket;
+  if (
+    (metadataRequired && headers['sec-fetch-site'] !== 'same-origin') ||
+    (request.websocket &&
+      headers['sec-fetch-site'] !== undefined &&
+      headers['sec-fetch-site'] !== 'same-origin')
+  )
     return fail('LIVE_CROSS_ORIGIN_REQUEST', 403);
   if (headers['sec-fetch-mode'] === 'navigate' && !navigation)
     return fail('LIVE_CROSS_ORIGIN_REQUEST', 403);

@@ -249,6 +249,52 @@ describe('preview-all-paths-auth and preview-cross-origin-resource-denial', () =
     );
     navigation.release();
   });
+  it('authorizes browser WS without Fetch Metadata only with exact bound Origin and a valid lease', async () => {
+    const f = await authorizedFixture();
+    const request: PreviewRequest = {
+      ...f.request,
+      websocket: true,
+      headers: { host: new URL(origin).host, cookie: f.cookie, origin, upgrade: 'websocket' },
+    };
+    const permit = f.adapter.open(request, { close() {} });
+    expect(permit.active()).toBe(true);
+    permit.release();
+    for (const foreign of [undefined, mobileOrigin, 'https://preview.example.test:9444'])
+      denied(
+        () =>
+          f.adapter.open(
+            { ...request, headers: { ...request.headers, origin: foreign } },
+            { close() {} },
+          ),
+        'ORIGIN_NOT_ALLOWED',
+        403,
+      );
+    for (const site of ['same-site', 'cross-site'])
+      denied(
+        () =>
+          f.adapter.open(
+            { ...request, headers: { ...request.headers, 'sec-fetch-site': site } },
+            { close() {} },
+          ),
+        'LIVE_CROSS_ORIGIN_REQUEST',
+        403,
+      );
+    denied(
+      () =>
+        f.adapter.open(
+          { ...request, headers: { ...request.headers, cookie: undefined } },
+          { close() {} },
+        ),
+      'LIVE_AUTH_REQUIRED',
+      401,
+    );
+    denied(
+      () => f.adapter.open({ ...request, websocket: false }, { close() {} }),
+      'LIVE_INVALID_REQUEST',
+      400,
+    );
+    expect(f.connections.size).toBe(0);
+  });
   it('binds to immutable assigned instance metadata and rejects another port, relay, app or generation', async () => {
     const f = await authorizedFixture();
     for (const other of [

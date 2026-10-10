@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -54,6 +54,7 @@ assert.equal(
 const root = await mkdtemp(join(tmpdir(), 'gestalt-remote-proof-'));
 const controller = join(root, 'controller');
 const project = join(root, 'project');
+const secondProject = join(root, 'second-project');
 const published = join(root, 'published');
 const browserHome = join(root, 'browser-home');
 for (const dir of [controller, project, published, browserHome, evidence])
@@ -173,17 +174,63 @@ try {
   await mkdir(join(project, '.impeccable/live'), { recursive: true });
   await writeFile(join(project, '.impeccable/live/config.json'), JSON.stringify(fixture.config));
   run('npm', ['install', '--no-audit', '--no-fund', '--include=optional'], { cwd: project });
-  const [previewPort, mobilePort, appPort, helperPort, gatewayPort, mobileGatewayPort] =
-    await Promise.all(Array.from({ length: 6 }, port));
+  await cp(join(published, 'tests/framework-fixtures/vite8-react-ts/files'), secondProject, {
+    recursive: true,
+  });
+  run('git', ['init', '--quiet'], { cwd: secondProject });
+  await symlink(join(project, 'node_modules'), join(secondProject, 'node_modules'));
+  await mkdir(join(secondProject, '.impeccable/live'), { recursive: true });
+  await writeFile(
+    join(secondProject, '.impeccable/live/config.json'),
+    JSON.stringify(fixture.config),
+  );
+  await mkdir(join(secondProject, 'public'));
+  await writeFile(
+    join(secondProject, 'public/cross-port-canary.js'),
+    'window.__crossPortScriptLoaded=true;',
+  );
+  await writeFile(
+    join(secondProject, 'public/cross-port-canary.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="green"/></svg>',
+  );
+  await cp(join(project, 'package-lock.json'), join(evidence, 'fixture-package-lock.json'));
+  const [
+    previewPort,
+    mobilePort,
+    appPort,
+    helperPort,
+    gatewayPort,
+    mobileGatewayPort,
+    secondPreviewPort,
+    secondAppPort,
+    secondHelperPort,
+    secondGatewayPort,
+  ] = await Promise.all(Array.from({ length: 10 }, port));
   assert.equal(
-    new Set([previewPort, mobilePort, appPort, helperPort, gatewayPort, mobileGatewayPort]).size,
-    6,
+    new Set([
+      previewPort,
+      mobilePort,
+      appPort,
+      helperPort,
+      gatewayPort,
+      mobileGatewayPort,
+      secondPreviewPort,
+      secondAppPort,
+      secondHelperPort,
+      secondGatewayPort,
+    ]).size,
+    10,
   );
   const previewOrigin = `https://${previewHost}:${previewPort}`;
+  const secondPreviewOrigin = `https://${previewHost}:${secondPreviewPort}`;
   const mobileOrigin = `https://${mobileHost}:${mobilePort}`;
   await writeFile(
     join(project, 'vite.config.ts'),
     `import {defineConfig} from 'vite';import react from '@vitejs/plugin-react';export default defineConfig({plugins:[react()],server:{host:'127.0.0.1',port:${appPort},strictPort:true,allowedHosts:['127.0.0.1'],hmr:{protocol:'wss',host:'${previewHost}',clientPort:${previewPort}}}});`,
+  );
+  await writeFile(
+    join(secondProject, 'vite.config.ts'),
+    `import {defineConfig} from 'vite';import react from '@vitejs/plugin-react';export default defineConfig({plugins:[react()],cacheDir:'.vite-cache',server:{host:'127.0.0.1',port:${secondAppPort},strictPort:true,allowedHosts:['127.0.0.1'],hmr:{protocol:'wss',host:'${previewHost}',clientPort:${secondPreviewPort}}}});`,
   );
   // Explicit 100% user font size; only the disposable upstream fixture copy is changed.
   await writeFile(
@@ -350,6 +397,42 @@ try {
     sandboxEnvironment: sandboxEnv,
   });
   const actualProjectDenial = await boundary.verify();
+  const secondPolicy = {
+    ...policy,
+    sandboxCwd: pathToFileURL(secondProject).href,
+    permissionProfile: {
+      ...policy.permissionProfile,
+      file_system: {
+        ...policy.permissionProfile.file_system,
+        entries: policy.permissionProfile.file_system.entries.map((entry) =>
+          entry.path.type === 'path' && entry.path.path === project
+            ? { ...entry, path: { ...entry.path, path: secondProject } }
+            : entry,
+        ),
+      },
+    },
+  };
+  const secondSandboxEnv = {
+    ...sandboxEnv,
+    IMPECCABLE_LIVE_PUBLIC_BASE_URL: `${secondPreviewOrigin}/__gestalt_live/`,
+  };
+  const secondSandboxArgs = (args) => [
+    'sandbox',
+    '--sandbox-state-json',
+    JSON.stringify(secondPolicy),
+    '--',
+    ...args,
+  ];
+  const secondBoundary = new ManagedCaddyAdminBoundary({
+    codexExecutable: codex,
+    projectDirectory: secondProject,
+    controllerDirectory: controller,
+    socketPath: socket,
+    credentialPath,
+    effectiveSandboxState: () => secondPolicy,
+    sandboxEnvironment: secondSandboxEnv,
+  });
+  const secondProjectDenial = await secondBoundary.verify();
   const engineRun = (args) =>
     run(codex, sandboxArgs([engine, ...args]), { cwd: project, env: sandboxEnv });
   // Both actual managed project processes use the exact verified effective policy.
@@ -371,16 +454,55 @@ try {
     env: sandboxEnv,
   });
   await ready(async () => (await fetch(`http://127.0.0.1:${appPort}/`)).ok, 'actual Vite fixture');
+  child(codex, secondSandboxArgs([engine, 'live-server', `--port=${secondHelperPort}`]), {
+    cwd: secondProject,
+    env: secondSandboxEnv,
+  });
+  await ready(
+    async () => (await fetch(`http://127.0.0.1:${secondHelperPort}/health`)).ok,
+    'second published helper',
+  );
+  const secondHelperState = JSON.parse(
+    await readFile(join(secondProject, '.impeccable/live/server.json'), 'utf8'),
+  );
+  run(
+    codex,
+    secondSandboxArgs([
+      engine,
+      'live-inject',
+      '--port',
+      String(secondHelperPort),
+      '--token',
+      secondHelperState.token,
+    ]),
+    { cwd: secondProject, env: secondSandboxEnv },
+  );
+  child(
+    codex,
+    secondSandboxArgs([process.execPath, join(secondProject, 'node_modules/vite/bin/vite.js')]),
+    { cwd: secondProject, env: secondSandboxEnv },
+  );
+  await ready(
+    async () => (await fetch(`http://127.0.0.1:${secondAppPort}/`)).ok,
+    'second actual Vite fixture',
+  );
   const routeStore = new CaddyRouteStore(
     join(controller, 'origins.sqlite'),
     previewHost,
-    [previewPort],
+    [previewPort, secondPreviewPort],
     { initialize: true },
   );
   cleanup.push(async () => routeStore.close());
   const targets = new RegisteredPreviewTargets();
   const registrationId = targets.register({ appRoot: project, appPort, helperPort, gatewayPort });
   const assignment = routeStore.assign(project);
+  const secondRegistrationId = targets.register({
+    appRoot: secondProject,
+    appPort: secondAppPort,
+    helperPort: secondHelperPort,
+    gatewayPort: secondGatewayPort,
+  });
+  const secondAssignment = routeStore.assign(secondProject);
   const rp = createRelyingPartyConfig(mobileOrigin);
   const auth = new SqliteAuthorizationStore(controller, rp);
   auth.initializeOwner(randomBytes(32));
@@ -388,7 +510,7 @@ try {
   const grants = new SqlitePreviewGrantStore(controller);
   cleanup.push(async () => grants.close());
   const authentication = previewAuthentication(auth);
-  let audience = null;
+  const audiences = new Map();
   const instance = {
     relayId: 'remote-proof',
     appId: 'vite-fixture',
@@ -396,11 +518,18 @@ try {
     generation: 1,
     previewOrigin,
   };
+  const secondInstance = {
+    relayId: 'second-remote-proof',
+    appId: 'second-vite-fixture',
+    liveId: 'second-real-helper',
+    generation: 1,
+    previewOrigin: secondPreviewOrigin,
+  };
   const deps = {
     store: grants,
     secrets: previewSecrets,
     authentication,
-    owners: { read: (id) => (id === instance.relayId ? audience : null) },
+    owners: { read: (id) => audiences.get(id) ?? null },
     now: () => new Date(),
     mobileOrigin,
   };
@@ -435,9 +564,12 @@ try {
     logger: { info() {}, warn() {}, error() {} },
   });
   mobile.addHook('onRequest', async (request) => {
-    if (request.url.endsWith('/live/launch-grants') && audience === null) {
+    const selected = [instance, secondInstance].find(
+      (candidate) => request.url === `/api/sessions/${candidate.relayId}/live/launch-grants`,
+    );
+    if (selected && !audiences.has(selected.relayId)) {
       const identity = authentication.identity(request.headers.cookie, deps.now().toISOString());
-      if (identity) audience = { ...instance, ...identity, active: true };
+      if (identity) audiences.set(selected.relayId, { ...selected, ...identity, active: true });
     }
   });
   mobile.get('/', async (_request, reply) =>
@@ -457,18 +589,47 @@ try {
     registrationId,
     connections,
   });
+  const upgradeObservations = [];
+  gateway.app.server.on('upgrade', (request) => {
+    upgradeObservations.push({
+      path: (request.url ?? '/').split('?')[0],
+      host: request.headers.host,
+      origin: request.headers.origin,
+      secFetchSite: request.headers['sec-fetch-site'] ?? null,
+      secFetchMode: request.headers['sec-fetch-mode'] ?? null,
+      hasCookie: Boolean(request.headers.cookie),
+      protocol: request.headers['sec-websocket-protocol'],
+    });
+  });
   await gateway.listen();
   cleanup.push(async () => gateway.close());
+  const secondGateway = await createPreviewGateway({
+    deps,
+    instance: secondInstance,
+    assignment: secondAssignment,
+    targets,
+    registrationId: secondRegistrationId,
+    connections,
+  });
+  await secondGateway.listen();
+  cleanup.push(async () => secondGateway.close());
   const broker = new CaddyRouteBroker(
     credential,
     new CaddyRoutes(admin, routeStore, targets),
     boundary,
   );
   await broker.execute(credential, { action: 'activate', appRoot: project, registrationId });
+  await broker.execute(credential, {
+    action: 'activate',
+    appRoot: secondProject,
+    registrationId: secondRegistrationId,
+  });
   const browserConfig = {
     previewOrigin,
+    secondPreviewOrigin,
     mobileOrigin,
     helperPort,
+    secondHelperPort,
     evidence,
     browserHome,
     hostAddress,
@@ -547,7 +708,7 @@ try {
             'Disposable transport proof; no model requested',
           ]);
         } else if (message.command === 'revoke') {
-          assert.ok(audience);
+          assert.ok(audiences.get(instance.relayId));
           await connections.revoke({ liveId: instance.liveId });
           assert.equal(connections.size, 0);
         } else if (message.result) {
@@ -562,6 +723,10 @@ try {
   });
   const exit = await new Promise((done) => browser.once('exit', (code) => done(code)));
   await processing;
+  await writeFile(
+    join(evidence, 'browser-upgrade-observations.json'),
+    JSON.stringify(upgradeObservations, null, 2),
+  );
   assert.equal(exit, 0, `Browser proof failed: ${browserFailure}`);
   assert.ok(browserResult);
   await writeFile(
@@ -570,6 +735,7 @@ try {
       {
         ...browserResult,
         actualProjectDenial,
+        secondProjectDenial,
         runtimeArchiveSha256: '65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898',
         engineSha256: '81fe24a7430571de1003f34fecf787bdc0acefa1be80525ccea9d4b74b5441a0',
         fixture: 'published-source/tests/framework-fixtures/vite8-react-ts',
@@ -581,6 +747,7 @@ try {
     ),
   );
   await broker.execute(credential, { action: 'remove', appRoot: project });
+  await broker.execute(credential, { action: 'remove', appRoot: secondProject });
   console.log(
     'Trusted TLS / separate network / real passkey launch / published helper SSE / Vite HMR / revocation proof passed',
   );

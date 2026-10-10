@@ -70,6 +70,10 @@ and WebSocket message and closes both SSE and HMR on revocation. All responses
 receive the frame and same-origin resource restrictions. Controller composition
 must register this listener before Caddy activation; no public request can choose
 its instance, origin, project root or loopback targets.
+Browser WebSocket upgrades require the exact assigned Origin and lease. Browsers
+omit Fetch Metadata on those upgrades; if supplied, foreign metadata is rejected.
+HTTP non-navigation reads still require `Sec-Fetch-Site: same-origin` as specified
+in the existing ADR.
 
 The same disposable workflow runs `scripts/live-remote-proof.mjs` after the
 focused native proof. It checksums the CI-published patched Impeccable archive,
@@ -81,6 +85,12 @@ Chromium certificate checks remain enabled. Actual SimpleWebAuthn registration,
 launch grant/opener PKCE exchange, overlay, helper SSE/event/reply and Vite HMR
 run through the gateway. The artifact includes four screenshots at 390×844 and
 1440×900, anonymous asset/upgrade denials, revocation checks, sanitized network
-destinations and pinned runtime digests. It contains no raw tokens, grant
+destinations and pinned runtime digests.
+Two admitted copies of that fixture obtain distinct port-bound leases in the
+same browser. Cross-port script/image/iframe and WebSocket probes send the
+ambient lease cookies but receive denials; no canary script executes. Both real
+helpers/dev servers use their own verified managed policy and origin binding.
+The generated fixture lockfile is included for reproducing dependency resolution.
+It contains no raw tokens, grant
 fragments, cookies or project/helper logs. The fixture removes its namespace,
 processes and temporary state. It neither deploys nor edits operator Caddy state.

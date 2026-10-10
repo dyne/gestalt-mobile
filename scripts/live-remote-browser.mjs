@@ -115,62 +115,72 @@ try {
   assert.equal(authentication.status, 201, JSON.stringify(authentication.result));
   assert.equal(authentication.result.status, 'authenticated');
   // A real opener supplies a one-use PKCE verifier only to the validated preview window/origin.
-  await mobile.evaluate(async ({ previewOrigin }) => {
-    const token = new Uint8Array(32);
-    crypto.getRandomValues(token);
-    const encode = (bytes) =>
-      btoa(String.fromCharCode(...bytes))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    const verifier = encode(token);
-    const challenge = encode(
-      new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
+  async function prepareLaunch(previewOrigin, relayId, liveId) {
+    await mobile.evaluate(
+      async ({ previewOrigin, relayId, liveId }) => {
+        window.__proofExchanged = false;
+        const token = new Uint8Array(32);
+        crypto.getRandomValues(token);
+        const encode = (bytes) =>
+          btoa(String.fromCharCode(...bytes))
+            .replaceAll('+', '-')
+            .replaceAll('/', '_')
+            .replaceAll('=', '');
+        const verifier = encode(token);
+        const challenge = encode(
+          new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
+        );
+        const response = await fetch(`/api/sessions/${relayId}/live/launch-grants`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            liveId,
+            generation: 1,
+            codeChallenge: challenge,
+            codeChallengeMethod: 'S256',
+          }),
+        });
+        if (!response.ok) throw new Error(`Launch grant ${response.status}`);
+        const grant = await response.json();
+        const button = document.getElementById('launch');
+        button.onclick = () => {
+          const peer = window.open(grant.exchangeUrl, `live-${relayId}`);
+          const receive = (event) => {
+            if (
+              event.source !== peer ||
+              event.origin !== previewOrigin ||
+              event.data?.grantId !== grant.grantId
+            )
+              return;
+            if (event.data.type === 'gestalt-live-proof')
+              peer.postMessage(
+                { type: 'gestalt-live-proof', grantId: grant.grantId, codeVerifier: verifier },
+                previewOrigin,
+              );
+            if (event.data.type === 'gestalt-live-exchanged') {
+              window.__proofExchanged = true;
+              window.removeEventListener('message', receive);
+            }
+          };
+          window.addEventListener('message', receive);
+        };
+      },
+      { previewOrigin, relayId, liveId },
     );
-    const response = await fetch('/api/sessions/remote-proof/live/launch-grants', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        liveId: 'real-helper',
-        generation: 1,
-        codeChallenge: challenge,
-        codeChallengeMethod: 'S256',
-      }),
-    });
-    if (!response.ok) throw new Error(`Launch grant ${response.status}`);
-    const grant = await response.json();
-    const button = document.getElementById('launch');
-    button.onclick = () => {
-      const peer = window.open(grant.exchangeUrl, 'live-preview');
-      const receive = (event) => {
-        if (
-          event.source !== peer ||
-          event.origin !== previewOrigin ||
-          event.data?.grantId !== grant.grantId
-        )
-          return;
-        if (event.data.type === 'gestalt-live-proof')
-          peer.postMessage(
-            { type: 'gestalt-live-proof', grantId: grant.grantId, codeVerifier: verifier },
-            previewOrigin,
-          );
-        if (event.data.type === 'gestalt-live-exchanged') {
-          window.__proofExchanged = true;
-          window.removeEventListener('message', receive);
-        }
-      };
-      window.addEventListener('message', receive);
-    };
-  }, config);
+  }
+  await prepareLaunch(config.previewOrigin, 'remote-proof', 'real-helper');
   const popupPromise = mobile.waitForEvent('popup');
   await mobile.locator('#launch').click();
   const preview = await popupPromise;
   let hmrOpened = false;
   let hmrUpdates = 0;
   let hmrClosed = false;
+  let crossPortProbe = false;
   preview.on('websocket', (socket) => {
     const url = new URL(socket.url());
     destinations.add(`${url.protocol}//${url.host}${url.pathname}`);
+    if (crossPortProbe && url.origin === config.secondPreviewOrigin.replace('https:', 'wss:'))
+      return;
     assert.equal(url.origin, config.previewOrigin.replace('https:', 'wss:'));
     socket.on('framereceived', (event) => {
       const message = JSON.parse(String(event.payload));
@@ -255,6 +265,94 @@ try {
       path: `${config.evidence}/remote-preview-authenticated-${viewport.width}x${viewport.height}.png`,
     });
   }
+  // Two actual admitted apps/ports and two valid ambient cookies in the same browser.
+  await prepareLaunch(config.secondPreviewOrigin, 'second-remote-proof', 'second-real-helper');
+  const secondPopupPromise = mobile.waitForEvent('popup');
+  await mobile.locator('#launch').click();
+  const secondPreview = await secondPopupPromise;
+  await secondPreview.waitForURL(`${config.secondPreviewOrigin}/`);
+  await ui.waitForHandshake(secondPreview);
+  await secondPreview.waitForFunction(() => window.__liveProofEvents.includes('connected'));
+  assert.equal(
+    await secondPreview.evaluate(async () => (await fetch('/cross-port-canary.js')).status),
+    200,
+  );
+  const leaseCookies = (await context.cookies()).filter((cookie) =>
+    cookie.name.startsWith('__Host-gestalt_live_'),
+  );
+  assert.equal(leaseCookies.length, 2);
+  const crossPortResponses = [];
+  const crossPortCookieNames = new Set();
+  const probeCdp = await context.newCDPSession(preview);
+  await probeCdp.send('Network.enable');
+  const probeRequests = new Map();
+  probeCdp.on('Network.requestWillBeSent', (event) => {
+    const url = new URL(event.request.url);
+    if (url.origin === config.secondPreviewOrigin)
+      probeRequests.set(event.requestId, { path: url.pathname, kind: event.type });
+  });
+  probeCdp.on('Network.responseReceivedExtraInfo', (event) => {
+    const request = probeRequests.get(event.requestId);
+    if (request) crossPortResponses.push({ ...request, status: event.statusCode });
+  });
+  probeCdp.on('Network.requestWillBeSentExtraInfo', (event) => {
+    if (!probeRequests.has(event.requestId)) return;
+    const cookie = event.headers.Cookie ?? event.headers.cookie ?? '';
+    for (const part of cookie.split(';')) crossPortCookieNames.add(part.trim().split('=')[0]);
+  });
+  crossPortProbe = true;
+  const crossPortBlocked = await preview.evaluate(async (origin) => {
+    const script = document.createElement('script');
+    script.src = `${origin}/cross-port-canary.js`;
+    const image = document.createElement('img');
+    image.src = `${origin}/cross-port-canary.svg`;
+    const iframe = document.createElement('iframe');
+    iframe.src = `${origin}/`;
+    const scriptBlocked = new Promise((done) => {
+      script.onload = () => done(false);
+      script.onerror = () => done(true);
+    });
+    const imageBlocked = new Promise((done) => {
+      image.onload = () => done(false);
+      image.onerror = () => done(true);
+    });
+    document.body.append(script, image, iframe);
+    const wsBlocked = new Promise((done) => {
+      const peer = new WebSocket(origin.replace('https:', 'wss:'), 'vite-hmr');
+      peer.onopen = () => {
+        peer.close();
+        done(false);
+      };
+      peer.onerror = () => done(true);
+    });
+    const [scriptDenied, imageDenied, websocketDenied] = await Promise.all([
+      scriptBlocked,
+      imageBlocked,
+      wsBlocked,
+    ]);
+    const scriptExecuted = window.__crossPortScriptLoaded === true;
+    return { scriptDenied, imageDenied, websocketDenied, scriptExecuted };
+  }, config.secondPreviewOrigin);
+  assert.deepEqual(crossPortBlocked, {
+    scriptDenied: true,
+    imageDenied: true,
+    websocketDenied: true,
+    scriptExecuted: false,
+  });
+  await preview.waitForTimeout(300);
+  for (const path of ['/cross-port-canary.js', '/cross-port-canary.svg', '/']) {
+    assert.ok(
+      crossPortResponses.some((response) => response.path === path && response.status === 403),
+      `Missing real cross-port 403 ${path}`,
+    );
+  }
+  assert.ok(
+    crossPortCookieNames.has(leaseCookies[0].name) &&
+      crossPortCookieNames.has(leaseCookies[1].name),
+    'Both live leases must be ambient on the denied cross-port request',
+  );
+  await secondPreview.close();
+  await probeCdp.detach();
   // Separate anonymous browser context, actual browser fetch metadata, all app/helper/dev assets denied.
   const anonymousContext = await browser.newContext();
   const denied = await anonymousContext.newPage();
@@ -332,7 +430,11 @@ try {
       path: `${config.evidence}/remote-preview-denied-${viewport.width}x${viewport.height}.png`,
     });
   }
-  const allowed = new Set([new URL(config.mobileOrigin).host, new URL(config.previewOrigin).host]);
+  const allowed = new Set([
+    new URL(config.mobileOrigin).host,
+    new URL(config.previewOrigin).host,
+    new URL(config.secondPreviewOrigin).host,
+  ]);
   for (const destination of destinations)
     assert.ok(
       allowed.has(new URL(destination).host),
@@ -355,6 +457,11 @@ try {
     launchPkceViaValidatedOpener: true,
     clearedGrantFragment: true,
     hostOnlyCookiesOnDistinctHosts: true,
+    twoLiveAppPortsAmbientCookieIsolation: {
+      ...crossPortBlocked,
+      responses: crossPortResponses,
+      cookieNames: [...crossPortCookieNames],
+    },
     realPublishedHelperOverlay: true,
     helperSseConnectedAndErrorReply: true,
     helperSseClosedAfterRevocation: true,
