@@ -9,13 +9,14 @@ on:
       - src/server/platform/live-design/**
       - src/server/features/live-design/application/**
       - .github/workflows/live-caddy-proof.yml
+      - scripts/live-remote-*.mjs
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   native-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +40,19 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/live-proof-tools" --no-save --ignore-scripts @openai/codex@0.161.0
           echo "LIVE_TEST_CADDY=$RUNNER_TEMP/live-proof-tools/caddy" >> "$GITHUB_ENV"
           echo "LIVE_TEST_CODEX=$RUNNER_TEMP/live-proof-tools/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          curl --fail --silent --show-error --location \
+            https://github.com/dyne/gestalt/releases/download/impeccable-gestalt-live-1/impeccable-gestalt-live-1-x86_64-unknown-linux-musl.tar.gz \
+            --output "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz"
+          printf '%s  %s\n' \
+            65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 \
+            "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" | sha256sum --check --status
+          echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
+      - name: Prepare disposable browser trust and network prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --no-install-recommends libnss3-tools iproute2
+          npx playwright install --with-deps chromium
       - name: Enable existing native sandbox prerequisites on disposable hosted runner
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
@@ -62,7 +76,16 @@ jobs:
           npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
             src/server/platform/live-design/caddy-admin-boundary.test.ts \
             src/server/platform/live-design/caddy-route-store.test.ts \
+            src/server/platform/live-design/preview-gateway.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Real helper browser proof in separate network with trusted TLS
+        env:
+          LIVE_REMOTE_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          npm run build:server
+          node scripts/live-remote-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

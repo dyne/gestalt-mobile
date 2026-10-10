@@ -59,3 +59,28 @@ CA installation, authenticates scoped operations and repeats denial after
 Caddy restart. The default suite also exercises durable origin and fail-closed
 broker contracts without requiring an operator Caddy installation. The explicit
 native proof must have no skipped tests before accepting route readiness.
+
+`createPreviewGateway` binds a durable assigned origin and a trusted target
+registration to a private loopback listener. It serves the L5 fragment/PKCE
+exchange and authorizes every app/helper HTTP request and Vite WebSocket
+upgrade against that binding. Upstream bodies stay streams, including helper
+JSON POSTs; Mobile/preview cookies, authorization and forwarded headers never
+reach the project. The owned connection registry checks every response chunk
+and WebSocket message and closes both SSE and HMR on revocation. All responses
+receive the frame and same-origin resource restrictions. Controller composition
+must register this listener before Caddy activation; no public request can choose
+its instance, origin, project root or loopback targets.
+
+The same disposable workflow runs `scripts/live-remote-proof.mjs` after the
+focused native proof. It checksums the CI-published patched Impeccable archive,
+uses its embedded Vite 8 React fixture and upstream browser UI helpers, and runs
+the real helper and Vite under the verified managed policy. A separate Linux
+network namespace can reach Caddy through a veth pair but cannot connect to the
+helper's loopback. Only that temporary browser HOME trusts the temporary CA;
+Chromium certificate checks remain enabled. Actual SimpleWebAuthn registration,
+launch grant/opener PKCE exchange, overlay, helper SSE/event/reply and Vite HMR
+run through the gateway. The artifact includes four screenshots at 390×844 and
+1440×900, anonymous asset/upgrade denials, revocation checks, sanitized network
+destinations and pinned runtime digests. It contains no raw tokens, grant
+fragments, cookies or project/helper logs. The fixture removes its namespace,
+processes and temporary state. It neither deploys nor edits operator Caddy state.
