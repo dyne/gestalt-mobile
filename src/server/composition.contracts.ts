@@ -3064,9 +3064,13 @@ describe('production composition', () => {
       const handles: LiveServerHandle[] = [];
       const launch = liveAppServer(handles);
       let unavailable = true;
+      const retries: Array<() => void> = [];
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
-        activitySchedule: () => () => {},
+        activitySchedule: (callback) => {
+          retries.push(callback);
+          return () => {};
+        },
         autopilotSchedule: (callback) => {
           const timer = { callback, cancelled: false, fired: false };
           timers.push(timer);
@@ -3096,6 +3100,13 @@ describe('production composition', () => {
         },
       });
       onTestFinished(() => fixture.app.close());
+      // A refresh settles only after its bounded retry sequence, rather than
+      // exposing the first intermediate reconciling snapshot as a failure.
+      for (let retry = 0; retry < 3; retry++) {
+        await vi.waitFor(() => expect(retries.length).toBeGreaterThan(0));
+        retries.shift()!();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       await vi.waitFor(async () => {
         expect(
           (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),

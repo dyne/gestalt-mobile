@@ -41,6 +41,43 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('retains bounded attention dialogue metadata through live replay and history reload', () => {
+    const attention = {
+      requestId: 'r',
+      turnId: 't',
+      requestedAt: '2026-10-10T12:00:00Z',
+      attention: {
+        reason: 'hardBlock' as const,
+        summary: 'The checkpoint step is missing.',
+        requestedAction: 'Refresh the plan.',
+        resumeCondition: 'externalStateChanged' as const,
+      },
+    };
+    const live = applyProjectionEvent(createChatProjection('s'), {
+      sequence: 1,
+      type: 'org-plan.attention-required',
+      occurredAt: attention.requestedAt,
+      payload: { ...attention, kind: 'orgPlanAttention', payload: attention.attention },
+    });
+    expect(live.messages[0]?.attention).toEqual(attention);
+    const reloaded = acceptSnapshot(createChatProjection('s'), {
+      baseSequence: 2,
+      activeTurnId: null,
+      items: [],
+      turns: [],
+      interactions: [],
+      autopilotAudit: [
+        {
+          id: 'audit:1',
+          label: 'Needs attention',
+          occurredAt: Date.parse(attention.requestedAt),
+          attention,
+        },
+      ],
+    });
+    expect(reloaded.messages[0]?.attention).toEqual(attention);
+    expect(hydrateCache('s', reloaded).messages[0]?.attention).toEqual(attention);
+  });
   it('renders a durably marked automatic continuation as an audit entry, never a human prompt', () => {
     const projection = acceptSnapshot(createChatProjection('s'), {
       ...snapshot(),

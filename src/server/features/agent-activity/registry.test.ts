@@ -231,6 +231,31 @@ describe('agent activity registry', () => {
     release?.();
     await first;
   });
+  it('keeps refresh pending through a scheduled retry so its caller sees recovered evidence', async () => {
+    const callbacks: Array<() => void> = [];
+    const reconcile = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const registry = new AgentActivityRegistry(() => {}, {
+      now: () => at,
+      reconcile,
+      retryDelaysMs: [1],
+      schedule: (callback) => {
+        callbacks.push(callback);
+        return () => {};
+      },
+    });
+    let settled = false;
+    const refresh = registry.refresh('s');
+    void refresh.then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(callbacks).toHaveLength(1));
+    expect(settled).toBe(false);
+    expect(registry.refresh('s')).toBe(refresh);
+    callbacks.shift()!();
+    await refresh;
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(registry.snapshot('s', at).confidence).toBe('fresh');
+  });
   it('retires owned-process projections when an authoritative roster omits their child', () => {
     const registry = new AgentActivityRegistry(() => {});
     registry.observe({

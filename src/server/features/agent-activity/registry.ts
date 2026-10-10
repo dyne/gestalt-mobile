@@ -258,13 +258,20 @@ export class AgentActivityRegistry {
         this.disconnected(sessionId, this.options.now?.() ?? now);
         return;
       }
-      this.#timers.set(
-        sessionId,
-        this.options.schedule!(
-          () => void this.#attempt(sessionId, generation, attempt + 1),
+      // Keep the shared refresh pending until retry evidence or exhaustion.
+      // Otherwise a caller treats the intermediate reconciling projection as
+      // failure and can launch a new refresh that supersedes this retry.
+      await new Promise<void>((resolve, reject) => {
+        const cancel = this.options.schedule!(
+          () => void this.#attempt(sessionId, generation, attempt + 1).then(resolve, reject),
           delays[attempt - 1]!,
-        ),
-      );
+        );
+        this.#timers.set(sessionId, () => {
+          cancel();
+          // Suspension, disposal, or newer live evidence retires this read.
+          resolve();
+        });
+      });
     }
   }
 

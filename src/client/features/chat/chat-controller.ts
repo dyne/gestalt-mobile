@@ -9,6 +9,7 @@ import type {
   SafeInteractionOutcome,
 } from '../../../shared/contracts/chat-snapshot.js';
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
+import { autopilotAuditAttention } from '../../../shared/contracts/autopilot-audit.js';
 import {
   acceptSnapshot,
   applyProjectionEvent,
@@ -120,7 +121,15 @@ const isAutopilotAuditRecord = (value: unknown): boolean =>
   typeof value.label === 'string' &&
   typeof value.occurredAt === 'number' &&
   Number.isFinite(value.occurredAt) &&
-  (value.controlId === undefined || typeof value.controlId === 'string');
+  (value.controlId === undefined || typeof value.controlId === 'string') &&
+  (value.attention === undefined ||
+    (object(value.attention) &&
+      Boolean(
+        autopilotAuditAttention({
+          ...value.attention,
+          payload: value.attention.attention,
+        }),
+      )));
 const isSafeActivitySnapshot = (value: unknown): boolean =>
   object(value) &&
   typeof value.id === 'string' &&

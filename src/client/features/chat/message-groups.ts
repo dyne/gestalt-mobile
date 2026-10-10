@@ -16,6 +16,7 @@ export type MessageGroup =
       occurredAt?: number;
       count: number;
       timestamps: readonly number[];
+      attention?: ChatMessage['attention'];
     }
   | {
       id: string;
@@ -52,6 +53,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         id: message.id,
         kind: 'audit',
         text: message.text,
+        ...(message.attention ? { attention: message.attention } : {}),
         ...(message.controlId ? { controlId: message.controlId } : {}),
         ...(message.occurredAt !== undefined ? { occurredAt: message.occurredAt } : {}),
         count: 1,

@@ -5,6 +5,14 @@
  */
 
 import type { FileChangeSummary } from './file-change.js';
+import type { OrgPlanAttention } from './org-plan-attention.js';
+
+export type AttentionAuditRecord = {
+  requestId: string;
+  turnId: string | null;
+  requestedAt: string | null;
+  attention: OrgPlanAttention;
+};
 
 export type ChatItem = {
   id: string;
@@ -26,6 +34,7 @@ export type AutopilotAuditRecord = {
   label: string;
   occurredAt: number;
   controlId?: string;
+  attention?: AttentionAuditRecord;
 };
 /** Safe display-only activity restored independently of upstream Codex history. */
 export type SafeActivitySnapshot = {

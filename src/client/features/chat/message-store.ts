@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { AttentionAuditRecord } from '../../../shared/contracts/chat-snapshot.js';
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'audit';
@@ -11,6 +13,7 @@ export type ChatMessage = {
   phase?: 'commentary' | 'final_answer';
   /** Durable coordinator identity for canonical audit de-duplication. */
   controlId?: string;
+  attention?: AttentionAuditRecord;
   text: string;
   occurredAt?: number;
   complete: boolean;

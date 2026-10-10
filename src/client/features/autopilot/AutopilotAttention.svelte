@@ -10,10 +10,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     attention,
     controlId = 'autopilot-attention',
     pending = false,
+    historical = false,
     onresolve = () => {},
   }: {
     attention: OrgPlanAttention | null;
     pending?: boolean;
+    historical?: boolean;
     controlId?: string;
     onresolve?: (action: 'resume' | 'disableAutopilot', guidance?: string) => void;
   } = $props();
@@ -43,8 +45,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 {#if attention}
-  <section class="attention" role="alert" aria-labelledby={`${controlId}-title`}>
-    <h3 id={`${controlId}-title`}>Autopilot needs your attention</h3>
+  <section
+    class="attention"
+    role={historical ? 'region' : 'alert'}
+    aria-labelledby={`${controlId}-title`}
+  >
+    <h3 id={`${controlId}-title`}>
+      {historical ? 'Autopilot attention request' : 'Autopilot needs your attention'}
+    </h3>
+    {#if attention.requestedAt}
+      <time datetime={attention.requestedAt}
+        >{new Date(attention.requestedAt).toLocaleString()}</time
+      >
+    {/if}
     <dl>
       <div>
         <dt>Reason</dt>
@@ -67,8 +80,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <div>
           <dt>Supervisor explanation</dt>
           <dd>
-            The supervisor has not supplied an explanation yet. You can ask for details in the
-            guidance below.
+            {historical
+              ? 'No supervisor explanation was retained for this request.'
+              : 'The supervisor has not supplied an explanation yet. You can ask for details in the guidance below.'}
           </dd>
         </div>
       {/if}
@@ -88,31 +102,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         </dd>
       </div>
     </dl>
-    <label for={`${controlId}-guidance`}>Optional guidance for the resumed work</label>
-    <textarea
-      id={`${controlId}-guidance`}
-      bind:value={guidance}
-      maxlength="600"
-      aria-describedby={`${controlId}-guidance-help`}
-      aria-invalid={Boolean(guidanceError)}></textarea>
-    <p id={`${controlId}-guidance-help`} class="guidance-help">
-      {guidanceError || 'Up to 600 characters. Do not include secrets.'}
-    </p>
-    <div class="actions">
-      <button
-        type="button"
-        disabled={pending || Boolean(guidanceError)}
-        onclick={() => (guidance.trim() ? onresolve('resume', guidance) : onresolve('resume'))}
-        >{pending
-          ? 'Updating…'
-          : attention.attention.executorReplacement
-            ? 'Authorize replacement'
-            : 'Resume'}</button
-      >
-      <button type="button" disabled={pending} onclick={() => onresolve('disableAutopilot')}
-        >Disable Autopilot</button
-      >
-    </div>
+    {#if !historical}
+      <label for={`${controlId}-guidance`}>Optional guidance for the resumed work</label>
+      <textarea
+        id={`${controlId}-guidance`}
+        bind:value={guidance}
+        maxlength="600"
+        aria-describedby={`${controlId}-guidance-help`}
+        aria-invalid={Boolean(guidanceError)}></textarea>
+      <p id={`${controlId}-guidance-help`} class="guidance-help">
+        {guidanceError || 'Up to 600 characters. Do not include secrets.'}
+      </p>
+      <div class="actions">
+        <button
+          type="button"
+          disabled={pending || Boolean(guidanceError)}
+          onclick={() => (guidance.trim() ? onresolve('resume', guidance) : onresolve('resume'))}
+          >{pending
+            ? 'Updating…'
+            : attention.attention.executorReplacement
+              ? 'Authorize replacement'
+              : 'Resume'}</button
+        >
+        <button type="button" disabled={pending} onclick={() => onresolve('disableAutopilot')}
+          >Disable Autopilot</button
+        >
+      </div>
+    {:else}
+      <p>This request is no longer pending.</p>
+    {/if}
   </section>
 {/if}
 
