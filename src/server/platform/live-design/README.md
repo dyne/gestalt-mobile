@@ -288,7 +288,10 @@ intentionally hides completed/discarded sessions. Lost terminal stdout cannot
 therefore be reconciled from an empty active-session list. The adapter uses actual
 upstream accept receipts for unfinished operations, the canonical no-force source
 gate, and source/terminal-journal digests; it preserves prior terminal dispositions
-and all journal entries. Missing/outside/dirty sources or conflicting receipts
+and all journal entries. Explicit Stop can discard unfinished variants through
+canonical `live-accept --discard`, using its source lock and durable receipt. An
+accept already applied before Stop finishes its chosen source; it never receives
+a conflicting discard or another accept transformation. Missing/outside/dirty sources or conflicting receipts
 retain recovery. Repeated terminal acknowledgements yield the same proof digest.
 
 Production admission is still a concrete integration prerequisite, not granted

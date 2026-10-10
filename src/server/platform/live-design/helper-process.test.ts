@@ -250,6 +250,92 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     // Disconnect does not authorize replay or silently discard the source journal.
     expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
   }, 15000);
+  it('explicit Stop discards unfinished variants through canonical source locks and receipts', async () => {
+    const f = await fixture();
+    const directory = join(f.app, '.impeccable/live/sessions');
+    mkdirSync(directory, { recursive: true });
+    const entries = [
+      {
+        seq: 1,
+        id: '1234abcd',
+        type: 'generate',
+        ts: '2026-10-10T00:00:00Z',
+        event: { id: '1234abcd', type: 'generate', count: 1 },
+      },
+      {
+        seq: 2,
+        id: '1234abcd',
+        type: 'agent_done',
+        ts: '2026-10-10T00:00:01Z',
+        event: { id: '1234abcd', type: 'agent_done', file: 'chosen.html' },
+      },
+    ];
+    writeFileSync(
+      join(directory, '1234abcd.jsonl'),
+      entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n',
+    );
+    writeFileSync(
+      join(f.app, 'chosen.html'),
+      [
+        '<div data-impeccable-variants="1234abcd" data-impeccable-variant-count="1" style="display:contents">',
+        '<!-- impeccable-variants-start 1234abcd -->',
+        '<!-- Original -->',
+        '<div data-impeccable-variant="original"><h1>Original</h1></div>',
+        '<!-- Variants: insert below this line -->',
+        '<div data-impeccable-variant="1"><h1>Changed</h1></div>',
+        '<!-- impeccable-variants-end 1234abcd -->',
+        '</div>',
+      ].join('\n'),
+    );
+    await f.helper.start();
+    await f.helper.settle();
+    const proof = await f.helper.reconcileJournal([], true);
+    expect(proof).toMatch(/^[a-f0-9]{64}$/);
+    expect(readFileSync(join(f.app, 'chosen.html'), 'utf8')).toContain('Original');
+    expect(readFileSync(join(f.app, 'chosen.html'), 'utf8')).not.toContain('Changed');
+    expect(
+      JSON.parse(
+        readFileSync(join(f.app, '.impeccable/live/accept-receipts/1234abcd.json'), 'utf8'),
+      ),
+    ).toMatchObject({ operation: 'discard' });
+    expect(await f.helper.reconcileJournal([], true)).toBe(proof);
+    expect(f.calls.filter((call) => call.args[0] === 'live-accept')).toHaveLength(1);
+  });
+  it('a durable applied-accept receipt makes Stop complete the chosen source without retrying accept or conflicting discard', async () => {
+    const f = await fixture();
+    const directory = join(f.app, '.impeccable/live/sessions');
+    const receipts = join(f.app, '.impeccable/live/accept-receipts');
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(receipts, { recursive: true });
+    writeFileSync(
+      join(directory, '1234abcd.jsonl'),
+      JSON.stringify({
+        seq: 1,
+        id: '1234abcd',
+        type: 'carbonize_cleanup',
+        ts: '2026-10-10T00:00:00Z',
+        event: { id: '1234abcd', type: 'carbonize_cleanup', file: 'chosen.html' },
+      }) + '\n',
+    );
+    writeFileSync(
+      join(receipts, '1234abcd.json'),
+      JSON.stringify({
+        id: '1234abcd',
+        operation: 'accept',
+        variantId: '1',
+        result: { handled: true, file: 'chosen.html', carbonize: false },
+      }),
+    );
+    writeFileSync(join(f.app, 'chosen.html'), '<h1>Chosen permanent source</h1>');
+    await f.helper.start();
+    await f.helper.settle();
+    await f.helper.reconcileJournal([], true);
+    expect(readFileSync(join(f.app, 'chosen.html'), 'utf8')).toBe(
+      '<h1>Chosen permanent source</h1>',
+    );
+    expect(f.calls.filter((call) => call.args[0] === 'live-accept')).toHaveLength(0);
+    expect(readFileSync(join(directory, '1234abcd.jsonl'), 'utf8')).toContain('complete');
+  });
   it('reconciles lost terminal stdout from actual durable journals and refuses dirty source after helper death', async () => {
     const f = await fixture();
     const directory = join(f.app, '.impeccable/live/sessions');

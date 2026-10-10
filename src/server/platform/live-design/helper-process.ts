@@ -50,9 +50,17 @@ const recordSchema = z.object({
   upstreamPid: z.number().int().positive().optional(),
   pendingCommand: z
     .object({
-      name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete', 'live-poll']),
+      name: z.enum([
+        'live-inject',
+        'live-status',
+        'live-resume',
+        'live-complete',
+        'live-poll',
+        'live-accept',
+      ]),
       ambiguous: z.boolean(),
       launcher: identitySchema.optional(),
+      exited: z.boolean().optional(),
     })
     .optional(),
 });
@@ -355,7 +363,13 @@ export class OwnedLiveHelper {
     );
     this.commandPending = true;
     if (record && child.pid) {
-      record.pendingCommand!.launcher = identity(child.pid);
+      try {
+        record.pendingCommand!.launcher = identity(child.pid);
+      } catch (error) {
+        // A short foreground CLI can exit before /proc/exe is observed. Its
+        // actual child close event below is authoritative; no PID kill/reuse probe.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       this.save(record);
     }
     let commandExited!: () => void;
@@ -409,13 +423,17 @@ export class OwnedLiveHelper {
       child.once('close', (code) => {
         commandExited();
         if (launchFailed) return;
+        if (record?.pendingCommand) {
+          record.pendingCommand.exited = true;
+          this.save(record);
+        }
         this.commandPending = false;
         clearTimeout(timer);
         this.log(args[0]!, code === 0 && !failed ? 'ok' : 'failed', bytes);
         if (code !== 0 || failed) {
           // Poll may have journalled preflight, applied accept/discard or posted a reply
           // before losing its response. An unsuccessful exit never permits replay.
-          if (args[0] === 'live-poll') ambiguous();
+          if (args[0] === 'live-poll' || args[0] === 'live-accept') ambiguous();
           settled();
           reject(new Error('LIVE_HELPER_COMMAND_FAILED'));
           return;
@@ -637,15 +655,17 @@ export class OwnedLiveHelper {
     const launcher = record.pendingCommand.launcher;
     if (
       this.commandPending ||
-      !launcher ||
-      sameProcess(launcher, false) ||
+      (record.pendingCommand.exited !== true && (!launcher || sameProcess(launcher, false))) ||
       !record.helper ||
       sameProcess(record.helper)
     )
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     await this.vacant();
     writeFileSync(
-      join(this.options.stateDirectory, `command-${record.generation}-${launcher.startTicks}.json`),
+      join(
+        this.options.stateDirectory,
+        `command-${record.generation}-${launcher?.startTicks ?? 'observed-exit'}.json`,
+      ),
       JSON.stringify(record.pendingCommand),
       { mode: 0o600, flag: 'wx' },
     );
@@ -760,12 +780,22 @@ export class OwnedLiveHelper {
           throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
         // Historical terminal sessions retain their own disposition. The explicit
         // Stop choice applies only to still-unfinished journal sessions.
-        const sessionDiscarded = terminalType ? terminalType === 'discarded' : discarded;
+        let sessionDiscarded = terminalType ? terminalType === 'discarded' : discarded;
         // Pinned Resume intentionally hides completed/discarded snapshots. An
         // active=false response never proves that a lost poll had no side effects.
         const resumed = (await this.command(['live-resume', '--id', id])) as { active?: boolean };
         if (!terminal.length) {
           const receiptPath = join(this.appRoot, '.impeccable/live/accept-receipts', `${id}.json`);
+          if (!existsSync(receiptPath) && discarded) {
+            // Explicit Stop may roll back unaccepted variants. Canonical accept's
+            // source lock and durable receipt fence crashes/PID loss; never use raw poll.
+            const result = (await this.command(['live-accept', '--id', id, '--discard'])) as {
+              handled?: boolean;
+              mode?: string;
+            };
+            if (result.handled !== true || result.mode === 'error')
+              throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+          }
           if (!existsSync(receiptPath) || statSync(receiptPath).size > 65536)
             throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
           const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
@@ -775,12 +805,15 @@ export class OwnedLiveHelper {
           };
           if (
             receipt.id !== id ||
-            receipt.operation !== (sessionDiscarded ? 'discard' : 'accept') ||
-            receipt.result?.handled === false ||
+            !['accept', 'discard'].includes(receipt.operation ?? '') ||
+            receipt.result?.handled !== true ||
             receipt.result?.mode === 'error' ||
             resumed.active !== true
           )
             throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+          // An accept already applied before Stop must finish its chosen source,
+          // rather than conflict with it by manufacturing a later discard.
+          sessionDiscarded = receipt.operation === 'discard';
         }
         // Actual no-force source gate and terminal snapshot; no accept/discard
         // source transformation is repeated, even after lost response/restart.
