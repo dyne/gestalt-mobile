@@ -121,7 +121,9 @@ export async function realCaddyFixture() {
           });
         },
       );
-      req.on('error', reject);
+      req.on('error', (error) =>
+        reject(new Error(`Isolated Caddy fixture ${method} ${path}: ${error.message}`)),
+      );
       req.end(body === undefined ? undefined : JSON.stringify(body));
     });
   }
