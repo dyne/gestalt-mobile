@@ -180,7 +180,7 @@ helper metadata must remain denied to every admitted project/agent process.
 This adapter does not enable production Start or establish the L7 admission facts.
 
 Readiness requires the verified executable, boot ID and process start time,
-launcher ancestry, owned loopback listener, canonical cwd and authenticated
+owned loopback listener, canonical cwd and authenticated
 `live-status` response. Persisted upstream `server.json` alone never grants
 ownership. Unknown/stale metadata fails closed; a known dead helper requires
 explicit `recoverStopped` reconciliation before restart. That operation retains
@@ -188,6 +188,13 @@ stale server evidence privately and uses upstream injection-journal healing.
 Config overrides change only config lookup; canonical state and session journals
 remain under the app's `.impeccable/live`. `resume` and `complete` use the pinned
 CLI, including its source-cleanliness gate, without `--force`.
+Every CLI command explicitly targets the admitted app, so parent manifests cannot
+redirect source recovery. App device/inode changes refuse further helper IO.
+Direct children require launcher ancestry. The native sandbox daemon's PID
+namespace requires a bounded host-process mapping by namespace PID, process birth,
+verified executable, app cwd and owned listener; host and upstream PIDs remain
+distinct in private metadata. Ambiguous command outcomes remain durable and block
+source-side retries until controller-owned reconciliation.
 
 Stop requests shutdown only from the identity-verified helper, then verifies
 exit and runs `live-inject --remove` separately so rollback failures remain

@@ -6,7 +6,15 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -90,6 +98,7 @@ async function fixture(
     effectivePolicy: policy,
     launcher: nativeLauncher
       ? {
+          topology: nativeLauncher.topology,
           launch(
             executable: string,
             args: readonly string[],
@@ -169,6 +178,13 @@ describe('owned helper admission', () => {
       );
     }
   });
+  it('rejects replacement of the admitted app inode before starting any helper', async () => {
+    const f = await fixture();
+    renameSync(f.app, join(f.root, 'previous-app'));
+    mkdirSync(f.app);
+    await expect(f.helper.start()).rejects.toThrow('LIVE_HELPER_APP_CHANGED');
+    expect(f.calls).toEqual([]);
+  });
   it('native launcher refuses a policy for a different app instead of broadening it', async () => {
     const f = await fixture();
     const launcher = new ManagedHelperLauncher({
@@ -183,6 +199,19 @@ describe('owned helper admission', () => {
 });
 
 describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
+  it('pins every CLI command to the admitted app despite a persisted parent-root manifest', async () => {
+    const f = await fixture();
+    const parentState = join(f.root, '.impeccable/live');
+    mkdirSync(parentState, { recursive: true });
+    writeFileSync(
+      join(parentState, 'roots.json'),
+      JSON.stringify({ version: 1, appRoot: f.root, repoRoot: f.root, sessionRoot: parentState }),
+    );
+    await f.helper.start();
+    expect(existsSync(join(f.app, '.impeccable/live/server.json'))).toBe(true);
+    expect(existsSync(join(parentState, 'server.json'))).toBe(false);
+    for (const call of f.calls) expect(call.args.slice(-2)).toEqual(['--target', f.app]);
+  });
   it('starts foreground loopback helper, injects public URL, preserves config, uses chat only, and stops owned resources', async () => {
     const f = await fixture();
     await f.helper.start();
@@ -355,7 +384,13 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     );
     expect(readFileSync(journal, 'utf8')).toContain(entry.trim());
     await expect(f.helper.complete('missing_session')).resolves.toHaveProperty('ok');
-    expect(f.calls[f.calls.length - 1]!.args).toEqual(['live-complete', '--id', 'missing_session']);
+    expect(f.calls[f.calls.length - 1]!.args).toEqual([
+      'live-complete',
+      '--id',
+      'missing_session',
+      '--target',
+      f.app,
+    ]);
     await expect(f.helper.complete('--force')).rejects.toThrow();
   });
 });

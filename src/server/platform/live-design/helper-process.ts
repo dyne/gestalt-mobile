@@ -10,8 +10,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
@@ -34,6 +36,8 @@ const identitySchema = z.object({
 const recordSchema = z.object({
   version: z.literal(1),
   appRoot: z.string(),
+  appDevice: z.string(),
+  appInode: z.string(),
   binary: z.string(),
   port: z.number().int().positive(),
   publicBaseUrl: z.string(),
@@ -42,6 +46,7 @@ const recordSchema = z.object({
   phase: z.enum(['starting', 'ready', 'recoveryRequired', 'stopped']),
   launcher: identitySchema.optional(),
   helper: identitySchema.optional(),
+  upstreamPid: z.number().int().positive().optional(),
   pendingCommand: z
     .object({
       name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete']),
@@ -95,6 +100,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 /** Narrow launch port. The elected controller must provide the exact admitted effective policy. */
 export interface HelperLauncher {
+  /** Native sandbox daemon may own a PID-namespaced child outside launcher ancestry. */
+  readonly topology?: 'native-daemon';
   launch(
     binary: string,
     args: readonly string[],
@@ -105,6 +112,7 @@ export interface HelperLauncher {
 
 /** Uses native sandbox execution only, never app-server/chat or an authenticated copy agent. */
 export class ManagedHelperLauncher implements HelperLauncher {
+  readonly topology = 'native-daemon' as const;
   constructor(
     private readonly options: {
       codexExecutable: string;
@@ -140,6 +148,8 @@ export class ManagedHelperLauncher implements HelperLauncher {
 /** Adapter construction grants no public Start readiness or external dev-server kill authority. */
 export class OwnedLiveHelper {
   private readonly appRoot: string;
+  private readonly appDevice: string;
+  private readonly appInode: string;
   private readonly binary: string;
   private readonly metadata: string;
   private readonly serverMetadata: string;
@@ -168,6 +178,9 @@ export class OwnedLiveHelper {
   ) {
     this.options = { ...options, effectivePolicy: structuredClone(options.effectivePolicy) };
     this.appRoot = realpathSync(options.appRoot);
+    const app = statSync(this.appRoot, { bigint: true });
+    this.appDevice = String(app.dev);
+    this.appInode = String(app.ino);
     this.binary = realpathSync(options.binary);
     loopbackPort(options.port);
     const url = new URL(options.publicBaseUrl);
@@ -206,6 +219,9 @@ export class OwnedLiveHelper {
     if (this.diagnostics.length > 32) this.diagnostics.shift();
   }
   private verifyBinary(): void {
+    const app = statSync(this.appRoot, { bigint: true });
+    if (String(app.dev) !== this.appDevice || String(app.ino) !== this.appInode)
+      throw new Error('LIVE_HELPER_APP_CHANGED');
     if (digest(readFileSync(this.binary)) !== LIVE_HELPER_BINARY_SHA256)
       throw new Error('LIVE_HELPER_BINARY_UNVERIFIED');
   }
@@ -215,6 +231,8 @@ export class OwnedLiveHelper {
       const record = recordSchema.parse(JSON.parse(readFileSync(this.metadata, 'utf8')));
       if (
         record.appRoot !== this.appRoot ||
+        record.appDevice !== this.appDevice ||
+        record.appInode !== this.appInode ||
         record.binary !== this.binary ||
         record.port !== this.options.port ||
         record.publicBaseUrl !== this.options.publicBaseUrl ||
@@ -248,15 +266,55 @@ export class OwnedLiveHelper {
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     const server = this.server();
     if (
-      server.pid !== record.helper.pid ||
+      server.pid !== record.upstreamPid ||
       server.port !== record.port ||
       server.publicBaseUrl !== record.publicBaseUrl.replace(/\/$/, '') ||
       record.helper.executableDigest !== LIVE_HELPER_BINARY_SHA256 ||
-      realpathSync(`/proc/${server.pid}/cwd`) !== this.appRoot ||
-      observeLoopbackListener(server.pid, server.port).startTicks !== record.helper.startTicks
+      realpathSync(`/proc/${record.helper.pid}/cwd`) !== this.appRoot ||
+      this.namespacePid(record.helper.pid) !== server.pid ||
+      observeLoopbackListener(record.helper.pid, server.port).startTicks !==
+        record.helper.startTicks
     )
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     return server;
+  }
+  private namespacePid(hostPid: number): number {
+    const status = readFileSync(`/proc/${hostPid}/status`, 'utf8');
+    const pids = /^NSpid:\s+(.+)$/m.exec(status)?.[1]?.trim().split(/\s+/);
+    if (!pids?.length) throw new Error('LIVE_HELPER_NAMESPACE_UNOBSERVABLE');
+    return Number(pids[pids.length - 1]);
+  }
+  private locateHelper(upstreamPid: number, record: Record): Identity {
+    if (!record.launcher) throw new Error('LIVE_HELPER_LAUNCHER_CHANGED');
+    if (this.options.launcher.topology !== 'native-daemon') {
+      if (!descendant(upstreamPid, record.launcher.pid))
+        throw new Error('LIVE_HELPER_NOT_DESCENDANT');
+      return identity(upstreamPid);
+    }
+    // The native daemon delegates execution into a PID namespace. Map that
+    // namespace PID to a unique new host process using kernel and socket evidence.
+    const pids = readdirSync('/proc').filter((pid) => /^\d+$/.test(pid));
+    if (pids.length > 4096) throw new Error('LIVE_HELPER_PROCESS_LIMIT');
+    const matches: Identity[] = [];
+    for (const raw of pids) {
+      const pid = Number(raw);
+      try {
+        if (this.namespacePid(pid) !== upstreamPid) continue;
+        const candidate = identity(pid);
+        if (
+          BigInt(candidate.startTicks) < BigInt(record.launcher.startTicks) ||
+          candidate.executableDigest !== LIVE_HELPER_BINARY_SHA256 ||
+          realpathSync(`/proc/${pid}/cwd`) !== this.appRoot ||
+          observeLoopbackListener(pid, record.port).startTicks !== candidate.startTicks
+        )
+          continue;
+        matches.push(candidate);
+      } catch {
+        /* inaccessible or unrelated process grants no ownership */
+      }
+    }
+    if (matches.length !== 1) throw new Error('LIVE_HELPER_PROCESS_UNOBSERVABLE');
+    return matches[0]!;
   }
   private async exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (this.busy) throw new Error('LIVE_HELPER_BUSY');
@@ -288,7 +346,7 @@ export class OwnedLiveHelper {
     }
     const child = this.options.launcher.launch(
       this.binary,
-      args,
+      [...args, '--target', this.appRoot],
       this.environment,
       this.options.effectivePolicy,
     );
@@ -391,6 +449,8 @@ export class OwnedLiveHelper {
       const record: Record = {
         version: 1,
         appRoot: this.appRoot,
+        appDevice: this.appDevice,
+        appInode: this.appInode,
         binary: this.binary,
         port: this.options.port,
         publicBaseUrl: this.options.publicBaseUrl,
@@ -403,7 +463,7 @@ export class OwnedLiveHelper {
       try {
         child = this.options.launcher.launch(
           this.binary,
-          ['live-server', `--port=${record.port}`],
+          ['live-server', `--port=${record.port}`, '--target', this.appRoot],
           this.environment,
           this.options.effectivePolicy,
         );
@@ -432,8 +492,8 @@ export class OwnedLiveHelper {
             const info = this.server();
             if (!sameProcess(record.launcher, false))
               throw new Error('LIVE_HELPER_LAUNCHER_CHANGED');
-            if (!descendant(info.pid, child.pid!)) throw new Error('LIVE_HELPER_NOT_DESCENDANT');
-            record.helper = identity(info.pid);
+            record.helper = this.locateHelper(info.pid, record);
+            record.upstreamPid = info.pid;
             this.verifyOwned(record);
             const health = await fetch(`http://127.0.0.1:${record.port}/health`, {
               signal: AbortSignal.timeout(500),
@@ -533,7 +593,7 @@ export class OwnedLiveHelper {
       if (existsSync(this.serverMetadata)) {
         const server = this.server();
         if (
-          server.pid !== record.helper.pid ||
+          server.pid !== record.upstreamPid ||
           server.port !== record.port ||
           server.publicBaseUrl !== record.publicBaseUrl.replace(/\/$/, '')
         )
