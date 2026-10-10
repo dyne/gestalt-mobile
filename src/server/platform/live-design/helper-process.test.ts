@@ -90,7 +90,12 @@ async function fixture(
     effectivePolicy: policy,
     launcher: nativeLauncher
       ? {
-          launch(executable, args, env, effectivePolicy) {
+          launch(
+            executable: string,
+            args: readonly string[],
+            env: NodeJS.ProcessEnv,
+            effectivePolicy: ManagedProjectSandboxState,
+          ) {
             const child = nativeLauncher.launch(executable, args, env, effectivePolicy);
             children.push(child);
             let diagnostic = '';
@@ -288,6 +293,23 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     expect(readFileSync(path, 'utf8')).toBe(raw);
     expect(f.calls).toEqual([]);
   });
+  it('restart retains an ambiguous command and refuses to blindly repeat source-side work', async () => {
+    const f = await fixture();
+    await f.helper.start();
+    const path = join(f.stateDirectory, 'helper.json');
+    const original = readFileSync(path, 'utf8');
+    const record = JSON.parse(original);
+    record.pendingCommand = { name: 'live-complete', ambiguous: true };
+    writeFileSync(path, JSON.stringify(record));
+    const restored = new OwnedLiveHelper(f.settings);
+    const calls = f.calls.length;
+    await expect(restored.complete('cleanup_session')).rejects.toThrow(
+      'LIVE_HELPER_RECOVERY_REQUIRED',
+    );
+    expect(f.calls).toHaveLength(calls);
+    expect(JSON.parse(readFileSync(path, 'utf8')).pendingCommand).toEqual(record.pendingCommand);
+    writeFileSync(path, original);
+  });
   it('helper crash requires explicit journal reconciliation then can restart with original configuration', async () => {
     const f = await fixture();
     await f.helper.start();
@@ -347,10 +369,48 @@ describe.runIf(binary && process.env.LIVE_TEST_CODEX)(
         await f.helper.start();
       } catch {
         const path = join(f.root, 'native-diagnostic.json');
+        const tree: { pid: number; namespacePids: string; executableReadable: boolean }[] = [];
+        const pending = children
+          .filter((child) => child.exitCode === null)
+          .map((child) => child.pid!);
+        for (let count = 0; pending.length && count < 32; count++) {
+          const pid = pending.shift()!;
+          try {
+            const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+            let executableReadable = true;
+            try {
+              readFileSync(`/proc/${pid}/exe`);
+            } catch {
+              executableReadable = false;
+            }
+            tree.push({
+              pid,
+              namespacePids: /^NSpid:\s+(.+)$/m.exec(status)?.[1] ?? 'unknown',
+              executableReadable,
+            });
+            pending.push(
+              ...readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean)
+                .map(Number),
+            );
+          } catch {
+            /* an owned process exited during observation */
+          }
+        }
+        let upstreamPid: unknown;
+        try {
+          upstreamPid = JSON.parse(
+            readFileSync(join(f.app, '.impeccable/live/server.json'), 'utf8'),
+          ).pid;
+        } catch {
+          /* helper may not have started */
+        }
         throw new Error(
           existsSync(path)
             ? readFileSync(path, 'utf8')
-            : 'Native helper readiness failed without sandbox diagnostic',
+            : `Native helper readiness failed: ${JSON.stringify({ logs: f.helper.logs(), upstreamPid, tree })}`,
         );
       }
       expect(((await f.helper.status()) as { liveServer: unknown }).liveServer).not.toBeNull();

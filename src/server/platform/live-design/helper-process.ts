@@ -42,6 +42,12 @@ const recordSchema = z.object({
   phase: z.enum(['starting', 'ready', 'recoveryRequired', 'stopped']),
   launcher: identitySchema.optional(),
   helper: identitySchema.optional(),
+  pendingCommand: z
+    .object({
+      name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete']),
+      ambiguous: z.boolean(),
+    })
+    .optional(),
 });
 type Record = z.infer<typeof recordSchema>;
 type Identity = z.infer<typeof identitySchema>;
@@ -271,6 +277,15 @@ export class OwnedLiveHelper {
   private async command(args: string[]): Promise<unknown> {
     if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     this.verifyBinary();
+    const record = this.read();
+    if (record?.pendingCommand) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    if (record) {
+      record.pendingCommand = {
+        name: recordSchema.shape.pendingCommand.unwrap().shape.name.parse(args[0]),
+        ambiguous: false,
+      };
+      this.save(record);
+    }
     const child = this.options.launcher.launch(
       this.binary,
       args,
@@ -282,22 +297,43 @@ export class OwnedLiveHelper {
       let output = '';
       let bytes = 0;
       let failed = false;
+      const ambiguous = () => {
+        if (record) {
+          record.phase = 'recoveryRequired';
+          record.pendingCommand!.ambiguous = true;
+          this.save(record);
+        }
+      };
+      const settled = () => {
+        if (record && !record.pendingCommand?.ambiguous) {
+          record.pendingCommand = undefined;
+          this.save(record);
+        }
+      };
       // Only bounded structured stdout is kept in memory; stderr is counted and dropped.
       child.stdout!.on('data', (chunk: Buffer) => {
         bytes += chunk.length;
         if (bytes <= 1024 * 1024) output += chunk.toString();
-        else failed = true;
+        else {
+          failed = true;
+          ambiguous();
+        }
       });
       child.stderr!.on('data', (chunk: Buffer) => {
         bytes += chunk.length;
       });
       const timer = setTimeout(() => {
         failed = true;
+        ambiguous();
         reject(new Error('LIVE_HELPER_COMMAND_TIMEOUT'));
       }, 20000);
       child.once('error', () => {
         this.commandPending = false;
         clearTimeout(timer);
+        if (record) {
+          record.pendingCommand = undefined;
+          this.save(record);
+        }
         reject(new Error('LIVE_HELPER_LAUNCH_FAILED'));
       });
       child.once('exit', (code) => {
@@ -305,12 +341,16 @@ export class OwnedLiveHelper {
         clearTimeout(timer);
         this.log(args[0]!, code === 0 && !failed ? 'ok' : 'failed', bytes);
         if (code !== 0 || failed) {
+          settled();
           reject(new Error('LIVE_HELPER_COMMAND_FAILED'));
           return;
         }
         try {
-          resolve(JSON.parse(output));
+          const value: unknown = JSON.parse(output);
+          settled();
+          resolve(value);
         } catch {
+          ambiguous();
           reject(new Error('LIVE_HELPER_PROTOCOL_INVALID'));
         }
       });
@@ -386,11 +426,13 @@ export class OwnedLiveHelper {
         record.launcher = identity(child.pid);
         this.save(record);
         const deadline = Date.now() + (this.options.startupTimeoutMs ?? 15000);
+        let probeFailure = 'notObserved';
         while (Date.now() < deadline && !exited) {
           try {
             const info = this.server();
-            if (!sameProcess(record.launcher, false) || !descendant(info.pid, child.pid!))
-              throw new Error();
+            if (!sameProcess(record.launcher, false))
+              throw new Error('LIVE_HELPER_LAUNCHER_CHANGED');
+            if (!descendant(info.pid, child.pid!)) throw new Error('LIVE_HELPER_NOT_DESCENDANT');
             record.helper = identity(info.pid);
             this.verifyOwned(record);
             const health = await fetch(`http://127.0.0.1:${record.port}/health`, {
@@ -399,12 +441,22 @@ export class OwnedLiveHelper {
             if (!health.ok || ((await health.json()) as { status?: string }).status !== 'ok')
               throw new Error();
             break;
-          } catch {
+          } catch (error) {
+            const failure = error as NodeJS.ErrnoException;
+            probeFailure =
+              failure.code && ['EACCES', 'EPERM', 'ENOENT'].includes(failure.code)
+                ? failure.code
+                : /^LIVE_(HELPER|TARGET)_[A-Z_]+$/.test(failure.message)
+                  ? failure.message
+                  : 'protocolMismatch';
             record.helper = undefined;
             await sleep(25);
           }
         }
-        if (!record.helper || exited) throw new Error('LIVE_HELPER_NOT_READY');
+        if (!record.helper || exited) {
+          this.log('readiness', probeFailure, 0);
+          throw new Error('LIVE_HELPER_NOT_READY');
+        }
         // Durable identity precedes any injection; crash recovery can still stop only this helper.
         this.save(record);
         const injected = await this.command(['live-inject', '--port', String(record.port)]);
@@ -422,6 +474,7 @@ export class OwnedLiveHelper {
         this.log('start', 'ready', 0);
       } catch {
         record.phase = 'recoveryRequired';
+        record.pendingCommand = this.read()?.pendingCommand;
         this.save(record);
         // Upstream journal rollback only after identity proves this attempt owns the helper.
         if (record.helper) {
@@ -463,6 +516,7 @@ export class OwnedLiveHelper {
         await this.stopOwned(record);
       } catch {
         record.phase = 'recoveryRequired';
+        record.pendingCommand = this.read()?.pendingCommand;
         this.save(record);
         throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
       }
