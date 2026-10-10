@@ -400,6 +400,7 @@ describe.runIf(binary && process.env.LIVE_TEST_CODEX)(
   () => {
     it('runs pinned helper and injection under the unchanged effective managed policy', async () => {
       const f = await fixture({ native: true });
+      const admittedPolicy = JSON.stringify(f.policy);
       try {
         await f.helper.start();
       } catch {
@@ -449,6 +450,9 @@ describe.runIf(binary && process.env.LIVE_TEST_CODEX)(
         );
       }
       expect(((await f.helper.status()) as { liveServer: unknown }).liveServer).not.toBeNull();
+      const record = JSON.parse(readFileSync(join(f.stateDirectory, 'helper.json'), 'utf8'));
+      expect(record.helper.pid).not.toBe(record.upstreamPid);
+      expect(JSON.stringify(f.policy)).toBe(admittedPolicy);
       await f.helper.stop();
       expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
     }, 30000);

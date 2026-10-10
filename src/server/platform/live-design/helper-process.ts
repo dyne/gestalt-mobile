@@ -16,7 +16,8 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { createServer } from 'node:net';
+import { request } from 'node:http';
+import { createConnection, createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -551,13 +552,40 @@ export class OwnedLiveHelper {
   private async stopOwned(record: Record): Promise<void> {
     if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     const server = this.verifyOwned(record);
-    const response = await fetch(
-      `http://127.0.0.1:${server.port}/stop?token=${encodeURIComponent(server.token)}`,
-      {
-        signal: AbortSignal.timeout(2000),
-      },
-    );
-    if (!response.ok) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    // Connect first, recheck ownership, then send. A reused listening port can
+    // never redirect this already-established connection to an unrelated server.
+    const socket = createConnection({ host: '127.0.0.1', port: server.port });
+    await new Promise<void>((resolve, reject) => {
+      socket.setTimeout(2000, () => socket.destroy(new Error('LIVE_HELPER_RECOVERY_REQUIRED')));
+      socket.once('error', () => reject(new Error('LIVE_HELPER_RECOVERY_REQUIRED')));
+      socket.once('connect', () => {
+        try {
+          this.verifyOwned(record);
+          resolve();
+        } catch {
+          socket.destroy();
+          reject(new Error('LIVE_HELPER_RECOVERY_REQUIRED'));
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      const stop = request(
+        {
+          hostname: '127.0.0.1',
+          port: server.port,
+          path: `/stop?token=${encodeURIComponent(server.token)}`,
+          method: 'GET',
+          createConnection: () => socket,
+        },
+        (response) => {
+          response.resume();
+          if (response.statusCode !== 200) reject(new Error('LIVE_HELPER_RECOVERY_REQUIRED'));
+          else resolve();
+        },
+      );
+      stop.once('error', () => reject(new Error('LIVE_HELPER_RECOVERY_REQUIRED')));
+      stop.end();
+    });
     const deadline = Date.now() + 5000;
     while (sameProcess(record.helper!) && Date.now() < deadline) await sleep(25);
     if (sameProcess(record.helper!)) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
