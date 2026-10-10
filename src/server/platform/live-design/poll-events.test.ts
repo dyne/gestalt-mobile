@@ -96,17 +96,27 @@ function fixture(limit = 256) {
   });
   let now = 1000;
   let event = events[0];
+  let pending = true;
   const cli = {
     status: vi.fn(async () => ({
       liveServer: {
-        pendingEvents: (event.id
+        pendingEvents: (event.id && pending
           ? [{ id: event.id, type: event.type, leased: true, leaseUntil: 600000 }]
           : []) as unknown[],
       },
     })),
-    poll: vi.fn(async () => event),
-    reply: vi.fn(async (reply: { id: string; status: string }) => ({ ok: true, ...reply })),
-    complete: vi.fn(async () => ({ ok: true })),
+    poll: vi.fn(async () => {
+      if (['accept', 'discard'].includes(event.type)) pending = false;
+      return event;
+    }),
+    reply: vi.fn(async (reply: { id: string; status: string }) => {
+      pending = false;
+      return { ok: true, ...reply };
+    }),
+    complete: vi.fn(async () => {
+      pending = false;
+      return { ok: true };
+    }),
   };
   const verify = vi.fn(async () => {});
   const authority = new LiveDispatchGuard({
@@ -142,6 +152,7 @@ function fixture(limit = 256) {
     verify,
     event(value: LivePollEvent) {
       event = value;
+      pending = true;
     },
     time(value: number) {
       now = value;
@@ -225,6 +236,7 @@ describe('canonical poll bridge', () => {
     await f.bridge.next(f.run);
     f.event({ ...events[1], message: 'Different requested change' });
     await f.bridge.next(f.run);
+    expect(f.apply.mock.calls[0][3]).not.toBe(f.apply.mock.calls[1][3]);
     await expect(f.bridge.next(f.run)).rejects.toThrow('LIVE_POLL_IDENTITY_AMBIGUOUS');
     expect(f.apply).toHaveBeenCalledTimes(2);
   });
@@ -308,6 +320,15 @@ describe('canonical poll bridge', () => {
     await f.bridge.next(f.run);
     expect(f.apply).not.toHaveBeenCalled();
   });
+  it('out-of-order generate after terminal receipt cannot reopen a completed session', async () => {
+    const f = fixture();
+    f.event(events[2]);
+    await f.bridge.next(f.run);
+    f.event(events[0]);
+    await expect(f.bridge.next(f.run)).rejects.toThrow('LIVE_POLL_DUPLICATE_TERMINAL');
+    expect(f.cli.poll).toHaveBeenCalledOnce();
+    expect(f.apply).not.toHaveBeenCalled();
+  });
   it('carbonized accept requires fenced cleanup and gated canonical completion', async () => {
     const f = fixture();
     f.event({
@@ -331,6 +352,13 @@ describe('canonical poll bridge', () => {
     await expect(f.bridge.next(f.run)).rejects.toThrow('LIVE_INBOX_FULL');
     expect(f.cli.poll).toHaveBeenCalledOnce();
     expect(f.inbox.records()).toHaveLength(1);
+  });
+  it('offline complete fallback cannot claim acknowledgement while queue entry remains', async () => {
+    const f = fixture();
+    f.event(events[7]);
+    f.cli.complete.mockResolvedValueOnce({ ok: true }); // no live queue acknowledgement
+    await expect(f.bridge.next(f.run)).rejects.toThrow('LIVE_POLL_ACK_INVALID');
+    expect(f.inbox.records()[0].stage).toBe('applied');
   });
   it('unproven runtime confinement cannot start a model turn', async () => {
     const f = fixture();

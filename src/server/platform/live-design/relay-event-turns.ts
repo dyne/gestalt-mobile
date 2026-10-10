@@ -78,6 +78,7 @@ export class RelayLiveEventTurns implements LiveEventTurns {
     run: LiveRun,
     event: LivePollEvent,
     deadline: number,
+    operationId: string,
   ): Promise<Omit<LiveEventReply, 'id'>> {
     const session = this.session(run);
     if (session.activeTurnId) throw new Error('LIVE_RELAY_BUSY');
@@ -100,7 +101,7 @@ export class RelayLiveEventTurns implements LiveEventTurns {
     const started = await this.input.runtime.startTurn(
       session,
       prompt,
-      `live-${event.id}`,
+      `live-${run.generation}-${operationId}`,
       new Date(this.input.now()).toISOString(),
     );
     if (!started.activeTurnId) throw new Error('LIVE_RELAY_TURN_INVALID');

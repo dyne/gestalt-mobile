@@ -155,7 +155,12 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
       }),
   );
   const work = f.guard.liveEvent(f.run, '1234abcd', () =>
-    f.turns.apply(f.run, { type: 'generate', id: '1234abcd', count: 1 }, 595000),
+    f.turns.apply(
+      f.run,
+      { type: 'generate', id: '1234abcd', count: 1 },
+      595000,
+      'operation-digest',
+    ),
   );
   await vi.waitFor(() => expect(f.wait).toHaveBeenCalled());
   // Independent request context must not inherit the controller's Live authority.
@@ -172,7 +177,7 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
     threadId: 'root',
     model: 'own-model',
     effort: 'high',
-    clientUserMessageId: 'live-1234abcd',
+    clientUserMessageId: `live-${f.run.generation}-operation-digest`,
   });
   expect(f.session().executionPolicy).toEqual(before.executionPolicy);
   expect(f.session().effectiveSkillSelection).toEqual(before.effectiveSkillSelection);
@@ -185,7 +190,7 @@ it.each(['not json', '{"status":"steer_done"}', '{"status":"done","unexpected":t
     f.final(final);
     await expect(
       f.guard.liveEvent(f.run, '1234abcd', () =>
-        f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000),
+        f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000, 'operation-digest'),
       ),
     ).rejects.toThrow('LIVE_RELAY_RESULT_INVALID');
   },
@@ -194,7 +199,12 @@ it('manual apply requires pinned structured entry outcomes', async () => {
   const f = await fixture();
   await expect(
     f.guard.liveEvent(f.run, '1234abcd', () =>
-      f.turns.apply(f.run, { type: 'manual_edit_apply', id: '1234abcd' }, 595000),
+      f.turns.apply(
+        f.run,
+        { type: 'manual_edit_apply', id: '1234abcd' },
+        595000,
+        'operation-digest',
+      ),
     ),
   ).rejects.toThrow('LIVE_RELAY_RESULT_INVALID');
 });
@@ -205,7 +215,7 @@ it('lease expiration during an active model turn never starts another turn', asy
   });
   await expect(
     f.guard.liveEvent(f.run, '1234abcd', () =>
-      f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000),
+      f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000, 'operation-digest'),
     ),
   ).rejects.toThrow('LIVE_POLL_LEASE_EXPIRED');
   expect(f.requests.filter((r) => r.method === 'turn/start')).toHaveLength(1);
@@ -215,7 +225,7 @@ it('rejects a provider/thread identity change before dispatch', async () => {
   f.sessions.save({ ...f.session(), provider: 'kimi' });
   await expect(
     f.guard.liveEvent(f.run, '1234abcd', () =>
-      f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000),
+      f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000, 'operation-digest'),
     ),
   ).rejects.toThrow('LIVE_RELAY_OWNER_INVALID');
   expect(f.requests.filter((r) => r.method === 'turn/start')).toHaveLength(0);

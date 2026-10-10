@@ -54,7 +54,12 @@ export interface CanonicalLivePoll {
 }
 export interface LiveEventTurns {
   /** Resolves only after this existing relay's turn has completed and its result is validated. */
-  apply(run: LiveRun, event: LivePollEvent, deadline: number): Promise<Omit<LiveEventReply, 'id'>>;
+  apply(
+    run: LiveRun,
+    event: LivePollEvent,
+    deadline: number,
+    operationId: string,
+  ): Promise<Omit<LiveEventReply, 'id'>>;
 }
 export interface LiveEventAuthority {
   liveEvent<T>(fence: LiveFence, eventId: string, work: () => Promise<T>): Promise<T>;
@@ -175,7 +180,7 @@ export class PollLiveEvents {
         if (ack.requiresComplete === true || ack.type === 'agent_done') {
           lease();
           const cleanup = await this.input.authority.liveEvent(fence, event.id!, () =>
-            this.input.turns.apply(run, event, deadline),
+            this.input.turns.apply(run, event, deadline, item.key),
           );
           if (cleanup.status !== 'done') throw new Error('LIVE_POLL_ACCEPT_RECOVERY_REQUIRED');
           lease();
@@ -188,7 +193,7 @@ export class PollLiveEvents {
       } else {
         lease();
         const reply = await this.input.authority.liveEvent(fence, event.id!, () =>
-          this.input.turns.apply(run, event, deadline),
+          this.input.turns.apply(run, event, deadline, item.key),
         );
         lease();
         advance('applied');
@@ -202,6 +207,18 @@ export class PollLiveEvents {
             throw new Error('LIVE_POLL_ACK_INVALID');
         }
       }
+      // live-complete can journal an offline fallback when its server POST fails.
+      // Successful CLI stdout alone therefore does not prove the live queue was acked.
+      const confirmed = object(object(await this.input.cli.status())?.liveServer);
+      if (
+        !confirmed ||
+        !Array.isArray(confirmed.pendingEvents) ||
+        confirmed.pendingEvents.some((p) => {
+          const row = object(p);
+          return row?.id === event.id && row?.type === event.type;
+        })
+      )
+        throw new Error('LIVE_POLL_ACK_INVALID');
       advance('acknowledged');
       this.input.inbox.finish(token);
       return 'event';
