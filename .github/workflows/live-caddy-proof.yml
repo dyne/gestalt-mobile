@@ -82,6 +82,8 @@ jobs:
             src/server/platform/live-design/helper-process.test.ts \
             src/server/platform/live-design/poll-events.test.ts \
             src/server/platform/live-design/relay-event-turns.test.ts \
+            src/server/platform/live-design/stop-resume.test.ts \
+            src/server/platform/live-design/live-autopilot.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
       - name: Real helper browser proof in separate network with trusted TLS
         timeout-minutes: 5

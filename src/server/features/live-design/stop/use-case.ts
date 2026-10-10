@@ -12,6 +12,8 @@ export type LiveStopDependencies = {
   /** Owned resources only; each method must be idempotent under the supplied fence. */
   resources: {
     remove(run: LiveRun): Promise<void>;
+    /** Cancel owned poll/model work and prove the entire writer tree has settled. */
+    settle(run: LiveRun): Promise<void>;
     revoke(run: LiveRun): Promise<void>;
     cleanup(run: LiveRun): Promise<void>;
     /** Actual route/auth/helper/process reconciliation, including pending results and descendants. */
@@ -25,11 +27,24 @@ export async function stopLive(deps: LiveStopDependencies, fence: LiveFence): Pr
   if (run.state !== 'idle') {
     if (run.state !== 'stopping') run = deps.owners.mutate(run, { event: 'stop' });
     try {
-      for (const name of ['remove', 'revoke', 'cleanup', 'verifyClean'] as const) {
+      let revocationError: unknown;
+      for (const name of ['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const) {
         run = deps.owners.mutate(run, { event: 'phase', phase: `stop:${name}:intent` });
-        await deps.resources[name](run);
+        try {
+          await deps.resources[name](run);
+        } catch (error) {
+          if (name !== 'revoke') throw error;
+          // A stream-close failure must not prevent cancellation of owned edits.
+          // Continue cleanup after settlement, but never release on failed revocation.
+          revocationError = error;
+          continue;
+        }
         deps.owners.assert(run);
         run = deps.owners.mutate(run, { event: 'phase', phase: `stop:${name}:ack` });
+      }
+      if (revocationError) {
+        run = deps.owners.mutate(run, { event: 'phase', phase: 'stop:revoke:intent' });
+        throw revocationError;
       }
       run = deps.owners.mutate(run, { event: 'cleaned' });
     } catch (error) {

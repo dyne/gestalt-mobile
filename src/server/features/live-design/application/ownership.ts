@@ -60,6 +60,7 @@ export type LiveMutation =
   | { event: 'captureControls'; intent: LiveControlIntent }
   | { event: 'controlsRestored' }
   | { event: 'ready' }
+  | { event: 'resume' }
   | { event: 'stop' }
   | { event: 'failed'; code: string }
   | { event: 'recover'; code: string }
@@ -80,6 +81,7 @@ export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
     captureControls: ['starting'],
     controlsRestored: ['idle'],
     ready: ['starting'],
+    resume: ['stopping'],
     stop: ['starting', 'active', 'error', 'recoveryRequired'],
     failed: ['starting', 'active', 'stopping'],
     recover: ['starting', 'active', 'stopping', 'error', 'recoveryRequired'],
@@ -97,6 +99,8 @@ export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
       return run.state;
     case 'ready':
       return 'active';
+    case 'resume':
+      return 'starting';
     case 'stop':
       return 'stopping';
     case 'failed':

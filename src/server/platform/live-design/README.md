@@ -247,3 +247,56 @@ Composition supplies this narrow factory to the trusted controller through
 The L7 guard verifies native collaboration confinement before side-effecting
 poll commands and each model turn, and fences every acknowledgement. All
 production admission requirements remain in force. Kimi Live remains unavailable.
+
+Stop revokes durable preview access and closes owned streams before cancellation
+or route removal. A stream-close failure still attempts cancellation and safe
+cleanup; failed revocation never releases the claim. `PollLiveEvents.settle`
+fences delayed receipts, wakes the helper's canonical foreground poll and awaits
+its exit, and calls the existing owning runtime's `settleLiveWork`. That method
+interrupts the root, observes a bounded native descendant tree and background
+commands, terminates exact command instances, and requires idle native statuses,
+no outstanding results or approvals. Unsupported observations fail closed; it
+never launches a replacement runtime/history reader to manufacture settlement.
+A cancellation RPC acknowledgement is not proof of completion. Retry Stop using
+the current durable fence after actual work settles. Journal/source reconciliation,
+canonical completion or discard, injection removal and actual route/auth/process
+cleanup must all finish before ownership and prior controls are released.
+
+The pinned server arms an eight-second timer when its last browser SSE client
+disconnects. Background tab suspension and network loss use that same upstream
+behavior; Gestalt adds no extended grace or keepalive that conceals a disconnected
+browser. A received `exit` changes ownership to `recoveryRequired`, invalidating
+preview authorization and every later edit dispatch. The helper's journal and
+config remain recovery inputs. Reconnection within the upstream grace cancels its
+anonymous exit; reconnection after an exit requires explicit Resume reconciliation.
+Explicit Stop always fences work immediately, independent of that timer.
+
+`resumeLive` revokes again, settles owned work, reconciles canonical journal/source
+postconditions and owned routes, and repeats actual admission proof before
+regranting access. A failed source, route, helper or isolation check keeps access
+revoked and ownership in recoveryRequired. An idle generation cannot Resume;
+Start must acquire a new claim. The private inbox's explicit reconciliation records
+completed/discarded disposition plus a source/journal proof digest while preserving
+original received/dispatched/applied/acknowledged history. An ambiguous applied
+record never becomes an invented acknowledged record. Terminal and reconciled
+tombstones cannot cause another edit; capacity remains a hard bound and fails
+explicitly rather than silently deleting deduplication evidence. The controller
+must obtain this proof from canonical journal/source reconciliation, never an
+HTTP or model-supplied hash. `OwnedLiveHelper.reconcileJournal` inventories bounded
+durable journal files as well as canonical status, because pinned `live-resume`
+intentionally hides completed/discarded sessions. Lost terminal stdout cannot
+therefore be reconciled from an empty active-session list. The adapter uses actual
+upstream accept receipts for unfinished operations, the canonical no-force source
+gate, and source/terminal-journal digests; it preserves prior terminal dispositions
+and all journal entries. Missing/outside/dirty sources or conflicting receipts
+retain recovery. Repeated terminal acknowledgements yield the same proof digest.
+
+Production admission is still a concrete integration prerequisite, not granted
+by these lifecycle ports: the current Codex process launcher supplies no immutable
+attestation of the effective managed policy of an already-running app-server or
+dev server; the relay's request guard does not confine native child/tool writers
+inside that app-server. A new sandbox probe cannot prove those old processes are
+isolated. Production Start therefore remains unavailable until the elected
+controller can verify all existing process policies and native writer confinement,
+or an operator-supported isolated broker supplies equivalent actual denial proof.
+Do not enable Start by binding lifecycle callbacks or passing fixture readiness.

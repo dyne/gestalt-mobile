@@ -36,6 +36,7 @@ export type InboxEvent = {
   stage: InboxStage;
   leaseUntil: number;
   history: readonly InboxStage[];
+  reconciliation?: { disposition: 'completed' | 'discarded'; proofDigest: string };
 };
 /** Controller-private metadata only: no prompts, model output or bearer tokens. */
 export interface LiveEventInbox {
@@ -51,8 +52,12 @@ export interface CanonicalLivePoll {
   poll(): Promise<unknown>;
   reply(reply: LiveEventReply): Promise<unknown>;
   complete(id: string, discarded?: boolean): Promise<unknown>;
+  /** End the owned helper poll and await its foreground command; never replay it. */
+  settle?(): Promise<void>;
 }
 export interface LiveEventTurns {
+  /** Interrupt the owned turn and prove root/descendant/command settlement. */
+  settle?(run: LiveRun): Promise<void>;
   /** Resolves only after this existing relay's turn has completed and its result is validated. */
   apply(
     run: LiveRun,
@@ -88,6 +93,7 @@ function object(value: unknown): Record<string, unknown> | null {
  */
 export class PollLiveEvents {
   private busy = false;
+  private flight: Promise<unknown> | null = null;
   constructor(
     private readonly input: {
       owners: LiveOwnershipStore;
@@ -98,7 +104,35 @@ export class PollLiveEvents {
       now(): number;
     },
   ) {}
-  async next(fence: LiveFence): Promise<'event' | 'timeout' | 'exit' | 'duplicate'> {
+  next(fence: LiveFence): Promise<'event' | 'timeout' | 'exit' | 'duplicate'> {
+    if (this.flight) return Promise.reject(new Error('LIVE_POLL_OWNER_BUSY'));
+    const flight = this.iterate(fence);
+    this.flight = flight;
+    void flight
+      .finally(() => {
+        if (this.flight === flight) this.flight = null;
+      })
+      .catch(() => {});
+    return flight;
+  }
+  async settle(fence: LiveFence): Promise<void> {
+    const run = this.input.owners.assert(fence);
+    if (run.state !== 'stopping' && run.state !== 'recoveryRequired')
+      throw new Error('LIVE_STATE_CONFLICT');
+    if (!this.input.cli.settle || !this.input.turns.settle)
+      throw new Error('LIVE_SETTLEMENT_UNAVAILABLE');
+    // Stop's state transition has already fenced every later apply/reply.
+    const flight = this.flight;
+    const results = await Promise.allSettled([
+      this.input.cli.settle(),
+      this.input.turns.settle(run),
+    ]);
+    if (results.some((result) => result.status === 'rejected'))
+      throw new Error('LIVE_SETTLEMENT_REQUIRED');
+    if (flight) await flight.catch(() => {});
+    this.input.owners.assert(fence);
+  }
+  private async iterate(fence: LiveFence): Promise<'event' | 'timeout' | 'exit' | 'duplicate'> {
     if (this.busy) throw new Error('LIVE_POLL_OWNER_BUSY');
     const run = this.input.owners.assert(fence);
     if (run.state !== 'active' || run.provider !== 'codex') throw new Error('LIVE_MODE_ACTIVE');
@@ -141,6 +175,8 @@ export class PollLiveEvents {
         // new reply or repoll an acknowledged source operation without reconciliation.
         if (event.id) throw new Error('LIVE_POLL_DUPLICATE_EVENT');
         this.input.inbox.finish(token);
+        if (event.type === 'exit')
+          this.input.owners.mutate(fence, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
         return event.type === 'timeout' ? 'timeout' : event.type === 'exit' ? 'exit' : 'duplicate';
       }
       const advance = (stage: InboxStage) => {
@@ -153,6 +189,8 @@ export class PollLiveEvents {
         advance('applied');
         advance('acknowledged');
         this.input.inbox.finish(token);
+        if (event.type === 'exit')
+          this.input.owners.mutate(fence, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
         return event.type === 'timeout' ? 'timeout' : event.type === 'exit' ? 'exit' : 'event';
       }
       let deadline = item.leaseUntil;

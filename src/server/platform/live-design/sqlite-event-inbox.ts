@@ -114,6 +114,7 @@ export class SqliteLiveEventInbox implements LiveEventInbox {
         .get(intent.app!, intent.liveId!, intent.generation!, key);
       if (old) {
         const item = JSON.parse(String(old.record)) as InboxEvent;
+        if (item.reconciliation) throw new Error('LIVE_POLL_RECONCILED_EVENT');
         if (item.stage !== 'acknowledged') throw new Error('LIVE_POLL_RECOVERY_REQUIRED');
         return item;
       }
@@ -162,11 +163,14 @@ export class SqliteLiveEventInbox implements LiveEventInbox {
     if (!kind) return false;
     const intent = this.intent(token);
     return this.db
-      .prepare('SELECT record FROM live_event_inbox WHERE app=? AND liveId=? AND generation=?')
-      .all(intent.app!, intent.liveId!, intent.generation!)
+      .prepare('SELECT record FROM live_event_inbox WHERE app=?')
+      .all(intent.app!)
       .some((row) => {
         const event = JSON.parse(String(row.record)) as InboxEvent;
-        return event.upstreamId === id && (event.kind === 'accept' || event.kind === 'discard');
+        return (
+          event.upstreamId === id &&
+          (event.kind === 'accept' || event.kind === 'discard' || !!event.reconciliation)
+        );
       });
   }
   finish(token: string): void {
@@ -175,7 +179,11 @@ export class SqliteLiveEventInbox implements LiveEventInbox {
       const unfinished = this.db
         .prepare('SELECT record FROM live_event_inbox WHERE app=? AND liveId=? AND generation=?')
         .all(intent.app!, intent.liveId!, intent.generation!)
-        .some((row) => (JSON.parse(String(row.record)) as InboxEvent).stage !== 'acknowledged');
+        .some(
+          (row) =>
+            (JSON.parse(String(row.record)) as InboxEvent).stage !== 'acknowledged' &&
+            !(JSON.parse(String(row.record)) as InboxEvent).reconciliation,
+        );
       if (unfinished) throw new Error('LIVE_POLL_RECOVERY_REQUIRED');
       this.db.prepare('DELETE FROM live_poll_intents WHERE token=?').run(token);
     });
@@ -184,6 +192,55 @@ export class SqliteLiveEventInbox implements LiveEventInbox {
     this.db
       .prepare("UPDATE live_poll_intents SET phase='recoveryRequired',code=? WHERE token=?")
       .run(/^LIVE_[A-Z_]+$/.test(code) ? code : 'LIVE_POLL_RECOVERY_REQUIRED', token);
+  }
+  /** Called only by the private controller AFTER canonical journal/source reconciliation
+   * and complete writer-tree settlement. Receipt history is preserved, never rewritten
+   * to claim an acknowledgement that was lost. Tombstones remain subject to the hard bound.
+   * No HTTP/model tool accepts this proof or grants permission to call this adapter.
+   */
+  reconcile(
+    run: LiveRun,
+    proof: { disposition: 'completed' | 'discarded'; proofDigest: string; generation?: number },
+  ): void {
+    if (run.state !== 'stopping' || !/^[a-f0-9]{64}$/.test(proof.proofDigest))
+      throw new Error('LIVE_INBOX_RECONCILIATION_INVALID');
+    withImmediateTransaction(this.db, () => {
+      const app = `${run.app.device}:${run.app.inode}`;
+      const generation = proof.generation ?? run.generation;
+      if (!Number.isInteger(generation) || generation < 1 || generation > run.generation)
+        throw new Error('LIVE_GENERATION_STALE');
+      const intent = this.db.prepare('SELECT * FROM live_poll_intents WHERE app=?').get(app);
+      // Takeover may change the epoch, but must not reconcile another generation.
+      if (
+        intent &&
+        (intent.liveId !== run.liveId ||
+          Number(intent.generation) !== generation ||
+          Number(intent.epoch) > run.controllerEpoch)
+      )
+        throw new Error('LIVE_GENERATION_STALE');
+      for (const row of this.db
+        .prepare(
+          'SELECT key,record FROM live_event_inbox WHERE app=? AND liveId=? AND generation=?',
+        )
+        .all(app, run.liveId, generation)) {
+        const item = JSON.parse(String(row.record)) as InboxEvent;
+        if (
+          item.reconciliation &&
+          (item.reconciliation.proofDigest !== proof.proofDigest ||
+            item.reconciliation.disposition !== proof.disposition)
+        )
+          throw new Error('LIVE_INBOX_RECONCILIATION_INVALID');
+        item.reconciliation = proof;
+        this.db
+          .prepare(
+            'UPDATE live_event_inbox SET record=? WHERE app=? AND liveId=? AND generation=? AND key=?',
+          )
+          .run(JSON.stringify(item), app, run.liveId, generation, String(row.key));
+      }
+      // Clearing a reservation permits only the reconciled generation. A duplicate
+      // receipt remains a tombstone and must never become another model/source edit.
+      this.db.prepare('DELETE FROM live_poll_intents WHERE app=?').run(app);
+    });
   }
   /** Read-only recovery evidence; never a retry/lease-takeover API. */
   records(): InboxEvent[] {

@@ -16,6 +16,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
+import { get } from 'node:http';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -199,6 +201,97 @@ describe('owned helper admission', () => {
 });
 
 describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
+  it('waits for CLI stdout close when process exit notification precedes the final JSON chunk', async () => {
+    const f = await fixture({
+      launcher: {
+        launch(executable, args, env) {
+          const child = spawn(executable, [...args], {
+            cwd: args.at(-1),
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          children.push(child);
+          // Deterministic Node exit-vs-close ordering regression, not readiness evidence.
+          if (args[0] === 'live-status') queueMicrotask(() => child.emit('exit', 0, null));
+          return child;
+        },
+      },
+    });
+    await f.helper.start();
+    await expect(f.helper.status()).resolves.toHaveProperty('liveServer');
+    await f.helper.stop();
+  });
+  it('owned shutdown wakes canonical long polling before cleanup and never leaves a later poll', async () => {
+    const f = await fixture();
+    await f.helper.start();
+    const poll = f.helper.poll(600000);
+    const settled = poll.catch(() => null);
+    await sleep(100);
+    await f.helper.settle();
+    await settled;
+    await expect(f.helper.poll(1)).rejects.toThrow('LIVE_HELPER_RECOVERY_REQUIRED');
+    await f.helper.recoverStopped();
+    await f.helper.stop();
+    expect(readFileSync(join(f.app, 'index.html'), 'utf8')).toBe(
+      '<html><body><h1>Original</h1></body></html>',
+    );
+  }, 15000);
+  it('background/network disconnect beyond the pinned eight seconds emits exit without inventing a longer grace', async () => {
+    const f = await fixture();
+    await f.helper.start();
+    const metadata = JSON.parse(readFileSync(join(f.app, '.impeccable/live/server.json'), 'utf8'));
+    const stream = get(`http://127.0.0.1:${metadata.port}/events?token=${metadata.token}`);
+    const [response] = await once(stream, 'response');
+    await once(response, 'data');
+    response.destroy();
+    stream.destroy();
+    await sleep(8500);
+    await expect(f.helper.poll(1000)).resolves.toMatchObject({ type: 'exit' });
+    // Disconnect does not authorize replay or silently discard the source journal.
+    expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
+  }, 15000);
+  it('reconciles lost terminal stdout from actual durable journals and refuses dirty source after helper death', async () => {
+    const f = await fixture();
+    const directory = join(f.app, '.impeccable/live/sessions');
+    mkdirSync(directory, { recursive: true });
+    const journal = join(directory, '1234abcd.jsonl');
+    writeFileSync(
+      journal,
+      JSON.stringify({
+        seq: 1,
+        id: '1234abcd',
+        type: 'carbonize_cleanup',
+        ts: '2026-10-10T00:00:00Z',
+        event: { id: '1234abcd', type: 'carbonize_cleanup', file: 'chosen.html' },
+      }) + '\n',
+    );
+    writeFileSync(join(f.app, 'chosen.html'), '<h1>Chosen</h1>');
+    await f.helper.start();
+    // Exact pinned journal envelope for a terminal completion whose response was lost.
+    writeFileSync(
+      journal,
+      readFileSync(journal, 'utf8') +
+        JSON.stringify({
+          seq: 2,
+          id: '1234abcd',
+          type: 'complete',
+          ts: '2026-10-10T00:00:01Z',
+          event: { id: '1234abcd', type: 'complete' },
+        }) +
+        '\n',
+    );
+    await f.helper.settle();
+    // Empty caller IDs must still discover terminal journals after lost poll output.
+    const proof = await f.helper.reconcileJournal([]);
+    expect(proof).toMatch(/^[a-f0-9]{64}$/);
+    expect(await f.helper.reconcileJournal([])).toBe(proof);
+    expect(readFileSync(journal, 'utf8')).toContain('carbonize_cleanup');
+    writeFileSync(join(f.app, 'chosen.html'), '<h1 data-p-size="large">Dirty</h1>');
+    await expect(f.helper.reconcileJournal([])).rejects.toThrow('LIVE_HELPER_COMMAND_FAILED');
+    expect(readFileSync(join(f.stateDirectory, 'helper.json'), 'utf8')).toContain(
+      'recoveryRequired',
+    );
+  });
   it('canonical poll journals generation preflight, leases, replies and handles discard', async () => {
     const f = await fixture();
     await f.helper.start();
@@ -525,6 +618,11 @@ describe.runIf(binary && process.env.LIVE_TEST_CODEX)(
       expect(record.helper.pid).not.toBe(record.upstreamPid);
       expect(JSON.stringify(f.policy)).toBe(admittedPolicy);
       await expect(f.helper.poll(10)).resolves.toMatchObject({ type: 'timeout' });
+      const pending = f.helper.poll(600000).catch(() => null);
+      await sleep(100);
+      await f.helper.settle();
+      await pending;
+      await f.helper.recoverStopped();
       await f.helper.stop();
       expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
     }, 30000);

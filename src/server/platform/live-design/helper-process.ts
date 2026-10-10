@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { request } from 'node:http';
 import { createConnection, createServer } from 'node:net';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
@@ -52,6 +52,7 @@ const recordSchema = z.object({
     .object({
       name: z.enum(['live-inject', 'live-status', 'live-resume', 'live-complete', 'live-poll']),
       ambiguous: z.boolean(),
+      launcher: identitySchema.optional(),
     })
     .optional(),
 });
@@ -333,6 +334,7 @@ export class OwnedLiveHelper {
       probe.listen(this.options.port, '127.0.0.1', () => probe.close(() => resolve()));
     });
   }
+  private commandFlight: Promise<void> | null = null;
   private async command(args: string[], deadlineMs = 20000): Promise<unknown> {
     if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     this.verifyBinary();
@@ -352,10 +354,19 @@ export class OwnedLiveHelper {
       this.options.effectivePolicy,
     );
     this.commandPending = true;
+    if (record && child.pid) {
+      record.pendingCommand!.launcher = identity(child.pid);
+      this.save(record);
+    }
+    let commandExited!: () => void;
+    this.commandFlight = new Promise<void>((resolve) => {
+      commandExited = resolve;
+    });
     return await new Promise((resolve, reject) => {
       let output = '';
       let bytes = 0;
       let failed = false;
+      let launchFailed = false;
       const ambiguous = () => {
         if (record) {
           record.phase = 'recoveryRequired';
@@ -387,15 +398,17 @@ export class OwnedLiveHelper {
         reject(new Error('LIVE_HELPER_COMMAND_TIMEOUT'));
       }, deadlineMs);
       child.once('error', () => {
+        launchFailed = true;
+        commandExited();
         this.commandPending = false;
         clearTimeout(timer);
-        if (record) {
-          record.pendingCommand = undefined;
-          this.save(record);
-        }
+        settled();
         reject(new Error('LIVE_HELPER_LAUNCH_FAILED'));
       });
-      child.once('exit', (code) => {
+      // exit can precede the final stdout chunk; close proves streams drained.
+      child.once('close', (code) => {
+        commandExited();
+        if (launchFailed) return;
         this.commandPending = false;
         clearTimeout(timer);
         this.log(args[0]!, code === 0 && !failed ? 'ok' : 'failed', bytes);
@@ -552,8 +565,7 @@ export class OwnedLiveHelper {
       }
     });
   }
-  private async stopOwned(record: Record): Promise<void> {
-    if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+  private async shutdownOwned(record: Record): Promise<void> {
     const server = this.verifyOwned(record);
     // Connect first, recheck ownership, then send. A reused listening port can
     // never redirect this already-established connection to an unrelated server.
@@ -592,6 +604,58 @@ export class OwnedLiveHelper {
     const deadline = Date.now() + 5000;
     while (sameProcess(record.helper!) && Date.now() < deadline) await sleep(25);
     if (sameProcess(record.helper!)) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+  }
+  /** Revoke/fence first in the controller. Stop the verified helper to wake canonical
+   * long polling, then await foreground CLI exit before any journal/injection cleanup.
+   * A hung or unobservable command retains recovery metadata; no PID-only kill/retry.
+   */
+  async settle(): Promise<void> {
+    const record = this.read();
+    if (!record || record.phase === 'stopped') return;
+    if (!record.helper) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    if (sameProcess(record.helper)) await this.shutdownOwned(record);
+    else await this.vacant();
+    if (this.commandPending) {
+      await Promise.race([
+        this.commandFlight!,
+        sleep(5000).then(() => {
+          throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+        }),
+      ]);
+    }
+    if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    const current = this.read()!;
+    current.phase = 'recoveryRequired';
+    this.save(current);
+  }
+  /** Preserve ambiguous command evidence privately after proving its launcher and
+   * helper have exited. This permits status inspection, never a poll/edit retry.
+   */
+  async reconcileCommandExit(): Promise<void> {
+    const record = this.read();
+    if (!record?.pendingCommand) return;
+    const launcher = record.pendingCommand.launcher;
+    if (
+      this.commandPending ||
+      !launcher ||
+      sameProcess(launcher, false) ||
+      !record.helper ||
+      sameProcess(record.helper)
+    )
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    await this.vacant();
+    writeFileSync(
+      join(this.options.stateDirectory, `command-${record.generation}-${launcher.startTicks}.json`),
+      JSON.stringify(record.pendingCommand),
+      { mode: 0o600, flag: 'wx' },
+    );
+    record.pendingCommand = undefined;
+    record.phase = 'recoveryRequired';
+    this.save(record);
+  }
+  private async stopOwned(record: Record): Promise<void> {
+    if (this.commandPending) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    await this.shutdownOwned(record);
     // Explicit remove reports failure; upstream `live-server stop` masks injection-removal errors.
     const removed = await this.command(['live-inject', '--remove']);
     if (!removed || typeof removed !== 'object' || !('ok' in removed) || removed.ok !== true)
@@ -611,6 +675,164 @@ export class OwnedLiveHelper {
         this.save(record);
         throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
       }
+    });
+  }
+  /** Explicit post-Stop journal reconciliation, not an edit or lease retry.
+   * Source writes must already have settled. Ambiguous unfinished accepts require
+   * their actual upstream receipt; dirty/missing/outside sources retain recovery.
+   */
+  async reconcileJournal(ids: readonly string[], discarded = false): Promise<string> {
+    return this.exclusive(async () => {
+      const record = this.read();
+      if (
+        !record?.helper ||
+        sameProcess(record.helper) ||
+        this.commandPending ||
+        record.pendingCommand
+      )
+        throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+      await this.vacant();
+      if (existsSync(this.serverMetadata)) {
+        const server = this.server();
+        if (
+          server.pid !== record.upstreamPid ||
+          server.port !== record.port ||
+          server.publicBaseUrl !== record.publicBaseUrl.replace(/\/$/, '')
+        )
+          throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+        renameSync(
+          this.serverMetadata,
+          join(this.options.stateDirectory, `server-${record.generation}.json`),
+        );
+      }
+      const status = (await this.command(['live-status'])) as { activeSessions?: unknown[] };
+      if (
+        !Array.isArray(status.activeSessions) ||
+        status.activeSessions.length > 256 ||
+        ids.length > 256
+      )
+        throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+      const sessions = new Set(ids);
+      // Lost poll stdout can hide a just-completed accept (absent from activeSessions).
+      // Inspect durable journals too; never treat an empty inbox/status as no effects.
+      for (const directory of [
+        join(this.appRoot, '.impeccable/live/sessions'),
+        join(this.appRoot, '.impeccable-live/sessions'),
+      ]) {
+        if (!existsSync(directory)) continue;
+        const tail = relative(this.appRoot, realpathSync(directory));
+        if (isAbsolute(tail) || tail === '..' || tail.startsWith(`..${sep}`))
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        const names = readdirSync(directory);
+        if (names.length > 768) throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        for (const name of names) if (name.endsWith('.jsonl')) sessions.add(name.slice(0, -6));
+      }
+      for (const value of status.activeSessions) {
+        const id = (value as { id?: unknown })?.id;
+        if (typeof id !== 'string') throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        sessions.add(id);
+      }
+      if (sessions.size > 256) throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+      const proof: string[] = [];
+      for (const id of [...sessions].sort()) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id))
+          throw new Error('LIVE_HELPER_SESSION_INVALID');
+        const journal = [
+          join(this.appRoot, '.impeccable/live/sessions', `${id}.jsonl`),
+          join(this.appRoot, '.impeccable-live/sessions', `${id}.jsonl`),
+        ].find(existsSync);
+        if (!journal || !statSync(journal).isFile() || statSync(journal).size > 2 * 1024 * 1024)
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        const journalTail = relative(this.appRoot, realpathSync(journal));
+        if (isAbsolute(journalTail) || journalTail === '..' || journalTail.startsWith(`..${sep}`))
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        const terminalEntries = () =>
+          readFileSync(journal, 'utf8')
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { event?: { type?: string }; type?: string })
+            .filter((entry) =>
+              ['complete', 'discarded'].includes(entry.event?.type ?? entry.type ?? ''),
+            );
+        const terminal = terminalEntries();
+        const terminalType = terminal[0]?.event?.type ?? terminal[0]?.type;
+        if (terminal.some((entry) => (entry.event?.type ?? entry.type) !== terminalType))
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        // Historical terminal sessions retain their own disposition. The explicit
+        // Stop choice applies only to still-unfinished journal sessions.
+        const sessionDiscarded = terminalType ? terminalType === 'discarded' : discarded;
+        // Pinned Resume intentionally hides completed/discarded snapshots. An
+        // active=false response never proves that a lost poll had no side effects.
+        const resumed = (await this.command(['live-resume', '--id', id])) as { active?: boolean };
+        if (!terminal.length) {
+          const receiptPath = join(this.appRoot, '.impeccable/live/accept-receipts', `${id}.json`);
+          if (!existsSync(receiptPath) || statSync(receiptPath).size > 65536)
+            throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+          const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+            id?: string;
+            operation?: string;
+            result?: { handled?: boolean; mode?: string };
+          };
+          if (
+            receipt.id !== id ||
+            receipt.operation !== (sessionDiscarded ? 'discard' : 'accept') ||
+            receipt.result?.handled === false ||
+            receipt.result?.mode === 'error' ||
+            resumed.active !== true
+          )
+            throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        }
+        // Actual no-force source gate and terminal snapshot; no accept/discard
+        // source transformation is repeated, even after lost response/restart.
+        const completed = (await this.command([
+          'live-complete',
+          '--id',
+          id,
+          ...(sessionDiscarded ? ['--discarded'] : []),
+        ])) as {
+          ok?: boolean;
+          id?: string;
+          phase?: string;
+          snapshot?: { id?: string; sourceFile?: string };
+        };
+        if (
+          completed.ok !== true ||
+          completed.id !== id ||
+          completed.phase !== (sessionDiscarded ? 'discarded' : 'completed') ||
+          completed.snapshot?.id !== id ||
+          !completed.snapshot.sourceFile
+        )
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        const source = realpathSync(join(this.appRoot, completed.snapshot.sourceFile));
+        const tail = relative(this.appRoot, source);
+        if (
+          isAbsolute(tail) ||
+          tail === '..' ||
+          tail.startsWith(`..${sep}`) ||
+          !tail ||
+          !statSync(source).isFile() ||
+          statSync(source).size > 2 * 1024 * 1024
+        )
+          throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        // Preserve all records; the first terminal entry is stable across repeated
+        // completion acknowledgements, so retry yields the same reconciliation proof.
+        const basis = terminalEntries()[0];
+        if (!basis) throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+        proof.push(
+          `${id}:${completed.phase}:${digest(readFileSync(source))}:${digest(JSON.stringify(basis))}`,
+        );
+      }
+      const after = (await this.command(['live-status'])) as {
+        activeSessions?: unknown[];
+        liveServer?: unknown;
+      };
+      if (
+        !Array.isArray(after.activeSessions) ||
+        after.activeSessions.length ||
+        after.liveServer !== null
+      )
+        throw new Error('LIVE_JOURNAL_RECOVERY_REQUIRED');
+      return digest(JSON.stringify(proof));
     });
   }
   /** Explicit controller reconciliation after helper death, never a PID-based termination. */

@@ -36,11 +36,21 @@ async function fixture() {
       async request(method, params) {
         requests.push({ method, params });
         if (method === 'thread/start') return { thread: { id: 'root' } };
-        if (method === 'turn/start') return { turn: { id: 'live-turn' } };
+        if (method === 'turn/start') {
+          complete = false;
+          return { turn: { id: 'live-turn' } };
+        }
+        if (method === 'turn/interrupt') {
+          complete = true;
+          return {};
+        }
+        if (method === 'thread/list' || method === 'thread/backgroundTerminals/list')
+          return { data: [] };
         if (method === 'thread/read')
           return {
             thread: {
               id: 'root',
+              status: { type: complete ? 'idle' : 'active' },
               turns: [
                 {
                   id: 'live-turn',
@@ -127,6 +137,8 @@ async function fixture() {
     rmSync(root, { recursive: true, force: true });
   });
   return {
+    owners,
+    server,
     run,
     guard,
     runtime,
@@ -229,4 +241,48 @@ it('rejects a provider/thread identity change before dispatch', async () => {
     ),
   ).rejects.toThrow('LIVE_RELAY_OWNER_INVALID');
   expect(f.requests.filter((r) => r.method === 'turn/start')).toHaveLength(0);
+});
+
+it('Stop interrupts the actual owned turn and proves settlement without launching a replacement', async () => {
+  const f = await fixture();
+  let release!: () => void;
+  f.wait.mockImplementationOnce(
+    () =>
+      new Promise<void>((done) => {
+        release = done;
+      }),
+  );
+  const work = f.guard.liveEvent(f.run, '1234abcd', () =>
+    f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000, 'stop-operation'),
+  );
+  const rejected = expect(work).rejects.toThrow();
+  await vi.waitFor(() => expect(f.wait).toHaveBeenCalled());
+  const stopped = f.owners.mutate(f.run, { event: 'stop' });
+  await f.turns.settle(stopped);
+  release();
+  await rejected;
+  expect(f.requests).toContainEqual({
+    method: 'turn/interrupt',
+    params: { threadId: 'root', turnId: 'live-turn' },
+  });
+  expect(f.launch).toHaveBeenCalledTimes(1);
+});
+it('missing owning runtime after restart cannot substitute a new history reader for settlement', async () => {
+  const f = await fixture();
+  const stopped = f.owners.mutate(f.run, { event: 'stop' });
+  f.runtime.stopAll();
+  await expect(f.turns.settle(stopped)).rejects.toThrow('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+  expect(f.launch).toHaveBeenCalledTimes(1);
+});
+
+it('unsupported native tree observation still interrupts known root work and retains the recovery lock', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  f.server.rpc.request = async (method, params) =>
+    method === 'thread/list' ? {} : realRequest(method, params);
+  const stopped = f.owners.mutate(f.run, { event: 'stop' });
+  await expect(f.turns.settle(stopped)).rejects.toThrow('LIVE_NATIVE_TREE_UNKNOWN');
+  expect(f.requests.some((request) => request.method === 'turn/interrupt')).toBe(true);
+  expect(f.owners.current(f.run.liveId)?.state).toBe('stopping');
+  expect(f.launch).toHaveBeenCalledTimes(1);
 });

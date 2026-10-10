@@ -189,7 +189,9 @@ describe('canonical poll bridge', () => {
       expect(f.cli.reply).toHaveBeenCalledTimes(work && event.type !== 'carbonize_cleanup' ? 1 : 0);
       expect(f.cli.complete).toHaveBeenCalledTimes(event.type === 'carbonize_cleanup' ? 1 : 0);
       expect(JSON.stringify(f.inbox.records())).not.toContain('Original');
-      expect(f.owners.current(f.run.liveId)?.state).toBe('active');
+      expect(f.owners.current(f.run.liveId)?.state).toBe(
+        event.type === 'exit' ? 'recoveryRequired' : 'active',
+      );
     },
   );
   it('matches pinned inventory and rejects push-only events and missing IDs', () => {
@@ -374,4 +376,69 @@ describe('canonical poll bridge', () => {
     await expect(bridge.next(f.run)).rejects.toThrow('LIVE_RUNTIME_UNISOLATED');
     expect(f.apply).not.toHaveBeenCalled();
   });
+});
+
+it('reconciles a crash after apply without inventing an ack or replaying the tombstone', () => {
+  const f = fixture();
+  const token = f.inbox.begin(f.run);
+  const item = f.inbox.receive(token, events[2], 1000);
+  f.inbox.advance(token, item.key, 'dispatched');
+  f.inbox.advance(token, item.key, 'applied');
+  f.inbox.recover(token, 'LIVE_POLL_ACK_INVALID');
+  expect(() =>
+    f.inbox.reconcile(f.run, { disposition: 'completed', proofDigest: 'a'.repeat(64) }),
+  ).toThrow('LIVE_INBOX_RECONCILIATION_INVALID');
+  const stopping = f.owners.mutate(f.run, { event: 'stop' });
+  const proof = { disposition: 'completed' as const, proofDigest: 'a'.repeat(64) };
+  f.inbox.reconcile(stopping, proof);
+  f.inbox.reconcile(stopping, proof);
+  expect(f.inbox.records()[0]).toMatchObject({ stage: 'applied', reconciliation: proof });
+  expect(f.inbox.records()[0].history).toEqual(['received', 'dispatched', 'applied']);
+  const next = f.inbox.begin(stopping);
+  expect(f.inbox.knownTerminal(next, '1234abcd', 'generate')).toBe(true);
+  expect(() => f.inbox.receive(next, events[2], 2000)).toThrow('LIVE_POLL_RECONCILED_EVENT');
+});
+it('Stop fences a delayed canonical receipt so it cannot start model work or reply', async () => {
+  const f = fixture();
+  let release!: (event: LivePollEvent) => void;
+  f.cli.poll.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        release = done;
+      }),
+  );
+  const work = f.bridge.next(f.run);
+  const rejected = expect(work).rejects.toThrow('LIVE_GENERATION_STALE');
+  await vi.waitFor(() => expect(f.cli.poll).toHaveBeenCalled());
+  f.owners.mutate(f.run, { event: 'stop' });
+  release(events[0]);
+  await rejected;
+  expect(f.apply).not.toHaveBeenCalled();
+  expect(f.cli.reply).not.toHaveBeenCalled();
+  expect(() => f.reopen().begin(f.run)).toThrow('LIVE_POLL_RECOVERY_REQUIRED');
+});
+
+it('controller takeover explicitly reconciles the old generation instead of expiring its reservation', () => {
+  const f = fixture();
+  const token = f.inbox.begin(f.run);
+  const item = f.inbox.receive(token, events[0], 1000);
+  f.inbox.advance(token, item.key, 'dispatched');
+  f.inbox.recover(token, 'LIVE_POLL_RECOVERY_REQUIRED');
+  const stopping = f.owners.mutate(f.run, { event: 'stop' });
+  const successor = {
+    ...stopping,
+    generation: stopping.generation + 1,
+    controllerEpoch: stopping.controllerEpoch + 1,
+  };
+  expect(() =>
+    f.inbox.reconcile(successor, { disposition: 'discarded', proofDigest: 'b'.repeat(64) }),
+  ).toThrow('LIVE_GENERATION_STALE');
+  f.inbox.reconcile(successor, {
+    disposition: 'discarded',
+    proofDigest: 'b'.repeat(64),
+    generation: f.run.generation,
+  });
+  expect(f.inbox.records()[0].stage).toBe('dispatched');
+  expect(f.inbox.records()[0].reconciliation?.disposition).toBe('discarded');
+  expect(() => f.inbox.begin(successor)).not.toThrow();
 });

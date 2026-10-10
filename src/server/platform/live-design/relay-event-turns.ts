@@ -62,6 +62,17 @@ export class RelayLiveEventTurns implements LiveEventTurns {
       wait(ms: number): Promise<void>;
     },
   ) {}
+  async settle(run: LiveRun): Promise<void> {
+    const current = this.input.owners.assert(run);
+    if (current.state !== 'stopping' && current.state !== 'recoveryRequired')
+      throw new Error('LIVE_STATE_CONFLICT');
+    const session = this.input.sessions.find(run.relayId);
+    if (!session || session.provider !== 'codex' || session.threadId !== run.rootThreadId)
+      throw new Error('LIVE_RELAY_OWNER_INVALID');
+    // No ensureWriter/read-only substitute: the actual owning native tree must exist.
+    await this.input.runtime.settleLiveWork(session);
+    this.input.owners.assert(run);
+  }
   private session(run: LiveRun): RelaySessionSnapshot {
     const current = this.input.owners.assert(run);
     const session = this.input.sessions.find(run.relayId);

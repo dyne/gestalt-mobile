@@ -345,7 +345,7 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
                 ? run.phase
                 : mutation.event,
         failureCode:
-          mutation.event === 'cleaned'
+          mutation.event === 'cleaned' || mutation.event === 'ready'
             ? null
             : 'code' in mutation
               ? mutation.code
