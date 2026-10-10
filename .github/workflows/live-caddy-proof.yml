@@ -47,6 +47,8 @@ jobs:
             65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 \
             "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" | sha256sum --check --status
           echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
+          tar -xzf "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" impeccable
+          echo "LIVE_TEST_IMPECCABLE=$RUNNER_TEMP/live-proof-tools/impeccable" >> "$GITHUB_ENV"
       - name: Prepare disposable browser trust and network prerequisites
         run: |
           set -Eeuo pipefail
@@ -77,6 +79,7 @@ jobs:
             src/server/platform/live-design/caddy-admin-boundary.test.ts \
             src/server/platform/live-design/caddy-route-store.test.ts \
             src/server/platform/live-design/preview-gateway.test.ts \
+            src/server/platform/live-design/helper-process.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
       - name: Real helper browser proof in separate network with trusted TLS
         timeout-minutes: 5
