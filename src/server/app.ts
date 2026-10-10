@@ -66,10 +66,13 @@ import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
 import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
 import { registerLiveDesignRoutes } from './features/live-design/register-routes.js';
+import { registerLiveDispatchBoundary } from './features/live-design/dispatch/register-boundary.js';
+import type { LiveDispatchPolicy } from './features/live-design/application/dispatch.js';
 import type { PreviewGrantDependencies } from './features/live-design/application/ports.js';
 
 export type AppDependencies = {
   liveDesign?: PreviewGrantDependencies;
+  liveDispatch?: LiveDispatchPolicy;
   upgrade?: import('./features/maintenance/upgrade/endpoint.js').UpgradePort;
   sessionDefaults?: SessionDefaultsStore;
   selfDebug?: SelfDebugDependencies;
@@ -90,6 +93,7 @@ export type AppDependencies = {
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
     skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
+    reserve?(session: RelaySessionSnapshot): void;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
@@ -272,6 +276,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       repository: deps.auth.repository,
       clock: deps.auth.clock,
       publicOrigin: deps.auth.relyingParty.publicOrigin,
+    });
+  if (deps.liveDispatch && deps.sessionRoutes)
+    registerLiveDispatchBoundary(app, {
+      policy: deps.liveDispatch,
+      session: deps.sessionRoutes.find,
     });
   registerGetHealth(app, deps.health);
   registerAuthRoutes(app, deps);

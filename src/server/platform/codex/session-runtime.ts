@@ -8,6 +8,7 @@ import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
+import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
 import { randomUUID } from 'node:crypto';
 import {
   createPlanMeasurementSnapshot,
@@ -24,7 +25,10 @@ import {
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
-import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
+import {
+  isOrgPlanHealthCall,
+  gestaltOrgPlanHealthDynamicTool,
+} from '../../../shared/contracts/org-plan-health.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
@@ -94,6 +98,7 @@ type PendingRequest = {
   resolve(result: unknown): void;
   reject(reason: Error): void;
   settling?: boolean;
+  observation?: boolean;
 };
 
 export type DirectChildThread = Readonly<{
@@ -247,6 +252,7 @@ export class CodexSessionRuntime {
       ): Promise<CodexRetrievalState>;
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
+    private readonly liveDispatch?: LiveDispatchPolicy,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -312,6 +318,7 @@ export class CodexSessionRuntime {
 
   /** Replaces only this session's app-server while retaining its durable root thread. */
   async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session);
     this.stop(session.id);
     return this.restore(session, now);
   }
@@ -337,6 +344,7 @@ export class CodexSessionRuntime {
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingRequests.get(requestId);
+    if (!pending?.observation) this.liveDispatch?.interaction(sessionId);
     if (!resource || !pending || pending.settling) return false;
     pending.settling = true;
     pending.resolve(result);
@@ -386,6 +394,7 @@ export class CodexSessionRuntime {
     clientUserMessageId: string | undefined,
     now: string,
   ): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session, 'turn');
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const result = decodeTurnStart(
@@ -409,6 +418,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId: string,
   ): Promise<string> {
+    this.liveDispatch?.writer(session, 'executor');
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const params = {
@@ -451,6 +461,7 @@ export class CodexSessionRuntime {
   }
 
   async ensureWriter(session: RelaySessionSnapshot, now: string): Promise<WriterAcquisition> {
+    this.liveDispatch?.writer(session);
     if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
     const inflight = this.writerAcquisitions.get(session.id);
     if (inflight) return inflight;
@@ -500,6 +511,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId?: string,
   ): Promise<void> {
+    this.liveDispatch?.writer(session, 'turn');
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     await resource.process.rpc.request('turn/steer', {
@@ -538,7 +550,10 @@ export class CodexSessionRuntime {
     const owned = this.sessions.get(session.id);
     const process =
       owned?.process ??
-      this.launch({ profile: session.profile, cwd: this.readerCwd ?? session.workspacePath });
+      this.launchGuarded(session, {
+        profile: session.profile,
+        cwd: this.readerCwd ?? session.workspacePath,
+      });
     try {
       if (!owned)
         await process.rpc.request('initialize', {
@@ -608,7 +623,7 @@ export class CodexSessionRuntime {
   private async readDetachedChildTopologyOnce(
     session: RelaySessionSnapshot,
   ): Promise<readonly DirectChildThread[]> {
-    const process = this.launch({
+    const process = this.launchGuarded(session, {
       profile: session.profile,
       cwd: this.readerCwd ?? session.workspacePath,
     });
@@ -924,7 +939,7 @@ export class CodexSessionRuntime {
   }> {
     // A reader is intentionally not a SessionResource: it owns no subscriptions,
     // runtime registration, plan lease, or writer state and is closed on every path.
-    const process = this.launch({
+    const process = this.launchGuarded(session, {
       profile: session.profile,
       cwd: this.readerCwd ?? session.workspacePath,
     });
@@ -1077,7 +1092,11 @@ export class CodexSessionRuntime {
     if (resource.pendingRequests.has(requestId))
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_DUPLICATE'));
     return new Promise((resolve, reject) => {
-      resource.pendingRequests.set(requestId, { resolve, reject });
+      resource.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        observation: isOrgPlanHealthCall(request),
+      });
       const unsupported = () => {
         if (resource.pendingRequests.delete(requestId))
           reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
@@ -1143,7 +1162,49 @@ export class CodexSessionRuntime {
       : { sandbox: selection };
   }
 
+  private launchGuarded(session: RelaySessionSnapshot, input: AppServerLaunchInput): AppServer {
+    this.liveDispatch?.writer(session);
+    const process = this.launch(input);
+    if (!this.liveDispatch) return process;
+    const policy = this.liveDispatch;
+    const reads = new Set([
+      'thread/read',
+      'thread/list',
+      'account/rateLimits/read',
+      'model/list',
+      'thread/backgroundTerminals/list',
+    ]);
+    const safeStop = new Set(['turn/interrupt', 'thread/unsubscribe']);
+    return {
+      close: () => process.close(),
+      ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
+      rpc: {
+        request: async (method, params) => {
+          const effect = !reads.has(method) && !safeStop.has(method);
+          const kind = method === 'turn/start' || method === 'turn/steer' ? 'turn' : 'writer';
+          if (effect) policy.writer(session, kind);
+          const result = await process.rpc.request(method, params);
+          if (effect) policy.writer(session, kind);
+          return result;
+        },
+        onNotification: (listener) => process.rpc.onNotification(listener),
+        onServerRequest: (listener) =>
+          process.rpc.onServerRequest(async (request) => {
+            const observation = isOrgPlanHealthCall(request);
+            if (!observation) policy.interaction(session.id);
+            const result = await listener(request);
+            if (!observation) policy.interaction(session.id);
+            return result;
+          }),
+        ...(process.rpc.onServerResponseSettled
+          ? { onServerResponseSettled: process.rpc.onServerResponseSettled.bind(process.rpc) }
+          : {}),
+      },
+    };
+  }
+
   private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+    this.liveDispatch?.writer(session);
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(
@@ -1155,7 +1216,7 @@ export class CodexSessionRuntime {
       const token = randomUUID();
       const skillsConfig = await this.resolveSkills?.(session);
       const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
-      const process = this.launch({
+      const process = this.launchGuarded(session, {
         profile: session.profile,
         cwd: session.workspacePath,
         ...(lease || this.planMeasurementBaseUrl

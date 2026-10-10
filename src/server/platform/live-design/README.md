@@ -1,5 +1,79 @@
 # Live Caddy adapter
 
+`SqliteLiveOwnership` is the authoritative shared relay/app claim store. Use one
+elected controller and its private `live.sqlite` across every relay data directory;
+opening another connection preserves claims. Missing, corrupt, foreign-controller
+or unsupported-version state fails closed. Only explicit first provisioning may
+initialize it. The elected controller calls `recoverController` after takeover;
+that transaction advances epoch and generation, preserves the last external IO
+intent, and moves every non-idle run to recoveryRequired. It does not release
+writer reservations or claims based on timeout/process absence.
+
+`LiveDispatchGuard` reserves ordinary writers in that same transaction store before
+runtime creation, model/skill discovery or ordinary mutation endpoints can await.
+The Codex RPC adapter checks every effect before sending and after its response;
+the Kimi runtime checks startup, restore, prompt/steer and interaction paths.
+Composition also gates auxiliary catalog/skill process launches and Kimi server
+creation. Their unproved effective scopes use a durable shared auxiliary claim,
+including after close, until controller-owned reconciliation proves the whole tree
+quiet. Auxiliary admission coexists with ordinary session reservations so nested
+or earlier discovery cannot disable ordinary work. Every Live claim still treats
+it as an unknown global writer. Controller-issued auxiliary token IDs encode this
+distinction in the existing private ledger; the reserved native catalog identity
+also recognizes its earlier token format without removing its claim. Old readers
+retain global Live exclusion. Ordinary writer scopes and exclusive ordinary-to-ordinary conflicts
+remain intact. A read-only
+ownership adapter grants no write admission. Provider/model and inherited native
+permissions remain unchanged; Kimi Live execution remains unavailable.
+
+Autopilot timers, queued operations, Org checkpoint/deadline recovery, capacity
+recovery and agent followups consult ownership again at execution. Ordinary APIs
+return `LIVE_MODE_ACTIVE` before cached prompt replay or model/control persistence.
+Manual Off, nonmodel interrupt and exact read-only Org health remain reachable.
+Only a trusted controller can enter a fenced Live event; it must verify native
+collaboration/external-writer confinement first. That authority expires when the
+event returns, including for detached callbacks. No HTTP/tool argument grants it.
+Pending ordinary approvals and delayed effects remain held or reject stale fences.
+Root completion, process exit and Stop never release a reservation automatically.
+Prior-control restoration is a separate lifecycle step, not timer-driven expiry.
+
+Start captures prior Autopilot intent and its durable generation before suspending
+delivery. `AutopilotLiveControls` pauses timers without disabling that intent or
+creating Org checkpoints. The elected controller can bind this adapter through
+composition; the binding grants no Start capability. `stopLive` records fenced
+cleanup intents/acks, removes owned route/auth/helper resources and verifies the
+entire tree before releasing ownership. Failed or interrupted cleanup retains
+`recoveryRequired`; a replacement controller must explicitly reconcile it.
+Restore compares the current control version, enabled choice and current plan
+identity/completion. Manual Off, replaced/removed/completed plans and newer Live
+generations defeat old snapshots. A durable restoration acknowledgement and the
+existing atomic Autopilot command ledger prevent duplicate continuation after
+retry/restart. Read-only plan projection stays current while Live holds dispatch;
+plan measurement writes, provider metadata updates and scheduling remain held.
+
+`RegisteredDevServers` verifies the actual Linux loopback listener's socket inode,
+PID start time and executable digest. It canonicalizes and rechecks app device,
+inode and original registry path, including symlink retargets. Registration never
+grants permission to terminate an external server. It is trusted process admission,
+not a public arbitrary-port/PID API and not proof of sandbox isolation.
+
+The `startLive` use case records fenced intent/ack phases around quiescence,
+helper preparation, authorization, route activation and reverse rollback. Busy
+admission never interrupts a writer. The private store also arbitrates ordinary
+writer reservations against ancestor/descendant app scopes; unknown or retargeted
+effective scopes are busy. Failed starts retain claims, including after cleanup,
+until explicit reconciliation. Late Stop/controller callbacks cannot acknowledge
+or roll back a newer revision/generation.
+
+Production Start remains unavailable until composition supplies an elected shared
+controller, production authentication, registered listener/process proof, complete
+writer-tree quiescence and controller-state denial for every project/agent process
+(including an existing dev server), plus the owned helper lifecycle. No Start
+endpoint or capability-ready flag is provided by these adapters. The admission
+port must verify those facts before any public route and again after preparation;
+an unprotected pre-existing process must refuse readiness. Application orchestration
+contains no filesystem/process/provider implementation and cannot widen permissions.
+
 `CaddyRouteBroker` is a private controller boundary, not a Mobile HTTP endpoint
 or an agent tool. Authenticate the controller with a random credential from
 controller-private state. Its command schema permits only activate, remove and

@@ -73,6 +73,8 @@ import type {
 
 export type AutopilotDependencies = Readonly<{
   store: AutopilotStore;
+  /** All non-idle Live states and unavailable ownership hold background work. */
+  liveHeld?(sessionId: string): boolean;
   now(): string;
   policy: AutopilotPolicy;
   plan(sessionId: string): Readonly<{ plan: SupervisedPlan; identity: string }> | null;
@@ -114,6 +116,14 @@ export class AutopilotCoordinator {
   private readonly storeRecoveryAttempts = new Map<string, number>();
   constructor(private readonly deps: AutopilotDependencies) {}
 
+  private liveHeld(sessionId: string): boolean {
+    try {
+      return this.deps.liveHeld?.(sessionId) ?? false;
+    } catch {
+      return true;
+    }
+  }
+
   snapshot(sessionId: string): AutopilotSnapshot {
     let state: AutopilotSession;
     try {
@@ -150,8 +160,47 @@ export class AutopilotCoordinator {
   acceptedControlTurns(sessionId: string): ReadonlyMap<string, string> {
     return this.deps.store.acceptedControlTurns?.(sessionId) ?? new Map();
   }
+  controlIntent(sessionId: string): {
+    version: number;
+    enabled: boolean;
+    planIdentity: string | null;
+  } {
+    const state = this.deps.store.find(sessionId);
+    return {
+      version: state?.generation ?? 0,
+      enabled: state?.requestedEnabled ?? false,
+      planIdentity: state?.planIdentity ?? null,
+    };
+  }
+  /** Pause delivery, preserving the durable human intent and accepted command ledger. */
+  holdForLive(sessionId: string): void {
+    if (!this.liveHeld(sessionId)) throw new Error('LIVE_STATE_CONFLICT');
+    this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
+  }
+  restoreAfterLive(
+    sessionId: string,
+    prior: ReturnType<AutopilotCoordinator['controlIntent']>,
+  ): void {
+    if (this.liveHeld(sessionId)) return;
+    const current = this.controlIntent(sessionId);
+    const retained = this.deps.plan(sessionId);
+    if (
+      current.version !== prior.version ||
+      current.enabled !== prior.enabled ||
+      current.planIdentity !== prior.planIdentity ||
+      !prior.enabled ||
+      !retained ||
+      retained.identity !== prior.planIdentity ||
+      executionComplete(retained.plan)
+    )
+      return;
+    this.restore(sessionId);
+  }
   /** Rehydrates only actionable durable state; terminal rows intentionally create no work. */
   restore(sessionId: string): void {
+    if (this.liveHeld(sessionId)) return;
     this.flushOutbox(sessionId);
     let state: AutopilotSession | null;
     try {
@@ -438,6 +487,7 @@ export class AutopilotCoordinator {
     return this.observableWake(sessionId, { leaseId: lease.id, condition, progressKey });
   }
   enable(sessionId: string): AutopilotSnapshot | { code: string } {
+    if (this.liveHeld(sessionId)) return { code: 'LIVE_MODE_ACTIVE' };
     const session = this.deps.session(sessionId);
     if (!session || !session.threadId || !['ready', 'turnActive'].includes(session.state))
       return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
@@ -631,6 +681,10 @@ export class AutopilotCoordinator {
     this.parkedSubscriptions.delete(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
+    if (this.liveHeld(sessionId)) {
+      this.cancelTimer(sessionId);
+      return this.snapshot(sessionId);
+    }
     const prior = this.deps.store.find(sessionId);
     if (!prior) return this.snapshot(sessionId);
     const session = this.deps.session(sessionId);
@@ -1124,6 +1178,7 @@ export class AutopilotCoordinator {
    * while a new identity can receive its own explicit supervision request.
    */
   supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
+    if (this.liveHeld(sessionId)) return { code: 'LIVE_MODE_ACTIVE' };
     const currentPlan = this.deps.plan(sessionId);
     if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
     if (executionComplete(currentPlan.plan)) return { code: 'AUTOPILOT_PLAN_COMPLETE' };
@@ -1375,6 +1430,10 @@ export class AutopilotCoordinator {
     );
   }
   private async fire(sessionId: string, generation: number): Promise<void> {
+    if (this.liveHeld(sessionId)) {
+      this.cancelTimer(sessionId);
+      return;
+    }
     this.timers.delete(sessionId);
     const current = this.deps.store.find(sessionId);
     if (!current || current.generation !== generation || !current.requestedEnabled) return;
@@ -1507,6 +1566,7 @@ export class AutopilotCoordinator {
     if (!id) return;
     if (!this.recordControlIssued(sessionId, id)) return;
     try {
+      if (this.liveHeld(sessionId)) return;
       await this.deps.turnStarter.start(
         sessionId,
         id,
@@ -1627,6 +1687,7 @@ export class AutopilotCoordinator {
     sessionId: string,
     event: SupervisedLifecycleEvent,
   ): Promise<boolean> {
+    if (this.liveHeld(sessionId)) return true;
     const controller = this.deps.executorController;
     const retained = this.deps.plan(sessionId);
     const state = this.deps.store.find(sessionId);
@@ -2155,6 +2216,7 @@ export class AutopilotCoordinator {
     process: OwnedExecutorProcess,
     kind: 'transfer' | 'consume' | 'terminate',
   ): Promise<boolean> {
+    if (this.liveHeld(sessionId)) return false;
     const controller = this.deps.executorController;
     if (!controller) return false;
     const requested = this.processActionCommand(sessionId, executor, process, kind);
@@ -2216,6 +2278,7 @@ export class AutopilotCoordinator {
       );
       return false;
     }
+    if (this.liveHeld(sessionId)) return false;
     const latest = this.processActionCurrent(sessionId, issued);
     if (!latest) {
       this.executorCommandTransition(sessionId, issued.commandId, 'superseded');
@@ -2638,6 +2701,7 @@ export class AutopilotCoordinator {
         }
         delivered = true;
         this.enqueue(sessionId, async () => {
+          if (this.liveHeld(sessionId)) return;
           const current = this.deps.store.find(sessionId);
           const latestPlan = this.deps.plan(sessionId);
           const activity = this.deps.activity(sessionId);
@@ -2692,7 +2756,9 @@ export class AutopilotCoordinator {
           const issued = this.executorCommandTransition(sessionId, command.commandId, 'issued');
           if (issued?.status !== 'issued') return;
           try {
+            if (this.liveHeld(sessionId)) return;
             await this.deps.executorController?.resume(sessionId, threadId, generation, trigger);
+            if (this.liveHeld(sessionId)) return;
           } catch (error) {
             const current = this.executorCommandCurrent(
               sessionId,
@@ -3155,6 +3221,7 @@ export class AutopilotCoordinator {
     // poison the next serial operation.
     const run = async () => {
       try {
+        if (this.liveHeld(sessionId)) return;
         await operation();
       } catch (error) {
         this.containOperationFailure(sessionId, error);
