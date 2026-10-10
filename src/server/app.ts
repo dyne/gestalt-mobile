@@ -65,8 +65,11 @@ import { registerMaintenanceRoutes } from './features/maintenance/register-route
 import type { LlmProvider } from '../shared/contracts/llm-provider.js';
 import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.js';
 import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
+import { registerLiveDesignRoutes } from './features/live-design/register-routes.js';
+import type { PreviewGrantDependencies } from './features/live-design/application/ports.js';
 
 export type AppDependencies = {
+  liveDesign?: PreviewGrantDependencies;
   upgrade?: import('./features/maintenance/upgrade/endpoint.js').UpgradePort;
   sessionDefaults?: SessionDefaultsStore;
   selfDebug?: SelfDebugDependencies;
@@ -238,6 +241,7 @@ export type AppDependencies = {
     webauthn: WebAuthnCeremonyService;
     relyingParty: { publicOrigin: string; rpId: string; rpName: string };
     ceremonyAttempts?: CeremonyAttemptGate;
+    revocations?: import('./features/auth/application/ports.js').AuthorizationRevocationObserver;
   };
   passkeyAuthDisabled?: boolean;
 };
@@ -271,6 +275,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   registerGetHealth(app, deps.health);
   registerAuthRoutes(app, deps);
+  if (deps.liveDesign) {
+    if (!deps.auth || deps.passkeyAuthDisabled)
+      throw new Error('Live requires production authentication');
+    registerLiveDesignRoutes(app, deps.liveDesign);
+  }
   registerCatalogRoutes(app, { bootstrap: deps.bootstrap, sessionDefaults: deps.sessionDefaults });
   registerSessionRoutes(app, deps);
   if (deps.selfDebug) registerSelfDebug(app, deps.selfDebug);
