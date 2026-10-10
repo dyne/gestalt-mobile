@@ -6,7 +6,7 @@
 
 // Disposable hosted-runner integration fixture. Never edits operator state or a published runtime.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { buildApp } from '../dist/server/server/app.js';
 import { createRelyingPartyConfig } from '../dist/server/server/config.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
@@ -118,6 +119,19 @@ try {
   // Namespace setup is confined to this disposable hosted runner and always removed below.
   sudo(['ip', 'netns', 'add', namespace]);
   cleanup.push(async () => {
+    const pids = sudo(['ip', 'netns', 'pids', namespace])
+      .toString()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    assert.ok(pids.every((pid) => /^[1-9][0-9]*$/.test(pid)));
+    if (pids.length) {
+      try {
+        sudo(['kill', '-TERM', '--', ...pids]);
+      } catch {
+        /* Owned processes may already have exited. */
+      }
+    }
     sudo(['ip', 'netns', 'delete', namespace]);
   });
   sudo(['ip', 'link', 'add', hostInterface, 'type', 'veth', 'peer', 'name', peerInterface]);
@@ -435,8 +449,18 @@ try {
     sandboxEnvironment: secondSandboxEnv,
   });
   const secondProjectDenial = await secondBoundary.verify();
-  const engineRun = (args) =>
-    run(codex, sandboxArgs([engine, ...args]), { cwd: project, env: sandboxEnv });
+  const engineRun = async (args) => {
+    try {
+      const result = await promisify(execFile)(codex, sandboxArgs([engine, ...args]), {
+        cwd: project,
+        env: sandboxEnv,
+        timeout: 20000,
+      });
+      return result.stdout;
+    } catch {
+      throw new Error('Managed helper command failed');
+    }
+  };
   // Both actual managed project processes use the exact verified effective policy.
   child(codex, sandboxArgs([engine, 'live-server', `--port=${helperPort}`]), {
     cwd: project,
@@ -450,7 +474,7 @@ try {
     await readFile(join(project, '.impeccable/live/server.json'), 'utf8'),
   );
   assert.ok(helperState.token);
-  engineRun(['live-inject', '--port', String(helperPort), '--token', helperState.token]);
+  await engineRun(['live-inject', '--port', String(helperPort), '--token', helperState.token]);
   child(codex, sandboxArgs([process.execPath, join(project, 'node_modules/vite/bin/vite.js')]), {
     cwd: project,
     env: sandboxEnv,
@@ -636,6 +660,8 @@ try {
   });
   await secondGateway.listen();
   cleanup.push(async () => secondGateway.close());
+  // On failed browser flows, revoke streams before Fastify waits for listener closure.
+  cleanup.push(async () => connections.close());
   const broker = new CaddyRouteBroker(
     credential,
     new CaddyRoutes(admin, routeStore, targets),
@@ -713,6 +739,24 @@ try {
     processing = processing
       .then(async () => {
         const message = JSON.parse(line);
+        if (message.checkpoint) {
+          assert.ok(
+            [
+              'enrolled',
+              'exchanged',
+              'overlay-sse',
+              'helper-replied',
+              'hmr',
+              'authenticated-screens',
+              'two-port-denied',
+              'anonymous-denied',
+              'revoked',
+              'denied-screens',
+            ].includes(message.checkpoint),
+          );
+          console.log(`Live browser proof checkpoint: ${message.checkpoint}`);
+          return;
+        }
         if (message.command === 'hmr') {
           const file = join(project, 'src/App.tsx');
           const source = await readFile(file, 'utf8');
@@ -720,11 +764,11 @@ try {
           await writeFile(file, source.replace('Vite 8 + TS Fixture', 'Remote HMR verified'));
         } else if (message.command === 'helper-reply') {
           const event = JSON.parse(
-            engineRun(['live-poll', '--types=generate', '--timeout=15000']).toString().trim(),
+            (await engineRun(['live-poll', '--types=generate', '--timeout=15000'])).trim(),
           );
           assert.equal(event.type, 'generate');
           assert.ok(event.id);
-          engineRun([
+          await engineRun([
             'live-poll',
             '--reply',
             event.id,

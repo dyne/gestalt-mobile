@@ -18,6 +18,16 @@ assert.equal(await readlink('/proc/self/ns/net'), config.browserNetwork);
 const ui = await import(pathToFileURL(config.uiModule).href);
 const commands = createInterface({ input: process.stdin });
 const replies = commands[Symbol.asyncIterator]();
+let stage = 'browser-start';
+function checkpoint(value) {
+  stage = value;
+  process.stdout.write(`${JSON.stringify({ checkpoint: value })}\n`);
+}
+const deadline = setTimeout(() => {
+  process.stderr.write(`Bounded browser proof deadline at ${stage}\n`);
+  process.exit(1);
+}, 180000);
+deadline.unref();
 async function command(value) {
   process.stdout.write(`${JSON.stringify({ command: value })}\n`);
   const reply = await replies.next();
@@ -129,6 +139,7 @@ try {
   });
   assert.equal(authentication.status, 201, JSON.stringify(authentication.result));
   assert.equal(authentication.result.status, 'authenticated');
+  checkpoint('enrolled');
   // A real opener supplies a one-use PKCE verifier only to the validated preview window/origin.
   async function prepareLaunch(previewOrigin, relayId, liveId) {
     await mobile.evaluate(
@@ -190,33 +201,37 @@ try {
   let hmrOpened = false;
   let hmrUpdates = 0;
   let hmrClosed = false;
+  let currentHmrSocket;
   let crossPortProbe = false;
   preview.on('websocket', (socket) => {
     const url = new URL(socket.url());
     destinations.add(`${url.protocol}//${url.host}${url.pathname}`);
     if (crossPortProbe && url.origin === config.secondPreviewOrigin.replace('https:', 'wss:'))
       return;
+    currentHmrSocket = socket;
     assert.equal(url.origin, config.previewOrigin.replace('https:', 'wss:'));
     socket.on('framereceived', (event) => {
       const message = JSON.parse(String(event.payload));
-      if (message.type === 'connected') {
+      if (message.type === 'connected' && socket === currentHmrSocket) {
         hmrOpened = true;
         hmrClosed = false;
       }
       if (message.type === 'update') hmrUpdates++;
     });
     socket.on('close', () => {
-      hmrClosed = true;
+      if (socket === currentHmrSocket) hmrClosed = true;
     });
   });
   preview.on('pageerror', (error) => errors.push(error.message));
   await preview.waitForURL(`${config.previewOrigin}/`);
   await mobile.waitForFunction(() => window.__proofExchanged === true);
+  checkpoint('exchanged');
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
   assert.equal(await preview.evaluate(() => isSecureContext), true);
   await ui.waitForHandshake(preview);
   await preview.waitForFunction(() => window.__liveProofEvents.includes('connected'));
+  checkpoint('overlay-sse');
   assert.equal(
     await preview.evaluate(() => window.__IMPECCABLE_PUBLIC_BASE_URL__),
     `${config.previewOrigin}/__gestalt_live`,
@@ -257,11 +272,13 @@ try {
   await ui.clickGo(preview);
   await command('helper-reply');
   await preview.waitForFunction(() => window.__liveProofEvents.includes('error'));
+  checkpoint('helper-replied');
   // Actual source edit produces an actual Vite HMR frame through the authenticated WSS gateway.
   await command('hmr');
   await preview.getByRole('heading', { name: 'Remote HMR verified' }).waitFor();
   assert.equal(hmrOpened, true);
   assert.ok(hmrUpdates > 0);
+  checkpoint('hmr');
   const responseHeaders = await (await preview.reload()).allHeaders();
   assert.equal(responseHeaders['cross-origin-resource-policy'], 'same-origin');
   assert.ok(responseHeaders['content-security-policy'].includes("frame-ancestors 'none'"));
@@ -280,6 +297,7 @@ try {
       path: `${config.evidence}/remote-preview-authenticated-${viewport.width}x${viewport.height}.png`,
     });
   }
+  checkpoint('authenticated-screens');
   // Two actual admitted apps/ports and two valid ambient cookies in the same browser.
   await prepareLaunch(config.secondPreviewOrigin, 'second-remote-proof', 'second-real-helper');
   const secondPopupPromise = mobile.waitForEvent('popup');
@@ -355,6 +373,7 @@ try {
   const crossPortCookieNames = new Set(crossPortResponses.flatMap((entry) => entry.cookieNames));
   await secondPreview.close();
   await preview.waitForTimeout(100);
+  checkpoint('two-port-denied');
   // Separate anonymous browser context, actual browser fetch metadata, all app/helper/dev assets denied.
   const anonymousContext = await browser.newContext();
   const denied = await anonymousContext.newPage();
@@ -402,9 +421,12 @@ try {
   }, paths);
   for (const result of denials.result) assert.equal(result.status, 401, result.path);
   assert.equal(denials.websocketDenied, true);
+  checkpoint('anonymous-denied');
   anonymous.push(...denials.result, { path: '/ (HMR upgrade)', denied: true });
   await anonymousContext.close();
   const sseErrorsBeforeRevocation = await preview.evaluate(() => window.__liveProofSseErrors);
+  assert.ok(currentHmrSocket);
+  assert.equal(currentHmrSocket.isClosed(), false);
   const revokeStarted = Date.now();
   await command('revoke');
   await preview.waitForFunction(
@@ -414,10 +436,12 @@ try {
   );
   await preview.waitForTimeout(300);
   assert.equal(hmrClosed, true);
+  assert.equal(currentHmrSocket.isClosed(), true);
   const revocationElapsedMs = Date.now() - revokeStarted;
   assert.ok(revocationElapsedMs < 3000);
   const revokeNavigation = await preview.goto(`${config.previewOrigin}/`);
   assert.equal(revokeNavigation.status(), 401);
+  checkpoint('revoked');
   await preview.getByRole('heading', { name: 'Preview unavailable' }).waitFor();
   for (const viewport of [
     { width: 390, height: 844 },
@@ -432,6 +456,7 @@ try {
       path: `${config.evidence}/remote-preview-denied-${viewport.width}x${viewport.height}.png`,
     });
   }
+  checkpoint('denied-screens');
   const allowed = new Set([
     new URL(config.mobileOrigin).host,
     new URL(config.previewOrigin).host,
@@ -486,4 +511,5 @@ try {
 } finally {
   await browser.close();
   commands.close();
+  clearTimeout(deadline);
 }

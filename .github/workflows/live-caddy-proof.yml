@@ -79,6 +79,7 @@ jobs:
             src/server/platform/live-design/preview-gateway.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
       - name: Real helper browser proof in separate network with trusted TLS
+        timeout-minutes: 5
         env:
           LIVE_REMOTE_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
