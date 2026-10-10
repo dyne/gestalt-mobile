@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "status": "normative-examples-not-live-implementation-proof",
+  "mobileOrigin": "https://mobile.example.test",
+  "previewOrigin": "https://preview.example.test:9443",
+  "grantLifetimeSeconds": 60,
+  "leaseLifetimeSeconds": 300,
+  "leaseAbsoluteLifetimeSeconds": 3600,
+  "streamMaximumSeconds": 60,
+  "ownerRecheckSeconds": 5,
+  "cases": [
+    {
+      "id": "anonymous-html",
+      "method": "GET",
+      "path": "/",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-source",
+      "method": "GET",
+      "path": "/src/App.svelte",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-asset",
+      "method": "GET",
+      "path": "/assets/app.js",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-source-map",
+      "method": "GET",
+      "path": "/assets/app.js.map",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-helper",
+      "method": "GET",
+      "path": "/__gestalt_live/editor",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-hmr",
+      "method": "WS",
+      "path": "/@vite/client",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "anonymous-sse",
+      "method": "GET",
+      "path": "/__gestalt_live/events",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-all-paths-auth"
+    },
+    {
+      "id": "stolen-grant-no-proof",
+      "status": 401,
+      "code": "LIVE_GRANT_INVALID",
+      "upstream": false,
+      "test": "launch-grant-proof-replay-audience"
+    },
+    {
+      "id": "replayed-grant",
+      "status": 401,
+      "code": "LIVE_GRANT_INVALID",
+      "upstream": false,
+      "test": "launch-grant-proof-replay-audience"
+    },
+    {
+      "id": "expired-grant-at-60s",
+      "status": 401,
+      "code": "LIVE_GRANT_INVALID",
+      "upstream": false,
+      "test": "launch-grant-proof-replay-audience"
+    },
+    {
+      "id": "cross-session-grant",
+      "status": 401,
+      "code": "LIVE_GRANT_INVALID",
+      "upstream": false,
+      "test": "launch-grant-proof-replay-audience"
+    },
+    {
+      "id": "wrong-port-grant",
+      "status": 401,
+      "code": "LIVE_GRANT_INVALID",
+      "upstream": false,
+      "test": "launch-grant-proof-replay-audience"
+    },
+    {
+      "id": "wrong-port-lease",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "owner-generation-revocation"
+    },
+    {
+      "id": "same-mobile-host-other-port",
+      "status": 400,
+      "code": "LIVE_PREVIEW_HOST_CONFLICT",
+      "upstream": false,
+      "test": "mobile-origin-cookie-boundary"
+    },
+    {
+      "id": "sibling-origin-mutation",
+      "status": 403,
+      "code": "ORIGIN_NOT_ALLOWED",
+      "upstream": false,
+      "test": "mobile-origin-cookie-boundary"
+    },
+    {
+      "id": "revoked-stream-reconnect",
+      "status": 401,
+      "code": "LIVE_AUTH_REQUIRED",
+      "upstream": false,
+      "test": "preview-stream-revocation"
+    },
+    {
+      "id": "expired-lease-renewal",
+      "status": 409,
+      "code": "LIVE_LEASE_EXPIRED",
+      "upstream": false,
+      "test": "preview-lease-renewal"
+    },
+    {
+      "id": "caddy-unproved-isolation",
+      "status": 503,
+      "code": "LIVE_CADDY_ADMIN_UNISOLATED",
+      "upstream": false,
+      "test": "caddy-admin-project-denial"
+    }
+  ]
+}

@@ -13,6 +13,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
 import { buildApp } from './app.js';
+import type {
+  LiveOwnershipReader,
+  PreviewGrantDependencies,
+} from './features/live-design/application/ports.js';
+import { SqlitePreviewGrantStore } from './platform/live-design/sqlite-preview-grant-store.js';
+import { previewAuthentication, previewSecrets } from './platform/live-design/preview-secrets.js';
+import { PreviewConnections } from './platform/live-design/preview-connections.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
 import { createSelfDebugSession } from './features/self-debug/create-session.js';
@@ -193,6 +200,8 @@ export type ComposeRelayAppOptions = {
   /** Test seam; production constructs the manager when the kimi CLI is installed. */
   kimiServerManager?: KimiWebServerManager;
   homeDirectory?: string;
+  /** Live remains unavailable until an authoritative ownership controller is supplied. */
+  liveOwnership?: LiveOwnershipReader;
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
   authorizationClock?: () => Date;
@@ -1651,6 +1660,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     };
   }
   let authorization: SqliteAuthorizationStore | undefined;
+  let previewGrants: SqlitePreviewGrantStore | undefined;
+  let liveDesign: PreviewGrantDependencies | undefined;
+  let previewConnections: PreviewConnections | undefined;
   if (passkeyAuthEnabled) {
     try {
       authorization = new SqliteAuthorizationStore(
@@ -1658,7 +1670,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         relyingParty,
       );
       authorization.initializeOwner(ownerHandle!);
+      if (options.liveOwnership) {
+        if (!relyingParty.publicOrigin.startsWith('https://'))
+          throw new Error('Live requires HTTPS production authentication');
+        previewGrants = new SqlitePreviewGrantStore(options.homeDirectory ?? homedir());
+        liveDesign = {
+          store: previewGrants,
+          owners: options.liveOwnership,
+          authentication: previewAuthentication(authorization),
+          secrets: previewSecrets,
+          now: options.authorizationClock ?? (() => new Date()),
+          mobileOrigin: relyingParty.publicOrigin,
+        };
+        previewConnections = new PreviewConnections(liveDesign);
+        liveDesign.revocations = previewConnections;
+      }
     } catch (error) {
+      previewGrants?.close();
+      authorization?.close();
       database.close();
       throw error;
     }
@@ -1666,6 +1695,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let app;
   try {
     app = await buildApp({
+      liveDesign,
       upgrade: new ManagedUpgrade(options.root),
       ...(authorization
         ? {
@@ -1691,6 +1721,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               },
               webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
               relyingParty,
+              ...(previewConnections
+                ? {
+                    revocations: {
+                      sessionRevoked: (
+                        session: import('./features/auth/domain/identifiers.js').AuthorizationSessionId,
+                      ) =>
+                        previewConnections!.revoke({
+                          authSessionHash: previewSecrets.hash(session),
+                        }),
+                      deviceRevoked: (
+                        deviceId: import('./features/auth/domain/identifiers.js').AuthorizedDeviceId,
+                      ) => previewConnections!.revoke({ deviceId }),
+                    },
+                  }
+                : {}),
             },
           }
         : { passkeyAuthDisabled: true }),
@@ -2345,6 +2390,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     });
   } catch (error) {
     authorization?.close();
+    previewGrants?.close();
     database.close();
     throw error;
   }
@@ -2448,7 +2494,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     kimiRuntime?.stopAll();
     await kimiManager?.stopAll();
     planStatusSource.closeAll();
+    await previewConnections?.close();
     database.close();
+    previewGrants?.close();
     authorization?.close();
   });
   return app;
