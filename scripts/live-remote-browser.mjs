@@ -195,7 +195,6 @@ try {
   assert.equal(await preview.evaluate(() => isSecureContext), true);
   await ui.waitForHandshake(preview);
   await preview.waitForFunction(() => window.__liveProofEvents.includes('connected'));
-  await preview.waitForFunction(() => window.__liveProofEvents.includes('connected'));
   assert.equal(
     await preview.evaluate(() => window.__IMPECCABLE_PUBLIC_BASE_URL__),
     `${config.previewOrigin}/__gestalt_live`,
@@ -241,6 +240,7 @@ try {
   assert.equal(responseHeaders['cross-origin-resource-policy'], 'same-origin');
   assert.ok(responseHeaders['content-security-policy'].includes("frame-ancestors 'none'"));
   await ui.waitForHandshake(preview);
+  await preview.waitForFunction(() => window.__liveProofEvents.includes('connected'));
   for (const viewport of [
     { width: 390, height: 844 },
     { width: 1440, height: 900 },
@@ -251,7 +251,7 @@ try {
       '16px',
     );
     await preview.screenshot({
-      path: `${config.evidence}/authenticated-${viewport.width}x${viewport.height}.png`,
+      path: `${config.evidence}/remote-preview-authenticated-${viewport.width}x${viewport.height}.png`,
     });
   }
   // Separate anonymous browser context, actual browser fetch metadata, all app/helper/dev assets denied.
@@ -313,7 +313,7 @@ try {
       '16px',
     );
     await preview.screenshot({
-      path: `${config.evidence}/denied-${viewport.width}x${viewport.height}.png`,
+      path: `${config.evidence}/remote-preview-denied-${viewport.width}x${viewport.height}.png`,
     });
   }
   const allowed = new Set([new URL(config.mobileOrigin).host, new URL(config.previewOrigin).host]);
@@ -323,6 +323,7 @@ try {
       `Unexpected browser destination ${destination}`,
     );
   const sanitized = [...destinations].sort();
+  assert.deepEqual(errors, []);
   await writeFile(
     `${config.evidence}/network-destinations.json`,
     JSON.stringify(sanitized, null, 2),
@@ -345,10 +346,10 @@ try {
     anonymous,
     revokeNavigationStatus: revokeNavigation.status(),
     screenshots: [
-      'authenticated-390x844.png',
-      'authenticated-1440x900.png',
-      'denied-390x844.png',
-      'denied-1440x900.png',
+      'remote-preview-authenticated-390x844.png',
+      'remote-preview-authenticated-1440x900.png',
+      'remote-preview-denied-390x844.png',
+      'remote-preview-denied-1440x900.png',
     ],
     fontSize: '100% / computed 16px',
     destinations: sanitized,

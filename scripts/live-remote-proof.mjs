@@ -490,6 +490,9 @@ try {
       `--reuid=${process.getuid()}`,
       `--regid=${process.getgid()}`,
       '--init-groups',
+      'env',
+      `HOME=${browserHome}`,
+      `PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(process.env.HOME, '.cache/ms-playwright')}`,
       process.execPath,
       resolve('scripts/live-remote-browser.mjs'),
       configFile,
@@ -508,7 +511,15 @@ try {
   });
   let browserFailure = '';
   browser.stderr.on('data', (chunk) => {
-    browserFailure = (browserFailure + chunk).slice(-2000);
+    const sanitized = String(chunk).replace(/(?:https?|wss?):\/\/[^\s"'<>]+/g, (value) => {
+      try {
+        const url = new URL(value);
+        return `${url.protocol}//${url.host}${url.pathname}`;
+      } catch {
+        return '[URL omitted]';
+      }
+    });
+    browserFailure = (browserFailure + sanitized).slice(-2000);
   });
   const lines = createInterface({ input: browser.stdout });
   let browserResult;
