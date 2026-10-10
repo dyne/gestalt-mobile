@@ -16,6 +16,79 @@ describe('MessageList', () => {
     cleanup();
     vi.useRealTimers();
   });
+  it('anchors the attention dialogue between earlier and later chat and keeps its explanation after resolution', async () => {
+    const attention = {
+      requestId: 'blocker',
+      turnId: 'turn',
+      requestedAt: '2026-10-10T12:00:01Z',
+      attention: {
+        reason: 'hardBlock' as const,
+        summary: 'Supervised execution requires human attention (hardBlock).',
+        requestedAction: 'Resolve the blocker.',
+        resumeCondition: 'externalStateChanged' as const,
+      },
+    };
+    const messages = [
+      {
+        id: 'before',
+        role: 'assistant' as const,
+        turnId: 'turn',
+        phase: 'commentary' as const,
+        text: 'The L3 checkpoint cannot be validated because its step is missing.',
+        occurredAt: Date.parse('2026-10-10T12:00:00Z'),
+        complete: true,
+      },
+      {
+        id: 'request',
+        role: 'audit' as const,
+        text: 'Needs attention',
+        attention,
+        occurredAt: Date.parse(attention.requestedAt),
+        complete: true,
+      },
+      {
+        id: 'after',
+        role: 'user' as const,
+        text: 'Later guidance',
+        occurredAt: Date.parse('2026-10-10T12:00:02Z'),
+        complete: true,
+      },
+    ];
+    const onattentionresolve = vi.fn();
+    const view = render(MessageList, { messages, activities: [], attention, onattentionresolve });
+    const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
+    expect(entries[0]?.textContent).toContain('commentary');
+    expect(entries[1]?.textContent).toContain('Autopilot needs your attention');
+    expect(entries[1]?.textContent).toContain('The L3 checkpoint cannot be validated');
+    expect(entries[2]?.textContent).toContain('Later guidance');
+    await fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(onattentionresolve).toHaveBeenCalledWith('resume');
+    await view.rerender({ messages, activities: [], attention: null });
+    expect(entries[1]?.textContent).toContain('Autopilot attention request');
+    expect(entries[1]?.textContent).toContain('The L3 checkpoint cannot be validated');
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
+  it('appends a new attention dialogue after the existing chat even before its audit arrives', () => {
+    render(MessageList, {
+      messages: [{ id: 'prior', role: 'user', text: 'Existing chat', complete: true }],
+      activities: [],
+      attention: {
+        requestId: 'new',
+        turnId: null,
+        requestedAt: null,
+        attention: {
+          reason: 'missingDependency',
+          summary: 'The test runner is unavailable.',
+          requestedAction: 'Install it.',
+          resumeCondition: 'dependencyInstalled',
+        },
+      },
+    });
+    const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
+    expect(entries[0]?.textContent).toContain('Existing chat');
+    expect(entries[1]?.textContent).toContain('The test runner is unavailable.');
+  });
 
   it('presents automatic continuation history as an audit entry, not a prompt bubble', () => {
     render(MessageList, {

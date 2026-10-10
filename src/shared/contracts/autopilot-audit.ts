@@ -4,6 +4,24 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { parseOrgPlanAttention } from './org-plan-attention.js';
+import type { AttentionAuditRecord } from './chat-snapshot.js';
+
+/** Only the bounded attention contract belongs in historical dialogue metadata. */
+export function autopilotAuditAttention(payload: unknown): AttentionAuditRecord | undefined {
+  const requestId = property(payload, 'requestId');
+  const attention = parseOrgPlanAttention(property(payload, 'payload'));
+  if (typeof requestId !== 'string' || requestId.length > 256 || !attention) return undefined;
+  const turnId = property(payload, 'turnId');
+  const requestedAt = property(payload, 'requestedAt');
+  return {
+    requestId,
+    turnId: typeof turnId === 'string' ? turnId : null,
+    requestedAt: typeof requestedAt === 'string' ? requestedAt : null,
+    attention,
+  };
+}
+
 /** Maps durable events to the intentionally small user-visible Autopilot timeline. */
 export function autopilotAuditLabel(type: string, payload: unknown): string | null {
   if (type === 'autopilot.turn-started') return 'Continued execution automatically';

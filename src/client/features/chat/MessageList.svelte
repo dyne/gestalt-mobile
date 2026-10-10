@@ -5,7 +5,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
+  import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
+  import type { OrgPlanAttention } from '../autopilot/contracts.js';
+  import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
+  import { parseOrgPlanAttention } from '../../../shared/contracts/org-plan-attention.js';
   import ActivityList from './ActivityList.svelte';
   import WorkDetails from './WorkDetails.svelte';
   import InteractionList from './InteractionList.svelte';
@@ -30,6 +34,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activeTurnId?: string | null;
     autopilotAuditTruncated?: boolean;
     interactions?: ProjectedInteraction[];
+    attention?: OrgPlanAttention | null;
+    attentionPending?: boolean;
+    onattentionresolve?(action: 'resume' | 'disableAutopilot', guidance?: string): void;
+    footer?: Snippet;
     answers?: Record<string, string>;
     submittedAnswers?: Record<string, readonly SubmittedQuizAnswer[]>;
     clipboard?: Pick<Clipboard, 'writeText'>;
@@ -48,6 +56,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activeTurnId = null,
     autopilotAuditTruncated = false,
     interactions = [],
+    attention = null,
+    attentionPending = false,
+    onattentionresolve = () => {},
+    footer,
     answers = {},
     submittedAnswers = {},
     clipboard = globalThis.navigator?.clipboard,
@@ -60,7 +72,57 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onopenfile,
     oncopyresult = () => {},
   }: Props = $props();
-  let groups = $derived(groupMessages(messages));
+  let groups = $derived.by(() => {
+    const grouped = groupMessages(messages);
+    if (
+      !attention ||
+      grouped.some(
+        (group) => group.kind === 'audit' && group.attention?.requestId === attention.requestId,
+      )
+    )
+      return grouped;
+    const payload = parseOrgPlanAttention(attention.attention);
+    if (!payload) return grouped;
+    const occurredAt = attention.requestedAt ? Date.parse(attention.requestedAt) : undefined;
+    const at = occurredAt !== undefined && Number.isFinite(occurredAt) ? occurredAt : undefined;
+    const index =
+      at === undefined
+        ? -1
+        : grouped.findIndex((group) => group.occurredAt !== undefined && group.occurredAt > at);
+    grouped.splice(index < 0 ? grouped.length : index, 0, {
+      id: `attention:${attention.requestId}`,
+      kind: 'audit',
+      text: 'Needs attention',
+      attention: { ...attention, attention: payload },
+      occurredAt: at,
+      count: 1,
+      timestamps: at === undefined ? [] : [at],
+    });
+    return grouped;
+  });
+  function attentionReport(record: NonNullable<ChatMessage['attention']>): OrgPlanAttention {
+    const requestedAt = record.requestedAt ? Date.parse(record.requestedAt) : NaN;
+    const reports = messages.filter(
+      (message) => message.role === 'assistant' && message.turnId === record.turnId,
+    );
+    const final = reports.findLast(
+      (message) =>
+        message.phase === 'final_answer' &&
+        message.occurredAt !== undefined &&
+        message.occurredAt >= requestedAt,
+    );
+    const commentary = reports.findLast(
+      (message) =>
+        message.phase === 'commentary' &&
+        message.occurredAt !== undefined &&
+        message.occurredAt <= requestedAt,
+    );
+    const supervisorReport =
+      attention?.requestId === record.requestId && attention.supervisorReport
+        ? attention.supervisorReport
+        : boundedAttentionReport(final?.text ?? commentary?.text);
+    return { ...record, ...(supervisorReport ? { supervisorReport } : {}) };
+  }
   let expandedCommentary = $state<Record<string, boolean>>({});
   let now = $state(Date.now());
   onMount(() => {
@@ -308,29 +370,39 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           : 'answer-item'}
     >
       {#if group.kind === 'audit'}
-        <aside class="autopilot-audit" aria-label="Autopilot audit entry">
-          <strong>Autopilot</strong>
-          {group.text}{group.count > 1 ? ` · ${group.count} times` : ''}
-          {#if group.occurredAt}
-            <time datetime={new Date(group.occurredAt).toISOString()}
-              >{formatMessageTime(group.occurredAt)}</time
-            >
-          {/if}
-          {#if group.count > 1}
-            <details>
-              <summary>Show {group.count} timestamps</summary>
-              <ul>
-                {#each group.timestamps as timestamp (`${group.id}:${timestamp}`)}
-                  <li>
-                    <time datetime={new Date(timestamp).toISOString()}
-                      >{formatMessageTime(timestamp)}</time
-                    >
-                  </li>
-                {/each}
-              </ul>
-            </details>
-          {/if}
-        </aside>
+        {#if group.attention}
+          <AutopilotAttention
+            attention={attentionReport(group.attention)}
+            historical={attention?.requestId !== group.attention.requestId}
+            pending={attentionPending}
+            controlId={`chat-attention-${group.attention.requestId}`}
+            onresolve={onattentionresolve}
+          />
+        {:else}
+          <aside class="autopilot-audit" aria-label="Autopilot audit entry">
+            <strong>Autopilot</strong>
+            {group.text}{group.count > 1 ? ` · ${group.count} times` : ''}
+            {#if group.occurredAt}
+              <time datetime={new Date(group.occurredAt).toISOString()}
+                >{formatMessageTime(group.occurredAt)}</time
+              >
+            {/if}
+            {#if group.count > 1}
+              <details>
+                <summary>Show {group.count} timestamps</summary>
+                <ul>
+                  {#each group.timestamps as timestamp (`${group.id}:${timestamp}`)}
+                    <li>
+                      <time datetime={new Date(timestamp).toISOString()}
+                        >{formatMessageTime(timestamp)}</time
+                      >
+                    </li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
+          </aside>
+        {/if}
       {:else if group.kind === 'user'}
         {@const ownedActivities = promptActivities(group)}
         <div class="entry-heading">
@@ -470,6 +542,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </li>
   {/if}
 </ol>
+{@render footer?.()}
 
 <style>
   .autopilot-audit {

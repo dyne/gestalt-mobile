@@ -38,7 +38,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     type AutopilotClientState,
   } from './features/autopilot/autopilot-controller.js';
   import AutopilotControl from './features/autopilot/AutopilotControl.svelte';
-  import AutopilotAttention from './features/autopilot/AutopilotAttention.svelte';
   import AutopilotSafetyStop from './features/autopilot/AutopilotSafetyStop.svelte';
   import { createAttentionToastDedupe } from './features/autopilot/attention-toast-dedupe.js';
   import Composer from './features/chat/Composer.svelte';
@@ -1781,26 +1780,26 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {#if tab === 'chat'}
         <section class="chat-view" aria-labelledby="chat-title">
           <h2 id="chat-title" class="visually-hidden">Chat</h2>
-          <AutopilotAttention
-            attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
-            controlId={`chat-attention-${sessionId ?? 'none'}`}
-            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
-            onresolve={(action, guidance) =>
-              sessionId && resolveAutopilotAttention(sessionId, action, guidance)}
-          />
-          <AutopilotSafetyStop
-            autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
-            attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
-            controlId={`chat-autopilot-safety-${sessionId ?? 'none'}`}
-            pending={sessionId ? autopilotState.pending.has(sessionId) : false}
-            onrecover={() => sessionId && void recoverAutopilot(sessionId)}
-            ondisable={() => sessionId && toggleAutopilot(sessionId, false)}
-          />
+          {#snippet autopilotSafety()}
+            <AutopilotSafetyStop
+              autopilot={sessionId ? (autopilotState.snapshots.get(sessionId) ?? null) : null}
+              attention={sessionId ? (autopilotState.attention.get(sessionId) ?? null) : null}
+              controlId={`chat-autopilot-safety-${sessionId ?? 'none'}`}
+              pending={sessionId ? autopilotState.pending.has(sessionId) : false}
+              onrecover={() => sessionId && void recoverAutopilot(sessionId)}
+              ondisable={() => sessionId && toggleAutopilot(sessionId, false)}
+            />
+          {/snippet}
           <p class="visually-hidden" aria-live="polite" aria-atomic="true">
             {interactionAnnouncement}
           </p>
           {#if sessionId}
             <MessageList
+              attention={autopilotState.attention.get(sessionId) ?? null}
+              attentionPending={autopilotState.pending.has(sessionId)}
+              onattentionresolve={(action, guidance) =>
+                resolveAutopilotAttention(sessionId!, action, guidance)}
+              footer={autopilotSafety}
               messages={chatView ? [...chatView.messages] : []}
               activities={chatView ? [...chatView.activities] : []}
               activeTurnId={chatView?.activeTurnId ?? null}

@@ -132,14 +132,17 @@ export class SqliteEventJournal {
         `
       SELECT substr(json_extract(payload_json, '$.text'), 1, 4001) AS text
       FROM session_events
-      WHERE session_id = ? AND type = 'agentMessageCompleted' AND occurred_at >= ?
+      WHERE session_id = ? AND type = 'agentMessageCompleted'
         AND json_extract(payload_json, '$.turnId') = ?
-        AND json_extract(payload_json, '$.phase') = 'final_answer'
+        AND (
+          (json_extract(payload_json, '$.phase') = 'final_answer' AND occurred_at >= ?)
+          OR (json_extract(payload_json, '$.phase') = 'commentary' AND occurred_at <= ?)
+        )
         AND json_type(payload_json, '$.text') = 'text'
-      ORDER BY sequence DESC LIMIT 1
+      ORDER BY (json_extract(payload_json, '$.phase') = 'final_answer') DESC, sequence DESC LIMIT 1
     `,
       )
-      .get(sessionId, requestedAt, turnId) as { text: string } | undefined;
+      .get(sessionId, turnId, requestedAt, requestedAt) as { text: string } | undefined;
     return boundedAttentionReport(row?.text);
   }
 

@@ -17,7 +17,11 @@ export function registerRefreshActivity(
   app.post('/api/sessions/:id/activity/refresh', async (request, reply) => {
     const id = (request.params as { id: string }).id;
     if (!deps.exists(id)) return reply.code(404).send({ code: 'SESSION_NOT_FOUND' });
-    await deps.refresh(id);
+    // This is an acceptance boundary. A bounded retry may still be pending;
+    // clients receive its authoritative outcome through activity events.
+    void deps.refresh(id).catch(() => {
+      request.log.warn({ code: 'ACTIVITY_REFRESH_FAILED' }, 'Activity refresh failed');
+    });
     return reply.code(202).send({ accepted: true });
   });
 }

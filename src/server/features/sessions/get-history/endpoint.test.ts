@@ -10,6 +10,47 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerGetHistory } from './endpoint.js';
 
 describe('GET /api/sessions/:id/history', () => {
+  it('restores bounded attention dialogue data from the durable audit without unrelated fields', async () => {
+    const app = fastify();
+    const attention = {
+      reason: 'hardBlock',
+      summary: 'The checkpoint step is missing.',
+      requestedAction: 'Refresh the plan.',
+      resumeCondition: 'externalStateChanged',
+    };
+    registerGetHistory(app, {
+      find: () => ({ id: 's' }) as never,
+      read: async () => ({ turns: [], activeTurnId: null }),
+      currentSequence: () => 1,
+      autopilotAudit: () => ({
+        truncated: false,
+        events: [
+          {
+            sessionId: 's',
+            sequence: 1,
+            type: 'org-plan.attention-required',
+            occurredAt: '2026-10-10T12:00:00Z',
+            payload: {
+              requestId: 'r',
+              turnId: 't',
+              requestedAt: '2026-10-10T12:00:00Z',
+              payload: attention,
+              unrelated: 'exclude',
+            },
+          },
+        ],
+      }),
+    });
+    const response = (await app.inject('/api/sessions/s/history')).json();
+    expect(response.autopilotAudit[0].attention).toEqual({
+      requestId: 'r',
+      turnId: 't',
+      requestedAt: '2026-10-10T12:00:00Z',
+      attention,
+    });
+    expect(JSON.stringify(response)).not.toContain('exclude');
+    await app.close();
+  });
   it('reads a stopped persisted session through the supplied detached reader', async () => {
     const app = fastify();
     const read = vi.fn(async () => ({ turns: [], activeTurnId: null }));

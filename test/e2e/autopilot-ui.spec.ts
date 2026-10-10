@@ -283,6 +283,87 @@ async function install(
   await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, (socket) => onsocket?.(socket));
 }
 
+test('keeps the attention dialogue at its original chat position with an explanation after reload', async ({
+  page,
+}) => {
+  const report = 'The L3 checkpoint cannot identify its step. Refresh the plan before retrying.';
+  const history = chatSnapshot({
+    items: [
+      {
+        id: 'earlier',
+        kind: 'user',
+        text: 'Earlier work',
+        occurredAt: Date.parse('2026-08-19T23:59:59Z'),
+      },
+      {
+        id: 'explanation',
+        kind: 'agent',
+        turnId: 'turn-1',
+        phase: 'final_answer',
+        text: report,
+        occurredAt: Date.parse('2026-08-20T00:00:01Z'),
+      },
+      {
+        id: 'later',
+        kind: 'user',
+        text: 'Later guidance',
+        occurredAt: Date.parse('2026-08-20T00:00:02Z'),
+      },
+    ],
+    autopilotAudit: [
+      {
+        id: 'attention-audit',
+        label: 'Needs attention',
+        occurredAt: Date.parse(attention.requestedAt),
+        attention: {
+          requestId: attention.requestId,
+          turnId: attention.turnId,
+          requestedAt: attention.requestedAt,
+          attention: {
+            reason: 'missingDependency',
+            summary: 'A required dependency is unavailable.',
+            requestedAction: 'Restore it.',
+            resumeCondition: 'dependencyInstalled',
+          },
+        },
+      },
+    ],
+  });
+  const installHistory = () =>
+    page.route('**/api/sessions/session-1/history', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(history) }),
+    );
+  await install(
+    page,
+    'attentionRequired',
+    undefined,
+    true,
+    undefined,
+    false,
+    undefined,
+    false,
+    false,
+    false,
+    report,
+  );
+  await installHistory();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  const entries = page.getByLabel('Chat messages').locator(':scope > li');
+  await expect(entries.nth(0)).toContainText('Earlier work');
+  await expect(entries.nth(1)).toContainText('Autopilot needs your attention');
+  await expect(entries.nth(1)).toContainText(report);
+  await expect(entries.nth(3)).toContainText('Later guidance');
+  await install(page, 'monitoring', undefined, false);
+  await installHistory();
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(entries.nth(1)).toContainText('Autopilot attention request');
+  await expect(entries.nth(1)).toContainText(report);
+  await expect(entries.nth(3)).toContainText('Later guidance');
+  await expect(page.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0);
+});
+
 test('renders a healthy controller as active without exposing its control identity', async ({
   page,
 }) => {
@@ -888,7 +969,7 @@ test('selected Chat receives live autopilot and attention journal events without
     }),
   );
   await expect(page.getByRole('alert', { name: 'Autopilot needs your attention' })).toBeVisible();
-  await expect(page.getByLabel('Chat messages')).toContainText('Needs attention');
+  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot needs your attention');
   await expect(page.getByText('Autopilot needs your attention.')).toHaveCount(1);
   const report = 'The checkpoint cannot identify L1.2. Refresh the plan state before retrying.';
   socket!.send(

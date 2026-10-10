@@ -12,7 +12,10 @@ import type {
   SafeInteractionSnapshot,
 } from '../../../../shared/contracts/chat-snapshot.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
-import { autopilotAuditLabel } from '../../../../shared/contracts/autopilot-audit.js';
+import {
+  autopilotAuditLabel,
+  autopilotAuditAttention,
+} from '../../../../shared/contracts/autopilot-audit.js';
 import type { FileChangeSummary } from '../../../../shared/contracts/file-change.js';
 
 import type { RelaySessionSnapshot } from '../model/relay-session.js';
@@ -169,6 +172,10 @@ function toAutopilotAudit(events: readonly SessionEvent[]): AutopilotAuditRecord
     if (!Number.isFinite(occurredAt)) return [];
     const label = autopilotAuditLabel(event.type, event.payload);
     if (!label) return [];
+    const attention =
+      event.type === 'org-plan.attention-required'
+        ? autopilotAuditAttention(event.payload)
+        : undefined;
     const controlId =
       event.payload &&
       typeof event.payload === 'object' &&
@@ -176,7 +183,13 @@ function toAutopilotAudit(events: readonly SessionEvent[]): AutopilotAuditRecord
         ? (event.payload as { controlId: string }).controlId
         : undefined;
     return [
-      { id: `audit:${event.sequence}`, label, occurredAt, ...(controlId ? { controlId } : {}) },
+      {
+        id: `audit:${event.sequence}`,
+        label,
+        occurredAt,
+        ...(controlId ? { controlId } : {}),
+        ...(attention ? { attention } : {}),
+      },
     ];
   });
 }

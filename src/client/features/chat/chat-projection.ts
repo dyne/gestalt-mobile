@@ -10,7 +10,10 @@ import type {
   SafeInteractionOutcome,
   SafeInteractionSnapshot,
 } from '../../../shared/contracts/chat-snapshot.js';
-import { autopilotAuditLabel } from '../../../shared/contracts/autopilot-audit.js';
+import {
+  autopilotAuditLabel,
+  autopilotAuditAttention,
+} from '../../../shared/contracts/autopilot-audit.js';
 import { toActivity, type HistoryActivity } from './activity-summary.js';
 import type { ChatMessage } from './message-store.js';
 
@@ -106,6 +109,7 @@ function auditMessage(item: {
   label: string;
   occurredAt: number;
   controlId?: string;
+  attention?: import('../../../shared/contracts/chat-snapshot.js').AttentionAuditRecord;
 }): ChatMessage {
   return {
     id: item.id,
@@ -113,6 +117,7 @@ function auditMessage(item: {
     text: item.label,
     occurredAt: item.occurredAt,
     ...(item.controlId ? { controlId: item.controlId } : {}),
+    ...(item.attention ? { attention: item.attention } : {}),
     complete: true,
   };
 }
@@ -131,6 +136,9 @@ function auditEventMessage(event: ProjectionEvent): ChatMessage | null {
         label,
         occurredAt,
         ...(controlId ? { controlId } : {}),
+        ...(event.type === 'org-plan.attention-required' && autopilotAuditAttention(event.payload)
+          ? { attention: autopilotAuditAttention(event.payload) }
+          : {}),
       })
     : null;
 }
@@ -391,6 +399,13 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           typeof message.id === 'string' &&
           (message.role === 'user' || message.role === 'assistant' || message.role === 'audit') &&
           typeof message.text === 'string' &&
+          (message.attention === undefined ||
+            Boolean(
+              autopilotAuditAttention({
+                ...message.attention,
+                payload: message.attention.attention,
+              }),
+            )) &&
           (message.occurredAt === undefined ||
             (typeof message.occurredAt === 'number' && Number.isFinite(message.occurredAt))),
         ),
