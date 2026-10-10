@@ -56,9 +56,11 @@ const controller = join(root, 'controller');
 const project = join(root, 'project');
 const secondProject = join(root, 'second-project');
 const published = join(root, 'published');
-const browserHome = join(root, 'browser-home');
+const browserHome = join(controller, 'browser-home');
+const browserTemporaryDirectory = join(controller, 'browser-tmp');
 for (const dir of [controller, project, published, browserHome, evidence])
   await mkdir(dir, { recursive: true, mode: 0o700 });
+await mkdir(browserTemporaryDirectory, { mode: 0o700 });
 const cleanup = [];
 const namespace = `live-${process.pid}`;
 const hostInterface = `lvh${process.pid}`;
@@ -611,6 +613,27 @@ try {
     registrationId: secondRegistrationId,
     connections,
   });
+  const crossPortObservations = [];
+  secondGateway.app.addHook('onSend', async (request, reply, payload) => {
+    const path = (request.raw.url ?? '/').split('?')[0];
+    if (
+      ['/cross-port-canary.js', '/cross-port-canary.svg', '/'].includes(path) &&
+      reply.statusCode === 403
+    ) {
+      crossPortObservations.push({
+        path,
+        status: reply.statusCode,
+        origin: request.headers.origin ?? null,
+        secFetchSite: request.headers['sec-fetch-site'] ?? null,
+        secFetchMode: request.headers['sec-fetch-mode'] ?? null,
+        secFetchDest: request.headers['sec-fetch-dest'] ?? null,
+        cookieNames: (request.headers.cookie ?? '')
+          .split(';')
+          .map((part) => part.trim().split('=')[0]),
+      });
+    }
+    return payload;
+  });
   await secondGateway.listen();
   cleanup.push(async () => secondGateway.close());
   const broker = new CaddyRouteBroker(
@@ -653,6 +676,7 @@ try {
       '--init-groups',
       'env',
       `HOME=${browserHome}`,
+      `TMPDIR=${browserTemporaryDirectory}`,
       `PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(process.env.HOME, '.cache/ms-playwright')}`,
       process.execPath,
       resolve('scripts/live-remote-browser.mjs'),
@@ -707,6 +731,11 @@ try {
             'error',
             'Disposable transport proof; no model requested',
           ]);
+        } else if (message.command === 'cross-port-evidence') {
+          browser.stdin.write(
+            `${JSON.stringify({ ok: true, observations: crossPortObservations })}\n`,
+          );
+          return;
         } else if (message.command === 'revoke') {
           assert.ok(audiences.get(instance.relayId));
           await connections.revoke({ liveId: instance.liveId });
@@ -723,6 +752,10 @@ try {
   });
   const exit = await new Promise((done) => browser.once('exit', (code) => done(code)));
   await processing;
+  await writeFile(
+    join(evidence, 'cross-port-gateway-observations.json'),
+    JSON.stringify(crossPortObservations, null, 2),
+  );
   await writeFile(
     join(evidence, 'browser-upgrade-observations.json'),
     JSON.stringify(upgradeObservations, null, 2),

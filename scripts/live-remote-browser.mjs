@@ -21,26 +21,41 @@ const replies = commands[Symbol.asyncIterator]();
 async function command(value) {
   process.stdout.write(`${JSON.stringify({ command: value })}\n`);
   const reply = await replies.next();
-  assert.equal(JSON.parse(reply.value).ok, true, `Controller proof command ${value} failed`);
+  const parsed = JSON.parse(reply.value);
+  assert.equal(parsed.ok, true, `Controller proof command ${value} failed`);
+  return parsed;
 }
-const helperLoopbackDenied = await new Promise((done) => {
-  const socket = createConnection({ host: '127.0.0.1', port: config.helperPort });
-  socket.once('connect', () => {
-    socket.destroy();
-    done(false);
+async function privateTargetDenied(host, port) {
+  return new Promise((done) => {
+    const socket = createConnection({ host, port });
+    socket.once('connect', () => {
+      socket.destroy();
+      done(false);
+    });
+    socket.once('error', (error) => done(error.code === 'ECONNREFUSED'));
+    socket.setTimeout(1000, () => {
+      socket.destroy();
+      done(false);
+    });
   });
-  socket.once('error', (error) => done(error.code === 'ECONNREFUSED'));
-  socket.setTimeout(1000, () => {
-    socket.destroy();
-    done(false);
-  });
-});
+}
+const privateTargetProbes = await Promise.all(
+  ['127.0.0.1', config.hostAddress].flatMap((host) =>
+    [config.helperPort, config.secondHelperPort].map(async (port) => ({
+      host,
+      port,
+      denied: await privateTargetDenied(host, port),
+    })),
+  ),
+);
+const helperLoopbackDenied = privateTargetProbes.every((probe) => probe.denied);
 assert.equal(helperLoopbackDenied, true);
 const destinations = new Set();
 const anonymous = [];
 const errors = [];
 const browser = await chromium.launch({
   headless: true,
+  chromiumSandbox: true,
   env: { ...process.env, HOME: config.browserHome, HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '' },
   args: [
     `--host-resolver-rules=MAP preview.live.test ${config.hostAddress}, MAP mobile.live.test ${config.hostAddress}`,
@@ -281,25 +296,6 @@ try {
     cookie.name.startsWith('__Host-gestalt_live_'),
   );
   assert.equal(leaseCookies.length, 2);
-  const crossPortResponses = [];
-  const crossPortCookieNames = new Set();
-  const probeCdp = await context.newCDPSession(preview);
-  await probeCdp.send('Network.enable');
-  const probeRequests = new Map();
-  probeCdp.on('Network.requestWillBeSent', (event) => {
-    const url = new URL(event.request.url);
-    if (url.origin === config.secondPreviewOrigin)
-      probeRequests.set(event.requestId, { path: url.pathname, kind: event.type });
-  });
-  probeCdp.on('Network.responseReceivedExtraInfo', (event) => {
-    const request = probeRequests.get(event.requestId);
-    if (request) crossPortResponses.push({ ...request, status: event.statusCode });
-  });
-  probeCdp.on('Network.requestWillBeSentExtraInfo', (event) => {
-    if (!probeRequests.has(event.requestId)) return;
-    const cookie = event.headers.Cookie ?? event.headers.cookie ?? '';
-    for (const part of cookie.split(';')) crossPortCookieNames.add(part.trim().split('=')[0]);
-  });
   crossPortProbe = true;
   const crossPortBlocked = await preview.evaluate(async (origin) => {
     const script = document.createElement('script');
@@ -340,19 +336,25 @@ try {
     scriptExecuted: false,
   });
   await preview.waitForTimeout(300);
-  for (const path of ['/cross-port-canary.js', '/cross-port-canary.svg', '/']) {
+  const crossPortResponses = (await command('cross-port-evidence')).observations;
+  for (const [path, destination] of [
+    ['/cross-port-canary.js', 'script'],
+    ['/cross-port-canary.svg', 'image'],
+    ['/', 'iframe'],
+  ]) {
+    const response = crossPortResponses.find(
+      (entry) => entry.path === path && entry.status === 403 && entry.secFetchDest === destination,
+    );
+    assert.ok(response, `Missing actual gateway cross-port 403 ${path}`);
+    assert.equal(response.secFetchSite, 'same-site');
     assert.ok(
-      crossPortResponses.some((response) => response.path === path && response.status === 403),
-      `Missing real cross-port 403 ${path}`,
+      leaseCookies.every((cookie) => response.cookieNames.includes(cookie.name)),
+      'Both valid leases must be ambient on the denied cross-port request',
     );
   }
-  assert.ok(
-    crossPortCookieNames.has(leaseCookies[0].name) &&
-      crossPortCookieNames.has(leaseCookies[1].name),
-    'Both live leases must be ambient on the denied cross-port request',
-  );
+  const crossPortCookieNames = new Set(crossPortResponses.flatMap((entry) => entry.cookieNames));
   await secondPreview.close();
-  await probeCdp.detach();
+  await preview.waitForTimeout(100);
   // Separate anonymous browser context, actual browser fetch metadata, all app/helper/dev assets denied.
   const anonymousContext = await browser.newContext();
   const denied = await anonymousContext.newPage();
@@ -453,6 +455,7 @@ try {
     serverNetwork: config.serverNetwork,
     browserNetwork: config.browserNetwork,
     helperLoopbackDenied,
+    privateTargetProbes,
     realSimpleWebAuthnEnrollment: true,
     launchPkceViaValidatedOpener: true,
     clearedGrantFragment: true,
