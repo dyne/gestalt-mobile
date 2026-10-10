@@ -22,7 +22,12 @@ it('retains canonical origin assignments across stopped apps, process reopen, al
   const alias = join(dir, 'alias');
   await symlink(apps[0]!, alias);
   const path = join(dir, 'controller', 'origins.sqlite');
-  const first = new CaddyRouteStore(path, 'preview.example.test', [24443, 24444]);
+  expect(() => new CaddyRouteStore(path, 'preview.example.test', [24443, 24444])).toThrow(
+    'LIVE_ORIGIN_STATE_MISSING',
+  );
+  const first = new CaddyRouteStore(path, 'preview.example.test', [24443, 24444], {
+    initialize: true,
+  });
   const assigned = first.assign(apps[0]!);
   expect(first.assign(alias).origin).toBe(assigned.origin);
   first.desire(apps[0]!, null);

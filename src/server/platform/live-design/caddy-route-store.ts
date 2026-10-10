@@ -23,6 +23,7 @@ export class CaddyRouteStore {
     path: string,
     readonly hostname: string,
     readonly ports: readonly number[],
+    options: { initialize?: boolean } = {},
   ) {
     if (
       !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]+$/.test(hostname) ||
@@ -34,12 +35,24 @@ export class CaddyRouteStore {
       throw new Error('LIVE_PREVIEW_POOL_INVALID');
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     if (lstatSync(dirname(path)).isSymbolicLink()) throw new Error('LIVE_PRIVATE_STATE_INVALID');
+    let existing = true;
     try {
       if (!lstatSync(path).isFile()) throw new Error('LIVE_PRIVATE_STATE_INVALID');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      existing = false;
     }
+    if (!existing && !options.initialize) throw new Error('LIVE_ORIGIN_STATE_MISSING');
     this.db = new DatabaseSync(path);
+    if (
+      existing &&
+      !this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_origins'")
+        .get()
+    ) {
+      this.db.close();
+      throw new Error('LIVE_ORIGIN_STATE_MISSING');
+    }
     chmodSync(path, 0o600);
     this.db.exec(`PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS live_origins (
@@ -49,8 +62,10 @@ export class CaddyRouteStore {
       );`);
     // Prevent changing pools/hostname from silently aliasing old service-worker origins.
     for (const row of this.list())
-      if (row.origin !== `https://${hostname}:${row.port}` || !ports.includes(row.port))
+      if (row.origin !== `https://${hostname}:${row.port}` || !ports.includes(row.port)) {
+        this.db.close();
         throw new Error('LIVE_PREVIEW_POOL_CHANGED');
+      }
   }
   assign(appRoot: string): StoredCaddyRoute {
     const canonical = realpathSync(appRoot);

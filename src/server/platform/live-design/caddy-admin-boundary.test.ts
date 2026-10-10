@@ -75,7 +75,9 @@ describe('Caddy private controller boundary', () => {
       effectiveSandboxState: () => effectivePolicy(dir),
     });
     await expect(boundary.verify()).rejects.toThrow('LIVE_CADDY_ADMIN_UNISOLATED');
-    const store = new CaddyRouteStore(join(dir, 'routes.sqlite'), 'preview.example.test', [24443]);
+    const store = new CaddyRouteStore(join(dir, 'routes.sqlite'), 'preview.example.test', [24443], {
+      initialize: true,
+    });
     cleanup.push(() => store.close());
     const broker = new CaddyRouteBroker(
       'a'.repeat(64),
@@ -138,6 +140,7 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
         join(f.controllerDirectory, 'routes.sqlite'),
         'preview.example.test',
         f.ports,
+        { initialize: true },
       );
       cleanup.push(() => store.close());
       const targets = new RegisteredPreviewTargets();

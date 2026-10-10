@@ -27,6 +27,7 @@ async function setup(poolSize = 3) {
     join(fixture.dir, 'routes.sqlite'),
     'preview.example.test',
     fixture.ports.slice(0, poolSize),
+    { initialize: true },
   );
   cleanup.push(() => store.close());
   const targets = new RegisteredPreviewTargets();

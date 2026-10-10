@@ -34,7 +34,10 @@ Stop deletes desired routes, never assignment records. Preserve the database on
 restart and report capacity exhaustion. A fresh controller must re-register
 targets before restoring any desired route; durable dial addresses alone are
 not authorization to proxy to a reused localhost port. Startup with lost state
-requires recovery, rather than allocating apparently vacant origins.
+requires recovery, rather than allocating apparently vacant origins. Missing or
+empty state fails with `LIVE_ORIGIN_STATE_MISSING`; only explicit first-time
+provisioning may pass `{ initialize: true }` to the store constructor. Runtime
+restart/recovery must use its default, which never creates a replacement ledger.
 
 The route engine operates solely on recorded `gestalt_live_*` servers. It checks
 ownership against its last desired/applied JSON, reads a servers-subtree ETag,
