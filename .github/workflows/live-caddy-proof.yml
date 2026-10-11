@@ -94,7 +94,7 @@ jobs:
           set -Eeuo pipefail
           npm run build:server
           node scripts/live-remote-proof.mjs
-      - name: Bounded outer app-server confinement investigation
+      - name: Bounded outer app-server confinement classification
         timeout-minutes: 2
         env:
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
@@ -124,6 +124,7 @@ jobs:
           };
           const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
             '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
+            '-c', 'permissions.l8_admitted={extends=":workspace",filesystem={"' + privateRoot + '":"deny"}}',
             'app-server', '--stdio'], {
             cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
           });
@@ -163,6 +164,19 @@ jobs:
               "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
               cwd: app, timeoutMs: 5000, outputBytesCap: 1024 });
             facts.nativeCommandDenied = exec.result?.exitCode === 0;
+            facts.nativeCommandExitCode = exec.result?.exitCode ?? null;
+            facts.nativeCommandErrorCode = exec.error?.code ?? null;
+            facts.nativeCommandClassification = exec.result?.exitCode === 9 ? 'PRIVATE_CANARY_READABLE' : exec.result?.exitCode === 0 ? 'DENIED' : exec.error ? 'RPC_ERROR' : 'NON_DENIAL_FAILURE';
+            facts.nativeCommandSandboxPrerequisite = /socket directory.*0700|Operation not permitted|bwrap|sandbox/i.test(exec.result?.stderr ?? '');
+            stage = 'native-command-admitted-profile';
+            const admitted = await request('command/exec', { command: ['/usr/bin/node', '-e',
+              "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
+              cwd: app, permissionProfile: 'l8_admitted', timeoutMs: 5000, outputBytesCap: 1024 });
+            facts.admittedCommandExitCode = admitted.result?.exitCode ?? null;
+            facts.admittedCommandErrorCode = admitted.error?.code ?? null;
+            facts.admittedCommandDenied = admitted.result?.exitCode === 0;
+            facts.admittedCommandClassification = admitted.result?.exitCode === 9 ? 'PRIVATE_CANARY_READABLE' : admitted.result?.exitCode === 0 ? 'DENIED' : admitted.error ? 'RPC_ERROR' : 'NON_DENIAL_FAILURE';
+          
             facts.actualNativeBoundary = facts.ordinaryReadPreserved && facts.privateReadDenied && facts.nativeCommandDenied;
             facts.stage = 'complete';
           } catch (error) {
