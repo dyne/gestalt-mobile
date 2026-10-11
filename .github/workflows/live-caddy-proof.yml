@@ -1,0 +1,200 @@
+# Copyright (C) 2026 Dyne.org foundation
+# Designed by Denis Roio <jaromil@dyne.org>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Isolated Live Caddy proof (no deployment)
+on:
+  pull_request:
+    paths:
+      - src/server/platform/live-design/**
+      - src/server/features/live-design/application/**
+      - .github/workflows/live-caddy-proof.yml
+      - scripts/live-remote-*.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - run: npm ci
+      - name: Prepare pinned test tools in runner temporary state
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/live-proof-tools"
+          curl --fail --silent --show-error --location \
+            https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz"
+          printf '%s  %s\n' \
+            a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7 \
+            "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" | sha512sum --check --status
+          tar -xzf "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" caddy
+          npm install --prefix "$RUNNER_TEMP/live-proof-tools" --no-save --ignore-scripts @openai/codex@0.161.0
+          echo "LIVE_TEST_CADDY=$RUNNER_TEMP/live-proof-tools/caddy" >> "$GITHUB_ENV"
+          echo "LIVE_TEST_CODEX=$RUNNER_TEMP/live-proof-tools/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          curl --fail --silent --show-error --location \
+            https://github.com/dyne/gestalt/releases/download/impeccable-gestalt-live-1/impeccable-gestalt-live-1-x86_64-unknown-linux-musl.tar.gz \
+            --output "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz"
+          printf '%s  %s\n' \
+            65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 \
+            "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" | sha256sum --check --status
+          echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
+          tar -xzf "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" impeccable
+          echo "LIVE_TEST_IMPECCABLE=$RUNNER_TEMP/live-proof-tools/impeccable" >> "$GITHUB_ENV"
+      - name: Prepare disposable browser trust and network prerequisites
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --no-install-recommends libnss3-tools iproute2
+          npx playwright install --with-deps chromium
+      - name: Enable existing native sandbox prerequisites on disposable hosted runner
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -Eeuo pipefail
+          current_userns=$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)
+          if [[ -n $current_userns && $current_userns != 1 ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          current_apparmor=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)
+          if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Real temporary Caddy and actual same-UID managed project denial
+        env:
+          LIVE_NATIVE_CADDY_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          "$LIVE_TEST_CADDY" version
+          "$LIVE_TEST_CODEX" --version
+          npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
+            src/server/platform/live-design/caddy-admin-boundary.test.ts \
+            src/server/platform/live-design/caddy-route-store.test.ts \
+            src/server/platform/live-design/preview-gateway.test.ts \
+            src/server/platform/live-design/helper-process.test.ts \
+            src/server/platform/live-design/poll-events.test.ts \
+            src/server/platform/live-design/relay-event-turns.test.ts \
+            src/server/platform/live-design/stop-resume.test.ts \
+            src/server/platform/live-design/live-autopilot.test.ts \
+            --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Real helper browser proof in separate network with trusted TLS
+        timeout-minutes: 5
+        env:
+          LIVE_REMOTE_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          npm run build:server
+          node scripts/live-remote-proof.mjs
+      - name: Bounded outer app-server confinement classification
+        timeout-minutes: 2
+        env:
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          node --input-type=module <<'L8_OUTER_PROBE'
+          // Copyright (C) 2026 Dyne.org foundation
+          // Designed by Denis Roio <jaromil@dyne.org>
+          // SPDX-License-Identifier: AGPL-3.0-or-later
+          import { spawn } from 'node:child_process';
+          import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const root = mkdtempSync(join(tmpdir(), 'live-outer-investigation-'));
+          const app = join(root, 'app'), privateRoot = join(root, 'private'), nativeHome = join(root, 'native-home');
+          for (const p of [app, privateRoot, nativeHome]) mkdirSync(p, { mode: 0o700 });
+          writeFileSync(join(app, 'public.txt'), 'public');
+          writeFileSync(join(privateRoot, 'canary.txt'), 'private-controller-canary');
+          const codex = process.env.LIVE_TEST_CODEX;
+          const state = {
+            permissionProfile: { type: 'managed', file_system: { type: 'restricted', entries: [
+              { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+              { path: { type: 'path', path: root }, access: 'write' },
+              { path: { type: 'path', path: privateRoot }, access: 'deny' },
+            ] }, network: 'enabled' },
+            sandboxCwd: pathToFileURL(app).href, useLegacyLandlock: false,
+          };
+          const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
+            '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
+            '-c', 'permissions.l8_admitted={extends=":workspace",filesystem={"' + privateRoot + '"="deny"}}',
+            'app-server', '--stdio'], {
+            cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
+          });
+          let output = '', nextId = 0, diagnostics = '', stage = 'initialize';
+          const pending = new Map();
+          child.stderr.on('data', b => { if (diagnostics.length < 8192) diagnostics += b.toString().slice(0, 8192 - diagnostics.length); });
+          child.stdout.on('data', b => {
+            output += b;
+            if (output.length > 131072) { child.kill('SIGTERM'); return; }
+            let line;
+            while ((line = output.indexOf('\n')) >= 0) {
+              const raw = output.slice(0, line); output = output.slice(line + 1);
+              try { const msg = JSON.parse(raw); if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); } } catch {}
+            }
+          });
+          const request = (method, params) => new Promise((resolve, reject) => {
+            const id = ++nextId;
+            const timer = setTimeout(() => { pending.delete(id); reject(new Error('RPC_TIMEOUT')); }, 15000);
+            pending.set(id, msg => { clearTimeout(timer); resolve(msg); });
+            child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
+          });
+          const facts = { outerAppServer: true, actualNativeBoundary: false, privateReadDenied: false,
+            ordinaryReadPreserved: false, nativeCommandDenied: false, collaborationFlagsRequested: true };
+          try {
+            const initialized = await request('initialize', { clientInfo: { name: 'live_outer_investigation', version: '1' },
+              capabilities: { experimentalApi: true } });
+            if (initialized.error) throw new Error('INITIALIZE_FAILED');
+            child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+            stage = 'ordinary-read';
+            const publicRead = await request('fs/readFile', { path: join(app, 'public.txt') });
+            facts.ordinaryReadPreserved = publicRead.result?.dataBase64 === Buffer.from('public').toString('base64');
+            stage = 'private-read';
+            const privateRead = await request('fs/readFile', { path: join(privateRoot, 'canary.txt') });
+            facts.privateReadDenied = !!privateRead.error;
+            stage = 'native-command';
+            const exec = await request('command/exec', { command: ['/usr/bin/node', '-e',
+              "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
+              cwd: app, timeoutMs: 5000, outputBytesCap: 1024 });
+            facts.nativeCommandDenied = exec.result?.exitCode === 0;
+            facts.nativeCommandExitCode = exec.result?.exitCode ?? null;
+            facts.nativeCommandErrorCode = exec.error?.code ?? null;
+            facts.nativeCommandClassification = exec.result?.exitCode === 9 ? 'PRIVATE_CANARY_READABLE' : exec.result?.exitCode === 0 ? 'DENIED' : exec.error ? 'RPC_ERROR' : 'NON_DENIAL_FAILURE';
+            facts.nativeCommandSandboxPrerequisite = /socket directory.*0700|Operation not permitted|bwrap|sandbox/i.test(exec.result?.stderr ?? '');
+            stage = 'native-command-admitted-profile';
+            const admitted = await request('command/exec', { command: ['/usr/bin/node', '-e',
+              "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
+              cwd: app, permissionProfile: 'l8_admitted', timeoutMs: 5000, outputBytesCap: 1024 });
+            facts.admittedCommandExitCode = admitted.result?.exitCode ?? null;
+            facts.admittedCommandErrorCode = admitted.error?.code ?? null;
+            facts.admittedCommandDenied = admitted.result?.exitCode === 0;
+            facts.admittedCommandClassification = admitted.result?.exitCode === 9 ? 'PRIVATE_CANARY_READABLE' : admitted.result?.exitCode === 0 ? 'DENIED' : admitted.error ? 'RPC_ERROR' : 'NON_DENIAL_FAILURE';
+          
+            facts.actualNativeBoundary = facts.ordinaryReadPreserved && facts.privateReadDenied && facts.nativeCommandDenied;
+            facts.stage = 'complete';
+          } catch (error) {
+            facts.stage = stage; facts.failure = error instanceof Error ? error.message : 'UNKNOWN';
+            facts.localNativePrerequisite = /socket directory.*0700|Operation not permitted|bwrap.*permission/i.test(diagnostics);
+          } finally {
+            try { process.kill(-child.pid, 'SIGTERM'); } catch {}
+            await new Promise(resolve => { if (child.exitCode !== null) resolve(); else { child.once('exit', resolve); setTimeout(resolve, 3000); } });
+            console.log('OUTER_LAUNCH_INVESTIGATION ' + JSON.stringify(facts));
+            const evidence = process.env.LIVE_CADDY_EVIDENCE_DIR;
+            if (evidence) { mkdirSync(evidence, { recursive: true }); writeFileSync(join(evidence, 'outer-launch-investigation.json'), JSON.stringify(facts, null, 2)); }
+            rmSync(root, { recursive: true, force: true });
+          }
+          
+          L8_OUTER_PROBE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: live-caddy-proof
+          path: test-results/live-caddy-proof
+          if-no-files-found: error

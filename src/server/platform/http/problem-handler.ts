@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { ProblemDetail } from '../../../shared/contracts/problem.js';
 import { problem as createProblem } from './problem.js';
+import { LiveDispatchError } from '../../features/live-design/application/dispatch.js';
 
 export function registerProblemHandler(app: FastifyInstance, serveSpa = false): void {
   app.setNotFoundHandler((request, reply) => {
@@ -26,6 +27,15 @@ export function registerProblemHandler(app: FastifyInstance, serveSpa = false): 
   });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof LiveDispatchError) {
+      const status = ['LIVE_STATE_UNAVAILABLE', 'LIVE_RUNTIME_UNISOLATED'].includes(error.code)
+        ? 503
+        : 409;
+      return reply
+        .code(status)
+        .type('application/problem+json')
+        .send(createProblem(error.code, status, 'Stop or reconcile Live before sending.', true));
+    }
     if (
       typeof error === 'object' &&
       error !== null &&

@@ -89,12 +89,19 @@ export interface AuthorizationRepository {
   }): boolean;
   saveSession(token: AuthorizationSession['id'], session: Omit<AuthorizationSession, 'id'>): void;
   sessionDevice(token: AuthorizationSession['id'], now: string): AuthorizedDevice['id'] | null;
+  /** Private controller lookup; permits Live to retain only a hash of the Mobile credential. */
+  sessionDeviceByHash?(hash: string, now: string): AuthorizedDevice['id'] | null;
   revokeSession(token: AuthorizationSession['id'], now: string): boolean;
   close(): void;
 }
 
 export interface Clock {
   now(): Date;
+}
+/** Notification follows authoritative auth revocation; delivery failure must not undo revocation. */
+export interface AuthorizationRevocationObserver {
+  sessionRevoked(session: AuthorizationSessionId): void | Promise<void>;
+  deviceRevoked(deviceId: AuthorizedDevice['id']): void | Promise<void>;
 }
 
 export interface RandomBytes {

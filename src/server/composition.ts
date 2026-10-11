@@ -4,6 +4,19 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { LiveDispatchGuard } from './platform/live-design/live-dispatch.js';
+import { RelayLiveEventTurns } from './platform/live-design/relay-event-turns.js';
+import {
+  PollLiveEvents,
+  type CanonicalLivePoll,
+  type LiveEventInbox,
+} from './features/live-design/application/poll-events.js';
+import { AutopilotLiveControls } from './platform/live-design/autopilot-live-controls.js';
+import type { LiveControls } from './features/live-design/application/controls.js';
+import {
+  LiveDispatchError,
+  type LiveDispatchPolicy,
+} from './features/live-design/application/dispatch.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,6 +26,13 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
 import { buildApp } from './app.js';
+import type {
+  LiveOwnershipReader,
+  PreviewGrantDependencies,
+} from './features/live-design/application/ports.js';
+import { SqlitePreviewGrantStore } from './platform/live-design/sqlite-preview-grant-store.js';
+import { previewAuthentication, previewSecrets } from './platform/live-design/preview-secrets.js';
+import { PreviewConnections } from './platform/live-design/preview-connections.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
 import { createSelfDebugSession } from './features/self-debug/create-session.js';
@@ -193,6 +213,17 @@ export type ComposeRelayAppOptions = {
   /** Test seam; production constructs the manager when the kimi CLI is installed. */
   kimiServerManager?: KimiWebServerManager;
   homeDirectory?: string;
+  /** Live remains unavailable until an authoritative ownership controller is supplied. */
+  liveOwnership?: LiveOwnershipReader;
+  /** Trusted elected controller; shares one durable DB and actual effective runtime scope. */
+  liveController?: ConstructorParameters<typeof LiveDispatchGuard>[0] & {
+    /** Trusted controller binding only; this grants no Start capability/readiness. */
+    bindControls?(controls: LiveControls): void;
+    /** Trusted controller receives existing-runtime dispatch only; no Start/admission grant. */
+    bindPollEvents?(
+      create: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => PollLiveEvents,
+    ): void;
+  };
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
   authorizationClock?: () => Date;
@@ -233,6 +264,63 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw error;
   }
   const sessions = new SqliteSessionRepository(database);
+  const liveEventAuthority = options.liveController
+    ? new LiveDispatchGuard(options.liveController)
+    : undefined;
+  const liveDispatch: LiveDispatchPolicy | undefined = options.liveController
+    ? liveEventAuthority
+    : options.liveOwnership
+      ? {
+          check() {
+            throw new LiveDispatchError('LIVE_STATE_UNAVAILABLE');
+          },
+          writer() {
+            throw new LiveDispatchError('LIVE_STATE_UNAVAILABLE');
+          },
+          interaction() {
+            throw new LiveDispatchError('LIVE_STATE_UNAVAILABLE');
+          },
+          blocked() {
+            return true;
+          },
+        }
+      : undefined;
+  const liveHeld = (sessionId: string): boolean => {
+    if (!liveDispatch) return false;
+    const session = sessions.find(sessionId);
+    if (!session) return true;
+    try {
+      liveDispatch.check(session);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  let auxiliaryReservation:
+    | ReturnType<NonNullable<ComposeRelayAppOptions['liveController']>['owners']['reserveWriter']>
+    | undefined;
+  // Catalog/helper processes have no proved project-only effective permission scope.
+  // Reserve them globally and retain that claim until controller tree reconciliation.
+  const admitAuxiliary = () => {
+    if (!liveDispatch) return;
+    const owners = options.liveController?.owners;
+    if (!owners) throw new LiveDispatchError('LIVE_STATE_UNAVAILABLE');
+    try {
+      if (auxiliaryReservation) owners.assertWriter(auxiliaryReservation, null);
+      else auxiliaryReservation = owners.reserveAuxiliary('relay-native-auxiliary');
+    } catch (error) {
+      throw new LiveDispatchError(
+        error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
+          ? error.message
+          : 'LIVE_STATE_UNAVAILABLE',
+      );
+    }
+  };
+  const launchAuxiliary: NonNullable<ComposeRelayAppOptions['launchAppServer']> = (input) => {
+    admitAuxiliary();
+    return (options.launchAppServer ?? launchCodexAppServer)(input);
+  };
+
   // Only sessions found while opening the relay database belong to a previous
   // process. A listen hook can run after a new session has already started in
   // this process; detaching that live writer would make restore and activity
@@ -447,8 +535,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       }),
     nextControlId: (sessionId, generation) =>
       `autopilot-${generation}-${createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex').slice(0, 16)}`,
+    liveHeld,
     turnStarter: {
       start: async (sessionId, controlId, generation, launchIdentity) => {
+        if (liveHeld(sessionId)) throw new LiveDispatchError();
         const current = () => {
           const state = autopilotStore.find(sessionId);
           return Boolean(
@@ -496,6 +586,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
     executorController: {
       resume: async (sessionId, threadId, generation, trigger) => {
+        if (liveHeld(sessionId)) throw new LiveDispatchError();
         const session = sessions.find(sessionId);
         if (!session || !runtime || interactions.list(sessionId).length)
           throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
@@ -578,6 +669,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     );
   };
   options.onAutopilotCoordinator?.(autopilot);
+  if (options.liveController)
+    options.liveController.bindControls?.(
+      new AutopilotLiveControls(autopilot, options.liveController.owners),
+    );
   const workspaces = new FilesystemWorkspaceCatalog(root);
   const workspaceFiles = new FilesystemWorkspaceFiles();
   const debugHome = options.homeDirectory ?? homedir();
@@ -589,7 +684,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const homeDirectory = options.homeDirectory ?? homedir();
   // Constructing the manager is cheap (no spawn until `ensure`); building it
   // before the model catalog lets the catalog reuse the gestalt-owned servers.
-  const kimiManager =
+  const rawKimiManager =
     options.kimiServerManager ??
     (options.installedKimiVersion != null && options.startAppServers
       ? new KimiWebServerManager({
@@ -597,12 +692,27 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           sourceShareDir: join(homeDirectory, '.kimi-code'),
         })
       : undefined);
+  const kimiManager = rawKimiManager
+    ? new Proxy(rawKimiManager, {
+        get(target, property) {
+          if (property === 'ensure')
+            return async (...args: Parameters<KimiWebServerManager['ensure']>) => {
+              admitAuxiliary();
+              const result = await target.ensure(...args);
+              admitAuxiliary();
+              return result;
+            };
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      })
+    : undefined;
   const kimiModels = new KimiModelCatalog(kimiManager ?? null, kimiManager != null);
   const models = new ProviderModelCatalog({
     codex:
       options.installedCodexVersion === null
         ? { list: async () => [] }
-        : new CodexModelCatalog(root, options.launchAppServer ?? launchCodexAppServer),
+        : new CodexModelCatalog(root, launchAuxiliary),
     kimi: kimiModels,
   });
   const sessionModels: ModelCatalog = options.sessionModelCatalog ?? {
@@ -626,18 +736,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const serenaInstallation = new ManagedSerena();
   const capabilities = new CodexCapabilities(xerj, new CodexSerena(serenaInstallation));
   const skillCatalog = (provider: LlmProvider, profile: string) =>
-    provider === 'kimi'
-      ? kimiSkillCatalog
-      : new CodexSkillCatalog(profile, options.launchAppServer ?? launchCodexAppServer);
+    provider === 'kimi' ? kimiSkillCatalog : new CodexSkillCatalog(profile, launchAuxiliary);
   const editorSkillCatalog = new CachedSkillCatalog(
     (provider, profile, workspace) =>
       provider === 'codex'
-        ? new CodexSkillCatalog(
-            profile,
-            options.launchAppServer ?? launchCodexAppServer,
-            5_000,
-            capabilities,
-          ).list(workspace)
+        ? new CodexSkillCatalog(profile, launchAuxiliary, 5_000, capabilities).list(workspace)
         : kimiSkillCatalog.list(workspace),
     async (provider, _profile, workspace, result) => {
       if (provider !== 'codex') return result;
@@ -684,7 +787,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   const recentThreads = createRecentThreadLister({
     root,
     profiles: options.profiles,
-    launch: options.launchAppServer ?? launchCodexAppServer,
+    launch: launchAuxiliary,
   });
   const kimiRecentSessions = createKimiRecentSessionLister({
     servers: kimiManager ?? null,
@@ -804,6 +907,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   /** Fail a held checkpoint exactly once and retain its durable root boundary. */
   const failCheckpointHandoff = (sessionId: string, requestId: string, turnId: string | null) => {
     cancelCheckpointHandoffTimer(sessionId, requestId);
+    if (liveHeld(sessionId)) return false;
     const occurredAt = new Date().toISOString();
     if (!interactions.resolve(sessionId, requestId, occurredAt, 'failed')) return false;
     autopilot.checkpointHandoffFailed(sessionId, turnId);
@@ -897,6 +1001,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const handle = setTimeout(() => {
       if (attentionAcknowledgementTimers.get(key)?.token !== token) return;
       attentionAcknowledgementTimers.delete(key);
+      if (liveHeld(sessionId)) return;
       const ownedRuntime = runtime;
       const session = sessions.find(sessionId);
       if (!ownedRuntime || !session || !ownedRuntime.abandonServerRequest(sessionId, requestId))
@@ -976,10 +1081,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   const acceptPlanUpdate = (sessionId: string, update: PlanStatusUpdate): void => {
     if (closing) return;
+    const held = liveHeld(sessionId);
     supervisedPlans.accept(sessionId, update);
-    planMeasurementRefresh?.accept(sessionId, update);
+    if (!held) planMeasurementRefresh?.accept(sessionId, update);
     if (update.kind === 'updated') {
-      void runtime?.syncThreadPlanName(sessionId, update.plan);
+      if (!held) void runtime?.syncThreadPlanName(sessionId, update.plan);
       const occurredAt = new Date().toISOString();
       const session = sessions.find(sessionId);
       if (session) {
@@ -1004,6 +1110,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           occurredAt,
         ),
       );
+    }
+    if (held) {
+      publishSessionStatus(sessionId, new Date().toISOString());
+      return;
     }
     if (update.kind === 'updated' && update.reason === 'supervision-start')
       autopilot.supervisionStarted(sessionId);
@@ -1113,6 +1223,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             );
         },
         async (sessionId, request, origin) => {
+          if (!isOrgPlanHealthCall(request)) liveDispatch?.interaction(sessionId);
           let rawInteraction = toPendingInteraction(request);
           const compactCheckpointKind = compactOrgPlanCheckpointKind(request);
           if (compactCheckpointKind || rawInteraction?.kind === 'orgPlanCheckpoint') {
@@ -1420,7 +1531,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           prepare: async (session, rpc, config, deadline) => {
             const catalog = await new CodexSkillCatalog(
               session.profile,
-              options.launchAppServer ?? launchCodexAppServer,
+              launchAuxiliary,
               Math.max(1, deadline - Date.now()),
             ).list(session.workspacePath);
             const project = await skillProfiles.readWorkspaceDefault(session.workspacePath);
@@ -1443,6 +1554,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           },
           verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
         },
+        liveDispatch,
       )
     : null;
   const handleKimiNotification = (
@@ -1506,6 +1618,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   kimiRuntime = kimiManager
     ? new KimiSessionRuntime({
         servers: kimiManager,
+        liveDispatch,
         skillsFor: async (session) => {
           const config = await resolveSkills(session);
           return config?.map((entry) => ({
@@ -1569,6 +1682,27 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
+  if (options.liveController?.bindPollEvents && liveEventAuthority && runtime) {
+    const owners = options.liveController.owners;
+    const turns = new RelayLiveEventTurns({
+      owners,
+      sessions: { find: (id) => sessions.find(id), save: saveSession, list: () => sessions.list() },
+      runtime,
+      now: Date.now,
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    options.liveController.bindPollEvents(
+      (cli, inbox) =>
+        new PollLiveEvents({
+          owners,
+          inbox,
+          cli,
+          authority: liveEventAuthority,
+          turns,
+          now: Date.now,
+        }),
+    );
+  }
   if (kimiRuntime) {
     // A gestalt-owned kimi web process exited or its websocket dropped: stop
     // the durable session like the codex supervisor does, without a resume
@@ -1586,13 +1720,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session.provider === 'kimi' ? kimiRuntime : runtime;
   if (runtime) {
     scheduleAgentCapacityRecovery = (sessionId, acknowledge) => {
-      if (closing || capacityRecoveries.has(sessionId) || !acknowledge()) return false;
+      if (closing || liveHeld(sessionId) || capacityRecoveries.has(sessionId) || !acknowledge())
+        return false;
       capacityRecoveries.add(sessionId);
       const timer = setTimeout(() => {
         capacityRecoveryTimers.delete(sessionId);
         const task = Promise.resolve().then(async () => {
           try {
-            if (closing) return;
+            if (closing || liveHeld(sessionId)) return;
             const session = sessions.find(sessionId);
             if (!session || session.desiredState !== 'active' || !session.threadId) return;
             const recovering = RelaySession.rehydrate(session).beginRecovery(
@@ -1622,6 +1757,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     };
     const supervisor = new SessionSupervisor(
       async (sessionId) => {
+        if (liveHeld(sessionId)) return;
         const session = sessions.find(sessionId);
         if (!session || session.desiredState !== 'active' || !session.threadId) return;
         const recovering = RelaySession.rehydrate(session).beginRecovery(
@@ -1651,6 +1787,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     };
   }
   let authorization: SqliteAuthorizationStore | undefined;
+  let previewGrants: SqlitePreviewGrantStore | undefined;
+  let liveDesign: PreviewGrantDependencies | undefined;
+  let previewConnections: PreviewConnections | undefined;
   if (passkeyAuthEnabled) {
     try {
       authorization = new SqliteAuthorizationStore(
@@ -1658,7 +1797,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         relyingParty,
       );
       authorization.initializeOwner(ownerHandle!);
+      if (options.liveOwnership || options.liveController) {
+        if (!relyingParty.publicOrigin.startsWith('https://'))
+          throw new Error('Live requires HTTPS production authentication');
+        previewGrants = new SqlitePreviewGrantStore(options.homeDirectory ?? homedir());
+        liveDesign = {
+          store: previewGrants,
+          owners: options.liveController?.owners ?? options.liveOwnership!,
+          authentication: previewAuthentication(authorization),
+          secrets: previewSecrets,
+          now: options.authorizationClock ?? (() => new Date()),
+          mobileOrigin: relyingParty.publicOrigin,
+        };
+        previewConnections = new PreviewConnections(liveDesign);
+        liveDesign.revocations = previewConnections;
+      }
     } catch (error) {
+      previewGrants?.close();
+      authorization?.close();
       database.close();
       throw error;
     }
@@ -1666,6 +1822,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let app;
   try {
     app = await buildApp({
+      liveDesign,
       upgrade: new ManagedUpgrade(options.root),
       ...(authorization
         ? {
@@ -1691,6 +1848,21 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               },
               webauthn: options.authorizationWebauthn ?? new SimpleWebAuthnAdapter(),
               relyingParty,
+              ...(previewConnections
+                ? {
+                    revocations: {
+                      sessionRevoked: (
+                        session: import('./features/auth/domain/identifiers.js').AuthorizationSessionId,
+                      ) =>
+                        previewConnections!.revoke({
+                          authSessionHash: previewSecrets.hash(session),
+                        }),
+                      deviceRevoked: (
+                        deviceId: import('./features/auth/domain/identifiers.js').AuthorizedDeviceId,
+                      ) => previewConnections!.revoke({ deviceId }),
+                    },
+                  }
+                : {}),
             },
           }
         : { passkeyAuthDisabled: true }),
@@ -1866,6 +2038,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               }),
           }
         : undefined,
+      liveDispatch,
       sessionRoutes: {
         createId: randomUUID,
         now: () => new Date().toISOString(),
@@ -1878,6 +2051,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillProfiles,
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
+        reserve: (session) => liveDispatch?.writer(session),
         activate:
           runtime || kimiRuntime
             ? async (session) => {
@@ -2012,10 +2186,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 })
             : undefined,
         release: (session) => {
+          liveDispatch?.check(session);
           autopilot.cancel(session.id, 'sessionEnded');
           return RelaySession.rehydrate(session).release(new Date().toISOString()).snapshot;
         },
         remove: (id) => {
+          const session = sessions.find(id);
+          if (session) liveDispatch?.check(session);
           autopilot.cancel(id, 'sessionEnded');
           activity.dispose(id);
           sessions.remove(id);
@@ -2024,6 +2201,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         close:
           runtime || kimiRuntime
             ? (id) => {
+                const existing = sessions.find(id);
+                if (existing) liveDispatch?.check(existing);
                 autopilot.cancel(id, 'sessionEnded');
                 planMeasurementRefresh?.stop(id);
                 dismissPendingInteractions(id, new Date().toISOString());
@@ -2077,20 +2256,30 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         open: async (id, planName) => {
           const session = sessions.find(id);
           if (!session) return { kind: 'missing' };
+          liveDispatch?.check(session);
           const result = await workspacePlanCatalog.read(session.workspacePath, planName);
           if (result.kind === 'available') {
             const planPath = resolve(session.workspacePath, ...planName.split('/'));
+            liveDispatch?.check(session);
             await planStatusSource.attach(session, planPath, (update) =>
               acceptPlanUpdate(id, update),
             );
           }
           return result;
         },
-        removeStatus: (id) =>
-          planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined),
-        clear: (id) => supervisedPlans.clear(id),
+        removeStatus: (id) => {
+          const session = sessions.find(id);
+          if (session) liveDispatch?.check(session);
+          return planStatusSource.remove(id, supervisedPlans.identity(id) ?? undefined);
+        },
+        clear: (id) => {
+          const session = sessions.find(id);
+          if (session) liveDispatch?.check(session);
+          return supervisedPlans.clear(id);
+        },
         closed: (id) => {
           const session = sessions.find(id);
+          if (session) liveDispatch?.check(session);
           if (session?.lastOrgPlan) {
             const updated = {
               ...session,
@@ -2106,7 +2295,38 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           events.publish(journal.append(id, 'plan.closed', {}, occurredAt));
         },
       },
-      workspacePlanRoutes: { workspaces, plans: workspacePlanCatalog, archiver: planArchiver },
+      workspacePlanRoutes: {
+        workspaces,
+        plans: workspacePlanCatalog,
+        archiver: {
+          archive: async (workspacePath, planName) => {
+            if (liveDispatch && !options.liveController)
+              throw new LiveDispatchError('LIVE_STATE_UNAVAILABLE');
+            const store = options.liveController?.owners;
+            let reservation: ReturnType<NonNullable<typeof store>['reserveWriter']> | undefined;
+            try {
+              reservation = store?.reserveWriter(
+                `archive-${createHash('sha256').update(workspacePath).digest('hex').slice(0, 32)}`,
+                [workspacePath],
+              );
+              const result = await planArchiver.archive(workspacePath, planName);
+              if (reservation)
+                store!.releaseQuiescentWriter(reservation, {
+                  roots: 0,
+                  descendants: 0,
+                  commands: 0,
+                  approvals: 0,
+                  unknown: false,
+                });
+              return result;
+            } catch (error) {
+              if (error instanceof Error && error.message === 'LIVE_MODE_ACTIVE')
+                throw new LiveDispatchError();
+              throw error;
+            }
+          },
+        },
+      },
       workspaceFileRoutes: {
         workspaces,
         files: workspaceFiles,
@@ -2345,6 +2565,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     });
   } catch (error) {
     authorization?.close();
+    previewGrants?.close();
     database.close();
     throw error;
   }
@@ -2448,7 +2669,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     kimiRuntime?.stopAll();
     await kimiManager?.stopAll();
     planStatusSource.closeAll();
+    await previewConnections?.close();
     database.close();
+    previewGrants?.close();
     authorization?.close();
   });
   return app;

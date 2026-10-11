@@ -8,6 +8,7 @@ import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
+import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
 import { randomUUID } from 'node:crypto';
 import {
   createPlanMeasurementSnapshot,
@@ -24,7 +25,10 @@ import {
 import { gestaltQuizDynamicTool } from '../../../shared/contracts/quiz.js';
 import { gestaltOrgPlanAttentionDynamicTool } from '../../../shared/contracts/org-plan-attention.js';
 import { gestaltOrgPlanCheckpointDynamicTool } from '../../../shared/contracts/org-plan-checkpoint.js';
-import { gestaltOrgPlanHealthDynamicTool } from '../../../shared/contracts/org-plan-health.js';
+import {
+  isOrgPlanHealthCall,
+  gestaltOrgPlanHealthDynamicTool,
+} from '../../../shared/contracts/org-plan-health.js';
 import { gestaltAutopilotWaitLeaseDynamicTool } from '../../../shared/contracts/autopilot-wait-lease.js';
 import { gestaltAgentCapacityRecoveryDynamicTool } from '../../../shared/contracts/agent-capacity-recovery.js';
 import { countDiffLines } from '../../../shared/contracts/file-change.js';
@@ -94,6 +98,7 @@ type PendingRequest = {
   resolve(result: unknown): void;
   reject(reason: Error): void;
   settling?: boolean;
+  observation?: boolean;
 };
 
 export type DirectChildThread = Readonly<{
@@ -247,6 +252,7 @@ export class CodexSessionRuntime {
       ): Promise<CodexRetrievalState>;
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
+    private readonly liveDispatch?: LiveDispatchPolicy,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -312,6 +318,7 @@ export class CodexSessionRuntime {
 
   /** Replaces only this session's app-server while retaining its durable root thread. */
   async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session);
     this.stop(session.id);
     return this.restore(session, now);
   }
@@ -337,6 +344,7 @@ export class CodexSessionRuntime {
   resolveServerRequest(sessionId: string, requestId: string, result: unknown): boolean {
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingRequests.get(requestId);
+    if (!pending?.observation) this.liveDispatch?.interaction(sessionId);
     if (!resource || !pending || pending.settling) return false;
     pending.settling = true;
     pending.resolve(result);
@@ -386,6 +394,7 @@ export class CodexSessionRuntime {
     clientUserMessageId: string | undefined,
     now: string,
   ): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session, 'turn');
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const result = decodeTurnStart(
@@ -409,6 +418,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId: string,
   ): Promise<string> {
+    this.liveDispatch?.writer(session, 'executor');
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const params = {
@@ -451,6 +461,7 @@ export class CodexSessionRuntime {
   }
 
   async ensureWriter(session: RelaySessionSnapshot, now: string): Promise<WriterAcquisition> {
+    this.liveDispatch?.writer(session);
     if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
     const inflight = this.writerAcquisitions.get(session.id);
     if (inflight) return inflight;
@@ -494,12 +505,152 @@ export class CodexSessionRuntime {
     return true;
   }
 
+  /** Controller Stop only: cancel native work without acquiring a writer or starting
+   * a reader process. Unsupported/ambiguous native observations retain Live ownership.
+   */
+  async settleLiveWork(
+    session: RelaySessionSnapshot,
+    assertCurrent: () => void,
+  ): Promise<readonly string[]> {
+    const owned = this.sessions.get(session.id);
+    if (!owned || !session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+    assertCurrent();
+    const deadline = Date.now() + 5000;
+    const bounded = async <T>(work: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+        assertCurrent();
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const request = (method: string, params: unknown) => {
+      assertCurrent();
+      if (Date.now() >= deadline) throw new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT');
+      return bounded(owned.process.rpc.request(method, params));
+    };
+    const rootHistory = await bounded(this.decodeHistory(owned.process, session.threadId, owned));
+    if (rootHistory.activeTurnId)
+      await request('turn/interrupt', {
+        threadId: session.threadId,
+        turnId: rootHistory.activeTurnId,
+      });
+    const threadIds = new Set<string>([session.threadId, ...owned.childThreads]);
+    const discover = async () => {
+      for (const threadId of threadIds) {
+        if (threadIds.size > 64) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
+        // A strict observation is required: an unsupported RPC returning {} is
+        // not an empty child tree. No continuation cursor may be discarded.
+        const result = asRecord(
+          await request('thread/list', {
+            parentThreadId: threadId,
+          }),
+        );
+        if (!result || !Array.isArray(result.data) || result.nextCursor)
+          throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        for (const value of result.data) {
+          const child = asRecord(value);
+          const id = boundedString(child?.id, 256);
+          const status = asRecord(child?.status)?.type;
+          if (!id || !['active', 'idle'].includes(String(status)))
+            throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+          threadIds.add(id);
+        }
+      }
+    };
+    await discover();
+    for (const threadId of threadIds) {
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
+      if (history.activeTurnId)
+        await request('turn/interrupt', {
+          threadId,
+          turnId: history.activeTurnId,
+        });
+      const terminals = asRecord(
+        await request('thread/backgroundTerminals/list', {
+          threadId,
+          limit: 64,
+        }),
+      );
+      if (!terminals || !Array.isArray(terminals.data) || terminals.nextCursor)
+        throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+      for (const value of terminals.data) {
+        const command = asRecord(value);
+        const processId = boundedString(command?.processId, 256);
+        const itemId = boundedString(command?.itemId, 256);
+        const osPid = boundedNonNegativeInteger(command?.osPid);
+        if (!processId || !itemId || osPid === null) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        const stopped = await bounded(
+          this.terminateChildProcess(
+            session,
+            threadId,
+            processId,
+            undefined,
+            {
+              itemId,
+              osPid,
+            },
+            assertCurrent,
+          ),
+        );
+        if (!stopped) throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+      }
+    }
+    // Cancellation acceptance is not completion. A caller may retry Stop after
+    // native settlement, but must not release on an in-flight turn/result/approval.
+    await discover();
+    let completedRootTurns: string[] = [];
+    for (const threadId of threadIds) {
+      const native = asRecord(await request('thread/read', { threadId, includeTurns: false }));
+      const thread = asRecord(native?.thread);
+      if (thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
+        throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
+      if (threadId === session.threadId)
+        completedRootTurns = history.turns
+          .filter((turn) => turn.completedAt !== null && turn.completedAt !== undefined)
+          .map((turn) => turn.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      const terminals = asRecord(
+        await request('thread/backgroundTerminals/list', {
+          threadId,
+          limit: 64,
+        }),
+      );
+      if (
+        history.activeTurnId ||
+        !terminals ||
+        !Array.isArray(terminals.data) ||
+        terminals.data.length ||
+        terminals.nextCursor
+      )
+        throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+    }
+    if (owned.pendingRequests.size) throw new Error('LIVE_NATIVE_APPROVALS_PENDING');
+    for (const process of owned.ownedChildProcesses.values()) {
+      if (process.state !== 'result-consumed' && process.state !== 'terminated-for-budget')
+        throw new Error('LIVE_NATIVE_RESULTS_PENDING');
+    }
+    return completedRootTurns;
+  }
+
   async queueTurnInput(
     session: RelaySessionSnapshot,
     turnId: string,
     text: string,
     clientUserMessageId?: string,
   ): Promise<void> {
+    this.liveDispatch?.writer(session, 'turn');
     const resource = this.sessions.get(session.id);
     if (!resource || !session.threadId) throw new Error('CODEX_SESSION_NOT_RUNNING');
     await resource.process.rpc.request('turn/steer', {
@@ -538,7 +689,10 @@ export class CodexSessionRuntime {
     const owned = this.sessions.get(session.id);
     const process =
       owned?.process ??
-      this.launch({ profile: session.profile, cwd: this.readerCwd ?? session.workspacePath });
+      this.launchGuarded(session, {
+        profile: session.profile,
+        cwd: this.readerCwd ?? session.workspacePath,
+      });
     try {
       if (!owned)
         await process.rpc.request('initialize', {
@@ -608,7 +762,7 @@ export class CodexSessionRuntime {
   private async readDetachedChildTopologyOnce(
     session: RelaySessionSnapshot,
   ): Promise<readonly DirectChildThread[]> {
-    const process = this.launch({
+    const process = this.launchGuarded(session, {
       profile: session.profile,
       cwd: this.readerCwd ?? session.workspacePath,
     });
@@ -799,7 +953,9 @@ export class CodexSessionRuntime {
     processId: string,
     actionId?: string,
     expected?: Pick<OwnedChildProcess, 'itemId' | 'osPid'>,
+    assertCurrent: () => void = () => {},
   ): Promise<boolean> {
+    assertCurrent();
     const owned = this.sessions.get(session.id);
     if (!owned) return false;
     if (actionId && owned.completedProcessActions.has(actionId))
@@ -811,6 +967,7 @@ export class CodexSessionRuntime {
     // never send a second terminate RPC merely to rediscover that fact.
     if (expected) {
       const active = await this.listChildBackgroundTerminals(owned, { id: childThreadId });
+      assertCurrent();
       const current = active.find(
         (candidate) =>
           candidate.processId === processId &&
@@ -822,10 +979,12 @@ export class CodexSessionRuntime {
         return true;
       }
     }
+    assertCurrent();
     const result = await owned.process.rpc.request('thread/backgroundTerminals/terminate', {
       threadId: childThreadId,
       processId,
     });
+    assertCurrent();
     const terminated = asRecord(result)?.terminated === true;
     if (terminated) {
       const key = childProcessKey(childThreadId, processId);
@@ -924,7 +1083,7 @@ export class CodexSessionRuntime {
   }> {
     // A reader is intentionally not a SessionResource: it owns no subscriptions,
     // runtime registration, plan lease, or writer state and is closed on every path.
-    const process = this.launch({
+    const process = this.launchGuarded(session, {
       profile: session.profile,
       cwd: this.readerCwd ?? session.workspacePath,
     });
@@ -1077,7 +1236,11 @@ export class CodexSessionRuntime {
     if (resource.pendingRequests.has(requestId))
       return Promise.reject(new Error('CODEX_SERVER_REQUEST_DUPLICATE'));
     return new Promise((resolve, reject) => {
-      resource.pendingRequests.set(requestId, { resolve, reject });
+      resource.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        observation: isOrgPlanHealthCall(request),
+      });
       const unsupported = () => {
         if (resource.pendingRequests.delete(requestId))
           reject(new Error('CODEX_SERVER_REQUEST_UNSUPPORTED'));
@@ -1143,7 +1306,53 @@ export class CodexSessionRuntime {
       : { sandbox: selection };
   }
 
+  private launchGuarded(session: RelaySessionSnapshot, input: AppServerLaunchInput): AppServer {
+    this.liveDispatch?.writer(session);
+    const process = this.launch(input);
+    if (!this.liveDispatch) return process;
+    const policy = this.liveDispatch;
+    const reads = new Set([
+      'thread/read',
+      'thread/list',
+      'account/rateLimits/read',
+      'model/list',
+      'thread/backgroundTerminals/list',
+    ]);
+    const safeStop = new Set([
+      'turn/interrupt',
+      'thread/unsubscribe',
+      'thread/backgroundTerminals/terminate',
+    ]);
+    return {
+      close: () => process.close(),
+      ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
+      rpc: {
+        request: async (method, params) => {
+          const effect = !reads.has(method) && !safeStop.has(method);
+          const kind = method === 'turn/start' || method === 'turn/steer' ? 'turn' : 'writer';
+          if (effect) policy.writer(session, kind);
+          const result = await process.rpc.request(method, params);
+          if (effect) policy.writer(session, kind);
+          return result;
+        },
+        onNotification: (listener) => process.rpc.onNotification(listener),
+        onServerRequest: (listener) =>
+          process.rpc.onServerRequest(async (request) => {
+            const observation = isOrgPlanHealthCall(request);
+            if (!observation) policy.interaction(session.id);
+            const result = await listener(request);
+            if (!observation) policy.interaction(session.id);
+            return result;
+          }),
+        ...(process.rpc.onServerResponseSettled
+          ? { onServerResponseSettled: process.rpc.onServerResponseSettled.bind(process.rpc) }
+          : {}),
+      },
+    };
+  }
+
   private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+    this.liveDispatch?.writer(session);
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
       ? await this.planStatusSource.open(
@@ -1155,7 +1364,7 @@ export class CodexSessionRuntime {
       const token = randomUUID();
       const skillsConfig = await this.resolveSkills?.(session);
       const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
-      const process = this.launch({
+      const process = this.launchGuarded(session, {
         profile: session.profile,
         cwd: session.workspacePath,
         ...(lease || this.planMeasurementBaseUrl
