@@ -124,7 +124,7 @@ jobs:
           };
           const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
             '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
-            '-c', 'permissions.l8_admitted={extends=":workspace",filesystem={"' + privateRoot + '":"deny"}}',
+            '-c', 'permissions.l8_admitted={extends=":workspace",filesystem={"' + privateRoot + '"="deny"}}',
             'app-server', '--stdio'], {
             cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
           });
