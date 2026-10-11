@@ -94,6 +94,90 @@ jobs:
           set -Eeuo pipefail
           npm run build:server
           node scripts/live-remote-proof.mjs
+      - name: Bounded outer app-server confinement investigation
+        timeout-minutes: 2
+        env:
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          node --input-type=module <<'L8_OUTER_PROBE'
+          // Copyright (C) 2026 Dyne.org foundation
+          // Designed by Denis Roio <jaromil@dyne.org>
+          // SPDX-License-Identifier: AGPL-3.0-or-later
+          import { spawn } from 'node:child_process';
+          import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const root = mkdtempSync(join(tmpdir(), 'live-outer-investigation-'));
+          const app = join(root, 'app'), privateRoot = join(root, 'private'), nativeHome = join(root, 'native-home');
+          for (const p of [app, privateRoot, nativeHome]) mkdirSync(p, { mode: 0o700 });
+          writeFileSync(join(app, 'public.txt'), 'public');
+          writeFileSync(join(privateRoot, 'canary.txt'), 'private-controller-canary');
+          const codex = process.env.LIVE_TEST_CODEX;
+          const state = {
+            permissionProfile: { type: 'managed', file_system: { type: 'restricted', entries: [
+              { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+              { path: { type: 'path', path: root }, access: 'write' },
+              { path: { type: 'path', path: privateRoot }, access: 'deny' },
+            ] }, network: 'enabled' },
+            sandboxCwd: pathToFileURL(app).href, useLegacyLandlock: false,
+          };
+          const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
+            '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
+            'app-server', '--stdio'], {
+            cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
+          });
+          let output = '', nextId = 0, diagnostics = '', stage = 'initialize';
+          const pending = new Map();
+          child.stderr.on('data', b => { if (diagnostics.length < 8192) diagnostics += b.toString().slice(0, 8192 - diagnostics.length); });
+          child.stdout.on('data', b => {
+            output += b;
+            if (output.length > 131072) { child.kill('SIGTERM'); return; }
+            let line;
+            while ((line = output.indexOf('\n')) >= 0) {
+              const raw = output.slice(0, line); output = output.slice(line + 1);
+              try { const msg = JSON.parse(raw); if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); } } catch {}
+            }
+          });
+          const request = (method, params) => new Promise((resolve, reject) => {
+            const id = ++nextId;
+            const timer = setTimeout(() => { pending.delete(id); reject(new Error('RPC_TIMEOUT')); }, 15000);
+            pending.set(id, msg => { clearTimeout(timer); resolve(msg); });
+            child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
+          });
+          const facts = { outerAppServer: true, actualNativeBoundary: false, privateReadDenied: false,
+            ordinaryReadPreserved: false, nativeCommandDenied: false, collaborationFlagsRequested: true };
+          try {
+            const initialized = await request('initialize', { clientInfo: { name: 'live_outer_investigation', version: '1' },
+              capabilities: { experimentalApi: true } });
+            if (initialized.error) throw new Error('INITIALIZE_FAILED');
+            child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+            stage = 'ordinary-read';
+            const publicRead = await request('fs/readFile', { path: join(app, 'public.txt') });
+            facts.ordinaryReadPreserved = publicRead.result?.dataBase64 === Buffer.from('public').toString('base64');
+            stage = 'private-read';
+            const privateRead = await request('fs/readFile', { path: join(privateRoot, 'canary.txt') });
+            facts.privateReadDenied = !!privateRead.error;
+            stage = 'native-command';
+            const exec = await request('command/exec', { command: ['/usr/bin/node', '-e',
+              "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
+              cwd: app, timeoutMs: 5000, outputBytesCap: 1024 });
+            facts.nativeCommandDenied = exec.result?.exitCode === 0;
+            facts.actualNativeBoundary = facts.ordinaryReadPreserved && facts.privateReadDenied && facts.nativeCommandDenied;
+            facts.stage = 'complete';
+          } catch (error) {
+            facts.stage = stage; facts.failure = error instanceof Error ? error.message : 'UNKNOWN';
+            facts.localNativePrerequisite = /socket directory.*0700|Operation not permitted|bwrap.*permission/i.test(diagnostics);
+          } finally {
+            try { process.kill(-child.pid, 'SIGTERM'); } catch {}
+            await new Promise(resolve => { if (child.exitCode !== null) resolve(); else { child.once('exit', resolve); setTimeout(resolve, 3000); } });
+            console.log('OUTER_LAUNCH_INVESTIGATION ' + JSON.stringify(facts));
+            const evidence = process.env.LIVE_CADDY_EVIDENCE_DIR;
+            if (evidence) { mkdirSync(evidence, { recursive: true }); writeFileSync(join(evidence, 'outer-launch-investigation.json'), JSON.stringify(facts, null, 2)); }
+            rmSync(root, { recursive: true, force: true });
+          }
+          
+          L8_OUTER_PROBE
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
