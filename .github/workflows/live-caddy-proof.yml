@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Dyne.org foundation
 # Designed by Denis Roio <jaromil@dyne.org>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-name: Bounded native launch prerequisite diagnostic
+name: Bounded owned Unix native launch investigation
 on:
   pull_request:
     paths:
@@ -28,7 +28,7 @@ jobs:
           if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - name: Exact outer native prerequisite diagnostic
+      - name: Owned0700 Unix bridge with exact protected policy
         env:
           LIVE_CADDY_EVIDENCE_DIR: native-launch-diagnostic
         run: |
@@ -37,6 +37,7 @@ jobs:
           // Designed by Denis Roio <jaromil@dyne.org>
           // SPDX-License-Identifier: AGPL-3.0-or-later
           import { spawn } from 'node:child_process';
+          import { createConnection } from 'node:net';
           import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
           import { tmpdir } from 'node:os';
           import { join } from 'node:path';
@@ -47,6 +48,9 @@ jobs:
           writeFileSync(join(app, 'public.txt'), 'public');
           writeFileSync(join(privateRoot, 'canary.txt'), 'private-controller-canary');
           const codex = process.env.LIVE_TEST_CODEX;
+          const socketDirectory = join(nativeHome, 'owned-rpc');
+          mkdirSync(socketDirectory, { mode: 0o700 });
+          const socketPath = join(socketDirectory, 'control.sock');
           const state = {
             permissionProfile: { type: 'managed', file_system: { type: 'restricted', entries: [
               { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
@@ -57,13 +61,14 @@ jobs:
           };
           const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
             '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
-            'app-server', '--stdio'], {
+            'app-server', '--listen', 'unix://' + socketPath], {
             cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
           });
-          let output = '', nextId = 0, diagnostics = '', stage = 'initialize';
+          let output = '', nextId = 0, diagnostics = '', stage = 'owned-unix-connect';
+          let rpcInput = child.stdin, rpcSocket;
           const pending = new Map();
           child.stderr.on('data', b => { if (diagnostics.length < 8192) diagnostics += b.toString().slice(0, 8192 - diagnostics.length); });
-          child.stdout.on('data', b => {
+          const receive = b => {
             output += b;
             if (output.length > 131072) { child.kill('SIGTERM'); return; }
             let line;
@@ -71,20 +76,39 @@ jobs:
               const raw = output.slice(0, line); output = output.slice(line + 1);
               try { const msg = JSON.parse(raw); if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); } } catch {}
             }
-          });
+          };
+          child.stdout.on('data', receive);
           const request = (method, params) => new Promise((resolve, reject) => {
             const id = ++nextId;
             const timer = setTimeout(() => { pending.delete(id); reject(new Error('RPC_TIMEOUT')); }, 15000);
             pending.set(id, msg => { clearTimeout(timer); resolve(msg); });
-            child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
+            rpcInput.write(JSON.stringify({ id, method, params }) + '\n');
           });
           const facts = { outerAppServer: true, actualNativeBoundary: false, privateReadDenied: false,
             ordinaryReadPreserved: false, nativeCommandDenied: false, collaborationFlagsRequested: true };
           try {
+            for (let attempt = 0; attempt < 50 && !rpcSocket; attempt++) {
+              try {
+                rpcSocket = await new Promise((resolve, reject) => {
+                  const connection = createConnection(socketPath);
+                  connection.once('connect', () => resolve(connection));
+                  connection.once('error', error => { connection.destroy(); reject(error); });
+                  connection.setTimeout(200, () => { connection.destroy(); reject(new Error('SOCKET_TIMEOUT')); });
+                });
+              } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
+              if (child.exitCode !== null) break;
+            }
+            if (!rpcSocket) throw new Error('OWNED_SOCKET_UNAVAILABLE');
+            rpcSocket.setTimeout(0);
+            rpcSocket.on('data', receive);
+            rpcSocket.on('error', () => {});
+            rpcInput = rpcSocket;
+            stage = 'initialize';
+            facts.ownedUnixDirectory = true;
             const initialized = await request('initialize', { clientInfo: { name: 'live_outer_investigation', version: '1' },
               capabilities: { experimentalApi: true } });
             if (initialized.error) throw new Error('INITIALIZE_FAILED');
-            child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
+            rpcInput.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
             stage = 'ordinary-read';
             const publicRead = await request('fs/readFile', { path: join(app, 'public.txt') });
             facts.ordinaryReadPreserved = publicRead.result?.dataBase64 === Buffer.from('public').toString('base64');
@@ -111,6 +135,7 @@ jobs:
             facts.stage = stage; facts.failure = error instanceof Error ? error.message : 'UNKNOWN';
             facts.localNativePrerequisite = /socket directory.*0700|Operation not permitted|bwrap.*permission/i.test(diagnostics);
           } finally {
+            rpcSocket?.destroy();
             try { process.kill(-child.pid, 'SIGTERM'); } catch {}
             await new Promise(resolve => { if (child.exitCode !== null) resolve(); else { child.once('exit', resolve); setTimeout(resolve, 3000); } });
             console.log('OUTER_LAUNCH_INVESTIGATION ' + JSON.stringify(facts));
