@@ -149,3 +149,16 @@ it('Resume cannot reopen an explicitly stopped generation', async () => {
   const stopped = await stopLive(f.deps, f.run);
   await expect(resumeLive(f.resume, stopped)).rejects.toThrow('LIVE_STATE_CONFLICT');
 });
+
+it('even an undefined revocation rejection settles work and retains ownership', async () => {
+  const f = fixture();
+  f.deps.resources.revoke.mockRejectedValueOnce(undefined);
+  const rejected = await stopLive(f.deps, f.run).then(
+    () => false,
+    () => true,
+  );
+  expect(rejected).toBe(true);
+  expect(f.deps.resources.settle).toHaveBeenCalledOnce();
+  expect(f.owners.current(f.run.liveId)?.state).toBe('recoveryRequired');
+  expect(f.restore).not.toHaveBeenCalled();
+});

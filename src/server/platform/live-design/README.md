@@ -257,7 +257,15 @@ interrupts the root, observes a bounded native descendant tree and background
 commands, terminates exact command instances, and requires idle native statuses,
 no outstanding results or approvals. Unsupported observations fail closed; it
 never launches a replacement runtime/history reader to manufacture settlement.
-A cancellation RPC acknowledgement is not proof of completion. Retry Stop using
+Every native cleanup request rechecks the ownership fence; a late callback cannot
+continue cancelling after another controller or Stop takes over. Native observations
+and waiting for a previously dispatched response have bounded cleanup budgets; an
+unresponsive runtime returns an explicit recovery error. Settlement is checked again
+after dispatched effects return, since a queued turn/start can materialize while its
+old response is settling. Actual completed history also reconciles a delayed or
+lost session completion notification before another Live turn or control restoration;
+provider/model/permissions remain unchanged. A cancellation RPC acknowledgement is not proof of
+completion. Retry Stop using
 the current durable fence after actual work settles. Journal/source reconciliation,
 canonical completion or discard, injection removal and actual route/auth/process
 cleanup must all finish before ownership and prior controls are released.

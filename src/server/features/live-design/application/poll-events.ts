@@ -129,7 +129,22 @@ export class PollLiveEvents {
     ]);
     if (results.some((result) => result.status === 'rejected'))
       throw new Error('LIVE_SETTLEMENT_REQUIRED');
-    if (flight) await flight.catch(() => {});
+    if (flight) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          flight.catch(() => {}),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LIVE_SETTLEMENT_REQUIRED')), 5000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    // A previously sent native turn/start may materialize while its response is
+    // settling. Observe/cancel again AFTER every dispatched effect has returned.
+    await this.input.turns.settle(run);
     this.input.owners.assert(fence);
   }
   private async iterate(fence: LiveFence): Promise<'event' | 'timeout' | 'exit' | 'duplicate'> {

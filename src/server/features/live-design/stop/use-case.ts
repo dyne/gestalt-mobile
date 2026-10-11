@@ -28,6 +28,7 @@ export async function stopLive(deps: LiveStopDependencies, fence: LiveFence): Pr
     if (run.state !== 'stopping') run = deps.owners.mutate(run, { event: 'stop' });
     try {
       let revocationError: unknown;
+      let revocationFailed = false;
       for (const name of ['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const) {
         run = deps.owners.mutate(run, { event: 'phase', phase: `stop:${name}:intent` });
         try {
@@ -36,13 +37,14 @@ export async function stopLive(deps: LiveStopDependencies, fence: LiveFence): Pr
           if (name !== 'revoke') throw error;
           // A stream-close failure must not prevent cancellation of owned edits.
           // Continue cleanup after settlement, but never release on failed revocation.
+          revocationFailed = true;
           revocationError = error;
           continue;
         }
         deps.owners.assert(run);
         run = deps.owners.mutate(run, { event: 'phase', phase: `stop:${name}:ack` });
       }
-      if (revocationError) {
+      if (revocationFailed) {
         run = deps.owners.mutate(run, { event: 'phase', phase: 'stop:revoke:intent' });
         throw revocationError;
       }

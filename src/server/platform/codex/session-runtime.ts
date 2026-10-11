@@ -508,12 +508,40 @@ export class CodexSessionRuntime {
   /** Controller Stop only: cancel native work without acquiring a writer or starting
    * a reader process. Unsupported/ambiguous native observations retain Live ownership.
    */
-  async settleLiveWork(session: RelaySessionSnapshot): Promise<void> {
+  async settleLiveWork(
+    session: RelaySessionSnapshot,
+    assertCurrent: () => void,
+  ): Promise<readonly string[]> {
     const owned = this.sessions.get(session.id);
     if (!owned || !session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
-    const rootHistory = await this.decodeHistory(owned.process, session.threadId, owned);
+    assertCurrent();
+    const deadline = Date.now() + 5000;
+    const bounded = async <T>(work: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+        assertCurrent();
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const request = (method: string, params: unknown) => {
+      assertCurrent();
+      if (Date.now() >= deadline) throw new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT');
+      return bounded(owned.process.rpc.request(method, params));
+    };
+    const rootHistory = await bounded(this.decodeHistory(owned.process, session.threadId, owned));
     if (rootHistory.activeTurnId)
-      await owned.process.rpc.request('turn/interrupt', {
+      await request('turn/interrupt', {
         threadId: session.threadId,
         turnId: rootHistory.activeTurnId,
       });
@@ -524,7 +552,7 @@ export class CodexSessionRuntime {
         // A strict observation is required: an unsupported RPC returning {} is
         // not an empty child tree. No continuation cursor may be discarded.
         const result = asRecord(
-          await owned.process.rpc.request('thread/list', {
+          await request('thread/list', {
             parentThreadId: threadId,
           }),
         );
@@ -542,14 +570,14 @@ export class CodexSessionRuntime {
     };
     await discover();
     for (const threadId of threadIds) {
-      const history = await this.decodeHistory(owned.process, threadId, owned);
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
       if (history.activeTurnId)
-        await owned.process.rpc.request('turn/interrupt', {
+        await request('turn/interrupt', {
           threadId,
           turnId: history.activeTurnId,
         });
       const terminals = asRecord(
-        await owned.process.rpc.request('thread/backgroundTerminals/list', {
+        await request('thread/backgroundTerminals/list', {
           threadId,
           limit: 64,
         }),
@@ -562,26 +590,39 @@ export class CodexSessionRuntime {
         const itemId = boundedString(command?.itemId, 256);
         const osPid = boundedNonNegativeInteger(command?.osPid);
         if (!processId || !itemId || osPid === null) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
-        const stopped = await this.terminateChildProcess(session, threadId, processId, undefined, {
-          itemId,
-          osPid,
-        });
+        const stopped = await bounded(
+          this.terminateChildProcess(
+            session,
+            threadId,
+            processId,
+            undefined,
+            {
+              itemId,
+              osPid,
+            },
+            assertCurrent,
+          ),
+        );
         if (!stopped) throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
       }
     }
     // Cancellation acceptance is not completion. A caller may retry Stop after
     // native settlement, but must not release on an in-flight turn/result/approval.
     await discover();
+    let completedRootTurns: string[] = [];
     for (const threadId of threadIds) {
-      const native = asRecord(
-        await owned.process.rpc.request('thread/read', { threadId, includeTurns: false }),
-      );
+      const native = asRecord(await request('thread/read', { threadId, includeTurns: false }));
       const thread = asRecord(native?.thread);
       if (thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
         throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
-      const history = await this.decodeHistory(owned.process, threadId, owned);
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
+      if (threadId === session.threadId)
+        completedRootTurns = history.turns
+          .filter((turn) => turn.completedAt !== null && turn.completedAt !== undefined)
+          .map((turn) => turn.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
       const terminals = asRecord(
-        await owned.process.rpc.request('thread/backgroundTerminals/list', {
+        await request('thread/backgroundTerminals/list', {
           threadId,
           limit: 64,
         }),
@@ -600,6 +641,7 @@ export class CodexSessionRuntime {
       if (process.state !== 'result-consumed' && process.state !== 'terminated-for-budget')
         throw new Error('LIVE_NATIVE_RESULTS_PENDING');
     }
+    return completedRootTurns;
   }
 
   async queueTurnInput(
@@ -911,7 +953,9 @@ export class CodexSessionRuntime {
     processId: string,
     actionId?: string,
     expected?: Pick<OwnedChildProcess, 'itemId' | 'osPid'>,
+    assertCurrent: () => void = () => {},
   ): Promise<boolean> {
+    assertCurrent();
     const owned = this.sessions.get(session.id);
     if (!owned) return false;
     if (actionId && owned.completedProcessActions.has(actionId))
@@ -923,6 +967,7 @@ export class CodexSessionRuntime {
     // never send a second terminate RPC merely to rediscover that fact.
     if (expected) {
       const active = await this.listChildBackgroundTerminals(owned, { id: childThreadId });
+      assertCurrent();
       const current = active.find(
         (candidate) =>
           candidate.processId === processId &&
@@ -934,10 +979,12 @@ export class CodexSessionRuntime {
         return true;
       }
     }
+    assertCurrent();
     const result = await owned.process.rpc.request('thread/backgroundTerminals/terminate', {
       threadId: childThreadId,
       processId,
     });
+    assertCurrent();
     const terminated = asRecord(result)?.terminated === true;
     if (terminated) {
       const key = childProcessKey(childThreadId, processId);

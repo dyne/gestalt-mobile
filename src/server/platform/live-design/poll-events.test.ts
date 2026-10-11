@@ -442,3 +442,41 @@ it('controller takeover explicitly reconciles the old generation instead of expi
   expect(f.inbox.records()[0].reconciliation?.disposition).toBe('discarded');
   expect(() => f.inbox.begin(successor)).not.toThrow();
 });
+
+it('Stop rechecks native settlement after a late dispatched turn-start response', async () => {
+  const f = fixture();
+  let release!: () => void;
+  let active = false;
+  const apply = vi.fn<LiveEventTurns['apply']>(
+    () =>
+      new Promise((done) => {
+        release = () => {
+          active = true;
+          done({ status: 'done' });
+        };
+      }),
+  );
+  const settle = vi.fn(async () => {
+    active = false;
+  });
+  const bridge = new PollLiveEvents({
+    owners: f.owners,
+    inbox: f.inbox,
+    cli: { ...f.cli, settle: async () => {} },
+    authority: f.authority,
+    turns: { apply, settle },
+    now: () => 1000,
+  });
+  const work = bridge.next(f.run);
+  const rejected = expect(work).rejects.toThrow('LIVE_GENERATION_STALE');
+  await vi.waitFor(() => expect(apply).toHaveBeenCalled());
+  const stopping = f.owners.mutate(f.run, { event: 'stop' });
+  const stop = bridge.settle(stopping);
+  await vi.waitFor(() => expect(settle).toHaveBeenCalledOnce());
+  release();
+  await rejected;
+  await stop;
+  expect(settle).toHaveBeenCalledTimes(2);
+  expect(active).toBe(false);
+  expect(f.cli.reply).not.toHaveBeenCalled();
+});

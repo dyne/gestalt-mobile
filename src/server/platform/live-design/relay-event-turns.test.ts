@@ -12,6 +12,7 @@ import { CodexSessionRuntime, type AppServer } from '../codex/session-runtime.js
 import { SqliteLiveOwnership, liveAppIdentity } from './sqlite-live-ownership.js';
 import { LiveDispatchGuard } from './live-dispatch.js';
 import { RelayLiveEventTurns } from './relay-event-turns.js';
+import { stopLive } from '../../features/live-design/stop/use-case.js';
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
@@ -259,6 +260,8 @@ it('Stop interrupts the actual owned turn and proves settlement without launchin
   await vi.waitFor(() => expect(f.wait).toHaveBeenCalled());
   const stopped = f.owners.mutate(f.run, { event: 'stop' });
   await f.turns.settle(stopped);
+  expect(f.session().state).toBe('ready');
+  expect(f.session().activeTurnId).toBeNull();
   release();
   await rejected;
   expect(f.requests).toContainEqual({
@@ -284,5 +287,89 @@ it('unsupported native tree observation still interrupts known root work and ret
   await expect(f.turns.settle(stopped)).rejects.toThrow('LIVE_NATIVE_TREE_UNKNOWN');
   expect(f.requests.some((request) => request.method === 'turn/interrupt')).toBe(true);
   expect(f.owners.current(f.run.liveId)?.state).toBe('stopping');
+  expect(f.launch).toHaveBeenCalledTimes(1);
+});
+
+it('a late native Stop observation cannot continue cancelling after its ownership fence changes', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  let release!: () => void;
+  f.server.rpc.request = async (method, params) => {
+    if (method === 'thread/list')
+      return new Promise((done) => {
+        release = () => done({ data: [] });
+      });
+    return realRequest(method, params);
+  };
+  const stopping = f.owners.mutate(f.run, { event: 'stop' });
+  const work = f.turns.settle(stopping);
+  const rejected = expect(work).rejects.toThrow('LIVE_GENERATION_STALE');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const newer = f.owners.mutate(stopping, { event: 'phase', phase: 'stop:remove:intent' });
+  const before = f.requests.length;
+  release();
+  await rejected;
+  expect(f.requests).toHaveLength(before);
+  expect(f.owners.current(f.run.liveId)).toEqual(newer);
+});
+
+it('unresponsive native settlement returns a bounded recovery error and never restores controls', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  f.server.rpc.request = async (method, params) =>
+    method === 'thread/list' ? new Promise(() => {}) : realRequest(method, params);
+  const restore = vi.fn();
+  vi.useFakeTimers();
+  try {
+    const work = stopLive(
+      {
+        owners: f.owners,
+        controls: {
+          read: () => ({ version: 1, enabled: false, planIdentity: null }),
+          hold: vi.fn(),
+          restore,
+        },
+        resources: {
+          revoke: async () => {},
+          settle: (run) => f.turns.settle(run),
+          remove: async () => {},
+          cleanup: async () => {},
+          verifyClean: async () => {},
+        },
+      },
+      f.run,
+    );
+    const rejected = expect(work).rejects.toThrow('LIVE_NATIVE_SETTLEMENT_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(5100);
+    await rejected;
+    expect(f.owners.current(f.run.liveId)?.state).toBe('recoveryRequired');
+    expect(restore).not.toHaveBeenCalled();
+    expect(f.launch).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('actual completed history reconciles a lost notification before the next serialized Live steering turn', async () => {
+  const f = await fixture();
+  const before = f.session();
+  await f.guard.liveEvent(f.run, 'generate-operation', () =>
+    f.turns.apply(f.run, { type: 'generate', id: '1234abcd' }, 595000, 'generate-operation'),
+  );
+  expect(f.session().state).toBe('ready');
+  expect(f.session().activeTurnId).toBeNull();
+  f.final('{"status":"steer_done"}');
+  await f.guard.liveEvent(f.run, 'steer-operation', () =>
+    f.turns.apply(
+      f.run,
+      { type: 'steer', id: '1234abcd', message: 'More space' },
+      595000,
+      'steer-operation',
+    ),
+  );
+  expect(f.requests.filter((request) => request.method === 'turn/start')).toHaveLength(2);
+  expect(f.session().model).toBe(before.model);
+  expect(f.session().executionPolicy).toEqual(before.executionPolicy);
+  expect(f.session().activeTurnId).toBeNull();
   expect(f.launch).toHaveBeenCalledTimes(1);
 });
