@@ -159,57 +159,93 @@ function userText(input) {
       .at(-1) ?? ''
   );
 }
+function providerCheck(stage, condition) {
+  report.provider.stage = stage;
+  assert.ok(condition);
+}
 function nextEvent(body) {
   const role = userText(body.input).includes(childMarker) ? 'child' : 'root';
   const step = roles.get(role) ?? 0;
   roles.set(role, step + 1);
-  const tools = availableTools(body.tools);
+  // This pinned model uses Responses Lite: actual tool specs live in additional_tools input.
+  const tools = availableTools([
+    ...(body.tools ?? []),
+    ...(body.input ?? [])
+      .filter((item) => item.type === 'additional_tools')
+      .flatMap((item) => item.tools ?? []),
+  ]);
+  const codeMode = tools.find((item) => item.name === 'exec' && item.type === 'custom');
+  const nested = (name) => codeMode?.description?.includes(`declare const tools: { ${name}(`);
+  report.provider.lastCall = {
+    role,
+    step,
+    requiredToolsAdvertised: Object.fromEntries(
+      ['exec_command', 'apply_patch', 'spawn_agent'].map((name) => [
+        name,
+        tools.some((item) => item.name === name) || Boolean(nested(name)),
+      ]),
+    ),
+    responsesLite: (body.input ?? []).some((item) => item.type === 'additional_tools'),
+    codeModeAdvertised: Boolean(codeMode),
+  };
   const find = (name) => {
     const tool = tools.find((item) => item.name === name);
-    assert.ok(tool, `Missing required native tool: ${name}`);
+    providerCheck(`required-tool-${name}`, tool);
     return tool;
   };
-  assert.equal(body.model, 'gpt-6-sol');
-  assert.equal(body.reasoning?.effort, 'medium');
+  const commandCall = (id, args) => {
+    const direct = tools.find((item) => item.name === 'exec_command');
+    if (direct) return functionCall(direct, id, args);
+    providerCheck('nested-native-exec-command', nested('exec_command'));
+    return patchCall(codeMode, id, `text(await tools.exec_command(${JSON.stringify(args)}));`);
+  };
+  const editCall = (id, patch) => {
+    const direct = tools.find((item) => item.name === 'apply_patch');
+    if (direct) return patchCall(direct, id, patch);
+    providerCheck('nested-native-apply-patch', nested('apply_patch'));
+    return patchCall(codeMode, id, `text(await tools.apply_patch(${JSON.stringify(patch)}));`);
+  };
+  providerCheck('selected-model-preserved', body.model === 'gpt-6-sol');
+  providerCheck('selected-thinking-preserved', body.reasoning?.effort === 'medium');
   const id = `${role}-${step}`;
   if (step === 1) {
     const output = body.input?.find(
-      (item) => item.type === 'function_call_output' && item.call_id === `${role}-0`,
+      (item) =>
+        ['function_call_output', 'custom_tool_call_output'].includes(item.type) &&
+        item.call_id === `${role}-0`,
     );
-    assert.ok(
+    providerCheck(
+      'native-command-denial-markers',
       output &&
         ['public-native-work', 'native-socket-denied', 'native-daemon-denied'].every((marker) =>
           JSON.stringify(output.output).includes(marker),
         ),
-      'Native command did not prove permitted public read',
     );
   }
   if (step === 0) {
     const probe =
       'import socket,sys\np=socket.socket(socket.AF_UNIX)\ntry:\n p.connect(sys.argv[1]); print("native-socket-breach")\nexcept OSError as e:\n if e.errno in [1,2,13,20]: print("native-socket-denied")\n else: raise\n';
     const command = `cat ${shellQuote(join(app, 'public.txt'))}; cat ${shellQuote(privateFile)}; cat ${shellQuote(`/proc/${process.pid}/root${privateFile}`)}; cat ${shellQuote(`/proc/${process.pid}/fd/${privateFd}`)}; /usr/bin/python3 -c ${shellQuote(probe)} ${shellQuote(socket)}; if ls ${shellQuote(daemon)} >/dev/null 2>&1; then echo native-daemon-breach; else echo native-daemon-denied; fi`;
-    return functionCall(find('exec_command'), id, {
+    return commandCall(id, {
       cmd: command,
       max_output_tokens: 1024,
       yield_time_ms: 1000,
     });
   }
   if (step === 1)
-    return patchCall(
-      find('apply_patch'),
+    return editCall(
       id,
       `*** Begin Patch\n*** Add File: ${join(app, `${role}-native-edit.txt`)}\n+permitted-native-edit\n*** End Patch`,
     );
   if (step === 2)
-    return patchCall(
-      find('apply_patch'),
+    return editCall(
       id,
       `*** Begin Patch\n*** Add File: ${join(controller, `${role}-forbidden-edit.txt`)}\n+forbidden-native-edit\n*** End Patch`,
     );
   if (role === 'root' && step === 3) {
     const spawn = find('spawn_agent');
     const properties = spawn.parameters?.properties ?? {};
-    assert.ok(properties.fork_turns || properties.fork_context);
+    providerCheck('native-child-fork-schema', properties.fork_turns || properties.fork_context);
     return functionCall(spawn, id, {
       message: childMarker,
       agent_type: 'default',
@@ -234,13 +270,15 @@ const provider = createServer(async (request, response) => {
       );
       return;
     }
-    assert.equal(request.method, 'POST');
-    assert.equal(request.url, '/v1/responses');
+    providerCheck(
+      'responses-endpoint',
+      request.method === 'POST' && request.url === '/v1/responses',
+    );
     const chunks = [];
     let length = 0;
     for await (const chunk of request) {
       length += chunk.length;
-      assert.ok(length < 4 * 1024 * 1024);
+      providerCheck('compressed-request-bound', length < 4 * 1024 * 1024);
       chunks.push(chunk);
     }
     const compressed = Buffer.concat(chunks);
@@ -248,20 +286,17 @@ const provider = createServer(async (request, response) => {
     const decoder = { gzip: gunzipSync, deflate: inflateSync, zstd: zstdDecompressSync }[
       compression
     ];
-    assert.ok(
-      !compression || compression === 'identity' || decoder,
-      'Unsupported request encoding',
-    );
+    providerCheck('request-compression', !compression || compression === 'identity' || decoder);
+    report.provider.stage = 'request-decompression';
     const bytes = decoder ? decoder(compressed, { maxOutputLength: 4 * 1024 * 1024 }) : compressed;
-    assert.ok(
-      !bytes.includes(Buffer.from(privateCanary)),
-      'Native private read leaked to model provider',
-    );
+    providerCheck('private-canary-absent', !bytes.includes(Buffer.from(privateCanary)));
+    report.provider.stage = 'request-json';
     const body = JSON.parse(bytes);
     report.provider.requestCount++;
-    assert.ok(report.provider.requestCount <= 20);
+    providerCheck('request-count-bound', report.provider.requestCount <= 20);
     const id = `controlled-${report.provider.requestCount}`;
     const event = nextEvent(body);
+    report.provider.stage = 'responses-sse-write';
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     for (const data of [
       { type: 'response.created', response: { id } },
@@ -271,9 +306,14 @@ const provider = createServer(async (request, response) => {
         response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
       },
     ])
-      response.write(`data: ${JSON.stringify(data)}\n\n`);
+      response.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
     response.end();
-  } catch {
+    report.provider.stage = 'responses-sse-complete';
+  } catch (error) {
+    report.provider.failure = {
+      stage: report.provider.stage,
+      code: error?.code === 'ERR_ASSERTION' ? 'ERR_ASSERTION' : 'UNCLASSIFIED',
+    };
     providerFailure = true;
     if (!response.headersSent) response.writeHead(500);
     response.end();
@@ -331,7 +371,11 @@ try {
         notification.method === 'turn/completed' &&
         notification.params?.threadId === session?.threadId
       ) {
-        if (notification.params?.turn?.status === 'completed') rootCompleted = true;
+        const status = notification.params?.turn?.status;
+        report.nativeTurn = {
+          status: ['completed', 'failed', 'interrupted'].includes(status) ? status : 'unknown',
+        };
+        if (status === 'completed') rootCompleted = true;
         else providerFailure = true;
       }
     },
