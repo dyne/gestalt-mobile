@@ -104,6 +104,8 @@ const report = {
 let appServer,
   runtime,
   session,
+  owningSessionId,
+  childThreadId,
   rootCompleted = false,
   childCompleted = false,
   providerFailure = false;
@@ -114,7 +116,28 @@ async function until(condition, budget = 60000) {
     if (await condition()) return;
     await wait(25);
   }
-  throw new Error('NATIVE_PROOF_DEADLINE');
+  throw Object.assign(new Error('NATIVE_PROOF_DEADLINE'), { code: 'NATIVE_PROOF_DEADLINE' });
+}
+async function readThread(id) {
+  let timer;
+  try {
+    return await Promise.race([
+      appServer.rpc.request('thread/read', { threadId: id, includeTurns: false }),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              Object.assign(new Error('NATIVE_THREAD_READ_DEADLINE'), {
+                code: 'NATIVE_THREAD_READ_DEADLINE',
+              }),
+            ),
+          5000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function availableTools(tools, namespace) {
   return (tools ?? []).flatMap((tool) =>
@@ -156,15 +179,34 @@ function userText(input) {
           .filter((content) => content.type === 'input_text')
           .map((content) => content.text),
       )
-      .at(-1) ?? ''
+      .join('\n') ?? ''
   );
 }
 function providerCheck(stage, condition) {
   report.provider.stage = stage;
   assert.ok(condition);
 }
-function nextEvent(body) {
-  const role = userText(body.input).includes(childMarker) ? 'child' : 'root';
+async function requestRole(body) {
+  providerCheck(
+    'native-request-thread-identity',
+    typeof body.client_metadata?.thread_id === 'string',
+  );
+  providerCheck(
+    'native-request-session-identity',
+    body.client_metadata?.session_id === owningSessionId,
+  );
+  const id = body.client_metadata.thread_id;
+  if (id === session.threadId) return 'root';
+  report.provider.stage = 'native-child-parent-reconciliation';
+  const child = await readThread(id);
+  providerCheck('native-child-parent', child.thread.parentThreadId === session.threadId);
+  providerCheck('native-child-owning-session', child.thread.sessionId === owningSessionId);
+  providerCheck('native-single-child', !childThreadId || childThreadId === id);
+  childThreadId = id;
+  report.checks.actualChildRequestReconciled = true;
+  return 'child';
+}
+function nextEvent(body, role) {
   const step = roles.get(role) ?? 0;
   roles.set(role, step + 1);
   // This pinned model uses Responses Lite: actual tool specs live in additional_tools input.
@@ -187,6 +229,7 @@ function nextEvent(body) {
     ),
     responsesLite: (body.input ?? []).some((item) => item.type === 'additional_tools'),
     codeModeAdvertised: Boolean(codeMode),
+    childTaskMarkerVisible: userText(body.input).includes(childMarker),
   };
   const find = (name) => {
     const tool = tools.find((item) => item.name === name);
@@ -253,6 +296,24 @@ function nextEvent(body) {
       ...(properties.fork_turns ? { fork_turns: 'none' } : { fork_context: false }),
     });
   }
+  if (role === 'root' && step === 4) {
+    const result = body.input?.find(
+      (item) => item.type === 'function_call_output' && item.call_id === 'root-3',
+    );
+    report.checks.nativeSpawnResponseObserved = Boolean(result);
+    providerCheck('native-spawn-response-present', result);
+    const text =
+      typeof result.output === 'string'
+        ? result.output
+        : (result.output ?? []).map((item) => item.text ?? '').join('');
+    report.provider.stage = 'native-spawn-result-json';
+    const output = JSON.parse(text);
+    providerCheck(
+      'native-spawn-task-result',
+      typeof output.task_name === 'string' && output.task_name.endsWith('/confinement_probe'),
+    );
+    report.checks.nativeSpawnTaskReturned = true;
+  }
   if (role === 'child') childCompleted = true;
   return finalMessage(id);
 }
@@ -295,7 +356,8 @@ const provider = createServer(async (request, response) => {
     report.provider.requestCount++;
     providerCheck('request-count-bound', report.provider.requestCount <= 20);
     const id = `controlled-${report.provider.requestCount}`;
-    const event = nextEvent(body);
+    const role = await requestRole(body);
+    const event = nextEvent(body, role);
     report.provider.stage = 'responses-sse-write';
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     for (const data of [
@@ -312,7 +374,9 @@ const provider = createServer(async (request, response) => {
   } catch (error) {
     report.provider.failure = {
       stage: report.provider.stage,
-      code: error?.code === 'ERR_ASSERTION' ? 'ERR_ASSERTION' : 'UNCLASSIFIED',
+      code: ['ERR_ASSERTION', 'NATIVE_THREAD_READ_DEADLINE'].includes(error?.code)
+        ? error.code
+        : 'UNCLASSIFIED',
     };
     providerFailure = true;
     if (!response.headersSent) response.writeHead(500);
@@ -369,6 +433,17 @@ try {
     (_sessionId, notification) => {
       if (
         notification.method === 'turn/completed' &&
+        childThreadId &&
+        notification.params?.threadId === childThreadId
+      ) {
+        const status = notification.params?.turn?.status;
+        report.nativeChildTurn = {
+          status: ['completed', 'failed', 'interrupted'].includes(status) ? status : 'unknown',
+        };
+        if (status !== 'completed') providerFailure = true;
+      }
+      if (
+        notification.method === 'turn/completed' &&
         notification.params?.threadId === session?.threadId
       ) {
         const status = notification.params?.turn?.status;
@@ -398,6 +473,7 @@ try {
     new Date().toISOString(),
   );
   const admitted = await runtime.inspectLiveAdmission(session);
+  owningSessionId = admitted.thread.thread.sessionId;
   assert.equal(admitted.launch.executableDigest, LIVE_CODEX_SHA256);
   assert.equal(admitted.launch.cwd, app);
   assert.equal(admitted.thread.thread.id, session.threadId);
@@ -413,8 +489,10 @@ try {
     'fixture-native-turn',
     new Date().toISOString(),
   );
+  report.stage = 'wait-root-and-child-model-completion';
   await until(() => providerFailure || (rootCompleted && childCompleted));
   assert.equal(providerFailure, false);
+  report.stage = 'wait-child-source-edit';
   await until(() => existsSync(join(app, 'child-native-edit.txt')));
   for (const role of ['root', 'child']) {
     assert.equal(
@@ -425,8 +503,10 @@ try {
   }
   assert.equal(readFileSync(privateFile, 'utf8'), privateCanary);
   assert.equal(socketConnections, 1);
+  report.stage = 'child-lifecycle-reconciliation';
   const children = await runtime.listDirectChildren(session);
   assert.equal(children.length, 1);
+  assert.equal(children[0].id, childThreadId);
   const child = await appServer.rpc.request('thread/read', {
     threadId: children[0].id,
     includeTurns: false,
@@ -436,6 +516,7 @@ try {
   assert.equal(child.thread.model, session.model);
   assert.equal(child.thread.reasoningEffort, 'medium');
   assert.equal(roles.get('child'), 4);
+  report.stage = 'wait-child-native-idle';
   await until(async () => {
     const current = await appServer.rpc.request('thread/read', {
       threadId: children[0].id,
@@ -471,8 +552,19 @@ try {
     'ERR_ASSERTION',
     'LIVE_RUNTIME_BINARY_UNVERIFIED',
     'LIVE_PROCESS_IDENTITY_UNAVAILABLE',
+    'NATIVE_PROOF_DEADLINE',
+    'NATIVE_THREAD_READ_DEADLINE',
   ]);
   report.failure = { code: codes.has(error?.code) ? error.code : 'UNCLASSIFIED' };
+  report.waitState = {
+    rootCompleted,
+    childModelCompletionEmitted: childCompleted,
+    actualChildRequestReconciled: Boolean(childThreadId),
+    rootRequestCount: roles.get('root') ?? 0,
+    childRequestCount: roles.get('child') ?? 0,
+    rootSourceEditPresent: existsSync(join(app, 'root-native-edit.txt')),
+    childSourceEditPresent: existsSync(join(app, 'child-native-edit.txt')),
+  };
   process.exitCode = 1;
 } finally {
   runtime?.stopAll();
