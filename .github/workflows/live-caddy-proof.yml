@@ -1,25 +1,60 @@
 # Copyright (C) 2026 Dyne.org foundation
 # Designed by Denis Roio <jaromil@dyne.org>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-name: Bounded owned Unix native launch investigation
+name: Isolated host controller native proof (no Live readiness)
 on:
   pull_request:
     paths:
       - .github/workflows/live-caddy-proof.yml
+      - scripts/live-host-controller-proof.mjs
 permissions:
   contents: read
 jobs:
-  diagnostic-only:
+  host-controller-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24.21.0
-      - name: Prepare immutable native tool and existing sandbox prerequisites
+          cache: npm
+      - name: Compile the actual Mobile launcher without starting a runtime
         run: |
+          set -Eeuo pipefail
+          npm ci
+          npm run build:server
+      - name: Prepare pinned native binary and supported schema
+        run: |
+          set -Eeuo pipefail
           npm install --prefix "$RUNNER_TEMP/native-tools" --no-save --ignore-scripts @openai/codex@0.161.0
-          echo "LIVE_TEST_CODEX=$RUNNER_TEMP/native-tools/node_modules/.bin/codex" >> "$GITHUB_ENV"
+          task_codex_bin=$(node --input-type=module - "$RUNNER_TEMP/native-tools" <<'JS'
+          import { createRequire } from 'node:module';
+          import { dirname, join } from 'node:path';
+          const require = createRequire(join(process.argv[2], 'node_modules/@openai/codex/bin/codex.js'));
+          const packagePath = require.resolve('@openai/codex-linux-x64/package.json');
+          console.log(join(dirname(packagePath), 'vendor/x86_64-unknown-linux-musl/bin/codex'));
+          JS
+          )
+          printf '%s  %s\n' 9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c "$task_codex_bin" | sha256sum --check --status
+          echo "LIVE_HOST_CODEX_BINARY=$task_codex_bin" >> "$GITHUB_ENV"
+          "$task_codex_bin" app-server generate-json-schema --experimental --out "$RUNNER_TEMP/native-schema"
+          mkdir -p test-results/host-controller-proof
+          python3 - "$RUNNER_TEMP/native-schema" <<'PY'
+          import json,pathlib,sys
+          root=pathlib.Path(sys.argv[1]);matches=list(root.rglob('CommandExecParams.json'))
+          if len(matches)!=1:raise SystemExit('Expected one CommandExecParams schema')
+          schema=json.loads(matches[0].read_text())
+          if 'permissionProfile' not in schema.get('properties',{}):raise SystemExit('Named profile command execution unsupported')
+          pathlib.Path('test-results/host-controller-proof/schema-preflight.json').write_text(json.dumps({'version':'codex0.161.0','schema':'CommandExecParams','namedProfileSupported':True},indent=2)+'\n')
+          PY
+      - name: Existing disposable hosted runner native sandbox prerequisites
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -Eeuo pipefail
           current_userns=$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)
           if [[ -n $current_userns && $current_userns != 1 ]]; then
             sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -28,126 +63,16 @@ jobs:
           if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - name: Owned0700 Unix bridge with exact protected policy
+      - name: Actual host-side Mobile launcher and sandboxed native children
         env:
-          LIVE_CADDY_EVIDENCE_DIR: native-launch-diagnostic
+          LIVE_HOST_EVIDENCE_DIR: test-results/host-controller-proof
         run: |
-          node --input-type=module <<'L8_OUTER_PROBE'
-          // Copyright (C) 2026 Dyne.org foundation
-          // Designed by Denis Roio <jaromil@dyne.org>
-          // SPDX-License-Identifier: AGPL-3.0-or-later
-          import { spawn } from 'node:child_process';
-          import { createConnection } from 'node:net';
-          import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-          import { tmpdir } from 'node:os';
-          import { join } from 'node:path';
-          import { pathToFileURL } from 'node:url';
-          const root = mkdtempSync(join(tmpdir(), 'live-outer-investigation-'));
-          const app = join(root, 'app'), privateRoot = join(root, 'private'), nativeHome = join(root, 'native-home');
-          for (const p of [app, privateRoot, nativeHome]) mkdirSync(p, { mode: 0o700 });
-          writeFileSync(join(app, 'public.txt'), 'public');
-          writeFileSync(join(privateRoot, 'canary.txt'), 'private-controller-canary');
-          const codex = process.env.LIVE_TEST_CODEX;
-          const socketDirectory = join(nativeHome, 'owned-rpc');
-          mkdirSync(socketDirectory, { mode: 0o700 });
-          const socketPath = join(socketDirectory, 'control.sock');
-          const state = {
-            permissionProfile: { type: 'managed', file_system: { type: 'restricted', entries: [
-              { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
-              { path: { type: 'path', path: root }, access: 'write' },
-              { path: { type: 'path', path: privateRoot }, access: 'deny' },
-            ] }, network: 'enabled' },
-            sandboxCwd: pathToFileURL(app).href, useLegacyLandlock: false,
-          };
-          const child = spawn(codex, ['sandbox', '--sandbox-state-json', JSON.stringify(state), '--', codex,
-            '--disable', 'daemon_auto_start', '--disable', 'multi_agent', '--disable', 'multi_agent_v2',
-            'app-server', '--listen', 'unix://' + socketPath], {
-            cwd: app, env: { ...process.env, CODEX_HOME: nativeHome }, stdio: 'pipe', detached: true,
-          });
-          let output = '', nextId = 0, diagnostics = '', stage = 'owned-unix-connect';
-          let rpcInput = child.stdin, rpcSocket;
-          const pending = new Map();
-          child.stderr.on('data', b => { if (diagnostics.length < 8192) diagnostics += b.toString().slice(0, 8192 - diagnostics.length); });
-          const receive = b => {
-            output += b;
-            if (output.length > 131072) { child.kill('SIGTERM'); return; }
-            let line;
-            while ((line = output.indexOf('\n')) >= 0) {
-              const raw = output.slice(0, line); output = output.slice(line + 1);
-              try { const msg = JSON.parse(raw); if (pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); } } catch {}
-            }
-          };
-          child.stdout.on('data', receive);
-          const request = (method, params) => new Promise((resolve, reject) => {
-            const id = ++nextId;
-            const timer = setTimeout(() => { pending.delete(id); reject(new Error('RPC_TIMEOUT')); }, 15000);
-            pending.set(id, msg => { clearTimeout(timer); resolve(msg); });
-            rpcInput.write(JSON.stringify({ id, method, params }) + '\n');
-          });
-          const facts = { outerAppServer: true, actualNativeBoundary: false, privateReadDenied: false,
-            ordinaryReadPreserved: false, nativeCommandDenied: false, collaborationFlagsRequested: true };
-          try {
-            for (let attempt = 0; attempt < 50 && !rpcSocket; attempt++) {
-              try {
-                rpcSocket = await new Promise((resolve, reject) => {
-                  const connection = createConnection(socketPath);
-                  connection.once('connect', () => resolve(connection));
-                  connection.once('error', error => { connection.destroy(); reject(error); });
-                  connection.setTimeout(200, () => { connection.destroy(); reject(new Error('SOCKET_TIMEOUT')); });
-                });
-              } catch { await new Promise(resolve => setTimeout(resolve, 100)); }
-              if (child.exitCode !== null) break;
-            }
-            if (!rpcSocket) throw new Error('OWNED_SOCKET_UNAVAILABLE');
-            rpcSocket.setTimeout(0);
-            rpcSocket.on('data', receive);
-            rpcSocket.on('error', () => {});
-            rpcInput = rpcSocket;
-            stage = 'initialize';
-            facts.ownedUnixDirectory = true;
-            const initialized = await request('initialize', { clientInfo: { name: 'live_outer_investigation', version: '1' },
-              capabilities: { experimentalApi: true } });
-            if (initialized.error) throw new Error('INITIALIZE_FAILED');
-            rpcInput.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
-            stage = 'ordinary-read';
-            const publicRead = await request('fs/readFile', { path: join(app, 'public.txt') });
-            facts.ordinaryReadPreserved = publicRead.result?.dataBase64 === Buffer.from('public').toString('base64');
-            stage = 'private-read';
-            const privateRead = await request('fs/readFile', { path: join(privateRoot, 'canary.txt') });
-            facts.privateReadDenied = !!privateRead.error;
-            stage = 'native-command';
-            const exec = await request('command/exec', { command: [process.execPath, '-e',
-              "const fs=require('node:fs');try{fs.readFileSync(process.argv[1]);process.exitCode=9}catch(e){process.exitCode=['EACCES','EPERM','ENOENT'].includes(e.code)?0:10}", join(privateRoot, 'canary.txt')],
-              cwd: app, timeoutMs: 5000, outputBytesCap: 1024 });
-            facts.nativeCommandDenied = exec.result?.exitCode === 0;
-            facts.nativeCommandExitCode = exec.result?.exitCode ?? null;
-            facts.nativeCommandErrorCode = exec.error?.code ?? null;
-            facts.nativeCommandClassification = exec.result?.exitCode === 9 ? 'PRIVATE_CANARY_READABLE' : exec.result?.exitCode === 0 ? 'DENIED' : exec.error ? 'RPC_ERROR' : 'NON_DENIAL_FAILURE';
-            facts.nativeCommandSandboxPrerequisite = /socket directory.*0700|Operation not permitted|bwrap|sandbox/i.test(exec.result?.stderr ?? '');
-            facts.nativeCommandDiagnostic = (exec.result?.stderr ?? '').split('\n').filter(l => /bwrap:|error building bubblewrap command:|app-server socket directory|Operation not permitted/i.test(l)).slice(0,2).map(l => l.replace(/\/[A-Za-z0-9_./-]+/g, '<path>').slice(0,240));
-            const ordinary = await request('command/exec', { command: ['/usr/bin/true'], cwd: app, timeoutMs: 5000, outputBytesCap: 1024 });
-            facts.ordinaryCommandExitCode = ordinary.result?.exitCode ?? null;
-            facts.ordinaryCommandErrorCode = ordinary.error?.code ?? null;
-            facts.ordinaryCommandDiagnostic = (ordinary.result?.stderr ?? '').split('\n').filter(l => /bwrap:|error building bubblewrap command:|app-server socket directory|Operation not permitted/i.test(l)).slice(0,2).map(l => l.replace(/\/[A-Za-z0-9_./-]+/g, '<path>').slice(0,240));
-            facts.actualNativeBoundary = facts.ordinaryReadPreserved && facts.privateReadDenied && facts.nativeCommandDenied;
-            facts.stage = 'complete';
-          } catch (error) {
-            facts.stage = stage; facts.failure = error instanceof Error ? error.message : 'UNKNOWN';
-            facts.localNativePrerequisite = /socket directory.*0700|Operation not permitted|bwrap.*permission/i.test(diagnostics);
-          } finally {
-            rpcSocket?.destroy();
-            try { process.kill(-child.pid, 'SIGTERM'); } catch {}
-            await new Promise(resolve => { if (child.exitCode !== null) resolve(); else { child.once('exit', resolve); setTimeout(resolve, 3000); } });
-            console.log('OUTER_LAUNCH_INVESTIGATION ' + JSON.stringify(facts));
-            const evidence = process.env.LIVE_CADDY_EVIDENCE_DIR;
-            if (evidence) { mkdirSync(evidence, { recursive: true }); writeFileSync(join(evidence, 'outer-launch-investigation.json'), JSON.stringify(facts, null, 2)); }
-            rmSync(root, { recursive: true, force: true });
-          }
-          
-          L8_OUTER_PROBE
+          set -Eeuo pipefail
+          node --check scripts/live-host-controller-proof.mjs
+          node scripts/live-host-controller-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: native-launch-diagnostic
-          path: native-launch-diagnostic
+          name: host-controller-proof
+          path: test-results/host-controller-proof
           if-no-files-found: error
