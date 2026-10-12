@@ -277,11 +277,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       ...interaction,
       ...(interaction.kind === 'orgPlanAttention' && interaction.turnId && interaction.requestedAt
         ? {
-            supervisorReport: journal.attentionReport(
-              sessionId,
-              interaction.turnId,
-              interaction.requestedAt,
-            ),
+            supervisorReport:
+              interactions.attentionReport(sessionId, interaction.requestId) ??
+              journal.attentionReport(sessionId, interaction.turnId, interaction.requestedAt),
           }
         : {}),
     }));
@@ -291,6 +289,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     session
       ? { ...session, pendingInteractions: pendingInteractionsWithReports(session.id) }
       : null;
+  // A quiz outlives its dynamic-tool request so a late answer can be delivered
+  // as a follow-up. Once its owning turn ends, it is no longer a runtime wait.
+  // Approvals and durable Org attention retain their independent blocking role.
+  const blockingInteractions = (sessionId: string) => {
+    const activeTurnId = sessions.find(sessionId)?.activeTurnId;
+    return interactions
+      .list(sessionId)
+      .filter(
+        (interaction) =>
+          interaction.kind !== 'quiz' || !interaction.turnId || interaction.turnId === activeTurnId,
+      );
+  };
   const events = new SessionEventBus();
   let notifyAutopilotActivity: (sessionId: string) => void = () => undefined;
   let publishSessionStatus: (sessionId: string, occurredAt: string) => void = () => undefined;
@@ -422,7 +432,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       options.autopilotActivity
         ? options.autopilotActivity(sessionId)
         : activity.snapshot(sessionId, new Date().toISOString()),
-    pendingInteraction: (sessionId) => interactions.list(sessionId).length > 0,
+    pendingInteraction: (sessionId) => blockingInteractions(sessionId).length > 0,
     attention: (sessionId) => {
       const interaction = interactions
         .list(sessionId)
@@ -460,13 +470,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         };
         if (!current()) throw new Error('AUTOPILOT_START_UNAVAILABLE');
         const session = sessions.find(sessionId);
-        if (!session || !runtime || session.activeTurnId || interactions.list(sessionId).length)
+        if (!session || !runtime || session.activeTurnId || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         // A relay restart can leave a durable, otherwise eligible session without this
         // process's writer. Reacquire through the normal ownership boundary before a
         // synthetic start; never bypass its single-writer and replacement semantics.
         const writer = await runtime.ensureWriter(session, new Date().toISOString());
-        if (!current() || writer.session.activeTurnId || interactions.list(sessionId).length)
+        if (!current() || writer.session.activeTurnId || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
         const continuationPrompt = launchIdentity
@@ -497,10 +507,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     executorController: {
       resume: async (sessionId, threadId, generation, trigger) => {
         const session = sessions.find(sessionId);
-        if (!session || !runtime || interactions.list(sessionId).length)
+        if (!session || !runtime || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
         const writer = await runtime.ensureWriter(session, new Date().toISOString());
-        if (interactions.list(sessionId).length) throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+        if (blockingInteractions(sessionId).length)
+          throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
         const context =
           trigger.kind === 'processExited'
             ? ` Process result ${trigger.resultArtifact} exited and is ready in this executor history.`
@@ -570,7 +581,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           plan: supervisedPlans.find(sessionId),
           activity: activity.snapshot(sessionId, occurredAt),
           autopilot: autopilot.snapshot(sessionId),
-          pendingAttention: interactions.list(sessionId).length > 0,
+          pendingAttention: blockingInteractions(sessionId).length > 0,
           observedAt: occurredAt,
         }),
         occurredAt,
@@ -764,7 +775,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     occurredAt: string,
     outcome: Extract<SafeInteractionOutcome, 'answered' | 'failed'>,
   ) => {
-    const remaining = interactions.list(sessionId);
+    const remaining = blockingInteractions(sessionId);
     const attention = remaining.find((item) => item.kind === 'orgPlanAttention');
     activity.observe({
       sessionId,
@@ -942,6 +953,12 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       interaction,
       acknowledgeAttention && interaction.kind === 'orgPlanAttention' ? 'acknowledged' : 'active',
     );
+    if (interaction.kind === 'orgPlanAttention' && interaction.turnId)
+      interactions.retainAttentionReport(
+        sessionId,
+        interaction.turnId,
+        journal.attentionReport(sessionId, interaction.turnId, interaction.requestedAt),
+      );
     try {
       activity.observe({
         sessionId,
@@ -1104,6 +1121,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           // mutation so canonical identity and every retained child reach both
           // the GUI and Autopilot even when the notification is sparse.
           if (refreshChildTopology) void activity.refresh(sessionId);
+          if (normalized.type === 'agentMessageCompleted') {
+            const message = normalized.payload as {
+              turnId?: string;
+              phase?: string;
+              text?: string;
+            };
+            if (message.turnId && message.phase === 'final_answer')
+              interactions.retainAttentionReport(sessionId, message.turnId, message.text);
+          }
           events.publish(
             journal.append(sessionId, normalized.type, normalized.payload, normalized.occurredAt),
           );
@@ -2047,7 +2073,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               }
             : undefined,
         interactionResolved: (sessionId, requestId, occurredAt, outcome) => {
-          const remaining = interactions.list(sessionId);
+          const remaining = blockingInteractions(sessionId);
           const attention = remaining.find((item) => item.kind === 'orgPlanAttention');
           activity.observe({
             sessionId,
@@ -2212,8 +2238,47 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     attention.executorReplacement.canonicalTaskName,
                   );
                   if (!authorization.accepted) {
-                    interactions.retryDelivery(sessionId, requestId, operationKey);
+                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
                     return { kind: 'replacementRejected' as const };
+                  }
+                }
+                // The dynamic tool already returned its acknowledgement. The
+                // later human response must reach the supervisor as new input.
+                if (decision.action === 'resume' && decision.guidance) {
+                  const session = sessions.find(sessionId);
+                  if (!runtime || !session) {
+                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
+                    return { kind: 'writerUnavailable' as const };
+                  }
+                  try {
+                    const writer = await runtime.ensureWriter(session, new Date().toISOString());
+                    const text = `The user resolved the Autopilot attention request. Guidance:\n${decision.guidance}`;
+                    if (writer.session.activeTurnId)
+                      await runtime.queueTurnInput(
+                        writer.session,
+                        writer.session.activeTurnId,
+                        text,
+                        operationKey,
+                      );
+                    else {
+                      const started = await runtime.startTurn(
+                        writer.session,
+                        text,
+                        operationKey,
+                        new Date().toISOString(),
+                      );
+                      sessions.save(started);
+                      activity.observe({
+                        sessionId,
+                        occurredAt: started.updatedAt,
+                        kind: 'turnStarted',
+                        threadId: started.threadId!,
+                        turnId: started.activeTurnId!,
+                      });
+                    }
+                  } catch {
+                    interactions.retryDelivery(sessionId, requestId, operationKey, 'acknowledged');
+                    return { kind: 'writerUnavailable' as const };
                   }
                 }
                 const resolvedAt = new Date().toISOString();

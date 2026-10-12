@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import type { PendingInteraction } from '../../features/sessions/model/relay-session.js';
 import type { SafeInteractionSnapshot } from '../../../shared/contracts/chat-snapshot.js';
+import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 
 type SafeInteractionOutcome = Extract<SafeInteractionSnapshot, { resolvedAt: string }>['outcome'];
 
@@ -55,6 +56,23 @@ export class SqlitePendingInteractionStore {
       )
       .get(sessionId, requestId) as { resolution_state: string } | undefined;
     return row?.resolution_state ?? null;
+  }
+  retainAttentionReport(sessionId: string, turnId: string, value: unknown): void {
+    const report = boundedAttentionReport(value);
+    if (!report) return;
+    this.db
+      .prepare(
+        "UPDATE pending_interactions SET supervisor_report = ? WHERE session_id = ? AND turn_id = ? AND kind = 'orgPlanAttention' AND resolved_at IS NULL",
+      )
+      .run(report, sessionId, turnId);
+  }
+  attentionReport(sessionId: string, requestId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT supervisor_report FROM pending_interactions WHERE session_id = ? AND request_id = ? AND kind = 'orgPlanAttention'",
+      )
+      .get(sessionId, requestId) as { supervisor_report: string | null } | undefined;
+    return boundedAttentionReport(row?.supervisor_report);
   }
   resolve(
     sessionId: string,
@@ -107,13 +125,18 @@ export class SqlitePendingInteractionStore {
     );
   }
   /** A local writer outage is retryable only by the already-claimed key. */
-  retryDelivery(sessionId: string, requestId: string, operationKey: string): boolean {
+  retryDelivery(
+    sessionId: string,
+    requestId: string,
+    operationKey: string,
+    state: 'active' | 'acknowledged' = 'active',
+  ): boolean {
     return (
       this.db
         .prepare(
-          "UPDATE pending_interactions SET resolution_state = 'active' WHERE session_id = ? AND request_id = ? AND operation_key = ? AND resolved_at IS NULL AND resolution_state = 'delivering'",
+          "UPDATE pending_interactions SET resolution_state = ? WHERE session_id = ? AND request_id = ? AND operation_key = ? AND resolved_at IS NULL AND resolution_state = 'delivering'",
         )
-        .run(sessionId, requestId, operationKey).changes === 1
+        .run(state, sessionId, requestId, operationKey).changes === 1
     );
   }
   /** Terminal state is durable before publishing a success/failure event. */

@@ -62,7 +62,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 {#each interactions as interaction (interaction.key ?? interaction.requestId)}
   {@const submitting = interaction.state === 'submitting'}
-  <article class:resolved={interaction.state === 'resolved'}>
+  <article
+    id={`chat-request-${interaction.requestId}`}
+    tabindex="-1"
+    class:resolved={interaction.state === 'resolved'}
+  >
     <p class="interaction-kind">{interaction.kind}</p>
     {#if interaction.state === 'resolved'}
       <p

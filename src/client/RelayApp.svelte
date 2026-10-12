@@ -42,6 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { createAttentionToastDedupe } from './features/autopilot/attention-toast-dedupe.js';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
+  import PendingChatRequests from './features/chat/PendingChatRequests.svelte';
   import type { XerjStatus } from '../shared/contracts/xerj-status.js';
   import { loadBootstrap, type WorkspaceOption } from './features/catalog/bootstrap-client.js';
   import type { ComponentVersion } from '../shared/contracts/component-version.js';
@@ -1794,6 +1795,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {interactionAnnouncement}
           </p>
           {#if sessionId}
+            <PendingChatRequests
+              interactions={chatView?.interactions ?? []}
+              attention={autopilotState.attention.get(sessionId) ?? null}
+              activeTurnId={chatView?.activeTurnId ?? null}
+            />
             <MessageList
               attention={autopilotState.attention.get(sessionId) ?? null}
               attentionPending={autopilotState.pending.has(sessionId)}
