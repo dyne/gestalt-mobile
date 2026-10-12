@@ -7,7 +7,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 
-import type { AuthorizationRepository, Clock } from '../../application/ports.js';
+import type {
+  AuthorizationRepository,
+  AuthorizationRevocationObserver,
+  Clock,
+} from '../../application/ports.js';
 import { AuthorizationDomainError } from '../../domain/errors.js';
 import { authorizedDeviceId } from '../../domain/identifiers.js';
 import { problem } from '../../../../platform/http/problem.js';
@@ -22,6 +26,7 @@ export function registerRevokeAuthorizedDevice(
     repository: AuthorizationRepository;
     clock: Clock;
     relyingParty: { publicOrigin: string };
+    revocations?: AuthorizationRevocationObserver;
   },
 ): void {
   app.delete('/api/auth/devices/:deviceId', async (request, reply) => {
@@ -39,6 +44,7 @@ export function registerRevokeAuthorizedDevice(
             problem('LAST_DEVICE_REQUIRED', 409, 'At least one authorized device is required.'),
           );
       if (outcome === 'notFound') return unavailable(reply, 404, 'DEVICE_NOT_AVAILABLE');
+      await deps.revocations?.deviceRevoked(id);
       if (current === id)
         reply.clearCookie('gestalt_mobile_session', {
           path: '/',

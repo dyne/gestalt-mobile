@@ -1,0 +1,78 @@
+# Copyright (C) 2026 Dyne.org foundation
+# Designed by Denis Roio <jaromil@dyne.org>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Isolated host controller native proof (no Live readiness)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/live-caddy-proof.yml
+      - scripts/live-host-controller-proof.mjs
+permissions:
+  contents: read
+jobs:
+  host-controller-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - name: Compile the actual Mobile launcher without starting a runtime
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          npm run build:server
+      - name: Prepare pinned native binary and supported schema
+        run: |
+          set -Eeuo pipefail
+          npm install --prefix "$RUNNER_TEMP/native-tools" --no-save --ignore-scripts @openai/codex@0.161.0
+          task_codex_bin=$(node --input-type=module - "$RUNNER_TEMP/native-tools" <<'JS'
+          import { createRequire } from 'node:module';
+          import { dirname, join } from 'node:path';
+          const require = createRequire(join(process.argv[2], 'node_modules/@openai/codex/bin/codex.js'));
+          const packagePath = require.resolve('@openai/codex-linux-x64/package.json');
+          console.log(join(dirname(packagePath), 'vendor/x86_64-unknown-linux-musl/bin/codex'));
+          JS
+          )
+          printf '%s  %s\n' 9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c "$task_codex_bin" | sha256sum --check --status
+          echo "LIVE_HOST_CODEX_BINARY=$task_codex_bin" >> "$GITHUB_ENV"
+          "$task_codex_bin" app-server generate-json-schema --experimental --out "$RUNNER_TEMP/native-schema"
+          mkdir -p test-results/host-controller-proof
+          python3 - "$RUNNER_TEMP/native-schema" <<'PY'
+          import json,pathlib,sys
+          root=pathlib.Path(sys.argv[1]);matches=list(root.rglob('CommandExecParams.json'))
+          if len(matches)!=1:raise SystemExit('Expected one CommandExecParams schema')
+          schema=json.loads(matches[0].read_text())
+          if 'permissionProfile' not in schema.get('properties',{}):raise SystemExit('Named profile command execution unsupported')
+          pathlib.Path('test-results/host-controller-proof/schema-preflight.json').write_text(json.dumps({'version':'codex0.161.0','schema':'CommandExecParams','namedProfileSupported':True},indent=2)+'\n')
+          PY
+      - name: Existing disposable hosted runner native sandbox prerequisites
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -Eeuo pipefail
+          current_userns=$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)
+          if [[ -n $current_userns && $current_userns != 1 ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          current_apparmor=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)
+          if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Actual host-side Mobile launcher and sandboxed native children
+        env:
+          LIVE_HOST_EVIDENCE_DIR: test-results/host-controller-proof
+        run: |
+          set -Eeuo pipefail
+          node --check scripts/live-host-controller-proof.mjs
+          node scripts/live-host-controller-proof.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: host-controller-proof
+          path: test-results/host-controller-proof
+          if-no-files-found: error
