@@ -503,23 +503,32 @@ try {
   }
   assert.equal(readFileSync(privateFile, 'utf8'), privateCanary);
   assert.equal(socketConnections, 1);
-  report.stage = 'child-lifecycle-reconciliation';
-  const children = await runtime.listDirectChildren(session);
-  assert.equal(children.length, 1);
-  assert.equal(children[0].id, childThreadId);
+  report.stage = 'child-owning-runtime-roster';
+  const roster = await runtime.inspectLiveSpawnedChildren(session);
+  assert.deepEqual(roster.launch, admitted.launch);
+  report.stage = 'child-roster-count';
+  assert.equal(roster.threads.length, 1);
+  report.stage = 'child-roster-request-identity';
+  assert.equal(roster.threads[0].id, childThreadId);
+  report.stage = 'child-thread-read';
   const child = await appServer.rpc.request('thread/read', {
-    threadId: children[0].id,
+    threadId: childThreadId,
     includeTurns: false,
   });
+  report.stage = 'child-parent-identity';
   assert.equal(child.thread.parentThreadId, session.threadId);
+  report.stage = 'child-session-identity';
   assert.equal(child.thread.sessionId, admitted.thread.thread.sessionId);
+  report.stage = 'child-selected-model';
   assert.equal(child.thread.model, session.model);
+  report.stage = 'child-selected-thinking';
   assert.equal(child.thread.reasoningEffort, 'medium');
+  report.stage = 'child-model-call-count';
   assert.equal(roles.get('child'), 4);
   report.stage = 'wait-child-native-idle';
   await until(async () => {
     const current = await appServer.rpc.request('thread/read', {
-      threadId: children[0].id,
+      threadId: childThreadId,
       includeTurns: false,
     });
     return current.thread.status?.type === 'idle';

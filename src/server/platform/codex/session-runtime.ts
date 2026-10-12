@@ -880,6 +880,59 @@ export class CodexSessionRuntime {
     }
   }
 
+  /** Live controller read: one existing owner, no detached reader or child resume. */
+  async inspectLiveSpawnedChildren(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    threads: readonly Readonly<Record<string, unknown>>[];
+  }> {
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const launch = resource.process.observeLiveLaunch();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let result: unknown;
+    try {
+      result = await Promise.race([
+        resource.process.rpc.request('thread/list', {
+          parentThreadId: session.threadId,
+          sourceKinds: ['subAgentThreadSpawn'],
+          limit: 64,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), 5000);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    if (
+      this.sessions.get(session.id) !== resource ||
+      resource.threadId !== session.threadId ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(launch)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    const response = asRecord(result);
+    const rows = response?.data;
+    if (!Array.isArray(rows) || rows.length > 64 || response?.nextCursor)
+      throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    const ids = new Set<string>();
+    const threads = rows.map((row: unknown) => {
+      const thread = asRecord(row);
+      const id = boundedString(thread?.id, 256);
+      if (!thread || !id || ids.has(id) || thread.parentThreadId !== session.threadId)
+        throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+      ids.add(id);
+      return structuredClone(thread);
+    });
+    return { launch, threads };
+  }
+
   /** Bounded reconciliation port for direct spawned children only. */
   async listDirectChildren(session: RelaySessionSnapshot): Promise<readonly DirectChildThread[]> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');

@@ -25,6 +25,7 @@ function session() {
 function fixture(observe = true) {
   const calls: { method: string; params: unknown }[] = [];
   let configuration: () => Promise<unknown> = async () => ({ config: {}, layers: [] });
+  let children: () => Promise<unknown> = async () => ({ data: [], nextCursor: null });
   let notify: Parameters<AppServer['rpc']['onNotification']>[0] = () => {};
   const process: AppServer = {
     rpc: {
@@ -39,6 +40,7 @@ function fixture(observe = true) {
             runtimeWorkspaceRoots: [globalThis.process.cwd()],
           };
         if (method === 'config/read') return configuration();
+        if (method === 'thread/list') return children();
         if (method === 'thread/read') return { thread: { id: 'same-thread' } };
         if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
         return {};
@@ -62,9 +64,86 @@ function fixture(observe = true) {
     setConfiguration: (read: typeof configuration) => {
       configuration = read;
     },
+    setChildren: (read: typeof children) => {
+      children = read;
+    },
   };
 }
 describe('owning runtime admission observations', () => {
+  it('enumerates native spawned children through the sole owner without detached readers or resume', async () => {
+    const { runtime, launch, calls, setChildren } = fixture();
+    const owning = await runtime.start(session(), 'time');
+    setChildren(async () => ({
+      data: [
+        {
+          id: 'actual-child',
+          parentThreadId: owning.threadId,
+          model: 'selected-model',
+          reasoningEffort: 'medium',
+          status: { type: 'idle' },
+        },
+      ],
+      nextCursor: null,
+    }));
+    try {
+      const before = calls.length;
+      const roster = await runtime.inspectLiveSpawnedChildren(owning);
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(calls.slice(before)).toEqual([
+        {
+          method: 'thread/list',
+          params: {
+            parentThreadId: owning.threadId,
+            sourceKinds: ['subAgentThreadSpawn'],
+            limit: 64,
+          },
+        },
+      ]);
+      expect(roster.threads[0]).toMatchObject({
+        id: 'actual-child',
+        model: 'selected-model',
+        reasoningEffort: 'medium',
+      });
+    } finally {
+      runtime.stopAll();
+    }
+  });
+  it.each([
+    { data: [{ id: 'foreign', parentThreadId: 'another-thread' }] },
+    {
+      data: [
+        { id: 'duplicate', parentThreadId: 'same-thread' },
+        { id: 'duplicate', parentThreadId: 'same-thread' },
+      ],
+    },
+    { data: [], nextCursor: 'incomplete-roster' },
+  ])('refuses foreign, ambiguous or incomplete Live child topology', async (reply) => {
+    const { runtime, setChildren } = fixture();
+    const owning = await runtime.start(session(), 'time');
+    setChildren(async () => reply);
+    try {
+      await expect(runtime.inspectLiveSpawnedChildren(owning)).rejects.toThrow(
+        'LIVE_CHILD_TOPOLOGY_UNAVAILABLE',
+      );
+    } finally {
+      runtime.stopAll();
+    }
+  });
+  it('fences a lost owner during Live child enumeration', async () => {
+    const { runtime, setChildren } = fixture();
+    const owning = await runtime.start(session(), 'time');
+    let release: (value: unknown) => void = () => {};
+    setChildren(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = runtime.inspectLiveSpawnedChildren(owning);
+    runtime.stopAll();
+    release({ data: [] });
+    await expect(pending).rejects.toThrow('LIVE_RUNTIME_IDENTITY_CHANGED');
+  });
   it('observes native profile provenance and ignores a different child thread settings update', async () => {
     const { runtime, notify } = fixture();
     const owning = await runtime.start(session(), 'time');
