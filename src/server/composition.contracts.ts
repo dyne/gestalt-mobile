@@ -3107,89 +3107,116 @@ describe('production composition', () => {
       },
     );
 
-    it('production blocked child wakes the idle supervisor for bounded recovery', async () => {
-      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
-      const fixture = await createProductionAutopilotFixture({
-        autopilotSchedule: (callback) => {
-          const timer = { callback, cancelled: false, fired: false };
-          timers.push(timer);
-          return () => {
-            timer.cancelled = true;
-          };
-        },
-      });
-      expect(
-        (
-          await fixture.app.inject({
-            method: 'PUT',
-            url: `/api/sessions/${fixture.sessionId}/autopilot`,
-            payload: { enabled: false },
-          })
-        ).statusCode,
-      ).toBe(200);
-      timers.length = 0;
-      const handle = fixture.handles.find((candidate) => candidate.notify)!;
-      handle.notify!({
-        method: 'thread/started',
-        params: { thread: { id: 'thread-1', status: { type: 'idle' } } },
-      });
-      handle.notify!({
-        method: 'item/started',
-        params: {
-          item: {
-            type: 'collabToolCall',
-            tool: 'spawn_agent',
-            status: 'inProgress',
-            senderThreadId: 'thread-1',
-            receiverThreadId: 'child-1',
-            agentStatus: 'working',
+    it.each([
+      { status: 'failed', retainedQuiz: false },
+      { status: 'completed', retainedQuiz: true },
+    ])(
+      'production $status child wakes the idle supervisor with retainedQuiz=$retainedQuiz',
+      async ({ status, retainedQuiz }) => {
+        const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+        const fixture = await createProductionAutopilotFixture({
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false, fired: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
           },
-        },
-      });
-      expect(
-        (
-          await fixture.app.inject({
-            method: 'PUT',
-            url: `/api/sessions/${fixture.sessionId}/autopilot`,
-            payload: { enabled: true },
-          })
-        ).statusCode,
-      ).toBe(200);
-      expect(timers).toHaveLength(0);
-
-      handle.notify!({
-        method: 'item/completed',
-        params: {
-          item: {
-            type: 'collabToolCall',
-            tool: 'wait',
-            status: 'failed',
-            senderThreadId: 'thread-1',
-            receiverThreadId: 'child-1',
-            agentStatus: 'failed',
-          },
-        },
-      });
-
-      const quietTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
-      expect(quietTimer).toBeDefined();
-      quietTimer!.fired = true;
-      quietTimer!.callback();
-      await vi.waitFor(() =>
-        expect(timers.find((timer) => !timer.cancelled && !timer.fired)).toBeDefined(),
-      );
-      const continuationTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
-      continuationTimer!.fired = true;
-      continuationTimer!.callback();
-      await vi.waitFor(() =>
+        });
         expect(
-          fixture.handles
-            .flatMap((candidate) => candidate.calls)
-            .filter((call) => call === 'turn/start'),
-        ).toHaveLength(1),
-      );
-      await fixture.app.close();
-    });
+          (
+            await fixture.app.inject({
+              method: 'PUT',
+              url: `/api/sessions/${fixture.sessionId}/autopilot`,
+              payload: { enabled: false },
+            })
+          ).statusCode,
+        ).toBe(200);
+        timers.length = 0;
+        if (retainedQuiz) {
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          database
+            .prepare(
+              'INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at) VALUES (?,?,?,?,?,?)',
+            )
+            .run(
+              fixture.sessionId,
+              'earlier-quiz',
+              'quiz',
+              JSON.stringify({ questions: [] }),
+              'ended-root-turn',
+              new Date().toISOString(),
+            );
+          database.close();
+        }
+        const handle = fixture.handles.find((candidate) => candidate.notify)!;
+        handle.notify!({
+          method: 'thread/started',
+          params: { thread: { id: 'thread-1', status: { type: 'idle' } } },
+        });
+        handle.notify!({
+          method: 'item/started',
+          params: {
+            item: {
+              type: 'collabToolCall',
+              tool: 'spawn_agent',
+              status: 'inProgress',
+              senderThreadId: 'thread-1',
+              receiverThreadId: 'child-1',
+              agentStatus: 'working',
+            },
+          },
+        });
+        expect(
+          (
+            await fixture.app.inject({
+              method: 'PUT',
+              url: `/api/sessions/${fixture.sessionId}/autopilot`,
+              payload: { enabled: true },
+            })
+          ).statusCode,
+        ).toBe(200);
+        expect(timers).toHaveLength(0);
+
+        handle.notify!({
+          method: 'item/completed',
+          params: {
+            item: {
+              type: 'collabToolCall',
+              tool: 'wait',
+              status: status === 'failed' ? 'failed' : 'completed',
+              senderThreadId: 'thread-1',
+              receiverThreadId: 'child-1',
+              agentStatus: status,
+            },
+          },
+        });
+
+        if (retainedQuiz)
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+          ).toMatchObject({ agentActivity: { aggregateSubagents: 'idle' } });
+
+        const quietTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
+        expect(quietTimer).toBeDefined();
+        quietTimer!.fired = true;
+        quietTimer!.callback();
+        await vi.waitFor(() =>
+          expect(timers.find((timer) => !timer.cancelled && !timer.fired)).toBeDefined(),
+        );
+        const continuationTimer = timers.find((timer) => !timer.cancelled && !timer.fired);
+        continuationTimer!.fired = true;
+        continuationTimer!.callback();
+        await vi.waitFor(() =>
+          expect(
+            fixture.handles
+              .flatMap((candidate) => candidate.calls)
+              .filter((call) => call === 'turn/start'),
+          ).toHaveLength(1),
+        );
+        await fixture.app.close();
+      },
+    );
 
     it('continues the same unloaded executor once after authoritative roster recovery', async () => {
       const handles: LiveServerHandle[] = [];
