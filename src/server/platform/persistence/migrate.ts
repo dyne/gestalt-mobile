@@ -77,6 +77,8 @@ export function migrate(database: DatabaseSync): void {
     database.exec('ALTER TABLE pending_interactions ADD COLUMN turn_id TEXT');
   if (!interactionColumns.some((column) => column.name === 'requested_at'))
     database.exec('ALTER TABLE pending_interactions ADD COLUMN requested_at TEXT');
+  if (!interactionColumns.some((column) => column.name === 'supervisor_report'))
+    database.exec('ALTER TABLE pending_interactions ADD COLUMN supervisor_report TEXT');
   if (!interactionColumns.some((column) => column.name === 'outcome'))
     database.exec('ALTER TABLE pending_interactions ADD COLUMN outcome TEXT');
   if (!interactionColumns.some((column) => column.name === 'operation_key'))

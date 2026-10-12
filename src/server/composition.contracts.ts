@@ -459,6 +459,137 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
+    it.each(['idle', 'active', 'retry'] as const)(
+      'delivers acknowledged attention guidance to the %s supervisor and retains its explanation beyond the journal tail',
+      async (mode) => {
+        const fixture = await createProductionAutopilotFixture();
+        const { app, sessionId, handles } = fixture;
+        onTestFinished(() => app.close());
+        const handle = handles.filter((value) => value.request).at(-1)!;
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        database
+          .prepare('UPDATE relay_sessions SET active_turn_id = ? WHERE id = ?')
+          .run('attention-turn', sessionId);
+        const threadId = (await app.inject(`/api/sessions/${sessionId}`)).json().threadId as string;
+        handle.notify!({
+          method: 'turn/started',
+          params: { threadId, turn: { id: 'attention-turn' } },
+        });
+        await expect(handle.request!(attentionCall(991))).resolves.toEqual(
+          toOrgPlanAttentionAcknowledgement(),
+        );
+        handle.notify!({
+          method: 'item/completed',
+          params: {
+            threadId,
+            turnId: 'attention-turn',
+            item: {
+              id: 'explanation',
+              type: 'agentMessage',
+              phase: 'final_answer',
+              text: 'The required build capability is unavailable.',
+            },
+          },
+        });
+        if (mode !== 'active')
+          database
+            .prepare('UPDATE relay_sessions SET active_turn_id = NULL WHERE id = ?')
+            .run(sessionId);
+        database.prepare('DELETE FROM session_events WHERE session_id = ?').run(sessionId);
+        database.close();
+        expect((await app.inject(`/api/sessions/${sessionId}/attention`)).json()).toMatchObject({
+          supervisorReport: 'The required build capability is unavailable.',
+        });
+        const input = {
+          operationKey: 'guidance-key',
+          action: 'resume',
+          guidance: 'Use the available local build tool.',
+        };
+        const url = `/api/sessions/${sessionId}/attention/991/resolve`;
+        if (mode === 'retry') {
+          handle.respond = (method) => {
+            if (method === 'turn/start') throw new Error('TEST_WRITER_UNAVAILABLE');
+          };
+          expect((await app.inject({ method: 'POST', url, payload: input })).statusCode).toBe(409);
+          expect((await app.inject(`/api/sessions/${sessionId}/attention`)).json()).toMatchObject({
+            requestId: '991',
+          });
+          handle.respond = undefined;
+        }
+        expect((await app.inject({ method: 'POST', url, payload: input })).statusCode).toBe(202);
+        expect((await app.inject({ method: 'POST', url, payload: input })).json()).toMatchObject({
+          accepted: true,
+          replayed: true,
+        });
+        const starts = handles
+          .flatMap((value) => value.requests)
+          .filter(
+            (request) => request.method === (mode === 'active' ? 'turn/steer' : 'turn/start'),
+          );
+        expect(starts).toHaveLength(mode === 'retry' ? 2 : 1);
+        expect(starts[0]!.params).toMatchObject({
+          input: [expect.objectContaining({ text: expect.stringContaining(input.guidance) })],
+        });
+      },
+    );
+
+    it('retains a completed-turn quiz for late answers without blocking the next continuation', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      const { app, sessionId, handles } = fixture;
+      onTestFinished(() => app.close());
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      // Reproduce the persisted boundary: a quiz belongs to a turn that has
+      // completed, but is retained so the browser can submit a late answer.
+      database
+        .prepare(
+          'INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at) VALUES (?,?,?,?,?,?)',
+        )
+        .run(
+          sessionId,
+          'stale-quiz',
+          'quiz',
+          JSON.stringify({ questions: [] }),
+          'completed-turn',
+          new Date().toISOString(),
+        );
+      database.close();
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json().pendingInteractions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ requestId: 'stale-quiz', kind: 'quiz' }),
+        ]),
+      );
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${sessionId}/autopilot`,
+            payload: { enabled: true },
+          })
+        ).statusCode,
+      ).toBe(200);
+      await vi.waitFor(() => expect(timers.some((timer) => !timer.cancelled)).toBe(true));
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(
+          handles.flatMap((handle) => handle.calls).filter((call) => call === 'turn/start'),
+        ).toHaveLength(1),
+      );
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json().pendingInteractions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ requestId: 'stale-quiz', kind: 'quiz' }),
+        ]),
+      );
+    });
+
     it('health reads match UI authority, reject session selection, and expose recoverable corrupt state', async () => {
       const fixture = await createProductionAutopilotFixture();
       const { app, sessionId, handles, dataDir } = fixture;
@@ -5538,6 +5669,7 @@ describe('production composition', () => {
               request: async (method: string, params: unknown) => {
                 handle.calls.push(method);
                 if (method === 'thread/start') return { thread: { id: 'thread-1' } };
+                if (method === 'turn/start') return { turn: { id: 'attention-guidance-turn' } };
                 if (method === 'thread/read') {
                   if (handle.failReads) throw new Error('READ_DOWN');
                   return { thread: { id: 'thread-1', status: { type: 'idle' }, turns: [] } };

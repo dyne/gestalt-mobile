@@ -46,6 +46,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 {#if attention}
   <section
+    id={controlId}
+    tabindex="-1"
     class="attention"
     role={historical ? 'region' : 'alert'}
     aria-labelledby={`${controlId}-title`}

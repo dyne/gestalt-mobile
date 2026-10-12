@@ -1016,6 +1016,10 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     const alert = page.getByRole('alert', { name: 'Autopilot needs your attention' });
+    const pending = page.getByRole('status', { name: 'Pending chat requests' });
+    await expect(pending).toContainText('checkpoint could not identify the completed L1.2');
+    await pending.getByRole('button', { name: 'Review Autopilot blocker' }).click();
+    await expect(alert).toBeFocused();
     await expect(alert).toContainText('checkpoint could not identify the completed L1.2');
     await page.reload();
     await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');
