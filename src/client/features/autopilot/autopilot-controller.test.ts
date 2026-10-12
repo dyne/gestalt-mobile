@@ -5,7 +5,10 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkpointHandoffRecoveryMessage } from '../../../shared/contracts/autopilot-recovery.js';
+import {
+  checkpointHandoffRecoveryMessage,
+  reconciliationRecoveryMessage,
+} from '../../../shared/contracts/autopilot-recovery.js';
 import { AutopilotController, type AutopilotClientState } from './autopilot-controller.js';
 
 const snapshot = (state = 'monitoring') => ({
@@ -46,6 +49,31 @@ const deferred = <T>() => {
 };
 
 describe('AutopilotController', () => {
+  it('announces reconciliation blockers from bootstrap and live replay, clearing on recovery', () => {
+    let published = capture();
+    const controller = new AutopilotController(
+      {
+        getSession: async () => ({}),
+        setAutopilot: async () => ({ autopilot: snapshot() }),
+        resolveAttention: async () => ({}),
+      },
+      (state) => (published = capture(state)),
+    );
+    const blocked = { ...snapshot(), reason: 'reconcileFailed' };
+    controller.bootstrap([{ id: 'a', autopilot: blocked, currentSequence: 1 }]);
+    expect(published.errors.get('a')).toBe(reconciliationRecoveryMessage);
+    controller.observe('a', { sequence: 2, type: 'autopilot.updated', payload: snapshot() });
+    expect(published.errors.has('a')).toBe(false);
+    controller.observe('a', { sequence: 3, type: 'autopilot.updated', payload: blocked });
+    expect(published.errors.get('a')).toBe(reconciliationRecoveryMessage);
+    controller.observe('a', {
+      sequence: 4,
+      type: 'autopilot.updated',
+      payload: { ...snapshot('disabled'), reason: 'reconcileFailed' },
+    });
+    expect(published.errors.has('a')).toBe(false);
+  });
+
   it('adds only the blocked root turn final to the alert and restores it from snapshots', () => {
     let published = capture();
     const controller = new AutopilotController(

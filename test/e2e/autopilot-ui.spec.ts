@@ -881,6 +881,26 @@ test('typed missing-plan conflicts remain safe and actionable after the real tog
   await expect(page.locator('body')).not.toContainText('/secret');
 });
 
+test('monitoring reconciliation failure announces a warning and persistent recovery actions', async ({
+  page,
+}) => {
+  await install(page, 'monitoring', 'reconcileFailed', false);
+  await page.goto('/');
+  await expect(page.getByRole('alert', { name: 'Autopilot recovery warning' })).toContainText(
+    'Autopilot cannot confirm agent status.',
+  );
+  await expect(page.locator('.toast.warning')).toContainText(
+    'Autopilot cannot confirm agent status.',
+  );
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Autopilot recovery warning' })).toContainText(
+    'restore or reopen the session',
+  );
+  await expect(page.getByRole('button', { name: 'Retry Autopilot' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Disable Autopilot' })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test('safety-stop recovery uses the Autopilot toggle endpoint, never an attention resolver', async ({
   page,
 }) => {

@@ -6,6 +6,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import type { AutopilotSnapshot, OrgPlanAttention } from './contracts.js';
+  import {
+    isReconciliationRecovery,
+    reconciliationRecoveryMessage,
+  } from '../../../shared/contracts/autopilot-recovery.js';
 
   let {
     autopilot,
@@ -38,6 +42,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let message = $derived(
     autopilot?.reason && !attention ? (reasons[autopilot.reason] ?? null) : null,
   );
+  let recovering = $derived(isReconciliationRecovery(autopilot));
   let recovery = $derived(
     autopilot?.reason === 'startUnavailable'
       ? 'There is no pending agent attention request to answer. Restore or reopen this session, then retry Autopilot.'
@@ -47,11 +52,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   );
 </script>
 
-{#if autopilot?.state === 'attentionRequired' && message}
-  <section class="safety-stop" role="alert" aria-labelledby={`${controlId}-title`}>
-    <h3 id={`${controlId}-title`}>Autopilot safety stop</h3>
-    <p>{message}</p>
-    <p>{recovery}</p>
+{#if !attention && (recovering || (autopilot?.state === 'attentionRequired' && message))}
+  <section class="safety-stop" class:recovering role="alert" aria-labelledby={`${controlId}-title`}>
+    <h3 id={`${controlId}-title`}>
+      {recovering ? 'Autopilot recovery warning' : 'Autopilot safety stop'}
+    </h3>
+    {#if recovering}
+      <p>{reconciliationRecoveryMessage}</p>
+    {:else}
+      <p>{message}</p>
+      <p>{recovery}</p>
+    {/if}
     <div class="actions">
       <button type="button" disabled={pending} onclick={onrecover}
         >{pending ? 'Updating…' : 'Retry Autopilot'}</button
@@ -73,6 +84,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   h3,
   p {
     margin: 0 0 0.5rem;
+  }
+  .recovering {
+    border-color: var(--theme-warning);
   }
   .actions {
     display: flex;

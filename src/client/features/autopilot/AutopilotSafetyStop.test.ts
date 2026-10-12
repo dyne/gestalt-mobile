@@ -26,6 +26,34 @@ const safety = (
 });
 
 describe('AutopilotSafetyStop', () => {
+  it('warns during enabled reconciliation recovery and clears when monitoring recovers', async () => {
+    const onrecover = vi.fn();
+    const ondisable = vi.fn();
+    const { rerender } = render(AutopilotSafetyStop, {
+      autopilot: { ...safety('reconcileFailed'), state: 'monitoring', enabled: true },
+      attention: null,
+      onrecover,
+      ondisable,
+    });
+    expect(screen.getByRole('alert', { name: 'Autopilot recovery warning' }).textContent).toContain(
+      'Autopilot cannot confirm agent status.',
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry Autopilot' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Disable Autopilot' }));
+    expect(onrecover).toHaveBeenCalledOnce();
+    expect(ondisable).toHaveBeenCalledOnce();
+    await rerender({
+      autopilot: {
+        ...safety('reconcileFailed'),
+        state: 'monitoring',
+        enabled: true,
+        reason: undefined,
+      },
+      attention: null,
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it.each([
     'attentionRequired',
     'noPlanProgress',

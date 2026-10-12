@@ -39,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } from './features/autopilot/autopilot-controller.js';
   import AutopilotControl from './features/autopilot/AutopilotControl.svelte';
   import AutopilotSafetyStop from './features/autopilot/AutopilotSafetyStop.svelte';
+  import { reconciliationRecoveryMessage } from '../shared/contracts/autopilot-recovery.js';
   import { createAttentionToastDedupe } from './features/autopilot/attention-toast-dedupe.js';
   import Composer from './features/chat/Composer.svelte';
   import MessageList from './features/chat/MessageList.svelte';
@@ -473,7 +474,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       active.add(key);
       if (announcedAutopilotErrors.has(key)) continue;
       announcedAutopilotErrors.add(key);
-      toastQueue.enqueue({ kind: 'error', message });
+      toastQueue.enqueue({
+        kind: message === reconciliationRecoveryMessage ? 'warning' : 'error',
+        message,
+      });
     }
     for (const key of announcedAutopilotErrors) {
       if (!active.has(key)) announcedAutopilotErrors.delete(key);
