@@ -59,7 +59,11 @@ const privateCanary = randomBytes(32).toString('hex');
 writeFileSync(privateFile, privateCanary, { mode: 0o600 });
 const privateFd = openSync(privateFile, 'r');
 writeFileSync(join(app, 'public.txt'), 'public-native-work', { mode: 0o600 });
-const socket = join(controller, 'admin.sock');
+// Unix endpoints have a ~108-byte limit. Keep the private endpoint out of the deep package path.
+assert.ok(process.env.RUNNER_TEMP, 'Disposable runner temporary state required');
+const socketController = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-admin-'));
+const socket = join(socketController, 'admin.sock');
+assert.ok(Buffer.byteLength(socket) < 104, 'Private Unix endpoint path too long');
 let socketConnections = 0;
 const admin = socketServer((peer) => {
   socketConnections++;
@@ -78,6 +82,8 @@ const report = {
     binarySha256: LIVE_CODEX_SHA256,
     nativeSource: LIVE_CODEX_SOURCE,
     bundledBwrapSha256: LIVE_CODEX_BWRAP_SHA256,
+    mobileHead: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    expectedHead: process.env.LIVE_PROOF_EXPECTED_HEAD,
     mobileTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
     sourceFiles: Object.fromEntries(
       [
@@ -274,10 +280,14 @@ const provider = createServer(async (request, response) => {
   }
 });
 try {
+  report.stage = 'checkout-provenance';
+  assert.equal(report.provenance.mobileHead, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  report.stage = 'admin-socket-bind';
   await new Promise((done, reject) => {
     admin.once('error', reject);
     admin.listen(socket, done);
   });
+  report.stage = 'admin-socket-host-probe';
   await new Promise((done, reject) => {
     const peer = createConnection(socket);
     peer.once('error', reject);
@@ -285,12 +295,15 @@ try {
     peer.resume();
   });
   assert.equal(socketConnections, 1);
+  report.checks.hostAdminSocketReachable = true;
+  report.stage = 'provider-bind';
   await new Promise((done, reject) => {
     provider.once('error', reject);
     provider.listen(0, '127.0.0.1', done);
   });
   const providerPort = provider.address().port;
-  const config = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled native proof"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(app)} = "write"\n${JSON.stringify(controller)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  report.stage = 'native-configuration';
+  const config = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled native proof"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(app)} = "write"\n${JSON.stringify(controller)} = "deny"\n${JSON.stringify(socketController)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
   writeFileSync(join(nativeHome, 'config.toml'), config, { mode: 0o600 });
   const env = {
     PATH: '/usr/bin:/bin',
@@ -403,13 +416,26 @@ try {
   report.checks.ownedRuntimeExited = true;
   report.passed = true;
   report.stage = 'complete';
-} catch {
+} catch (error) {
+  const codes = new Set([
+    'EINVAL',
+    'ENAMETOOLONG',
+    'ENOENT',
+    'EACCES',
+    'EPERM',
+    'EADDRINUSE',
+    'ERR_ASSERTION',
+    'LIVE_RUNTIME_BINARY_UNVERIFIED',
+    'LIVE_PROCESS_IDENTITY_UNAVAILABLE',
+  ]);
+  report.failure = { code: codes.has(error?.code) ? error.code : 'UNCLASSIFIED' };
   process.exitCode = 1;
 } finally {
   runtime?.stopAll();
   provider.closeAllConnections();
   await new Promise((done) => provider.close(done));
   await new Promise((done) => admin.close(done));
+  rmSync(socketController, { recursive: true, force: true });
   closeSync(privateFd);
   writeFileSync(
     join(evidence, 'native-model-tools-proof.json'),
@@ -421,6 +447,7 @@ try {
     JSON.stringify({
       passed: report.passed,
       stage: report.stage,
+      failure: report.failure ?? null,
       provider: 'deterministic',
       genuine: false,
     }) + '\n',

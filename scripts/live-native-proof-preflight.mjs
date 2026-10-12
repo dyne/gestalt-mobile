@@ -6,6 +6,7 @@
 
 // Prerequisite evidence only. Never launches native processes or grants readiness.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -19,6 +20,12 @@ mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const report = { schemaVersion: 1, passed: false, stage: 'opt-in', genuine: false, checks: {} };
 try {
   assert.equal(process.env.LIVE_NATIVE_MODEL_PROOF, '1');
+  report.stage = 'checkout-provenance';
+  assert.match(process.env.LIVE_PROOF_EXPECTED_HEAD ?? '', /^[a-f0-9]{40}$/);
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim();
+  assert.equal(head, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  report.provenance = { head, tree, expectedHead: process.env.LIVE_PROOF_EXPECTED_HEAD };
   assert.ok(process.env.RUNNER_TEMP);
   // Exact layout from the pinned 0.161.0 platform package and its bin/codex.js loader.
   const platform = join(
