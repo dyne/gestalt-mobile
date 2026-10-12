@@ -5,8 +5,8 @@
  */
 
 // Hosted diagnostic only. No model calls, runtime credentials, production config or IPC repair.
-import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   lstatSync,
   readFileSync,
@@ -16,46 +16,44 @@ import {
   writeFileSync,
   symlinkSync,
   rmSync,
-} from "node:fs";
-import { createServer, createConnection } from "node:net";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+} from 'node:fs';
+import { createServer, createConnection } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const evidence = resolve(
-  process.env.LIVE_HOST_EVIDENCE_DIR ?? "test-results/host-controller-proof",
+  process.env.LIVE_HOST_EVIDENCE_DIR ?? 'test-results/host-controller-proof',
 );
 mkdirSync(evidence, { recursive: true });
 const codex = resolve(process.env.LIVE_HOST_CODEX_BINARY);
-const expectedHash =
-  "9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c";
-const sourcePin = "979011409de0a60b52f179721948e65531d26144";
-const profile = "l8-host-proof";
-const commit = execFileSync("git", ["rev-parse", "HEAD"], {
-  encoding: "utf8",
+const expectedHash = '9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c';
+const sourcePin = '979011409de0a60b52f179721948e65531d26144';
+const profile = 'l8-host-proof';
+const commit = execFileSync('git', ['rev-parse', 'HEAD'], {
+  encoding: 'utf8',
 }).trim();
 const runner = {
   repository: process.env.GITHUB_REPOSITORY,
   runId: process.env.GITHUB_RUN_ID,
 };
-const root = mkdtempSync(join(tmpdir(), "live-host-proof-"));
-const app = join(root, "app"),
-  privateRoot = join(root, "private"),
-  nativeHome = join(root, "native-home");
-const bin = join(root, "bin"),
-  scratch = join(root, "scratch");
-for (const p of [app, privateRoot, nativeHome, bin, scratch])
-  mkdirSync(p, { mode: 0o700 });
-const publicFile = join(app, "public.txt");
-writeFileSync(publicFile, "public-fixture");
-const privateFiles = ["controller", "auth", "caddy"].map((kind) => {
+const root = mkdtempSync(join(tmpdir(), 'live-host-proof-'));
+const app = join(root, 'app'),
+  privateRoot = join(root, 'private'),
+  nativeHome = join(root, 'native-home');
+const bin = join(root, 'bin'),
+  scratch = join(root, 'scratch');
+for (const p of [app, privateRoot, nativeHome, bin, scratch]) mkdirSync(p, { mode: 0o700 });
+const publicFile = join(app, 'public.txt');
+writeFileSync(publicFile, 'public-fixture');
+const privateFiles = ['controller', 'auth', 'caddy'].map((kind) => {
   const path = join(privateRoot, `${kind}.fixture`);
   writeFileSync(path, `${kind}-fixture`, { mode: 0o600 });
   return path;
 });
-const socketPath = join(privateRoot, "caddy.fixture.sock");
+const socketPath = join(privateRoot, 'caddy.fixture.sock');
 const daemonDirectory = `/tmp/codex-daemon-${process.geteuid()}`;
-const hash = (data) => createHash("sha256").update(data).digest("hex");
+const hash = (data) => createHash('sha256').update(data).digest('hex');
 const metadata = (path) => {
   try {
     const stat = lstatSync(path);
@@ -74,25 +72,22 @@ const metadata = (path) => {
   }
 };
 const receipt = (pid) => {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  const status = readFileSync(`/proc/${pid}/status`, "utf8").split("\n");
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const status = readFileSync(`/proc/${pid}/status`, 'utf8').split('\n');
   const field = (key) =>
     status
       .find((line) => line.startsWith(`${key}:`))
-      ?.split(":")[1]
+      ?.split(':')[1]
       ?.trim();
   return {
     pid,
-    startTicks: stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19],
-    bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
-    uid: field("Uid"),
-    gid: field("Gid"),
-    namespacePids: field("NSpid"),
+    startTicks: stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19],
+    bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+    uid: field('Uid'),
+    gid: field('Gid'),
+    namespacePids: field('NSpid'),
     namespaces: Object.fromEntries(
-      ["mnt", "user", "pid"].map((kind) => [
-        kind,
-        readlinkSync(`/proc/${pid}/ns/${kind}`),
-      ]),
+      ['mnt', 'user', 'pid'].map((kind) => [kind, readlinkSync(`/proc/${pid}/ns/${kind}`)]),
     ),
     executable: readlinkSync(`/proc/${pid}/exe`),
     executableSha256: hash(readFileSync(`/proc/${pid}/exe`)),
@@ -125,17 +120,17 @@ enabled = true
 mode = "full"
 allow_local_binding = true
 `;
-writeFileSync(join(nativeHome, "config.toml"), config, { mode: 0o600 });
-symlinkSync(codex, join(bin, "codex"));
+writeFileSync(join(nativeHome, 'config.toml'), config, { mode: 0o600 });
+symlinkSync(codex, join(bin, 'codex'));
 // Credential-free subprocess environment. Do not transmit runner tokens or model credentials.
 for (const key of Object.keys(process.env)) delete process.env[key];
 Object.assign(process.env, {
   PATH: `${bin}:/usr/bin:/bin`,
   HOME: nativeHome,
   CODEX_HOME: nativeHome,
-  XDG_CONFIG_HOME: join(nativeHome, "xdg"),
+  XDG_CONFIG_HOME: join(nativeHome, 'xdg'),
   TMPDIR: scratch,
-  LANG: "C.UTF-8",
+  LANG: 'C.UTF-8',
 });
 
 const facts = {
@@ -150,13 +145,13 @@ const facts = {
   binarySha256: hash(readFileSync(codex)),
   hostDaemonBefore: metadata(daemonDirectory),
   checks: {},
-  stage: "preflight",
+  stage: 'preflight',
   pass: false,
   limitations: [
-    "No model calls or credentials: native model file tools untested.",
-    "No configured MCP: production MCP/config allowlisting and confinement untested.",
-    "No real Live picker/edit/accept or production admission: this cannot accept L8.",
-    "Private stdio runtime has no named daemon RPC listener; daemon directory traversal and process/FD aliases are tested.",
+    'No model calls or credentials: native model file tools untested.',
+    'No configured MCP: production MCP/config allowlisting and confinement untested.',
+    'No real Live picker/edit/accept or production admission: this cannot accept L8.',
+    'Private stdio runtime has no named daemon RPC listener; daemon directory traversal and process/FD aliases are tested.',
   ],
 };
 let appServer;
@@ -166,20 +161,20 @@ const server = createServer((peer) => {
   peer.end();
 });
 const controllerSocket = async () => {
-  const acceptedEvent = new Promise((done) => server.once("connection", done));
+  const acceptedEvent = new Promise((done) => server.once('connection', done));
   const connected = new Promise((resolveResult, reject) => {
     const peer = createConnection(socketPath);
-    peer.once("connect", () => {
+    peer.once('connect', () => {
       peer.destroy();
       resolveResult();
     });
-    peer.once("error", reject);
+    peer.once('error', reject);
   });
   await Promise.all([acceptedEvent, connected]);
 };
 const safeDiagnostic = (text) =>
-  String(text ?? "")
-    .split("\n")
+  String(text ?? '')
+    .split('\n')
     .filter((line) =>
       /app-server socket directory|error building bubblewrap|invalid permission profile|unknown variant|unknown field|invalid request|method not found/i.test(
         line,
@@ -193,7 +188,7 @@ const request = async (method, params) => {
     return await Promise.race([
       appServer.rpc.request(method, params),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("RPC_TIMEOUT")), 20000);
+        timer = setTimeout(() => reject(new Error('RPC_TIMEOUT')), 20000);
       }),
     ]);
   } finally {
@@ -201,7 +196,7 @@ const request = async (method, params) => {
   }
 };
 const command = (argv, cap = 24576) =>
-  request("command/exec", {
+  request('command/exec', {
     command: argv,
     cwd: app,
     permissionProfile: profile,
@@ -209,9 +204,9 @@ const command = (argv, cap = 24576) =>
     outputBytesCap: cap,
   });
 const childProbe = async function (input) {
-  const fs = await import("node:fs");
-  const net = await import("node:net");
-  const denyErrors = new Set(["EACCES", "EPERM", "ENOENT", "ENOTDIR"]);
+  const fs = await import('node:fs');
+  const net = await import('node:net');
+  const denyErrors = new Set(['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR']);
   const readDenied = (path) => {
     try {
       fs.readFileSync(path);
@@ -230,14 +225,14 @@ const childProbe = async function (input) {
         peer.destroy();
         done(value);
       };
-      peer.once("connect", () => finish({ denied: false }));
-      peer.once("error", (error) =>
+      peer.once('connect', () => finish({ denied: false }));
+      peer.once('error', (error) =>
         finish({
-          denied: denyErrors.has(error.code) || error.code === "ECONNREFUSED",
+          denied: denyErrors.has(error.code) || error.code === 'ECONNREFUSED',
           errno: error.code,
         }),
       );
-      peer.setTimeout(300, () => finish({ denied: false, errno: "TIMEOUT" }));
+      peer.setTimeout(300, () => finish({ denied: false, errno: 'TIMEOUT' }));
     });
   const meta = (path) => {
     try {
@@ -254,10 +249,8 @@ const childProbe = async function (input) {
       return { errno: e.code };
     }
   };
-  const directories = fs
-    .readdirSync("/proc")
-    .filter((name) => /^\d+$/.test(name));
-  if (directories.length > 512) throw new Error("PROC_OBSERVATION_UNBOUNDED");
+  const directories = fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name));
+  if (directories.length > 512) throw new Error('PROC_OBSERVATION_UNBOUNDED');
   const aliases = [...new Set([...directories, ...input.hostPids.map(String)])];
   const privateReads = input.privateFiles.map((path) => ({
     path,
@@ -309,13 +302,13 @@ const childProbe = async function (input) {
     }
   });
   const mounts = fs
-    .readFileSync("/proc/self/mountinfo", "utf8")
-    .split("\n")
+    .readFileSync('/proc/self/mountinfo', 'utf8')
+    .split('\n')
     .filter(Boolean)
-    .map((line) => line.split(" "))
+    .map((line) => line.split(' '))
     .filter((p) => p[4] === input.daemonDirectory || p[4] === input.privateRoot)
     .map((p) => {
-      const i = p.indexOf("-");
+      const i = p.indexOf('-');
       return {
         device: p[2],
         mountPoint: p[4],
@@ -329,12 +322,9 @@ const childProbe = async function (input) {
     uid: process.geteuid(),
     gid: process.getegid(),
     namespaces: Object.fromEntries(
-      ["mnt", "user", "pid"].map((kind) => [
-        kind,
-        fs.readlinkSync(`/proc/self/ns/${kind}`),
-      ]),
+      ['mnt', 'user', 'pid'].map((kind) => [kind, fs.readlinkSync(`/proc/self/ns/${kind}`)]),
     ),
-    publicRead: fs.readFileSync(input.publicFile, "utf8") === "public-fixture",
+    publicRead: fs.readFileSync(input.publicFile, 'utf8') === 'public-fixture',
     daemonDirectory: meta(input.daemonDirectory),
     daemonTraversal,
     daemonAliases,
@@ -354,28 +344,26 @@ const childProbe = async function (input) {
     hostFdAliases.every((p) => p.denied) &&
     daemonTraversal.denied &&
     daemonAliases.every((p) => p.denied) &&
-    result.daemonDirectory.mode === "0" &&
+    result.daemonDirectory.mode === '0' &&
     result.daemonDirectory.uid === process.geteuid();
   console.log(JSON.stringify(result));
   process.exitCode = result.pass ? 0 : 1;
 };
 try {
   if (
-    facts.hostDaemonBefore.errno !== "ENOENT" &&
+    facts.hostDaemonBefore.errno !== 'ENOENT' &&
     (!facts.hostDaemonBefore.directory ||
-      facts.hostDaemonBefore.mode !== "700" ||
+      facts.hostDaemonBefore.mode !== '700' ||
       facts.hostDaemonBefore.uid !== process.geteuid())
   )
-    throw new Error("HOST_BOUNDARY_UNAVAILABLE");
-  if (facts.binarySha256 !== expectedHash)
-    throw new Error("BINARY_CHECKSUM_MISMATCH");
-  facts.codexVersion = execFileSync(codex, ["--version"], {
-    encoding: "utf8",
+    throw new Error('HOST_BOUNDARY_UNAVAILABLE');
+  if (facts.binarySha256 !== expectedHash) throw new Error('BINARY_CHECKSUM_MISMATCH');
+  facts.codexVersion = execFileSync(codex, ['--version'], {
+    encoding: 'utf8',
   }).trim();
-  if (facts.codexVersion !== "codex-cli 0.161.0")
-    throw new Error("NATIVE_VERSION_MISMATCH");
+  if (facts.codexVersion !== 'codex-cli 0.161.0') throw new Error('NATIVE_VERSION_MISMATCH');
   await new Promise((done, reject) => {
-    server.once("error", reject);
+    server.once('error', reject);
     server.listen(socketPath, done);
   });
   await controllerSocket();
@@ -383,53 +371,40 @@ try {
   facts.checks.controllerSocketBefore = true;
   // Use the actual Mobile launcher/stdio client, with the resolved pinned binary on trusted PATH.
   const { launchCodexAppServer } = await import(
-    pathToFileURL(
-      resolve("dist/server/server/platform/codex/codex-process-launcher.js"),
-    ).href
+    pathToFileURL(resolve('dist/server/server/platform/codex/codex-process-launcher.js')).href
   );
-  appServer = launchCodexAppServer({ profile: "default", cwd: app });
-  appServer.child.stderr.on("data", () => {}); // Never retain arbitrary runtime diagnostic content.
-  await request("initialize", {
-    clientInfo: { name: "l8_host_controller_proof", version: "1" },
+  appServer = launchCodexAppServer({ profile: 'default', cwd: app });
+  appServer.child.stderr.on('data', () => {}); // Never retain arbitrary runtime diagnostic content.
+  await request('initialize', {
+    clientInfo: { name: 'l8_host_controller_proof', version: '1' },
     capabilities: { experimentalApi: true },
   });
-  appServer.child.stdin.write(
-    JSON.stringify({ method: "initialized", params: {} }) + "\n",
-  );
+  appServer.child.stdin.write(JSON.stringify({ method: 'initialized', params: {} }) + '\n');
   facts.appServer = receipt(appServer.child.pid);
-  if (facts.appServer.executableSha256 !== expectedHash)
-    throw new Error("LAUNCH_BINARY_MISMATCH");
-  facts.checks.hostRuntime =
-    facts.appServer.namespaces.mnt === facts.controller.namespaces.mnt;
-  const profiles = await request("permissionProfile/list", { cwd: app });
+  if (facts.appServer.executableSha256 !== expectedHash) throw new Error('LAUNCH_BINARY_MISMATCH');
+  facts.checks.hostRuntime = facts.appServer.namespaces.mnt === facts.controller.namespaces.mnt;
+  const profiles = await request('permissionProfile/list', { cwd: app });
   facts.checks.namedProfileAllowed =
     profiles.data?.some((p) => p.id === profile && p.allowed === true) === true;
-  if (!facts.checks.namedProfileAllowed)
-    throw new Error("NAMED_PROFILE_NOT_ALLOWED");
-  const configured = await request("config/read", {
+  if (!facts.checks.namedProfileAllowed) throw new Error('NAMED_PROFILE_NOT_ALLOWED');
+  const configured = await request('config/read', {
     cwd: app,
     includeLayers: false,
   });
-  facts.configuredMcpCount = Object.keys(
-    configured.config?.mcp_servers ?? {},
-  ).length;
-  facts.configuredPluginCount = Object.keys(
-    configured.config?.plugins ?? {},
-  ).length;
+  facts.configuredMcpCount = Object.keys(configured.config?.mcp_servers ?? {}).length;
+  facts.configuredPluginCount = Object.keys(configured.config?.plugins ?? {}).length;
   if (facts.configuredMcpCount || facts.configuredPluginCount)
-    throw new Error("UNEXPECTED_MCP_CONFIG");
-  facts.stage = "trusted-fs-rpc";
-  const trustedRead = await request("fs/readFile", { path: privateFiles[0] });
+    throw new Error('UNEXPECTED_MCP_CONFIG');
+  facts.stage = 'trusted-fs-rpc';
+  const trustedRead = await request('fs/readFile', { path: privateFiles[0] });
   facts.checks.trustedFsRpcHostAuthority =
-    trustedRead.dataBase64 ===
-    Buffer.from("controller-fixture").toString("base64");
-  facts.stage = "native-command";
-  const ordinary = await command(["/usr/bin/true"], 1024);
+    trustedRead.dataBase64 === Buffer.from('controller-fixture').toString('base64');
+  facts.stage = 'native-command';
+  const ordinary = await command(['/usr/bin/true'], 1024);
   facts.ordinaryExitCode = ordinary.exitCode;
   facts.ordinaryDiagnostic = safeDiagnostic(ordinary.stderr);
   facts.checks.ordinaryCommand = ordinary.exitCode === 0;
-  if (!facts.checks.ordinaryCommand)
-    throw new Error("ORDINARY_NATIVE_COMMAND_FAILED");
+  if (!facts.checks.ordinaryCommand) throw new Error('ORDINARY_NATIVE_COMMAND_FAILED');
   facts.hostDaemonAfterCommand = metadata(daemonDirectory);
   const input = {
     publicFile,
@@ -441,8 +416,8 @@ try {
   };
   const confined = await command([
     process.execPath,
-    "--input-type=module",
-    "--eval",
+    '--input-type=module',
+    '--eval',
     `await (${childProbe.toString()})(${JSON.stringify(input)});`,
   ]);
   facts.confinedExitCode = confined.exitCode;
@@ -450,35 +425,29 @@ try {
   try {
     facts.sandboxedChild = JSON.parse(confined.stdout);
   } catch {
-    throw new Error("CHILD_PROOF_UNAVAILABLE");
+    throw new Error('CHILD_PROOF_UNAVAILABLE');
   }
   facts.checks.nativeChildConfinement =
     confined.exitCode === 0 && facts.sandboxedChild.pass === true;
-  facts.checks.sameUid =
-    facts.sandboxedChild.uid === Number(facts.controller.uid.split(/\s+/)[0]);
+  facts.checks.sameUid = facts.sandboxedChild.uid === Number(facts.controller.uid.split(/\s+/)[0]);
   facts.checks.fixtureSocketNotReached = accepted === 0;
   await controllerSocket();
   facts.checks.controllerSocketAfter = true;
   facts.hostDaemonAfter = metadata(daemonDirectory);
   facts.pass = Object.values(facts.checks).every((value) => value === true);
-  facts.stage = "complete";
+  facts.stage = 'complete';
 } catch (error) {
-  facts.failure = /^[A-Z_]+$/.test(error.message)
-    ? error.message
-    : "PROOF_OPERATION_FAILED";
-  facts.rpcErrorCode = typeof error.code === "number" ? error.code : null;
+  facts.failure = /^[A-Z_]+$/.test(error.message) ? error.message : 'PROOF_OPERATION_FAILED';
+  facts.rpcErrorCode = typeof error.code === 'number' ? error.code : null;
   facts.safeDiagnostic = safeDiagnostic(error.message);
   process.exitCode = 1;
 } finally {
   if (appServer) {
-    const gone = new Promise((done) => appServer.child.once("close", done));
+    const gone = new Promise((done) => appServer.child.once('close', done));
     appServer.close();
     await Promise.race([gone, new Promise((done) => setTimeout(done, 3000))]);
-    if (
-      appServer.child.exitCode === null &&
-      appServer.child.signalCode === null
-    ) {
-      appServer.child.kill("SIGKILL");
+    if (appServer.child.exitCode === null && appServer.child.signalCode === null) {
+      appServer.child.kill('SIGKILL');
       await gone;
     }
     facts.ownedAppServerStopped =
@@ -487,10 +456,7 @@ try {
   if (server.listening) await new Promise((done) => server.close(done));
   facts.observedAt = new Date().toISOString();
   facts.pass = facts.pass && facts.ownedAppServerStopped === true;
-  writeFileSync(
-    join(evidence, "host-controller-proof.json"),
-    JSON.stringify(facts, null, 2),
-  );
+  writeFileSync(join(evidence, 'host-controller-proof.json'), JSON.stringify(facts, null, 2));
   rmSync(root, { recursive: true, force: true }); // Only this owned temporary fixture.
   if (!facts.pass) process.exitCode = 1;
   console.log(
@@ -498,7 +464,7 @@ try {
       pass: facts.pass,
       stage: facts.stage,
       failure: facts.failure,
-      artifact: join(evidence, "host-controller-proof.json"),
+      artifact: join(evidence, 'host-controller-proof.json'),
     }),
   );
 }
