@@ -505,6 +505,200 @@ export class CodexSessionRuntime {
     return true;
   }
 
+  /** Controller Stop only: cancel native work without acquiring a writer or starting
+   * a reader process. Unsupported/ambiguous native observations retain Live ownership.
+   */
+  async settleLiveWork(
+    session: RelaySessionSnapshot,
+    assertCurrent: () => void,
+  ): Promise<readonly string[]> {
+    const owned = this.sessions.get(session.id);
+    if (!owned || !session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+    assertCurrent();
+    const deadline = Date.now() + 5000;
+    const bounded = async <T>(work: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+        assertCurrent();
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const request = (method: string, params: unknown) => {
+      assertCurrent();
+      if (Date.now() >= deadline) throw new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT');
+      return bounded(owned.process.rpc.request(method, params));
+    };
+    const rootHistory = await bounded(this.decodeHistory(owned.process, session.threadId, owned));
+    if (rootHistory.activeTurnId)
+      await request('turn/interrupt', {
+        threadId: session.threadId,
+        turnId: rootHistory.activeTurnId,
+      });
+    const root = asRecord(
+      asRecord(await request('thread/read', { threadId: session.threadId, includeTurns: false }))
+        ?.thread,
+    );
+    const sessionId = boundedString(root?.sessionId, 256);
+    if (root?.id !== session.threadId || !sessionId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+    const threadIds = new Set<string>([session.threadId]);
+    const discover = async () => {
+      // Codex 0.161 ThreadListParams has no parent filter. List supported
+      // subagent sources, then prove the parent chain and session identity.
+      const candidates = new Map<string, { parent: string | null; session: string }>();
+      let cursor: string | undefined;
+      const cursors = new Set<string>();
+      for (let page = 0; ; page++) {
+        if (page >= 16) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
+        const result = asRecord(
+          await request('thread/list', {
+            limit: 64,
+            sourceKinds: [
+              'subAgent',
+              'subAgentReview',
+              'subAgentCompact',
+              'subAgentThreadSpawn',
+              'subAgentOther',
+            ],
+            ...(cursor ? { cursor } : {}),
+          }),
+        );
+        if (!result || !Array.isArray(result.data)) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        for (const value of result.data) {
+          const child = asRecord(value);
+          const id = boundedString(child?.id, 256);
+          const childSession = boundedString(child?.sessionId, 256);
+          const parent = child?.parentThreadId;
+          if (!id || !childSession || (parent !== null && !boundedString(parent, 256)))
+            throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+          const previous = candidates.get(id);
+          if (previous && (previous.parent !== parent || previous.session !== childSession))
+            throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+          candidates.set(id, { parent: parent as string | null, session: childSession });
+        }
+        if (result.nextCursor === null || result.nextCursor === undefined) break;
+        cursor = boundedString(result.nextCursor, 256) ?? undefined;
+        if (!cursor || cursors.has(cursor)) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        cursors.add(cursor);
+      }
+      const verified = new Set<string>([session.threadId!]);
+      let added: boolean;
+      do {
+        added = false;
+        for (const [id, child] of candidates) {
+          if (
+            child.session === sessionId &&
+            child.parent !== null &&
+            verified.has(child.parent) &&
+            !verified.has(id)
+          ) {
+            // Verify fresh native lineage before granting cancellation authority.
+            const native = asRecord(
+              asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
+            );
+            if (
+              native?.id !== id ||
+              native.sessionId !== sessionId ||
+              native.parentThreadId !== child.parent
+            )
+              throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+            verified.add(id);
+            if (verified.size > 64) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
+            added = true;
+          }
+        }
+      } while (added);
+      // Locally observed children are hints, not cancellation authority.
+      if ([...threadIds, ...owned.childThreads].some((id) => !verified.has(id)))
+        throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+      for (const id of verified) threadIds.add(id);
+    };
+    await discover();
+    for (const threadId of threadIds) {
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
+      if (history.activeTurnId)
+        await request('turn/interrupt', {
+          threadId,
+          turnId: history.activeTurnId,
+        });
+      const terminals = asRecord(
+        await request('thread/backgroundTerminals/list', {
+          threadId,
+          limit: 64,
+        }),
+      );
+      if (!terminals || !Array.isArray(terminals.data) || terminals.nextCursor)
+        throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+      for (const value of terminals.data) {
+        const command = asRecord(value);
+        const processId = boundedString(command?.processId, 256);
+        const itemId = boundedString(command?.itemId, 256);
+        const osPid = boundedNonNegativeInteger(command?.osPid);
+        if (!processId || !itemId || osPid === null) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        const stopped = await bounded(
+          this.terminateChildProcess(
+            session,
+            threadId,
+            processId,
+            undefined,
+            {
+              itemId,
+              osPid,
+            },
+            assertCurrent,
+          ),
+        );
+        if (!stopped) throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+      }
+    }
+    // Cancellation acceptance is not completion. A caller may retry Stop after
+    // native settlement, but must not release on an in-flight turn/result/approval.
+    await discover();
+    let completedRootTurns: string[] = [];
+    for (const threadId of threadIds) {
+      const native = asRecord(await request('thread/read', { threadId, includeTurns: false }));
+      const thread = asRecord(native?.thread);
+      if (thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
+        throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+      const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
+      if (threadId === session.threadId)
+        completedRootTurns = history.turns
+          .filter((turn) => turn.completedAt !== null && turn.completedAt !== undefined)
+          .map((turn) => turn.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      const terminals = asRecord(
+        await request('thread/backgroundTerminals/list', {
+          threadId,
+          limit: 64,
+        }),
+      );
+      if (
+        history.activeTurnId ||
+        !terminals ||
+        !Array.isArray(terminals.data) ||
+        terminals.data.length ||
+        terminals.nextCursor
+      )
+        throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
+    }
+    if (owned.pendingRequests.size) throw new Error('LIVE_NATIVE_APPROVALS_PENDING');
+    for (const process of owned.ownedChildProcesses.values()) {
+      if (process.state !== 'result-consumed' && process.state !== 'terminated-for-budget')
+        throw new Error('LIVE_NATIVE_RESULTS_PENDING');
+    }
+    return completedRootTurns;
+  }
+
   async queueTurnInput(
     session: RelaySessionSnapshot,
     turnId: string,
@@ -814,7 +1008,9 @@ export class CodexSessionRuntime {
     processId: string,
     actionId?: string,
     expected?: Pick<OwnedChildProcess, 'itemId' | 'osPid'>,
+    assertCurrent: () => void = () => {},
   ): Promise<boolean> {
+    assertCurrent();
     const owned = this.sessions.get(session.id);
     if (!owned) return false;
     if (actionId && owned.completedProcessActions.has(actionId))
@@ -826,6 +1022,7 @@ export class CodexSessionRuntime {
     // never send a second terminate RPC merely to rediscover that fact.
     if (expected) {
       const active = await this.listChildBackgroundTerminals(owned, { id: childThreadId });
+      assertCurrent();
       const current = active.find(
         (candidate) =>
           candidate.processId === processId &&
@@ -837,10 +1034,12 @@ export class CodexSessionRuntime {
         return true;
       }
     }
+    assertCurrent();
     const result = await owned.process.rpc.request('thread/backgroundTerminals/terminate', {
       threadId: childThreadId,
       processId,
     });
+    assertCurrent();
     const terminated = asRecord(result)?.terminated === true;
     if (terminated) {
       const key = childProcessKey(childThreadId, processId);
@@ -1174,7 +1373,11 @@ export class CodexSessionRuntime {
       'model/list',
       'thread/backgroundTerminals/list',
     ]);
-    const safeStop = new Set(['turn/interrupt', 'thread/unsubscribe']);
+    const safeStop = new Set([
+      'turn/interrupt',
+      'thread/unsubscribe',
+      'thread/backgroundTerminals/terminate',
+    ]);
     return {
       close: () => process.close(),
       ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),

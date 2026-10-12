@@ -5,6 +5,13 @@
  */
 
 import { LiveDispatchGuard } from './platform/live-design/live-dispatch.js';
+import { RelayLiveEventTurns } from './platform/live-design/relay-event-turns.js';
+import { LivePollLoop } from './features/live-design/application/poll-loop.js';
+import {
+  PollLiveEvents,
+  type CanonicalLivePoll,
+  type LiveEventInbox,
+} from './features/live-design/application/poll-events.js';
 import { AutopilotLiveControls } from './platform/live-design/autopilot-live-controls.js';
 import type { LiveControls } from './features/live-design/application/controls.js';
 import {
@@ -213,6 +220,12 @@ export type ComposeRelayAppOptions = {
   liveController?: ConstructorParameters<typeof LiveDispatchGuard>[0] & {
     /** Trusted controller binding only; this grants no Start capability/readiness. */
     bindControls?(controls: LiveControls): void;
+    /** Trusted controller receives existing-runtime dispatch only; no Start/admission grant. */
+    bindPollEvents?(
+      create: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => PollLiveEvents,
+    ): void;
+    /** Loop with the production durable revocation barrier; still requires actual admission. */
+    bindPollLoop?(create: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => LivePollLoop): void;
   };
   /** Testable source for the one durable opaque WebAuthn user handle. */
   authorizationRandomBytes?: (length: number) => Uint8Array;
@@ -254,8 +267,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     throw error;
   }
   const sessions = new SqliteSessionRepository(database);
-  const liveDispatch: LiveDispatchPolicy | undefined = options.liveController
+  const liveEventAuthority = options.liveController
     ? new LiveDispatchGuard(options.liveController)
+    : undefined;
+  const liveDispatch: LiveDispatchPolicy | undefined = options.liveController
+    ? liveEventAuthority
     : options.liveOwnership
       ? {
           check() {
@@ -1669,6 +1685,28 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       void activity.refresh(session.id);
     if (becameRuntimeReady) autopilot.restore(session.id);
   };
+  let createLivePollEvents:
+    ((cli: CanonicalLivePoll, inbox: LiveEventInbox) => PollLiveEvents) | undefined;
+  if (options.liveController && liveEventAuthority && runtime) {
+    const owners = options.liveController.owners;
+    const turns = new RelayLiveEventTurns({
+      owners,
+      sessions: { find: (id) => sessions.find(id), save: saveSession, list: () => sessions.list() },
+      runtime,
+      now: Date.now,
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    createLivePollEvents = (cli, inbox) =>
+      new PollLiveEvents({
+        owners,
+        inbox,
+        cli,
+        authority: liveEventAuthority,
+        turns,
+        now: Date.now,
+      });
+    options.liveController.bindPollEvents?.(createLivePollEvents);
+  }
   if (kimiRuntime) {
     // A gestalt-owned kimi web process exited or its websocket dropped: stop
     // the durable session like the codex supervisor does, without a resume
@@ -1784,6 +1822,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       database.close();
       throw error;
     }
+  }
+  if (options.liveController?.bindPollLoop && createLivePollEvents && previewConnections) {
+    const create = createLivePollEvents;
+    const revocations = previewConnections;
+    const owners = options.liveController.owners;
+    options.liveController.bindPollLoop(
+      (cli, inbox) => new LivePollLoop({ owners, poll: create(cli, inbox), revocations }),
+    );
   }
   let app;
   try {

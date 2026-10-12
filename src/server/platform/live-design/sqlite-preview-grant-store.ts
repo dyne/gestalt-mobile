@@ -45,6 +45,7 @@ export class SqlitePreviewGrantStore implements PreviewGrantStore {
         CREATE TABLE IF NOT EXISTS live_grants (id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, record TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS live_leases (id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, record TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS live_revocations (kind TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind, value));
+        CREATE TABLE IF NOT EXISTS live_generation_revocations (liveId TEXT PRIMARY KEY, generation INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS live_attempts (key TEXT PRIMARY KEY, started INTEGER NOT NULL, count INTEGER NOT NULL);`);
     } catch (error) {
       this.db.close();
@@ -136,6 +137,31 @@ export class SqlitePreviewGrantStore implements PreviewGrantStore {
     return this.db.isTransaction ? attempt() : withImmediateTransaction(this.db, attempt);
   }
   revoke(match: PreviewRevocationScope): void {
+    if ('throughGeneration' in match) {
+      if (
+        Object.keys(match).length !== 2 ||
+        !match.liveId ||
+        !Number.isSafeInteger(match.throughGeneration) ||
+        match.throughGeneration < 1
+      )
+        throw new Error('Revocation requires one valid scope');
+      withImmediateTransaction(this.db, () => {
+        this.db
+          .prepare(
+            `INSERT INTO live_generation_revocations VALUES (?, ?)
+            ON CONFLICT(liveId) DO UPDATE SET generation=MAX(generation, excluded.generation)`,
+          )
+          .run(match.liveId, match.throughGeneration);
+        for (const table of ['live_grants', 'live_leases'])
+          this.db
+            .prepare(
+              `DELETE FROM ${table} WHERE json_extract(record, '$.liveId') = ?
+              AND json_extract(record, '$.generation') <= ?`,
+            )
+            .run(match.liveId, match.throughGeneration);
+      });
+      return;
+    }
     const fields = Object.entries(match);
     if (
       fields.length !== 1 ||
@@ -154,6 +180,9 @@ export class SqlitePreviewGrantStore implements PreviewGrantStore {
   }
   private isRevoked(audience: LiveAudience): boolean {
     return (
+      this.db
+        .prepare('SELECT 1 FROM live_generation_revocations WHERE liveId=? AND generation>=?')
+        .get(audience.liveId, audience.generation) !== undefined ||
       this.db
         .prepare(
           `SELECT 1 FROM live_revocations WHERE

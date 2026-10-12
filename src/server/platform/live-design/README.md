@@ -9,6 +9,18 @@ that transaction advances epoch and generation, preserves the last external IO
 intent, and moves every non-idle run to recoveryRequired. It does not release
 writer reservations or claims based on timeout/process absence.
 
+`electLiveController` constructs this shared store only after a Linux OS lock
+elects one controller across independent Mobile processes. Supply one absolute,
+canonical, existing user-owned mode-0700 private directory and stable controller
+ID across every relay data directory. First provisioning requires explicit
+`initialize: true`; missing state on restart refuses construction. The adapter
+never removes the lock inode, repairs an exposed directory, or adopts unowned
+IPC. Its owned lock holder exits on parent pipe closure; holder loss closes the
+store and fails outstanding callbacks. Every election advances the durable epoch
+and marks unresolved runs recoveryRequired while retaining writer claims. Close
+the controller only after lifecycle shutdown; closing does not release Live claims.
+This constructor grants no native confinement, target admission or Start readiness.
+
 `LiveDispatchGuard` reserves ordinary writers in that same transaction store before
 runtime creation, model/skill discovery or ordinary mutation endpoints can await.
 The Codex RPC adapter checks every effect before sending and after its response;
@@ -168,3 +180,217 @@ The generated fixture lockfile is included for reproducing dependency resolution
 It contains no raw tokens, grant
 fragments, cookies or project/helper logs. The fixture removes its namespace,
 processes and temporary state. It neither deploys nor edits operator Caddy state.
+
+`OwnedLiveHelper` owns only the checksum-pinned Impeccable process. Construct it
+inside the elected controller with the admitted canonical app root, dedicated
+helper port, HTTPS `/__gestalt_live/` URL, generation, controller-private state
+and exact effective managed policy. `ManagedHelperLauncher` runs the native
+sandbox command with that unchanged policy; it never starts another app-server
+or model session. Every helper/CLI command receives copy-agent mode `chat`.
+The runtime binary must remain outside project write permissions, and private
+helper metadata must remain denied to every admitted project/agent process.
+This adapter does not enable production Start or establish the L7 admission facts.
+
+Readiness requires the verified executable, boot ID and process start time,
+owned loopback listener, canonical cwd and authenticated
+`live-status` response. Persisted upstream `server.json` alone never grants
+ownership. Unknown/stale metadata fails closed; a known dead helper requires
+explicit `recoverStopped` reconciliation before restart. That operation retains
+stale server evidence privately and uses upstream injection-journal healing.
+Config overrides change only config lookup; canonical state and session journals
+remain under the app's `.impeccable/live`. `resume` and `complete` use the pinned
+CLI, including its source-cleanliness gate, without `--force`.
+Every CLI command explicitly targets the admitted app, so parent manifests cannot
+redirect source recovery. App device/inode changes refuse further helper IO.
+Direct children require launcher ancestry. The native sandbox daemon's PID
+namespace requires a bounded host-process mapping by namespace PID, process birth,
+verified executable, app cwd and owned listener; host and upstream PIDs remain
+distinct in private metadata. Ambiguous command outcomes remain durable and block
+source-side retries until controller-owned reconciliation.
+
+Stop requests shutdown only from the identity-verified helper, then verifies
+exit and runs `live-inject --remove` separately so rollback failures remain
+visible. It never sends a PID-based signal or stops an external dev server.
+Bounded diagnostics contain only command names, fixed outcomes and byte counts;
+helper output, tokens, project content and environment values are not logged.
+The controller must retain its app/relay claim until full lifecycle reconciliation,
+including unresolved command/process activity, finishes.
+
+Run the real helper fixture with `LIVE_TEST_IMPECCABLE=/path/to/pinned/impeccable
+npx vitest run src/server/platform/live-design/helper-process.test.ts`. Set
+`LIVE_TEST_CODEX=/path/to/pinned/codex` as well for the actual managed-policy
+proof; its explicit supported-runner gate must pass without skips. The existing
+isolated Caddy workflow supplies both pinned binaries and disposable-runner native
+prerequisites. Direct-launch fixtures prove lifecycle behavior, not production
+native confinement or overall Start readiness.
+
+`PollLiveEvents` uses the foreground `live-poll` CLI, including upstream
+preflight, its 600-second lease, accept/discard source locks and receipts,
+and canonical replies/completion. It never implements HTTP `/poll` itself.
+`SqliteLiveEventInbox` belongs in shared controller-private state outside the
+app. One durable app-inode reservation spans status, poll, relay turn and ack.
+A second process cannot take it over on timeout or process exit. Restart,
+lost stdout after canonical accept, lost reply, stale fences and expired leases
+retain recovery evidence and blocking ownership; reconciliation belongs to the
+Stop/Resume controller. Records contain identities, digests and the durable
+received/dispatched/applied/acknowledged history, without browser content or
+model output. A hard 256-record default bound fails closed and retains tombstones;
+controllers must explicitly reconcile completed history before capacity renewal.
+
+The pinned IDs identify sessions rather than individual actions. Keys include
+Live generation, upstream ID, event kind and a digest excluding poller-owned
+preflight enrichments. Different steering requests remain distinct. An identical
+steer or mount repair cannot be proved to be a new action, so it requires explicit
+recovery. Duplicate edit deliveries never start another turn; known terminal
+sessions are rejected before another canonical poll. Upstream accept receipts
+protect repeated deterministic operations; lost or ambiguous results still
+require journal/source reconciliation. This is not an exactly-once edit claim.
+ID-less prefetch/timeout/exit are advisory and cause no edits or replies; the
+pinned server removes ID-less queued events on lease. Exit is returned to the
+lifecycle controller for cleanup, never treated as a clean release.
+
+`RelayLiveEventTurns` sends work only to the existing owning Codex thread using
+its existing runtime and session model, reasoning effort, execution policy and
+skill selection. It waits for the actual turn's completion, validates the final
+structured result, and bounds it by the upstream lease deadline read through
+canonical status. It never reacquires a writer or launches another provider.
+Composition supplies this narrow factory to the trusted controller through
+`bindPollEvents`; this binding grants no readiness or production Start capability.
+The L7 guard verifies native collaboration confinement before side-effecting
+poll commands and each model turn, and fences every acknowledgement. All
+production admission requirements remain in force. Kimi Live remains unavailable.
+
+`LivePollLoop` serializes those iterations and cannot restart after an exit or
+failure. Composition's `bindPollLoop` supplies the same owning runtime plus the
+production durable preview revocation/connection barrier; it is available only
+with production passkey authentication. Bind its `revoke` and `drain` methods to
+Stop/Resume resources after actual admission. Disconnect/error drains revoke
+preview access before cancelling commands and retain recovery ownership; Stop
+owns concurrent cleanup, and late old-controller loops cannot touch successors.
+This loop does not remove routes, reconcile journals or release claims itself.
+
+Lifecycle revocation uses a monotonic per-Live generation cutoff, closes all
+owned streams through that cutoff and permanently denies older leases/grants.
+Resume advances generation only after journal/source/route reconciliation and
+before authorization. A delayed older revocation cannot invalidate newer access;
+no barrier is cleared. Whole-instance, device and authorization-session revocation
+remain permanent. Gateway/helper bindings must be reconstructed for the resumed
+generation and reverified before exposure.
+
+Stop revokes durable preview access and closes owned streams before cancellation
+or route removal. A stream-close failure still attempts cancellation and safe
+cleanup; failed revocation never releases the claim. `PollLiveEvents.settle`
+fences delayed receipts, wakes the helper's canonical foreground poll and awaits
+its exit, and calls the existing owning runtime's `settleLiveWork`. That method
+interrupts the root, observes a bounded native descendant tree and background
+commands, terminates exact command instances, and requires idle native statuses,
+no outstanding results or approvals. Unsupported observations fail closed; it
+never launches a replacement runtime/history reader to manufacture settlement.
+Every native cleanup request rechecks the ownership fence; a late callback cannot
+continue cancelling after another controller or Stop takes over. Native observations
+and waiting for a previously dispatched response have bounded cleanup budgets; an
+unresponsive runtime returns an explicit recovery error. Settlement is checked again
+after dispatched effects return, since a queued turn/start can materialize while its
+old response is settling. Actual completed history also reconciles a delayed or
+lost session completion notification before another Live turn or control restoration;
+provider/model/permissions remain unchanged. A cancellation RPC acknowledgement is not proof of
+completion. Retry Stop using
+the current durable fence after actual work settles. Journal/source reconciliation,
+canonical completion or discard, injection removal and actual route/auth/process
+cleanup must all finish before ownership and prior controls are released.
+
+The pinned server arms an eight-second timer when its last browser SSE client
+disconnects. Background tab suspension and network loss use that same upstream
+behavior; Gestalt adds no extended grace or keepalive that conceals a disconnected
+browser. A received `exit` changes ownership to `recoveryRequired`, invalidating
+preview authorization and every later edit dispatch. The helper's journal and
+config remain recovery inputs. Reconnection within the upstream grace cancels its
+anonymous exit; reconnection after an exit requires explicit Resume reconciliation.
+Explicit Stop always fences work immediately, independent of that timer.
+
+`resumeLive` revokes again, settles owned work, reconciles canonical journal/source
+postconditions and owned routes, and repeats actual admission proof before
+regranting access. A failed source, route, helper or isolation check keeps access
+revoked and ownership in recoveryRequired. An idle generation cannot Resume;
+Start must acquire a new claim. The private inbox's explicit reconciliation records
+completed/discarded disposition plus a source/journal proof digest while preserving
+original received/dispatched/applied/acknowledged history. An ambiguous applied
+record never becomes an invented acknowledged record. Terminal and reconciled
+tombstones cannot cause another edit; capacity remains a hard bound and fails
+explicitly rather than silently deleting deduplication evidence. The controller
+must obtain this proof from canonical journal/source reconciliation, never an
+HTTP or model-supplied hash. `OwnedLiveHelper.reconcileJournal` inventories bounded
+durable journal files as well as canonical status, because pinned `live-resume`
+intentionally hides completed/discarded sessions. Lost terminal stdout cannot
+therefore be reconciled from an empty active-session list. The adapter uses actual
+upstream accept receipts for unfinished operations, the canonical no-force source
+gate, and source/terminal-journal digests; it preserves prior terminal dispositions
+and all journal entries. Explicit Stop can discard unfinished variants through
+canonical `live-accept --discard`, using its source lock and durable receipt. An
+accept already applied before Stop finishes its chosen source; it never receives
+a conflicting discard or another accept transformation. Missing/outside/dirty sources or conflicting receipts
+retain recovery. Repeated terminal acknowledgements yield the same proof digest.
+
+Production Start remains unavailable: the CLI does not supply a production
+`liveController`. The elected store, canonical poll loop, durable generation
+cutoffs and Stop/Resume adapters are lifecycle foundations, not an admission
+receipt for an existing process tree. The request guard cannot confine native
+child/tool writers.
+
+## Host launch foundation and remaining admission
+
+The supported launch chain starts Mobile from the trusted host, then uses
+`launchCodexAppServer` with private stdio. The app-server inherits that host
+namespace; each native `command/exec` must select a trusted managed permission
+profile. Launching another app-server inside an agent sandbox instead sees the
+fixed `/tmp/codex-daemon-<euid>` mode-000 mask and fails its required mode-0700
+check. Changing `--listen`, HOME or TMPDIR does not relocate this fixed path.
+The host route avoids that nested check without removing the child's mask.
+
+The app-server RPC transport is a controller authority boundary. Trusted
+`fs/readFile` RPC has host filesystem authority; it is not equivalent to a model
+file tool running with turn permissions. Do not expose unrestricted RPC to the
+browser, project, helper, agent or MCP processes. Native managed tool policies
+also do not automatically confine directly spawned MCP servers.
+
+The isolated host proof used Codex 0.161.0 (source pin
+`979011409de0a60b52f179721948e65531d26144`, binary SHA-256
+`9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c`).
+[Successful proof run 38252423273](https://github.com/dyne/gestalt-mobile/actions/runs/38252423273)
+ran provisional source head `2facdae77f2b807798aa02a5d63a12d9161aebc6`.
+Artifact `11749206185` has ZIP SHA-256
+`1556c0e8e928a077108c9b31d2448c29a89e165a9fbb27fd1014cf247871dd46`.
+It proves ordinary command/public-read success and same-UID native child denial
+of disposable private controller/auth/Caddy files, the controlled Unix socket,
+daemon-directory traversal and tested proc/FD aliases. The host daemon directory
+was mode 0700; the child saw the read-only mode-000 mask. The controller could
+reach its fixture socket before and after, no child connected, and the owned
+app-server stopped. Trusted fs RPC deliberately read its private canary.
+
+That proof used no model calls, credentials, configured MCP or production
+services. Native model file tools, production config admission and the complete
+dev-server/helper/MCP/collaboration descendant tree remain untested. It did not
+exercise the Live picker/edit/accept lifecycle. The provisional diagnostic
+workflow and probe exist on draft PR 104's test branch, not in this delivered
+adapter diff. Its passing standard CI does not verify the current uncommitted
+L8 tree. This repository's `live-caddy-proof.yml` retains the complete pinned
+native Caddy, helper and separate-network browser gates; the diagnostic workflow
+must not replace those integration gates.
+
+| Remaining boundary                               | Required owner and proof                                                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Trusted host launcher and native policy receipts | L9, Manager: protected controller/auth/Caddy paths and explicit managed policies for owned launches                                               |
+| Config admission and MCP/descendant confinement  | L10, Agents: allowlisted trusted config and separately confined MCP, hooks and other subprocesses                                                 |
+| Production Start and real Live lifecycle         | L11, Mobile: concrete admission, owned helper/dev server, native model tools, Caddy/auth/browser and real picker/edit/accept/Stop/Resume evidence |
+
+Refuse unverified existing processes; do not adopt unowned daemon IPC or enable
+Start from fixture readiness or callbacks. The host proof requires no Codex fork
+on the demonstrated route, but does not establish complete production isolation.
+
+Native settlement uses Codex 0.161.0's supported subagent `sourceKinds` and
+bounded pagination. `ThreadListParams` has no parent-thread filter. Before
+cancelling a descendant, settlement verifies its `Thread.parentThreadId` chain
+and `sessionId` through the owning root using fresh `thread/read` observations;
+locally observed child IDs alone grant no cancellation authority. Missing,
+conflicting or unavailable lineage retains recovery ownership. Production L11
+must prove this discovery against the actual owning native session tree.

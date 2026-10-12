@@ -24,7 +24,7 @@ export type RegisteredDevServer = Readonly<{
 }>;
 
 /** Linux listener identity, including the owning process start fence; a port/PID alone is insufficient. */
-function observe(pid: number, port: number): DevServerIdentity {
+export function observeLoopbackListener(pid: number, port: number): DevServerIdentity {
   try {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error();
     const processRoot = `/proc/${pid}`;
@@ -87,7 +87,7 @@ export class RegisteredDevServers {
       targetId: randomUUID(),
       app,
       port: loopbackPort(port),
-      identity: observe(pid, port),
+      identity: observeLoopbackListener(pid, port),
     });
     this.targets.set(target.targetId, target);
     return target;
@@ -103,7 +103,8 @@ export class RegisteredDevServers {
       throw new Error('LIVE_TARGET_UNREGISTERED');
     revalidateLiveApp(target.app);
     if (
-      JSON.stringify(observe(target.identity.pid, target.port)) !== JSON.stringify(target.identity)
+      JSON.stringify(observeLoopbackListener(target.identity.pid, target.port)) !==
+      JSON.stringify(target.identity)
     )
       throw new Error('LIVE_TARGET_UNREGISTERED');
     return target;

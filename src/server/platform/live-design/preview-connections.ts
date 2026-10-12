@@ -146,5 +146,8 @@ export class PreviewConnections implements PreviewRevocationBarrier {
 function matches(audience: LiveAudience, scope: PreviewRevocationScope): boolean {
   if ('authSessionHash' in scope) return audience.authSessionHash === scope.authSessionHash;
   if ('deviceId' in scope) return audience.deviceId === scope.deviceId;
-  return audience.liveId === scope.liveId;
+  return (
+    audience.liveId === scope.liveId &&
+    (!('throughGeneration' in scope) || audience.generation <= scope.throughGeneration)
+  );
 }

@@ -179,7 +179,7 @@ function lifecycle(f: ReturnType<typeof fixture>) {
   const deps: LiveStopDependencies = {
     owners: f.owners,
     controls,
-    resources: { remove: clean, revoke: clean, cleanup: clean, verifyClean: clean },
+    resources: { remove: clean, revoke: clean, settle: clean, cleanup: clean, verifyClean: clean },
   };
   const takeOver = () =>
     startLive(
@@ -264,7 +264,7 @@ describe('versioned prior control restoration through durable adapters', () => {
     expect(f.start).not.toHaveBeenCalled();
     expect(f.resume).not.toHaveBeenCalled();
   });
-  it.each(['remove', 'revoke', 'cleanup', 'verifyClean'] as const)(
+  it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const)(
     'interrupted %s keeps ownership until verified reconciliation',
     async (phase) => {
       const f = fixture();

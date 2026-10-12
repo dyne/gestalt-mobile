@@ -1,12 +1,45 @@
 # Impeccable Live integration contract
 
-Status: normative design for subsequent implementation; the existing Mobile
-authentication controls described below are implemented. Live endpoints and
-their negative examples are requirements, not evidence of working Live security.
-L1 owns this document and fixtures only. Deployment and threat assumptions are
+Status: normative integration contract with implemented Mobile authentication
+and lifecycle foundations. Live endpoints and their negative examples remain
+requirements, not evidence of production Live security. L1 established the
+initial document and fixtures; the current readiness boundary is recorded below.
+Deployment and threat assumptions are
 fixed by the authorized plan: operator-managed HTTPS/DNS/Caddy, untrusted project
 content, one authenticated owner, exclusive relay/app ownership, and Codex-only
 initial Live support. No additional deployment assumption is needed.
+
+## Current implementation and readiness boundary
+
+The initial L1 baseline and acceptance matrix below are historical contract
+inputs. The user-authorized host-launch revision retains every operational and
+security requirement while separating the completed Mobile foundation from
+production admission. L8 supplies elected shared ownership, canonical serialized
+polling, durable event delivery, generation-scoped preview revocation, and
+Stop/Resume reconciliation adapters. Production Start remains unavailable.
+
+The supported foundation is trusted host-started Mobile launching its Codex
+app-server through controller-only private stdio, with explicit managed native
+tool profiles. The verified isolated host proof succeeds without weakening the
+agent sandbox's daemon-directory mask. App-server filesystem RPC is trusted host
+authority; it must not be exposed as unrestricted project/browser/agent access.
+MCP spawn confinement requires a separate trusted configuration and launcher
+boundary. See the [Live adapter architecture and exact proof provenance](../src/server/platform/live-design/README.md#host-launch-foundation-and-remaining-admission).
+
+The remaining owners are L9 (Manager host launcher/policy receipts), L10 (Agents
+MCP/config and descendant confinement), and L11 (Mobile production admission and
+real owning-session Live integration). Native model file tools, configured MCP,
+production descendant admission and real picker/edit/accept have not been proven
+by the minimal host diagnostic. The later Mobile UI, UI hardening and terminal
+review milestones are L12–L15. Historical milestone labels below do not supersede
+these revised dependencies.
+
+The host proof's provisional branch contains a narrow diagnostic workflow. The
+delivered Mobile workflow retains its complete native/Caddy/helper/browser gates;
+passing diagnostic or ordinary standard CI cannot replace those gates or accept
+the current Live implementation. Production integration must establish actual
+owned launch receipts and rerun every retained auth, network, lifecycle and
+whole-process-tree requirement. No readiness requirement is waived.
 
 ## ADR 1: origins and authorization
 
