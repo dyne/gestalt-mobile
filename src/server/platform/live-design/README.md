@@ -9,6 +9,18 @@ that transaction advances epoch and generation, preserves the last external IO
 intent, and moves every non-idle run to recoveryRequired. It does not release
 writer reservations or claims based on timeout/process absence.
 
+`electLiveController` constructs this shared store only after a Linux OS lock
+elects one controller across independent Mobile processes. Supply one absolute,
+canonical, existing user-owned mode-0700 private directory and stable controller
+ID across every relay data directory. First provisioning requires explicit
+`initialize: true`; missing state on restart refuses construction. The adapter
+never removes the lock inode, repairs an exposed directory, or adopts unowned
+IPC. Its owned lock holder exits on parent pipe closure; holder loss closes the
+store and fails outstanding callbacks. Every election advances the durable epoch
+and marks unresolved runs recoveryRequired while retaining writer claims. Close
+the controller only after lifecycle shutdown; closing does not release Live claims.
+This constructor grants no native confinement, target admission or Start readiness.
+
 `LiveDispatchGuard` reserves ordinary writers in that same transaction store before
 runtime creation, model/skill discovery or ordinary mutation endpoints can await.
 The Codex RPC adapter checks every effect before sending and after its response;
@@ -248,6 +260,23 @@ The L7 guard verifies native collaboration confinement before side-effecting
 poll commands and each model turn, and fences every acknowledgement. All
 production admission requirements remain in force. Kimi Live remains unavailable.
 
+`LivePollLoop` serializes those iterations and cannot restart after an exit or
+failure. Composition's `bindPollLoop` supplies the same owning runtime plus the
+production durable preview revocation/connection barrier; it is available only
+with production passkey authentication. Bind its `revoke` and `drain` methods to
+Stop/Resume resources after actual admission. Disconnect/error drains revoke
+preview access before cancelling commands and retain recovery ownership; Stop
+owns concurrent cleanup, and late old-controller loops cannot touch successors.
+This loop does not remove routes, reconcile journals or release claims itself.
+
+Lifecycle revocation uses a monotonic per-Live generation cutoff, closes all
+owned streams through that cutoff and permanently denies older leases/grants.
+Resume advances generation only after journal/source/route reconciliation and
+before authorization. A delayed older revocation cannot invalidate newer access;
+no barrier is cleared. Whole-instance, device and authorization-session revocation
+remain permanent. Gateway/helper bindings must be reconstructed for the resumed
+generation and reverified before exposure.
+
 Stop revokes durable preview access and closes owned streams before cancellation
 or route removal. A stream-close failure still attempts cancellation and safe
 cleanup; failed revocation never releases the claim. `PollLiveEvents.settle`
@@ -302,12 +331,66 @@ accept already applied before Stop finishes its chosen source; it never receives
 a conflicting discard or another accept transformation. Missing/outside/dirty sources or conflicting receipts
 retain recovery. Repeated terminal acknowledgements yield the same proof digest.
 
-Production admission is still a concrete integration prerequisite, not granted
-by these lifecycle ports: the current Codex process launcher supplies no immutable
-attestation of the effective managed policy of an already-running app-server or
-dev server; the relay's request guard does not confine native child/tool writers
-inside that app-server. A new sandbox probe cannot prove those old processes are
-isolated. Production Start therefore remains unavailable until the elected
-controller can verify all existing process policies and native writer confinement,
-or an operator-supported isolated broker supplies equivalent actual denial proof.
-Do not enable Start by binding lifecycle callbacks or passing fixture readiness.
+Production Start remains unavailable: the CLI does not supply a production
+`liveController`. The elected store, canonical poll loop, durable generation
+cutoffs and Stop/Resume adapters are lifecycle foundations, not an admission
+receipt for an existing process tree. The request guard cannot confine native
+child/tool writers.
+
+## Host launch foundation and remaining admission
+
+The supported launch chain starts Mobile from the trusted host, then uses
+`launchCodexAppServer` with private stdio. The app-server inherits that host
+namespace; each native `command/exec` must select a trusted managed permission
+profile. Launching another app-server inside an agent sandbox instead sees the
+fixed `/tmp/codex-daemon-<euid>` mode-000 mask and fails its required mode-0700
+check. Changing `--listen`, HOME or TMPDIR does not relocate this fixed path.
+The host route avoids that nested check without removing the child's mask.
+
+The app-server RPC transport is a controller authority boundary. Trusted
+`fs/readFile` RPC has host filesystem authority; it is not equivalent to a model
+file tool running with turn permissions. Do not expose unrestricted RPC to the
+browser, project, helper, agent or MCP processes. Native managed tool policies
+also do not automatically confine directly spawned MCP servers.
+
+The isolated host proof used Codex 0.161.0 (source pin
+`979011409de0a60b52f179721948e65531d26144`, binary SHA-256
+`9a820c17865fa825d04db416818679a9d63bd72e50835c396f496e5684626c9c`).
+[Successful proof run 38252423273](https://github.com/dyne/gestalt-mobile/actions/runs/38252423273)
+ran provisional source head `2facdae77f2b807798aa02a5d63a12d9161aebc6`.
+Artifact `11749206185` has ZIP SHA-256
+`1556c0e8e928a077108c9b31d2448c29a89e165a9fbb27fd1014cf247871dd46`.
+It proves ordinary command/public-read success and same-UID native child denial
+of disposable private controller/auth/Caddy files, the controlled Unix socket,
+daemon-directory traversal and tested proc/FD aliases. The host daemon directory
+was mode 0700; the child saw the read-only mode-000 mask. The controller could
+reach its fixture socket before and after, no child connected, and the owned
+app-server stopped. Trusted fs RPC deliberately read its private canary.
+
+That proof used no model calls, credentials, configured MCP or production
+services. Native model file tools, production config admission and the complete
+dev-server/helper/MCP/collaboration descendant tree remain untested. It did not
+exercise the Live picker/edit/accept lifecycle. The provisional diagnostic
+workflow and probe exist on draft PR 104's test branch, not in this delivered
+adapter diff. Its passing standard CI does not verify the current uncommitted
+L8 tree. This repository's `live-caddy-proof.yml` retains the complete pinned
+native Caddy, helper and separate-network browser gates; the diagnostic workflow
+must not replace those integration gates.
+
+| Remaining boundary                               | Required owner and proof                                                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Trusted host launcher and native policy receipts | L9, Manager: protected controller/auth/Caddy paths and explicit managed policies for owned launches                                               |
+| Config admission and MCP/descendant confinement  | L10, Agents: allowlisted trusted config and separately confined MCP, hooks and other subprocesses                                                 |
+| Production Start and real Live lifecycle         | L11, Mobile: concrete admission, owned helper/dev server, native model tools, Caddy/auth/browser and real picker/edit/accept/Stop/Resume evidence |
+
+Refuse unverified existing processes; do not adopt unowned daemon IPC or enable
+Start from fixture readiness or callbacks. The host proof requires no Codex fork
+on the demonstrated route, but does not establish complete production isolation.
+
+Native settlement uses Codex 0.161.0's supported subagent `sourceKinds` and
+bounded pagination. `ThreadListParams` has no parent-thread filter. Before
+cancelling a descendant, settlement verifies its `Thread.parentThreadId` chain
+and `sessionId` through the owning root using fresh `thread/read` observations;
+locally observed child IDs alone grant no cancellation authority. Missing,
+conflicting or unavailable lineage retains recovery ownership. Production L11
+must prove this discovery against the actual owning native session tree.

@@ -9,6 +9,7 @@ import {
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
 import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
+import type { LiveProcessIdentity } from '../live-design/process-identity.js';
 import { randomUUID } from 'node:crypto';
 import {
   createPlanMeasurementSnapshot,
@@ -65,6 +66,8 @@ export type AppServer = {
   };
   close(): void;
   onExit?(listener: () => void): () => void;
+  /** Trusted controller observation only; no raw host RPC crosses this port. */
+  observeLiveLaunch?(): LiveProcessIdentity;
 };
 
 export type AppServerLaunchInput = {
@@ -264,6 +267,96 @@ export class CodexSessionRuntime {
   >();
   private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
+  private readonly nativeThreadSelections = new WeakMap<
+    AppServer,
+    Readonly<Record<string, unknown>>
+  >();
+  private observeNativeThreadSelection(process: AppServer, response: unknown): void {
+    const native = asRecord(response);
+    const thread = asRecord(native?.thread);
+    if (!native || typeof thread?.id !== 'string') {
+      this.nativeThreadSelections.delete(process);
+      return;
+    }
+    const selection: Record<string, unknown> = { threadId: thread.id };
+    for (const name of [
+      'model',
+      'modelProvider',
+      'cwd',
+      'approvalPolicy',
+      'activePermissionProfile',
+      'sandbox',
+      'reasoningEffort',
+      'runtimeWorkspaceRoots',
+    ]) {
+      if (Object.hasOwn(native, name)) selection[name] = structuredClone(native[name]);
+    }
+    this.nativeThreadSelections.set(process, Object.freeze(selection));
+  }
+
+  /** Reads only the already-owned process. Admission must never launch a replacement reader. */
+  async inspectLiveAdmission(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    configuration: unknown;
+    thread: unknown;
+    mcp: unknown;
+    threadSelection: Readonly<Record<string, unknown>> | null;
+    threadConfig: Readonly<Record<string, unknown>>;
+    skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+  }> {
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const before = resource.process.observeLiveLaunch();
+    const bounded = async (method: string, params: unknown): Promise<unknown> => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          resource.process.rpc.request(method, params),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), 5000);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    };
+    const configuration = await bounded('config/read', {
+      includeLayers: true,
+      cwd: session.workspacePath,
+    });
+    const thread = await bounded('thread/read', {
+      threadId: session.threadId,
+      includeTurns: false,
+    });
+    const mcp = await bounded('mcpServerStatus/list', {
+      threadId: session.threadId,
+      detail: 'full',
+    });
+    if (
+      this.sessions.get(session.id) !== resource ||
+      resource.threadId !== session.threadId ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(before)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    return {
+      launch: before,
+      configuration,
+      thread,
+      mcp,
+      threadSelection: this.nativeThreadSelections.has(resource.process)
+        ? structuredClone(this.nativeThreadSelections.get(resource.process)!)
+        : null,
+      threadConfig: structuredClone(resource.modelConfig),
+      skillsConfig: resource.skillsConfig && structuredClone(resource.skillsConfig),
+    };
+  }
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     const resource = await this.createResource(session);
@@ -545,28 +638,83 @@ export class CodexSessionRuntime {
         threadId: session.threadId,
         turnId: rootHistory.activeTurnId,
       });
-    const threadIds = new Set<string>([session.threadId, ...owned.childThreads]);
+    const root = asRecord(
+      asRecord(await request('thread/read', { threadId: session.threadId, includeTurns: false }))
+        ?.thread,
+    );
+    const sessionId = boundedString(root?.sessionId, 256);
+    if (root?.id !== session.threadId || !sessionId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+    const threadIds = new Set<string>([session.threadId]);
     const discover = async () => {
-      for (const threadId of threadIds) {
-        if (threadIds.size > 64) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
-        // A strict observation is required: an unsupported RPC returning {} is
-        // not an empty child tree. No continuation cursor may be discarded.
+      // Codex 0.161 ThreadListParams has no parent filter. List supported
+      // subagent sources, then prove the parent chain and session identity.
+      const candidates = new Map<string, { parent: string | null; session: string }>();
+      let cursor: string | undefined;
+      const cursors = new Set<string>();
+      for (let page = 0; ; page++) {
+        if (page >= 16) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
         const result = asRecord(
           await request('thread/list', {
-            parentThreadId: threadId,
+            limit: 64,
+            sourceKinds: [
+              'subAgent',
+              'subAgentReview',
+              'subAgentCompact',
+              'subAgentThreadSpawn',
+              'subAgentOther',
+            ],
+            ...(cursor ? { cursor } : {}),
           }),
         );
-        if (!result || !Array.isArray(result.data) || result.nextCursor)
-          throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        if (!result || !Array.isArray(result.data)) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
         for (const value of result.data) {
           const child = asRecord(value);
           const id = boundedString(child?.id, 256);
-          const status = asRecord(child?.status)?.type;
-          if (!id || !['active', 'idle'].includes(String(status)))
+          const childSession = boundedString(child?.sessionId, 256);
+          const parent = child?.parentThreadId;
+          if (!id || !childSession || (parent !== null && !boundedString(parent, 256)))
             throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
-          threadIds.add(id);
+          const previous = candidates.get(id);
+          if (previous && (previous.parent !== parent || previous.session !== childSession))
+            throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+          candidates.set(id, { parent: parent as string | null, session: childSession });
         }
+        if (result.nextCursor === null || result.nextCursor === undefined) break;
+        cursor = boundedString(result.nextCursor, 256) ?? undefined;
+        if (!cursor || cursors.has(cursor)) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        cursors.add(cursor);
       }
+      const verified = new Set<string>([session.threadId!]);
+      let added: boolean;
+      do {
+        added = false;
+        for (const [id, child] of candidates) {
+          if (
+            child.session === sessionId &&
+            child.parent !== null &&
+            verified.has(child.parent) &&
+            !verified.has(id)
+          ) {
+            // Verify fresh native lineage before granting cancellation authority.
+            const native = asRecord(
+              asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
+            );
+            if (
+              native?.id !== id ||
+              native.sessionId !== sessionId ||
+              native.parentThreadId !== child.parent
+            )
+              throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+            verified.add(id);
+            if (verified.size > 64) throw new Error('LIVE_NATIVE_TREE_UNBOUNDED');
+            added = true;
+          }
+        }
+      } while (added);
+      // Locally observed children are hints, not cancellation authority.
+      if ([...threadIds, ...owned.childThreads].some((id) => !verified.has(id)))
+        throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+      for (const id of verified) threadIds.add(id);
     };
     await discover();
     for (const threadId of threadIds) {
@@ -1146,7 +1294,7 @@ export class CodexSessionRuntime {
       let result: RestoreSessionResult;
       let missingRollout: unknown;
       try {
-        await resource.process.rpc.request('thread/resume', {
+        const resumed = await resource.process.rpc.request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
           ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
@@ -1163,6 +1311,7 @@ export class CodexSessionRuntime {
             gestaltAgentCapacityRecoveryDynamicTool,
           ],
         });
+        this.observeNativeThreadSelection(resource.process, resumed);
         result = {
           session: RelaySession.rehydrate(session).restore(now).supportsAttentionTool(now).snapshot,
           historyUnavailable: false,
@@ -1268,12 +1417,13 @@ export class CodexSessionRuntime {
     skillsConfig?: readonly { path: string; enabled: boolean }[],
     modelConfig: Record<string, unknown> = {},
   ): Promise<string> {
-    return decodeThreadStart(
-      await process.rpc.request(
-        'thread/start',
-        this.threadStartParams(session, skillsConfig, modelConfig),
-      ),
+    const response = await process.rpc.request(
+      'thread/start',
+      this.threadStartParams(session, skillsConfig, modelConfig),
     );
+    const id = decodeThreadStart(response);
+    this.observeNativeThreadSelection(process, response);
+    return id;
   }
 
   private threadStartParams(
@@ -1314,6 +1464,8 @@ export class CodexSessionRuntime {
     const reads = new Set([
       'thread/read',
       'thread/list',
+      'config/read',
+      'mcpServerStatus/list',
       'account/rateLimits/read',
       'model/list',
       'thread/backgroundTerminals/list',
@@ -1326,6 +1478,9 @@ export class CodexSessionRuntime {
     return {
       close: () => process.close(),
       ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
+      ...(process.observeLiveLaunch
+        ? { observeLiveLaunch: process.observeLiveLaunch.bind(process) }
+        : {}),
       rpc: {
         request: async (method, params) => {
           const effect = !reads.has(method) && !safeStop.has(method);
@@ -1409,6 +1564,22 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (notification.method === 'thread/settings/updated') {
+          const params = asRecord(notification.params);
+          const settings = asRecord(params?.threadSettings);
+          if (
+            typeof resource.threadId === 'string' &&
+            params?.threadId === resource.threadId &&
+            settings
+          ) {
+            this.observeNativeThreadSelection(process, {
+              ...settings,
+              thread: { id: resource.threadId },
+              sandbox: settings.sandboxPolicy,
+              reasoningEffort: settings.effort,
+            });
+          }
+        }
         if (notification.method === 'mcpServer/statusUpdated') {
           const status = notification.params as { name?: string; status?: string } | null;
           if (
@@ -1617,7 +1788,7 @@ export class CodexSessionRuntime {
       );
       return;
     }
-    await resource.process.rpc.request('thread/resume', {
+    const resumed = await resource.process.rpc.request('thread/resume', {
       threadId: resource.threadId,
       cwd: session.workspacePath,
       ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
@@ -1626,6 +1797,7 @@ export class CodexSessionRuntime {
         : {}),
       ...this.permissionParams(session),
     });
+    this.observeNativeThreadSelection(resource.process, resumed);
   }
 
   private resolveNotificationOrigin(

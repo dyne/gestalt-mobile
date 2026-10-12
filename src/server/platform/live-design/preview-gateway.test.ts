@@ -143,6 +143,29 @@ test('binds registered app/helper targets, relays JSON bodies and strips credent
   expect(f.connections.size).toBe(0);
 });
 
+test('authenticated preview content cannot become a poll owner or bypass controller cleanup', async () => {
+  const f = await fixture();
+  for (const path of [
+    '/__gestalt_live/poll?token=fixture',
+    '/__gestalt_live/%70oll?token=fixture',
+    '/__gestalt_live//poll?token=fixture',
+    '/__gestalt_live/stop?token=fixture',
+    '/__gestalt_live/agent-target?token=fixture',
+  ]) {
+    expect((await f.send(path)).status).toBe(403);
+    expect((await f.send(path, '{}')).status).toBe(403);
+    expect(f.requests).toHaveLength(0);
+    expect(f.connections.size).toBe(0);
+  }
+  // The pinned browser itself posts these targeting verdicts and claims.
+  expect((await f.send('/__gestalt_live/agent-target-result', '{}')).status).toBe(200);
+  expect((await f.send('/__gestalt_live/agent-target-claim', '{}')).status).toBe(200);
+  expect(f.requests.map((request) => request.path)).toEqual([
+    '/agent-target-result',
+    '/agent-target-claim',
+  ]);
+});
+
 test('authorizes the actual HMR upgrade and closes its transport before revocation returns', async () => {
   const f = await fixture();
   const socket = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/?token=vite`, 'vite-hmr', {

@@ -226,7 +226,19 @@ export async function createPreviewGateway(options: {
 }
 function helperRoute(path: string): { helper: boolean; path: string } {
   const helper = path.startsWith('/__gestalt_live/');
-  return { helper, path: helper ? path.slice('/__gestalt_live'.length) : path };
+  if (!helper) return { helper, path };
+  const upstream = path.slice('/__gestalt_live'.length);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(upstream.split('?')[0]!);
+  } catch {
+    throw new LiveAuthError('LIVE_INVALID_REQUEST', 400);
+  }
+  // These are controller operations at the pin, never picker/browser operations.
+  // Authentication does not grant a second canonical poll owner or bypass Stop.
+  if (/^\/(poll|stop|agent-target)(\/|$)/i.test(decoded.replace(/\/+/g, '/')))
+    throw new LiveAuthError('LIVE_INVALID_REQUEST', 403);
+  return { helper, path: upstream };
 }
 function loopback(request: IncomingMessage): boolean {
   return (

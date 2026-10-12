@@ -350,7 +350,10 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
             : 'code' in mutation
               ? mutation.code
               : run.failureCode,
-        generation: mutation.event === 'recover' ? this.generation() : run.generation,
+        generation:
+          mutation.event === 'recover' || mutation.event === 'resume'
+            ? this.generation()
+            : run.generation,
       };
       runSchema.parse(next);
       this.save(next);
@@ -404,6 +407,10 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         });
     });
     this.admittedEpoch = expectedEpoch + 1;
+  }
+  /** Call only after acquiring the OS controller election; existing claims stay held. */
+  recoverElectedController(): void {
+    this.recoverController(this.admittedEpoch);
   }
   private writerScopes(record: string): readonly AppIdentity[] | null {
     const scopes = z.array(appSchema).parse(JSON.parse(record));

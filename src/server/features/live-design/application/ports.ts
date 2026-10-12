@@ -37,7 +37,10 @@ export type PreviewInstance = Pick<
   'relayId' | 'appId' | 'liveId' | 'generation' | 'previewOrigin'
 >;
 export type PreviewRevocationScope =
-  { authSessionHash: string } | { deviceId: string } | { liveId: string };
+  | { authSessionHash: string }
+  | { deviceId: string }
+  | { liveId: string }
+  | { liveId: string; throughGeneration: number };
 export interface PreviewRevocationBarrier {
   /** Persist the denial barrier first, then close matching owned connections before resolving. */
   revoke(scope: PreviewRevocationScope): Promise<void>;

@@ -51,6 +51,8 @@ async function fixture() {
           return {
             thread: {
               id: 'root',
+              sessionId: 'root-session',
+              parentThreadId: null,
               status: { type: complete ? 'idle' : 'active' },
               turns: [
                 {
@@ -372,4 +374,106 @@ it('actual completed history reconciles a lost notification before the next seri
   expect(f.session().executionPolicy).toEqual(before.executionPolicy);
   expect(f.session().activeTurnId).toBeNull();
   expect(f.launch).toHaveBeenCalledTimes(1);
+});
+
+it('native Stop validates pinned parent lineage and leaves unrelated roots and descendants untouched', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  const lineage = [
+    { id: 'unrelated-root', sessionId: 'other-session', parentThreadId: null },
+    { id: 'foreign-child', sessionId: 'other-session', parentThreadId: 'unrelated-root' },
+    { id: 'grandchild', sessionId: 'root-session', parentThreadId: 'child' },
+    { id: 'child', sessionId: 'root-session', parentThreadId: 'root' },
+  ];
+  const interrupted = new Set<string>();
+  const inspected: string[] = [];
+  f.server.rpc.request = async (method, params) => {
+    const p = params as { threadId?: string; parentThreadId?: string; sourceKinds?: string[] };
+    if (method === 'thread/list') {
+      expect(p.parentThreadId).toBeUndefined();
+      expect(p.sourceKinds).toContain('subAgentThreadSpawn');
+      return { data: lineage, nextCursor: null };
+    }
+    if (method === 'thread/read' && p.threadId !== 'root') {
+      inspected.push(p.threadId!);
+      const child = lineage.find((row) => row.id === p.threadId)!;
+      return {
+        thread: {
+          ...child,
+          status: { type: interrupted.has(child.id) ? 'idle' : 'active' },
+          turns: [
+            {
+              id: `turn-${child.id}`,
+              status: interrupted.has(child.id) ? 'completed' : 'inProgress',
+              startedAt: 1,
+              completedAt: interrupted.has(child.id) ? 2 : null,
+              items: [],
+            },
+          ],
+        },
+      };
+    }
+    if (method === 'turn/interrupt' && p.threadId !== 'root') {
+      interrupted.add(p.threadId!);
+      return {};
+    }
+    if (method === 'thread/backgroundTerminals/list') {
+      inspected.push(p.threadId!);
+      return { data: [], nextCursor: null };
+    }
+    return realRequest(method, params);
+  };
+  await f.turns.settle(f.owners.mutate(f.run, { event: 'stop' }));
+  expect([...interrupted].sort()).toEqual(['child', 'grandchild']);
+  expect(inspected).not.toContain('unrelated-root');
+  expect(inspected).not.toContain('foreign-child');
+});
+
+it('missing native lineage fails closed before descendant cancellation', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  f.server.rpc.request = async (method, params) =>
+    method === 'thread/list'
+      ? { data: [{ id: 'unrelated-root', status: { type: 'active' } }], nextCursor: null }
+      : realRequest(method, params);
+  await expect(f.turns.settle(f.owners.mutate(f.run, { event: 'stop' }))).rejects.toThrow(
+    'LIVE_NATIVE_TREE_UNKNOWN',
+  );
+  expect(
+    f.requests
+      .filter((r) => r.method === 'turn/interrupt')
+      .every((r) => (r.params as { threadId: string }).threadId === 'root'),
+  ).toBe(true);
+});
+
+it('listed ancestry cannot authorize a child whose native parent disagrees', async () => {
+  const f = await fixture();
+  const realRequest = f.server.rpc.request.bind(f.server.rpc);
+  f.server.rpc.request = async (method, params) => {
+    if (method === 'thread/list')
+      return {
+        data: [{ id: 'foreign', sessionId: 'root-session', parentThreadId: 'root' }],
+        nextCursor: null,
+      };
+    if (method === 'thread/read' && (params as { threadId: string }).threadId === 'foreign')
+      return {
+        thread: {
+          id: 'foreign',
+          sessionId: 'root-session',
+          parentThreadId: 'unrelated-root',
+          status: { type: 'active' },
+          turns: [],
+        },
+      };
+    return realRequest(method, params);
+  };
+  await expect(f.turns.settle(f.owners.mutate(f.run, { event: 'stop' }))).rejects.toThrow(
+    'LIVE_NATIVE_TREE_UNKNOWN',
+  );
+  expect(
+    f.requests
+      .filter((r) => r.method === 'turn/interrupt')
+      .every((r) => (r.params as { threadId: string }).threadId === 'root'),
+  ).toBe(true);
+  expect(f.requests.some((r) => r.method === 'thread/backgroundTerminals/list')).toBe(false);
 });
