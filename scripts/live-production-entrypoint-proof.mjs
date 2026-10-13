@@ -19,7 +19,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:http';
@@ -29,6 +28,7 @@ import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
+import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -65,6 +65,9 @@ const report = {
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
+const rootIdentity = lstatSync(root);
+const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
+if (installationOnly) report.proofKind = 'installation-only-no-native-launch';
 const appRoot = join(root, 'app'),
   privateRoot = join(root, 'private'),
   installation = join(root, 'installed');
@@ -422,6 +425,7 @@ async function api(method, path, payload) {
   return res.json();
 }
 try {
+  report.installationStage = 'provenance';
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   assert.equal(head, process.env.LIVE_PROOF_EXPECTED_HEAD);
   report.provenance = {
@@ -430,36 +434,46 @@ try {
     agents: '9866e6f7abef7a3226052d803ce963c49f88cd0f',
     manager: LIVE_MANAGER_SHA256,
   };
+  report.installationStage = 'vendor-copy';
   const vendor = join(installation, 'vendor');
   cpSync(dirname(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY))), vendor, {
     recursive: true,
   });
+  report.installationStage = 'vendor-immutability';
   protect(vendor);
+  report.installationStage = 'native-and-bwrap-pins';
   const native = pin(join(vendor, 'bin/codex')),
     bwrap = pin(join(vendor, 'codex-resources/bwrap'));
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
+  report.installationStage = 'node-copy';
   const nodeRoot = join(installation, 'node-bin');
   mkdirSync(nodeRoot, { mode: 0o700 });
   const node = copyFile(process.execPath, join(nodeRoot, 'node'), true);
+  report.installationStage = 'manager-copy';
   const manager = copyFile(
     process.env.LIVE_HOST_MANAGER_BINARY,
-    join(installation, 'gestalt'),
+    join(installation, 'gestalt-manager'),
     true,
   );
   assert.equal(manager.sha256, LIVE_MANAGER_SHA256);
+  report.installationStage = 'helper-copy';
   const helper = copyFile(process.env.LIVE_TEST_IMPECCABLE, join(installation, 'impeccable'), true);
   assert.equal(helper.sha256, LIVE_HELPER_BINARY_SHA256);
+  report.installationStage = 'worker-copy';
   const worker = copyFile(
     resolve('dist/server/server/platform/live-design/project-process-worker.js'),
     join(installation, 'project-worker.mjs'),
   );
+  report.installationStage = 'agents-provenance';
   const agentsRoot = realpathSync(process.env.LIVE_HOST_AGENTS_ROOT);
   assert.equal(
     execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: agentsRoot, encoding: 'utf8' }).trim(),
     report.provenance.agents,
   );
+  report.installationStage = 'agents-package-copy';
   const packages = ['context-mode', 'gestalt'].map((name) => {
+    report.installationPackage = name;
     const target = join(installation, name);
     cpSync(join(agentsRoot, 'plugins', name), target, {
       recursive: true,
@@ -475,25 +489,42 @@ try {
     });
     return { name, root: target };
   });
+  report.installationStage = 'runtime-preparer-import';
   const { prepareLiveRuntime } = await import(
     pathToFileURL(join(installation, 'gestalt/scripts/prepare-live-runtime.mjs')).href
   );
+  report.installationStage = 'runtime-preparation';
   const preparedRuntime = await prepareLiveRuntime(
     join(installation, 'context-mode'),
     join(installation, 'context-runtime'),
   );
+  report.installationStage = 'package-immutability-and-inventory';
   for (const entry of packages) {
     protect(entry.root);
     entry.sha256 = measureInstalledLiveTree(entry.root);
   }
+  report.installationStage = 'runtime-immutability-and-inventory';
   protect(preparedRuntime.root);
   const runtime = {
     root: preparedRuntime.root,
     sha256: measureInstalledLiveTree(preparedRuntime.root),
   };
+  report.installationStage = 'mobile-immutability-and-inventory';
   const mobileRoot = realpathSync(resolve('dist/server'));
   protect(mobileRoot);
+  report.installationInventory = {
+    native: native.sha256,
+    bwrap: bwrap.sha256,
+    node: node.sha256,
+    manager: manager.sha256,
+    helper: helper.sha256,
+    worker: worker.sha256,
+    packages: packages.map(({ name, sha256 }) => ({ name, sha256 })),
+    preparedRuntime: runtime.sha256,
+    mobile: measureInstalledLiveTree(mobileRoot),
+  };
   report.checks.exactInstalledPreparedBytes = true;
+  if (installationOnly) throw new Error('INSTALLATION_ONLY_COMPLETE');
   mkdirSync(join(appRoot, '.impeccable/live'), { recursive: true, mode: 0o700 });
   writeFileSync(
     join(appRoot, 'package.json'),
@@ -810,43 +841,103 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
-  generationDirectory ??= readdirSync(controller)
-    .filter((name) => name.startsWith('generation-'))
-    .map((name) => join(controller, name))[0];
-  report.preparationDiagnostics = readdirSync(controller)
-    .filter((name) => /^preparation-failure-[a-f0-9-]+\.json$/.test(name))
-    .map((name) => JSON.parse(readFileSync(join(controller, name), 'utf8')));
-  report.failure = {
-    stage: report.stage,
-    code:
-      error?.code === 'ERR_ASSERTION'
-        ? 'ERR_ASSERTION'
-        : /^[A-Z][A-Z0-9_]+$/.test(error?.message ?? '')
-          ? error.message
-          : 'UNCLASSIFIED',
-  };
-  process.exitCode = 1;
+  if (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') {
+    report.passed = true;
+    report.stage = 'installation-only-complete';
+  } else {
+    generationDirectory ??= readdirSync(controller)
+      .filter((name) => name.startsWith('generation-'))
+      .map((name) => join(controller, name))[0];
+    report.preparationDiagnostics = readdirSync(controller)
+      .filter((name) => /^preparation-failure-[a-f0-9-]+\.json$/.test(name))
+      .map((name) => JSON.parse(readFileSync(join(controller, name), 'utf8')));
+    report.failure = {
+      stage: report.stage,
+      installationStage: report.installationStage,
+      code: /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code ?? '')
+        ? error.code
+        : [
+              'invalid-live-installation-path',
+              'live-runtime-not-prepared',
+              'live-runtime-symlink',
+              'live-runtime-special-file',
+              'live-runtime-publish-failed',
+            ].includes(error?.message)
+          ? error.message.toUpperCase().replaceAll('-', '_')
+          : /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.message ?? '')
+            ? error.message
+            : 'UNCLASSIFIED',
+    };
+    process.exitCode = 1;
+  }
 } finally {
   stream?.destroy();
   if (mobile) {
     try {
       await mobile.close();
+      mobile = undefined;
     } catch {
       report.shutdownFailure = 'LIVE_CLEANUP_REQUIRED';
       process.exitCode = 1;
     }
   }
   if (caddy) {
-    const exited = new Promise((done) => caddy.once('close', done));
-    if (caddy.exitCode === null && caddy.signalCode === null) caddy.kill('SIGTERM');
-    else caddy = undefined;
-    if (caddy) await exited;
+    try {
+      if (caddy.exitCode === null && caddy.signalCode === null) {
+        await new Promise((done, reject) => {
+          const deadline = setTimeout(() => reject(new Error('CADDY_CLOSE_DEADLINE')), 10000);
+          caddy.once('close', () => {
+            clearTimeout(deadline);
+            done();
+          });
+          caddy.kill('SIGTERM');
+        });
+      }
+      caddy = undefined;
+    } catch {
+      report.shutdownFailure ??= 'CADDY_CLOSE_UNVERIFIED';
+      process.exitCode = 1;
+    }
   }
-  await new Promise((done) => provider.close(done));
+  if (provider.listening) {
+    try {
+      await new Promise((done, reject) =>
+        provider.close((error) => (error ? reject(error) : done())),
+      );
+    } catch {
+      report.shutdownFailure ??= 'PROVIDER_CLOSE_UNVERIFIED';
+      process.exitCode = 1;
+    }
+  }
   if (generationDirectory && existsSync(generationDirectory))
     report.generationEvidence = readdirSync(generationDirectory)
       .filter((name) => /receipt|manifest|bootstrap|owning-configuration/.test(name))
       .map((name) => ({ name, sha256: hash(readFileSync(join(generationDirectory, name))) }));
+  if (!report.shutdownFailure) {
+    try {
+      removeOwnedProofTree(root, rootIdentity, {
+        processesClosed: !mobile && !caddy && !provider.listening,
+      });
+      report.disposableTreeRemoved = true;
+      if (installationOnly || report.failure?.stage === 'installation')
+        report.cleanupComplete = true;
+    } catch (error) {
+      report.disposableCleanupFailure = [
+        'EACCES',
+        'EPERM',
+        'OWNED_PROOF_PROCESSES_NOT_CLOSED',
+        'OWNED_PROOF_IDENTITY_CHANGED',
+        'OWNED_PROOF_TREE_UNSAFE',
+      ].includes(error?.code ?? error?.message)
+        ? (error.code ?? error.message)
+        : 'OWNED_PROOF_CLEANUP_FAILED';
+      process.exitCode = 1;
+    }
+  }
+  if (report.shutdownFailure || report.disposableCleanupFailure) {
+    report.passed = false;
+    report.cleanupComplete = false;
+  }
   writeFileSync(
     join(evidence, 'production-entrypoint-proof.json'),
     JSON.stringify(report, null, 2) + '\n',
@@ -862,5 +953,4 @@ try {
       cleanupComplete: report.cleanupComplete,
     }) + '\n',
   );
-  if (!report.shutdownFailure) rmSync(root, { recursive: true, force: true });
 }

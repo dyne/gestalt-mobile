@@ -146,12 +146,14 @@ jobs:
         timeout-minutes: 8
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
           LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
           native_binary="$RUNNER_TEMP/live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
+          node --test scripts/live-proof-cleanup.test.mjs
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-production-entrypoint-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
