@@ -535,6 +535,8 @@ try {
     { mode: 0o600 },
   );
   writeFileSync(join(appRoot, 'index.html'), sourceIndex, { mode: 0o600 });
+  // A real project marker bounds Native discovery to this owned fixture.
+  execFileSync('git', ['init', '--quiet', appRoot], { stdio: 'ignore' });
   writeFileSync(
     join(appRoot, '.impeccable/live/config.json'),
     JSON.stringify({ files: ['index.html'], insertBefore: '</body>', commentSyntax: 'html' }),

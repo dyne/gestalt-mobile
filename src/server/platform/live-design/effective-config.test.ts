@@ -33,6 +33,26 @@ function fixture() {
   return { root, path, bytes, layer, input };
 }
 describe('owning configuration inventory', () => {
+  it('identifies an unapproved disabled thread MCP surface without logging names or transports', () => {
+    const { input } = fixture();
+    const canary = 'PRIVATE-TRANSPORT-CANARY';
+    try {
+      resolveLiveConfigFiles({
+        ...input,
+        threadConfig: { mcp_servers: { [canary]: { command: canary, enabled: false } } },
+      });
+      throw new Error('EXPECTED_REFUSAL');
+    } catch (error) {
+      expect(error).toMatchObject({
+        message: 'LIVE_EFFECTIVE_CONFIG_UNAVAILABLE',
+        liveConfigDiagnostics: { stage: 'approved-launch-surface-mcp_servers' },
+        liveLaunchInventory: {
+          mcp_servers: { thread: { type: 'object', count: 1 }, matchesApproved: false },
+        },
+      });
+      expect(JSON.stringify(error)).not.toContain(canary);
+    }
+  });
   it('inventories enabled native layers that omit disabledReason without omitting source bytes', () => {
     const { input, path, bytes, layer } = fixture();
     const { name, version, config } = layer;

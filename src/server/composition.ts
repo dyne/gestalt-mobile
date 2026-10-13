@@ -7,6 +7,8 @@
 import { LiveDispatchGuard } from './platform/live-design/live-dispatch.js';
 import { createProductionLiveController } from './platform/live-design/production-controller.js';
 import { AuxiliaryLifetimes } from './platform/live-design/auxiliary-lifetimes.js';
+import { baselineHasNoManagedDelegates } from './platform/live-design/baseline-capabilities.js';
+import { beforeDeadline } from './platform/retrieval/codex-xerj.js';
 import { RelayLiveEventTurns } from './platform/live-design/relay-event-turns.js';
 import { LivePollLoop } from './features/live-design/application/poll-loop.js';
 import {
@@ -1585,6 +1587,29 @@ async function composeRelayAppOwned(
                 session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
             });
+            if (productionLive) {
+              const observed = await beforeDeadline(
+                rpc.request('config/read', {
+                  includeLayers: false,
+                  cwd: session.workspacePath,
+                }),
+                deadline,
+              );
+              if (
+                baselineHasNoManagedDelegates({
+                  observed,
+                  threadConfig: config,
+                  skills: catalog.skills,
+                })
+              )
+                return {
+                  ready: false,
+                  deadline,
+                  config,
+                  skillsConfig: selected.skillsConfig,
+                  fallback() {},
+                };
+            }
             return capabilities.prepare({
               cwd: session.workspacePath,
               approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',

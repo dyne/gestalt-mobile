@@ -515,6 +515,10 @@ export class ProductionLiveController {
               error instanceof Error && 'liveConfigDiagnostics' in error
                 ? error.liveConfigDiagnostics
                 : undefined,
+            launchInventory:
+              error instanceof Error && 'liveLaunchInventory' in error
+                ? error.liveLaunchInventory
+                : undefined,
             helper: helper?.diagnostics(),
             devserver: devserver?.diagnostics(),
           }) + '\n',

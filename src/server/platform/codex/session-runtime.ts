@@ -2078,7 +2078,10 @@ export class CodexSessionRuntime {
     resource: SessionResource,
     session: RelaySessionSnapshot,
   ): Promise<void> {
-    if (!this.retrieval) return;
+    // Claim-fenced Live restoration already supplies the complete signed MCP
+    // surface. Ordinary optional capability preparation must not add transports.
+    // The controller verifies actual native MCP connections before activation.
+    if (!this.retrieval || this.liveConfigurations.has(session.id)) return;
     const state = await this.retrieval.prepare(
       session,
       resource.process.rpc,

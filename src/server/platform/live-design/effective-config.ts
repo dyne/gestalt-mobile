@@ -69,6 +69,7 @@ export function resolveLiveConfigFiles(input: {
   approved: LiveApprovedLaunchSurfaces;
 }): readonly LiveConfigFile[] {
   let stage = 'response-shape';
+  let launchInventory: unknown;
   try {
     const observed = configuration.parse(input.configuration);
     stage = 'thread-launch-overrides';
@@ -83,12 +84,44 @@ export function resolveLiveConfigFiles(input: {
     )
       throw new Error();
     const merged = mergeLiveConfig(observed.config, input.threadConfig);
-    stage = 'approved-launch-surfaces';
-    if (
-      !isDeepStrictEqual(merged.mcp_servers ?? {}, input.approved.mcpServers) ||
-      !isDeepStrictEqual(merged.plugins ?? {}, input.approved.plugins)
-    )
-      throw new Error();
+    launchInventory = Object.fromEntries(
+      [
+        ['mcp_servers', input.approved.mcpServers],
+        ['plugins', input.approved.plugins],
+      ].map(([field, approved]) => {
+        const key = field as string;
+        const summary = (value: unknown) => ({
+          type:
+            value === undefined
+              ? 'absent'
+              : value === null
+                ? 'null'
+                : Array.isArray(value)
+                  ? 'array'
+                  : typeof value,
+          count:
+            value && typeof value === 'object' && !Array.isArray(value)
+              ? Math.min(Object.keys(value).length, 65)
+              : null,
+        });
+        return [
+          key,
+          {
+            native: summary(observed.config[key]),
+            thread: summary(input.threadConfig[key]),
+            merged: summary(merged[key]),
+            matchesApproved: isDeepStrictEqual(merged[key] ?? {}, approved),
+          },
+        ];
+      }),
+    );
+    for (const [key, approved] of [
+      ['mcp_servers', input.approved.mcpServers],
+      ['plugins', input.approved.plugins],
+    ] as const) {
+      stage = `approved-launch-surface-${key}`;
+      if (!isDeepStrictEqual(merged[key] ?? {}, approved)) throw new Error();
+    }
     const paths = new Set<string>();
     const roles = new Set<string>();
     const inspect = (config: Record<string, unknown>) => {
@@ -208,6 +241,7 @@ export function resolveLiveConfigFiles(input: {
         stage,
         error instanceof z.ZodError ? error.issues : [],
       ),
+      liveLaunchInventory: launchInventory,
     });
   }
 }
