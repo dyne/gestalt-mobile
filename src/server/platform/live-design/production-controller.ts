@@ -511,6 +511,10 @@ export class ProductionLiveController {
                 : 'UNCLASSIFIED',
             ownerReleased,
             ownerReleaseAttempted,
+            effectiveConfig:
+              error instanceof Error && 'liveConfigDiagnostics' in error
+                ? error.liveConfigDiagnostics
+                : undefined,
             helper: helper?.diagnostics(),
             devserver: devserver?.diagnostics(),
           }) + '\n',

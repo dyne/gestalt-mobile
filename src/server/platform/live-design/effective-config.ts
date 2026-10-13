@@ -19,7 +19,8 @@ const configuration = z.object({
         name: object,
         version: z.string().min(1),
         config: object,
-        disabledReason: z.string().nullable(),
+        // Native 0.161 omits disabledReason for enabled layers (serde None).
+        disabledReason: z.string().nullable().optional(),
       }),
     )
     .min(1)
@@ -67,8 +68,10 @@ export function resolveLiveConfigFiles(input: {
   threadConfig: Readonly<Record<string, unknown>>;
   approved: LiveApprovedLaunchSurfaces;
 }): readonly LiveConfigFile[] {
+  let stage = 'response-shape';
   try {
     const observed = configuration.parse(input.configuration);
+    stage = 'thread-launch-overrides';
     // Native config overrides interpret dotted keys as table paths. Do not mistake
     // one for an inert JSON property and omit its launch effect from this inventory.
     if (
@@ -80,6 +83,7 @@ export function resolveLiveConfigFiles(input: {
     )
       throw new Error();
     const merged = mergeLiveConfig(observed.config, input.threadConfig);
+    stage = 'approved-launch-surfaces';
     if (
       !isDeepStrictEqual(merged.mcp_servers ?? {}, input.approved.mcpServers) ||
       !isDeepStrictEqual(merged.plugins ?? {}, input.approved.plugins)
@@ -96,6 +100,7 @@ export function resolveLiveConfigFiles(input: {
         'computer_use',
         'desktop',
       ]) {
+        stage = `launch-surface-${key}`;
         const value = config[key];
         if (
           value !== undefined &&
@@ -106,6 +111,7 @@ export function resolveLiveConfigFiles(input: {
           throw new Error();
       }
       const features = config.features;
+      stage = 'hooks-feature';
       if (
         features &&
         typeof features === 'object' &&
@@ -114,6 +120,7 @@ export function resolveLiveConfigFiles(input: {
       )
         throw new Error();
       const agents = config.agents;
+      stage = 'agent-config-reference';
       if (agents && typeof agents === 'object' && !Array.isArray(agents)) {
         for (const value of Object.values(agents)) {
           if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
@@ -129,6 +136,7 @@ export function resolveLiveConfigFiles(input: {
     for (const layer of observed.layers) {
       // Disabled layers can become enabled after trust/config changes; inventory them too.
       inspect(layer.config);
+      stage = 'layer-provenance';
       const type = layer.name.type;
       if (
         type === 'project' ||
@@ -145,6 +153,7 @@ export function resolveLiveConfigFiles(input: {
       )
         throw new Error();
       if (typeof layer.name.file !== 'string') throw new Error();
+      stage = 'layer-source-path';
       // Native can describe a nonexistent system/user layer. It must be empty and disabled.
       try {
         if (realpathSync(layer.name.file) !== layer.name.file) throw new Error();
@@ -156,10 +165,12 @@ export function resolveLiveConfigFiles(input: {
     }
     // A synthesized empty layers array is never evidence of the owning configuration.
     if (!paths.size) throw new Error();
+    stage = 'source-file-inventory';
     return Object.freeze(
       [...paths].sort().map((path) => {
         const pin = readLiveConfigFile(path);
         if (roles.has(path)) {
+          stage = 'role-file-inventory';
           const bytes = readFileSync(path);
           if (hash(bytes) !== pin.sha256) throw new Error();
           // v1 admits the installed/session-generated informational/model role
@@ -190,9 +201,75 @@ export function resolveLiveConfigFiles(input: {
         return pin;
       }),
     );
-  } catch {
-    throw new Error('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+  } catch (error) {
+    throw Object.assign(new Error('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE'), {
+      liveConfigDiagnostics: summarizeLiveConfigShape(
+        input.configuration,
+        stage,
+        error instanceof z.ZodError ? error.issues : [],
+      ),
+    });
   }
+}
+
+/** Fixed field types/presence only: never paths, config values, or unknown keys. */
+function summarizeLiveConfigShape(value: unknown, stage: string, issues: z.ZodError['issues']) {
+  const kind = (entry: unknown): string =>
+    entry === undefined
+      ? 'absent'
+      : entry === null
+        ? 'null'
+        : Array.isArray(entry)
+          ? 'array'
+          : typeof entry;
+  const record = (entry: unknown): Record<string, unknown> =>
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? (entry as Record<string, unknown>)
+      : {};
+  const response = record(value);
+  const types = [
+    'packagedDefaults',
+    'system',
+    'user',
+    'sessionFlags',
+    'project',
+    'mdm',
+    'enterpriseManaged',
+    'legacyManagedConfigTomlFromFile',
+    'legacyManagedConfigTomlFromMdm',
+  ];
+  const layers = Array.isArray(response.layers) ? response.layers : [];
+  return {
+    stage,
+    shapeIssues: issues.slice(0, 8).map((issue) => ({
+      field: issue.path
+        .map((part) =>
+          typeof part === 'number' && part >= 0 && part < 64
+            ? part
+            : ['config', 'layers', 'name', 'version', 'disabledReason'].includes(String(part))
+              ? part
+              : 'unrecognized',
+        )
+        .join('.'),
+      code: issue.code,
+    })),
+    configType: kind(response.config),
+    layersType: kind(response.layers),
+    layerCount: Math.min(layers.length, 65),
+    layers: layers.slice(0, 64).map((entry) => {
+      const layer = record(entry),
+        name = record(layer.name);
+      return {
+        source:
+          typeof name.type === 'string' && types.includes(name.type) ? name.type : 'unrecognized',
+        nameType: kind(layer.name),
+        fileType: kind(name.file),
+        versionType: kind(layer.version),
+        configType: kind(layer.config),
+        disabledReasonType: kind(layer.disabledReason),
+      };
+    }),
+  };
 }
 
 /** O_NOFOLLOW plus descriptor identity prevents a replaced final path from being silently trusted. */

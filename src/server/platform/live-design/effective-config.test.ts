@@ -33,6 +33,53 @@ function fixture() {
   return { root, path, bytes, layer, input };
 }
 describe('owning configuration inventory', () => {
+  it('inventories enabled native layers that omit disabledReason without omitting source bytes', () => {
+    const { input, path, bytes, layer } = fixture();
+    const { name, version, config } = layer;
+    const enabled = { name, version, config };
+    const nativeInput = { ...input, configuration: { config: {}, layers: [enabled] } };
+    expect(resolveLiveConfigFiles(nativeInput)).toEqual([
+      { path, sha256: createHash('sha256').update(bytes).digest('hex') },
+    ]);
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...nativeInput,
+        configuration: { config: {}, layers: [{ ...enabled, config: [] }] },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...nativeInput,
+        configuration: { config: {}, layers: [{ ...enabled, disabledReason: false }] },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+  });
+  it('reports only fixed shape diagnostics for rejected native responses', () => {
+    const { input, path, layer } = fixture();
+    const canary = 'PRIVATE-CONFIG-CANARY';
+    try {
+      resolveLiveConfigFiles({
+        ...input,
+        configuration: {
+          config: { private: canary },
+          layers: [{ ...layer, version: 7, name: { type: canary, file: path } }],
+        },
+      });
+      throw new Error('EXPECTED_REFUSAL');
+    } catch (error) {
+      expect(error).toMatchObject({
+        message: 'LIVE_EFFECTIVE_CONFIG_UNAVAILABLE',
+        liveConfigDiagnostics: {
+          stage: 'response-shape',
+          shapeIssues: [{ field: 'layers.0.version', code: 'invalid_type' }],
+          layers: [{ source: 'unrecognized', versionType: 'number' }],
+        },
+      });
+      const serialized = JSON.stringify(error);
+      expect(serialized).not.toContain(canary);
+      expect(serialized).not.toContain(path);
+    }
+  });
   it('inventories the observed user configuration and child role configuration bytes', () => {
     const { root, path, bytes, input } = fixture();
     const role = join(root, 'role.toml');
