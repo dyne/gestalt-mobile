@@ -70,6 +70,47 @@ describe('real FIFO stream descriptor ownership', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it('records deliberate in-flight write cancellation and still proves both descriptor closures', async () => {
+    const { root, child, exited, pipes, errors } = fixture();
+    try {
+      // An actual round trip establishes construction before racing the next write callback.
+      const ready = once(pipes.lines, 'line');
+      pipes.input.write('ready\n');
+      await ready;
+      pipes.input.write('pending-controller-frame\n');
+      const closing = pipes.close();
+      await Promise.all([closing, exited]);
+      expect(pipes.errorCodes()).toEqual(['ERR_STREAM_DESTROYED']);
+      expect(errors).toEqual([]);
+      expect(pipes.input.closed && pipes.output.closed).toBe(true);
+    } finally {
+      child.kill();
+      await exited;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('refuses unexpected write destruction outside explicit Stop', async () => {
+    const { root, child, exited, pipes, errors } = fixture();
+    try {
+      const ready = once(pipes.lines, 'line');
+      pipes.input.write('ready\n');
+      await ready;
+      const inputClosed = new Promise<void>((done) => pipes.input.once('close', done));
+      pipes.input.write('pending-controller-frame\n');
+      pipes.input.destroy();
+      await inputClosed;
+      child.kill('SIGTERM');
+      await exited;
+      await expect(pipes.close()).rejects.toThrow('LIVE_PROJECT_PIPE_CLOSE_FAILED');
+      expect(errors).toContain('ERR_STREAM_DESTROYED');
+      expect(pipes.input.closed && pipes.output.closed).toBe(true);
+    } finally {
+      child.kill();
+      await exited;
+      await pipes.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('reports an actual invalid descriptor through readline and refuses to hide cleanup failure', async () => {
     const root = mkdtempSync('/tmp/live-fifo-invalid-');
     execFileSync('/usr/bin/mkfifo', [join(root, 'in'), join(root, 'out')]);

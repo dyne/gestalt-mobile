@@ -253,6 +253,8 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   const codes = new Set([
     'LIVE_PROJECT_PROCESS_UNAVAILABLE',
     'LIVE_PROJECT_RECOVERY_REQUIRED',
+    'LIVE_PROJECT_PIPE_CLOSE_FAILED',
+    'LIVE_PROJECT_PIPE_CLOSE_TIMEOUT',
     'ERR_ASSERTION',
     'ENOENT',
     'EPERM',
@@ -261,7 +263,7 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   ]);
   const stage =
     typeof error?.stage === 'string' &&
-    /^(?:pin-(?:native|bwrap|node|worker|executable|launch-input)-(?:file|permissions|canonical|digest|read)|role|helper-fixed-launch|authority-shape|canonical-root|mutable-runtime-location|private-directory|fixed-launch-value|unapproved-environment|fixed-environment|filesystem-profile|filesystem-write-scope|private-denial-missing|private-denial-overridden|signing-key-create|signing-key-metadata|(?:relay|target)-(?:privileges|pid-isolation|mount-isolation|user-isolation|host-uid)|native-(?:listener-ambiguity|private-mask|protected-mask|proc-mask)|unspecified)$/.test(
+    /^(?:pin-(?:native|bwrap|node|worker|executable|launch-input)-(?:file|permissions|canonical|digest|read)|role|helper-fixed-launch|authority-shape|canonical-root|mutable-runtime-location|private-directory|fixed-launch-value|unapproved-environment|fixed-environment|filesystem-profile|filesystem-write-scope|private-denial-missing|private-denial-overridden|signing-key-create|signing-key-metadata|(?:relay|target)-(?:privileges|pid-isolation|mount-isolation|user-isolation|host-uid)|native-(?:listener-ambiguity|private-mask|protected-mask|proc-mask)|controller-pipe-close|namespace-exit-check|unspecified)$/.test(
       error.stage,
     )
       ? error.stage
@@ -285,6 +287,8 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   await new Promise((done) => hostServer.close(done));
   await new Promise((done) => admin.close(done));
   report.cleanupComplete = cleanup;
+  // Capture final teardown state even when the initial failure came before cleanup.
+  report.resourceDiagnostics = processes.map((owned) => owned.diagnostics());
   writeFileSync(
     join(evidence, 'project-isolation-proof.json'),
     JSON.stringify(report, null, 2) + '\n',

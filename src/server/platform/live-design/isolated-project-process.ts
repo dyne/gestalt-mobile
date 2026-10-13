@@ -219,6 +219,9 @@ export class IsolatedProjectProcess {
     workerFailure: 'none',
     originalFailureStage: 'none',
     pipeFailureCode: 'none',
+    pipeErrorCodes: [] as readonly string[],
+    pipeDescriptorsClosed: false,
+    namespaceExited: false,
   };
 
   diagnostics(): Readonly<typeof this.diagnostic> {
@@ -663,6 +666,7 @@ export class IsolatedProjectProcess {
   }
   async stop(): Promise<void> {
     this.revokeChannels();
+    this.diagnostic.stage = 'await-owned-process-exit';
     const child = this.child;
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     if (this.exited) {
@@ -674,7 +678,17 @@ export class IsolatedProjectProcess {
       if (child && child.exitCode === null && child.signalCode === null)
         throw new Error('LIVE_PROJECT_RECOVERY_REQUIRED');
     }
-    await this.pipes?.close();
+    this.diagnostic.stage = 'controller-pipe-close';
+    let pipeFailure: unknown;
+    try {
+      await this.pipes?.close();
+    } catch (error) {
+      pipeFailure = error;
+    } finally {
+      this.diagnostic.pipeErrorCodes = this.pipes?.errorCodes() ?? [];
+      this.diagnostic.pipeDescriptorsClosed =
+        !this.pipes || (this.pipes.input.closed && this.pipes.output.closed);
+    }
     for (const fd of this.descriptors) {
       try {
         closeSync(fd);
@@ -683,15 +697,24 @@ export class IsolatedProjectProcess {
       }
     }
     this.descriptors = [];
+    this.diagnostic.stage = 'namespace-exit-check';
     if (this.network) {
       for (const name of readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
         try {
           if (observeLiveProcess(Number(name)).namespaces.net === this.network)
-            throw new Error('LIVE_PROJECT_RECOVERY_REQUIRED');
+            throw Object.assign(new Error('LIVE_PROJECT_RECOVERY_REQUIRED'), {
+              code: 'LIVE_PROJECT_RECOVERY_REQUIRED',
+              stage: 'namespace-exit-check',
+            });
         } catch (error) {
           if ((error as Error).message === 'LIVE_PROJECT_RECOVERY_REQUIRED') throw error;
         }
       }
+    }
+    this.diagnostic.namespaceExited = true;
+    if (pipeFailure) {
+      this.diagnostic.stage = 'controller-pipe-close-failed';
+      throw pipeFailure;
     }
     this.diagnostic.stage = 'revoked-and-exited';
   }
