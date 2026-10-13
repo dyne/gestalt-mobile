@@ -6,7 +6,8 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { codexChildEnvironment } from './codex-process-launcher.js';
+import { codexChildEnvironment, launchCodexAppServer } from './codex-process-launcher.js';
+import { LIVE_CODEX_SHA256 } from '../live-design/native-contract.js';
 
 const inheritedPlanStatus = process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
 const inheritedPlanStatusDirectory = process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
@@ -20,6 +21,28 @@ afterEach(() => {
 });
 
 describe('codexChildEnvironment', () => {
+  it('refuses an unpinned trusted executable before creating a process', () => {
+    expect(() =>
+      launchCodexAppServer(
+        { profile: 'default', cwd: '/workspace' },
+        {
+          executable: '/unapproved/native',
+          sha256: 'a'.repeat(64),
+          environment: {},
+        },
+      ),
+    ).toThrow('LIVE_RUNTIME_BINARY_UNVERIFIED');
+    expect(() =>
+      launchCodexAppServer(
+        { profile: 'default', cwd: '/workspace' },
+        {
+          executable: '/absent/native',
+          sha256: LIVE_CODEX_SHA256,
+          environment: {},
+        },
+      ),
+    ).toThrow('LIVE_RUNTIME_BINARY_UNVERIFIED');
+  });
   it('does not pass an ambient plan status path to catalog or model discovery children', () => {
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE = '/ambient/session.json';
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY = '/ambient/session';

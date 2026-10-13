@@ -11,6 +11,13 @@ import { describe, expect, it } from 'vitest';
 import { CliUsageError, normalizePublicOrigin, parseConfig } from './config.js';
 
 describe('parseConfig', () => {
+  it('resolves explicit host Live configuration without changing authentication defaults', () => {
+    expect(parseConfig(['--live-config', 'private/live.json'], '/caller')).toMatchObject({
+      liveConfigFile: '/caller/private/live.json',
+      passkeyAuthEnabled: true,
+    });
+    expect(() => parseConfig(['--live-config'])).toThrow('Missing value');
+  });
   it('selects root-wide automatic, manual or disabled retrieval without permission changes', () => {
     for (const mode of ['auto', 'manual', 'off']) {
       expect(parseConfig(['--xerj', mode, '--cwd', 'universe'], '/caller')).toMatchObject({

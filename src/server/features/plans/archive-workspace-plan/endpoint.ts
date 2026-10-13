@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import type { WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { WorkspacePlanArchiveSource } from '../application/ports.js';
+import { LiveDispatchError } from '../../live-design/application/dispatch.js';
 
 export function registerArchiveWorkspacePlan(
   app: FastifyInstance,
@@ -27,6 +28,7 @@ export function registerArchiveWorkspacePlan(
         return reply.code(409).send({ code: 'PLAN_ARCHIVE_CONFLICT' });
       return reply.code(422).send({ code: 'PLAN_ARCHIVE_UNAVAILABLE' });
     } catch (error) {
+      if (error instanceof LiveDispatchError) throw error;
       if (error instanceof Error && error.message === 'WORKSPACE_NOT_FOUND')
         return reply.code(404).send({ code: 'WORKSPACE_NOT_FOUND' });
       return reply.code(503).send({ code: 'PLAN_ARCHIVE_UNAVAILABLE' });

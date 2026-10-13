@@ -31,6 +31,8 @@ export async function startSession(
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
     skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
+    /** Durable admission before model/skill discovery can start a native helper. */
+    reserve?(session: RelaySessionSnapshot): void;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
@@ -44,6 +46,22 @@ export async function startSession(
     deps.workspaces.resolve(input.workspaceId),
     ...(input.provider === 'codex' ? [deps.profiles.require(input.profile)] : []),
   ]);
+  const id = deps.createId();
+  const startedAt = deps.now();
+  deps.reserve?.(
+    RelaySession.create({
+      id,
+      workspaceId: workspace.id,
+      workspacePath: workspace.realPath,
+      provider: input.provider,
+      profile: input.profile,
+      model: input.model,
+      sandbox: input.sandbox,
+      approvalPolicy: input.approvalPolicy,
+      effectiveSkillSelection: { skills: [] },
+      now: startedAt,
+    }).snapshot,
+  );
   let model = input.model;
   const modelCatalog = deps.sessionModels ?? deps.models;
   if (modelCatalog) {
@@ -89,7 +107,7 @@ export async function startSession(
   };
   const branch = await deps.gitBranch?.(workspace.realPath);
   const session = RelaySession.create({
-    id: deps.createId(),
+    id,
     workspaceId: workspace.id,
     workspacePath: workspace.realPath,
     provider: input.provider,
@@ -111,7 +129,7 @@ export async function startSession(
     sandbox: input.sandbox,
     approvalPolicy: input.approvalPolicy,
     effectiveSkillSelection,
-    now: deps.now(),
+    now: startedAt,
   }).snapshot;
   deps.save(session);
   if (!deps.activate) return session;

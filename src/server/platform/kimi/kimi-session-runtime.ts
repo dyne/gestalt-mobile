@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
+
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
@@ -94,6 +96,7 @@ export class KimiSessionRuntime {
   public constructor(
     private readonly input: {
       servers: KimiWebServerManager;
+      liveDispatch?: LiveDispatchPolicy;
       skillsFor(
         session: RelaySessionSnapshot,
       ): Promise<SkillSelection | undefined> | SkillSelection | undefined;
@@ -128,10 +131,13 @@ export class KimiSessionRuntime {
   }
 
   public async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.input.liveDispatch?.writer(session);
     const handle = await this.ensureServer(session);
+    this.input.liveDispatch?.writer(session);
     const created = (await handle.client.post('/api/v1/sessions', {
       metadata: { cwd: session.workspacePath },
     })) as { id?: string };
+    this.input.liveDispatch?.writer(session);
     if (!created.id || typeof created.id !== 'string')
       throw new Error('KIMI_SESSION_CREATE_FAILED');
     await this.applyProfile(handle, created.id, session);
@@ -153,6 +159,7 @@ export class KimiSessionRuntime {
   }
 
   public async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
+    this.input.liveDispatch?.writer(session);
     this.stop(session.id);
     return this.restore(session, now);
   }
@@ -170,6 +177,7 @@ export class KimiSessionRuntime {
     session: RelaySessionSnapshot,
     now: string,
   ): Promise<WriterAcquisition> {
+    this.input.liveDispatch?.writer(session);
     if (this.ownsWriter(session.id)) return { session, replacementCreated: false };
     const inflight = this.writerAcquisitions.get(session.id);
     if (inflight) return inflight;
@@ -189,6 +197,7 @@ export class KimiSessionRuntime {
     clientUserMessageId: string | undefined,
     now: string,
   ): Promise<RelaySessionSnapshot> {
+    this.input.liveDispatch?.writer(session);
     const resource = this.requireResource(session);
     const promptId = clientUserMessageId ?? randomUUID();
     await this.submitPrompt(resource, promptId, text, session.model);
@@ -203,6 +212,7 @@ export class KimiSessionRuntime {
     text: string,
     clientUserMessageId?: string,
   ): Promise<void> {
+    this.input.liveDispatch?.writer(session);
     const resource = this.requireResource(session);
     await this.submitPrompt(resource, clientUserMessageId ?? randomUUID(), text, session.model);
   }
@@ -237,6 +247,7 @@ export class KimiSessionRuntime {
     requestId: string,
     result: unknown,
   ): Promise<boolean> {
+    this.input.liveDispatch?.interaction(sessionId);
     const resource = this.sessions.get(sessionId);
     const pending = resource?.pendingInteractions.get(requestId);
     if (!resource || !pending || pending.settling) return false;
@@ -368,6 +379,7 @@ export class KimiSessionRuntime {
   }
 
   private async ensureServer(session: RelaySessionSnapshot): Promise<KimiServerHandle> {
+    this.input.liveDispatch?.writer(session);
     // A recent thread imported from a running Kimi server carries that server's
     // profile key in `profile`, but no reconstructable effective skill selection.
     // Reuse its exact owner; never collapse it onto the default server or restart
@@ -378,6 +390,7 @@ export class KimiSessionRuntime {
       throw new Error(KIMI_SESSION_NOT_RUNNING);
     }
     const skills = await this.input.skillsFor(session);
+    this.input.liveDispatch?.writer(session);
     return this.input.servers.ensure(
       this.profileKey(session),
       skills ?? session.effectiveSkillSelection?.skills ?? [],
@@ -389,6 +402,7 @@ export class KimiSessionRuntime {
     threadId: string,
     session: RelaySessionSnapshot,
   ): Promise<void> {
+    this.input.liveDispatch?.writer(session);
     await handle.client.post(`/api/v1/sessions/${threadId}/profile`, {
       agent_config: {
         ...(session.model ? { model: session.model } : {}),
@@ -596,6 +610,7 @@ export class KimiSessionRuntime {
     pending: PendingInteraction,
     result: unknown,
   ): Promise<void> {
+    if (result !== 'cancel') this.input.liveDispatch?.interaction(resource.sessionId);
     const handle = this.input.servers.get(resource.profileKey);
     if (!handle) throw new Error(KIMI_SESSION_NOT_RUNNING);
     if (pending.kind === 'approval') {
@@ -614,6 +629,7 @@ export class KimiSessionRuntime {
     const answers = item ? kimiQuestionAnswers(item, result) : null;
     if (!answers) throw new Error('KIMI_INTERACTION_RESPONSE_INVALID');
     try {
+      this.input.liveDispatch?.interaction(resource.sessionId);
       await handle.client.post(
         `/api/v1/sessions/${resource.threadId}/questions/${pending.kimiId}`,
         { answers },
@@ -638,6 +654,7 @@ export class KimiSessionRuntime {
   ): Promise<void> {
     const handle = this.input.servers.get(resource.profileKey);
     if (!handle) throw new Error(KIMI_SESSION_NOT_RUNNING);
+    this.input.liveDispatch?.interaction(resource.sessionId);
     resource.pendingPrompts.push(promptId);
     try {
       await handle.client.post(`/api/v1/sessions/${resource.threadId}/prompts`, {
@@ -658,6 +675,7 @@ export class KimiSessionRuntime {
     // kimi enqueues prompts submitted while a turn runs; steer pulls the
     // queued prompt into the active turn instead of deferring it.
     if (resource.activePromptId) {
+      this.input.liveDispatch?.interaction(resource.sessionId);
       await handle.client.post(`/api/v1/sessions/${resource.threadId}/prompts:steer`, {
         prompt_ids: [promptId],
       });

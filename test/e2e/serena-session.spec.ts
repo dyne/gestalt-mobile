@@ -10,7 +10,7 @@ import { normalizeCodexNotification } from '../../src/server/platform/codex/norm
 import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 
-const evidence = '/tmp/serena-mobile-browser';
+const evidence = process.env.SERENA_EVIDENCE_DIR ?? '/tmp/serena-mobile-browser';
 const failureMessage =
   'Serena is unavailable in this session. Use native code tools. Connection availability will be checked when the runtime resumes.';
 for (const viewport of [

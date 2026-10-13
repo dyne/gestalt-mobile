@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "states": ["idle", "starting", "active", "stopping", "recoveryRequired", "error"],
+  "transitions": [
+    { "from": "idle", "event": "start", "to": "starting" },
+    { "from": "starting", "event": "ready", "to": "active" },
+    { "from": "starting", "event": "stop", "to": "stopping" },
+    { "from": "starting", "event": "fail", "to": "error" },
+    { "from": "active", "event": "stop", "to": "stopping" },
+    { "from": "active", "event": "ownerLost", "to": "stopping" },
+    { "from": "active", "event": "helperLost", "to": "recoveryRequired" },
+    { "from": "stopping", "event": "cleaned", "to": "idle" },
+    { "from": "stopping", "event": "fail", "to": "error" },
+    { "from": "error", "event": "stop", "to": "stopping" },
+    { "from": "recoveryRequired", "event": "stop", "to": "stopping" },
+    { "from": "recoveryRequired", "event": "reconciledResume", "to": "active" },
+    { "from": "starting", "event": "restart", "to": "recoveryRequired" },
+    { "from": "active", "event": "restart", "to": "recoveryRequired" },
+    { "from": "stopping", "event": "restart", "to": "recoveryRequired" },
+    { "from": "error", "event": "restart", "to": "recoveryRequired" },
+    { "from": "recoveryRequired", "event": "restart", "to": "recoveryRequired" }
+  ]
+}
