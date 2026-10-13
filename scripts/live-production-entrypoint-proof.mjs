@@ -90,7 +90,6 @@ const browserSession = previewSecrets.token();
 const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browserSession}` };
 const roles = new Map();
 let seed = true,
-  seedStep = 0,
   owningThread,
   owningNativeSession,
   childThread,
@@ -104,6 +103,29 @@ async function until(check, stage, budget = 30000) {
     await wait(50);
   }
   throw new Error(stage);
+}
+// Never read project configuration or remove metadata: the production resolver
+// still refuses every unproven project layer. Only bounded owned-fixture facts.
+function ownedProjectMetadata() {
+  const folder = join(appRoot, '.codex');
+  try {
+    const info = lstatSync(folder);
+    if (info.isSymbolicLink() || !info.isDirectory() || realpathSync(folder) !== folder)
+      return { directoryPresent: true, canonicalDirectory: false };
+    const names = readdirSync(folder);
+    return {
+      directoryPresent: true,
+      canonicalDirectory: true,
+      ownedByCurrentUser: info.uid === process.getuid(),
+      entryCount: Math.min(names.length, 65),
+      configEntryPresent: names.includes('config.toml'),
+      directoryEntries: names
+        .slice(0, 64)
+        .filter((name) => lstatSync(join(folder, name)).isDirectory()).length,
+    };
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { directoryPresent: false } : { inspectionUnavailable: true };
+  }
 }
 function protect(path) {
   const info = lstatSync(path);
@@ -191,37 +213,6 @@ async function eventFor(body) {
   if (seed) {
     owningThread = metadata.thread_id;
     owningNativeSession = metadata.session_id;
-    if (seedStep++ === 0) {
-      const initialTools = toolsIn([
-        ...(body.tools ?? []),
-        ...(body.input ?? [])
-          .filter((item) => item.type === 'additional_tools')
-          .flatMap((item) => item.tools ?? []),
-      ]);
-      const direct = initialTools.find((tool) => tool.name === 'exec_command');
-      const args = {
-        cmd: '/usr/bin/true',
-        workdir: appRoot,
-        yield_time_ms: 1000,
-        max_output_tokens: 1000,
-      };
-      if (direct) return call(direct, 'seed-exec', args);
-      const code = initialTools.find((tool) => tool.name === 'exec' && tool.type === 'custom');
-      assert.ok(code?.description?.includes('declare const tools: { exec_command('));
-      return call(
-        code,
-        'seed-exec',
-        `text(await tools.exec_command(${JSON.stringify(args)}));`,
-        true,
-      );
-    }
-    assert.ok(
-      body.input.some(
-        (item) =>
-          item.call_id === 'seed-exec' &&
-          ['function_call_output', 'custom_tool_call_output'].includes(item.type),
-      ),
-    );
     return final('seed', 'Seed completed.');
   }
   assert.equal(metadata.session_id, owningNativeSession);
@@ -683,6 +674,7 @@ try {
     }),
     { mode: 0o600 },
   );
+  report.projectMetadata = { beforeOwner: ownedProjectMetadata() };
   report.stage = 'sole-production-composition';
   mobile = await composeRelayApp({
     root: appRoot,
@@ -710,13 +702,16 @@ try {
     sandbox: 'workspace-git',
     approvalPolicy: 'never',
   });
+  report.projectMetadata.afterSessionCreate = ownedProjectMetadata();
   await api('POST', `/api/sessions/${session.id}/turns`, {
     text: 'Seed owning thread persistence.',
   });
   await until(async () => {
     const current = await api('GET', `/api/sessions/${session.id}`);
-    return !current.activeTurnId && report.provider.requestCount === 2;
+    return !current.activeTurnId && report.provider.requestCount === 1;
   }, 'OWNING_SEED_DEADLINE');
+  report.projectMetadata.afterSeed = ownedProjectMetadata();
+  report.checks.persistedBaselineWithoutPreAdmissionCommands = true;
   seed = false;
   assert.equal(owningThread, session.threadId);
   const operation = {

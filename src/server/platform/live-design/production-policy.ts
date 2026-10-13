@@ -64,6 +64,7 @@ export async function prepareProductionPolicy(input: {
   // to be the observed original inventory.
   const files = resolveLiveConfigFiles({
     configuration: observation.configuration,
+    appRoot: app.appRoot,
     threadConfig: observation.threadConfig,
     approved: { mcpServers: {}, plugins: {} },
   });
@@ -114,6 +115,7 @@ export async function prepareProductionPolicy(input: {
     launch: observation.launch,
     launchEnvironment: observation.launchEnvironment,
     configuration: observation.configuration,
+    appRoot: app.appRoot,
     threadConfig: observation.threadConfig,
     skillsConfig: observation.skillsConfig,
     selection,

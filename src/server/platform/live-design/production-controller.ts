@@ -212,6 +212,7 @@ export class ProductionLiveController {
       ];
       resolveLiveConfigFiles({
         configuration: observation.configuration,
+        appRoot: app.appRoot,
         threadConfig: observation.threadConfig,
         approved: { mcpServers: {}, plugins: {} },
       });
@@ -359,6 +360,7 @@ export class ProductionLiveController {
         // Actual source/policy checks run before closing an idle owner or making keys.
         resolveLiveConfigFiles({
           configuration: observation.configuration,
+          appRoot: app.appRoot,
           threadConfig: observation.threadConfig,
           approved: { mcpServers: {}, plugins: {} },
         });

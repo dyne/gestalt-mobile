@@ -6,7 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { constants, closeSync, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 
@@ -67,6 +67,8 @@ export function resolveLiveConfigFiles(input: {
   configuration: unknown;
   threadConfig: Readonly<Record<string, unknown>>;
   approved: LiveApprovedLaunchSurfaces;
+  /** Registered root for bounded diagnostics only; never grants project trust. */
+  appRoot?: string;
 }): readonly LiveConfigFile[] {
   let stage = 'response-shape';
   let launchInventory: unknown;
@@ -240,6 +242,7 @@ export function resolveLiveConfigFiles(input: {
         input.configuration,
         stage,
         error instanceof z.ZodError ? error.issues : [],
+        input.appRoot,
       ),
       liveLaunchInventory: launchInventory,
     });
@@ -247,7 +250,12 @@ export function resolveLiveConfigFiles(input: {
 }
 
 /** Fixed field types/presence only: never paths, config values, or unknown keys. */
-function summarizeLiveConfigShape(value: unknown, stage: string, issues: z.ZodError['issues']) {
+function summarizeLiveConfigShape(
+  value: unknown,
+  stage: string,
+  issues: z.ZodError['issues'],
+  appRoot?: string,
+) {
   const kind = (entry: unknown): string =>
     entry === undefined
       ? 'absent'
@@ -298,6 +306,11 @@ function summarizeLiveConfigShape(value: unknown, stage: string, issues: z.ZodEr
           typeof name.type === 'string' && types.includes(name.type) ? name.type : 'unrecognized',
         nameType: kind(layer.name),
         fileType: kind(name.file),
+        dotCodexFolderType: kind(name.dotCodexFolder),
+        projectFolderIsRegisteredAppMetadata:
+          appRoot && typeof name.dotCodexFolder === 'string'
+            ? name.dotCodexFolder === join(appRoot, '.codex')
+            : null,
         versionType: kind(layer.version),
         configType: kind(layer.config),
         disabledReasonType: kind(layer.disabledReason),

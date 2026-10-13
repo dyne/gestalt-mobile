@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,6 +33,29 @@ function fixture() {
   return { root, path, bytes, layer, input };
 }
 describe('owning configuration inventory', () => {
+  it('refuses native directory-only project provenance even when config.toml does not exist', () => {
+    const { input, layer, root } = fixture();
+    const folder = join(root, '.codex');
+    mkdirSync(folder, { mode: 0o700 });
+    const project = {
+      name: { type: 'project', dotCodexFolder: folder },
+      version: 'native-empty-project-version',
+      config: {},
+    };
+    const observed = { ...input, configuration: { config: {}, layers: [project, layer] } };
+    expect(() => resolveLiveConfigFiles(observed)).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    // Empty-looking config must not conceal the significant subfolders the
+    // native loader intentionally represents with this directory-only layer.
+    mkdirSync(join(folder, 'hooks'), { mode: 0o700 });
+    writeFileSync(join(folder, 'hooks', 'unapproved'), 'unapproved', { mode: 0o600 });
+    expect(() => resolveLiveConfigFiles(observed)).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...observed,
+        configuration: { config: {}, layers: [{ ...project, disabledReason: 'untrusted' }, layer] },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+  });
   it('identifies an unapproved disabled thread MCP surface without logging names or transports', () => {
     const { input } = fixture();
     const canary = 'PRIVATE-TRANSPORT-CANARY';
