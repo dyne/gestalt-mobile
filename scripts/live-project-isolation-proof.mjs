@@ -8,7 +8,18 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+  cpSync,
+  lstatSync,
+  readdirSync,
+} from 'node:fs';
 import { Agent, createServer, request } from 'node:http';
 import { createConnection, createServer as unixServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
@@ -28,14 +39,49 @@ const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-projec
 const app = join(root, 'app');
 const controller = join(root, 'controller');
 const outside = join(root, 'outside');
-for (const path of [app, controller, outside]) mkdirSync(path, { mode: 0o700 });
+const runtimeDirectory = join(root, 'runtime');
+for (const path of [app, controller, outside, runtimeDirectory]) mkdirSync(path, { mode: 0o700 });
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
-const native = pin(process.env.LIVE_HOST_CODEX_BINARY);
-const bwrap = pin(join(dirname(dirname(native.path)), 'codex-resources/bwrap'));
-const node = pin(process.execPath);
-const worker = pin(resolve('dist/server/server/platform/live-design/project-process-worker.js'));
-const impeccable = pin(process.env.LIVE_TEST_IMPECCABLE);
+// npm/toolcache/build outputs can be group-writable. Prepare immutable owned copies;
+// never relax admission or chmod installed tools. Preserve the complete vendor layout.
+const nativeSource = realpathSync(process.env.LIVE_HOST_CODEX_BINARY);
+const vendorSource = dirname(dirname(nativeSource));
+const vendor = join(runtimeDirectory, 'vendor', 'x86_64-unknown-linux-musl');
+cpSync(vendorSource, vendor, {
+  recursive: true,
+  dereference: false,
+  errorOnExist: true,
+  force: false,
+});
+function protectTree(path) {
+  const info = lstatSync(path);
+  assert.equal(info.isSymbolicLink(), false);
+  if (info.isDirectory()) {
+    for (const name of readdirSync(path)) protectTree(join(path, name));
+    chmodSync(path, 0o500);
+  } else {
+    assert.ok(info.isFile());
+    chmodSync(path, info.mode & 0o111 ? 0o500 : 0o400);
+  }
+}
+protectTree(vendor);
+function prepareFile(source, name, executable) {
+  const target = join(runtimeDirectory, name);
+  writeFileSync(target, readFileSync(source), { flag: 'wx', mode: executable ? 0o500 : 0o400 });
+  assert.equal(hash(readFileSync(target)), hash(readFileSync(source)));
+  return pin(target);
+}
+const native = pin(join(vendor, 'bin/codex'));
+const bwrap = pin(join(vendor, 'codex-resources/bwrap'));
+const node = prepareFile(process.execPath, 'node', true);
+const worker = prepareFile(
+  resolve('dist/server/server/platform/live-design/project-process-worker.js'),
+  'project-process-worker.mjs',
+  false,
+);
+const impeccable = prepareFile(process.env.LIVE_TEST_IMPECCABLE, 'impeccable', true);
+protectTree(runtimeDirectory);
 assert.equal(native.sha256, LIVE_CODEX_SHA256);
 assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
 assert.equal(impeccable.sha256, LIVE_HELPER_BINARY_SHA256);
@@ -144,12 +190,14 @@ try {
     hostServer.listen(0, '127.0.0.1', done);
   });
   const hostPort = hostServer.address().port;
-  report.stage = 'actual-pinned-helper-isolation';
+  report.stage = 'helper-construction';
   const helper = new IsolatedProjectProcess(
     specification('helper', impeccable, ['live-server', '--port=12181', '--target', app], []),
   );
   processes.push(helper);
+  report.stage = 'helper-native-start';
   const helperReceipt = await helper.start();
+  report.stage = 'helper-controller-pipe-http';
   assert.equal((await http(helper, helperReceipt, '/health')).status, 200);
   const metadata = JSON.parse(readFileSync(join(app, '.impeccable/live/server.json'), 'utf8'));
   assert.equal(typeof metadata.token, 'string');
@@ -165,13 +213,15 @@ const child=spawnSync(process.execPath,['--input-type=module','-e',${JSON.string
 spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
 createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-type','application/json');r.end(JSON.stringify(checks))}).listen(12182,'127.0.0.1');`;
   writeFileSync(source, code, { mode: 0o600 });
-  report.stage = 'actual-devserver-isolation';
+  report.stage = 'devserver-construction';
   const devserver = new IsolatedProjectProcess(
     specification('devserver', node, [source], [join(app, '.impeccable')], [pin(source)]),
   );
   processes.push(devserver);
+  report.stage = 'devserver-native-start';
   const devReceipt = await devserver.start();
   assert.notEqual(devReceipt.target.namespaces.net, helperReceipt.target.namespaces.net);
+  report.stage = 'devserver-controller-pipe-http';
   const observed = await http(devserver, devReceipt, '/');
   assert.equal(observed.status, 200);
   const checks = JSON.parse(observed.body);
@@ -199,7 +249,27 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.checks.ownedNamespacesAndDescendantsExited = true;
   report.passed = true;
   report.stage = 'complete';
-} catch {
+} catch (error) {
+  const codes = new Set([
+    'LIVE_PROJECT_PROCESS_UNAVAILABLE',
+    'LIVE_PROJECT_RECOVERY_REQUIRED',
+    'ERR_ASSERTION',
+    'ENOENT',
+    'EPERM',
+    'EACCES',
+    'ABORT_ERR',
+  ]);
+  const stage =
+    typeof error?.stage === 'string' &&
+    /^(?:pin-(?:native|bwrap|node|worker|executable|launch-input)-(?:file|permissions|canonical|digest|read)|role|helper-fixed-launch|authority-shape|canonical-root|mutable-runtime-location|private-directory|fixed-launch-value|unapproved-environment|fixed-environment|filesystem-profile|filesystem-write-scope|private-denial-missing|private-denial-overridden|signing-key-create|signing-key-metadata|unspecified)$/.test(
+      error.stage,
+    )
+      ? error.stage
+      : 'unclassified';
+  report.failure = {
+    code: codes.has(error?.code) ? error.code : 'UNCLASSIFIED',
+    validationStage: stage,
+  };
   report.resourceDiagnostics = processes.map((owned) => owned.diagnostics());
   process.exitCode = 1;
 } finally {
@@ -228,5 +298,13 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
       genuine: false,
     }) + '\n',
   );
-  if (cleanup) rmSync(root, { recursive: true, force: true });
+  if (cleanup) {
+    function removable(path) {
+      const info = lstatSync(path);
+      chmodSync(path, info.isDirectory() ? 0o700 : 0o600);
+      if (info.isDirectory()) for (const name of readdirSync(path)) removable(join(path, name));
+    }
+    removable(runtimeDirectory);
+    rmSync(root, { recursive: true, force: true });
+  }
 }

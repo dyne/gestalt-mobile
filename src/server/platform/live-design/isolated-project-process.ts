@@ -68,8 +68,11 @@ export type IsolatedProjectReceipt = Readonly<{
 }>;
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-function failure(): Error {
-  return new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE');
+function failure(stage = 'unspecified'): Error {
+  return Object.assign(new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE'), {
+    code: 'LIVE_PROJECT_PROCESS_UNAVAILABLE',
+    stage,
+  });
 }
 function fifo(path: string): { read: number; write: number } {
   const bootstrap = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
@@ -82,16 +85,17 @@ function fifo(path: string): { read: number; write: number } {
     closeSync(bootstrap);
   }
 }
-function verifyPin(pin: Pin): void {
-  const info = lstatSync(pin.path);
-  if (
-    !info.isFile() ||
-    info.isSymbolicLink() ||
-    info.mode & 0o022 ||
-    realpathSync(pin.path) !== pin.path ||
-    hash(readFileSync(pin.path)) !== pin.sha256
-  )
-    throw failure();
+function verifyPin(pin: Pin, label: string): void {
+  try {
+    const info = lstatSync(pin.path);
+    if (!info.isFile() || info.isSymbolicLink()) throw failure(`pin-${label}-file`);
+    if (info.mode & 0o022) throw failure(`pin-${label}-permissions`);
+    if (realpathSync(pin.path) !== pin.path) throw failure(`pin-${label}-canonical`);
+    if (hash(readFileSync(pin.path)) !== pin.sha256) throw failure(`pin-${label}-digest`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'LIVE_PROJECT_PROCESS_UNAVAILABLE') throw error;
+    throw failure(`pin-${label}-read`);
+  }
 }
 function inside(parent: string, path: string): boolean {
   const suffix = relative(parent, path);
@@ -238,14 +242,14 @@ export class IsolatedProjectProcess {
   constructor(specification: IsolatedProjectSpecification) {
     this.spec = structuredClone(specification);
     const spec = this.spec;
-    if (!['helper', 'devserver'].includes(spec.role)) throw failure();
+    if (!['helper', 'devserver'].includes(spec.role)) throw failure('role');
     if (
       spec.role === 'helper' &&
       (spec.executable.sha256 !== LIVE_HELPER_BINARY_SHA256 ||
         JSON.stringify(spec.argv) !==
           JSON.stringify(['live-server', `--port=${spec.port}`, '--target', spec.appRoot]))
     )
-      throw failure();
+      throw failure('helper-fixed-launch');
     if (
       process.platform !== 'linux' ||
       process.arch !== 'x64' ||
@@ -260,20 +264,21 @@ export class IsolatedProjectProcess {
       spec.argv.length > 64 ||
       spec.launchInputs.length > 64
     )
-      throw failure();
+      throw failure('authority-shape');
     if (
       realpathSync(spec.appRoot) !== spec.appRoot ||
       realpathSync(spec.privateDirectory) !== spec.privateDirectory ||
       inside(spec.appRoot, spec.privateDirectory)
     )
-      throw failure();
+      throw failure('canonical-root');
     for (const pin of [spec.native, spec.bwrap, spec.node, spec.worker])
-      if (inside(spec.appRoot, pin.path)) throw failure();
+      if (inside(spec.appRoot, pin.path)) throw failure('mutable-runtime-location');
     const info = lstatSync(spec.privateDirectory);
     if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o700)
-      throw failure();
+      throw failure('private-directory');
     for (const value of [...spec.argv, ...Object.values(spec.environment)])
-      if (typeof value !== 'string' || value.includes('\0') || value.length > 8192) throw failure();
+      if (typeof value !== 'string' || value.includes('\0') || value.length > 8192)
+        throw failure('fixed-launch-value');
     // Inherited credentials, native config and Node injection never enter project processes.
     for (const name of Object.keys(spec.environment))
       if (
@@ -287,14 +292,14 @@ export class IsolatedProjectProcess {
           'IMPECCABLE_LIVE_PUBLIC_BASE_URL',
         ].includes(name)
       )
-        throw failure();
+        throw failure('unapproved-environment');
     if (
       spec.environment.PATH !== '/usr/bin:/bin' ||
       !spec.environment.HOME ||
       spec.environment.TMPDIR !== '/tmp'
     )
-      throw failure();
-    if (spec.filesystem.type !== 'restricted') throw failure();
+      throw failure('fixed-environment');
+    if (spec.filesystem.type !== 'restricted') throw failure('filesystem-profile');
     for (const entry of spec.filesystem.entries) {
       if (entry.access !== 'write') continue;
       if (
@@ -304,7 +309,7 @@ export class IsolatedProjectProcess {
         continue;
       if (entry.path.type === 'special' && ['slash_tmp', 'tmpdir'].includes(entry.path.value.kind))
         continue;
-      throw failure();
+      throw failure('filesystem-write-scope');
     }
     for (const path of [spec.privateDirectory, ...spec.protectedPaths, '/proc']) {
       if (
@@ -313,10 +318,10 @@ export class IsolatedProjectProcess {
             entry.access === 'deny' && entry.path.type === 'path' && entry.path.path === path,
         )
       )
-        throw failure();
+        throw failure('private-denial-missing');
       for (const entry of spec.filesystem.entries)
         if (entry.access !== 'deny' && entry.path.type === 'path' && inside(path, entry.path.path))
-          throw failure();
+          throw failure('private-denial-overridden');
     }
     this.verifyInputs();
     this.specificationDigest = hash(JSON.stringify(spec));
@@ -324,7 +329,7 @@ export class IsolatedProjectProcess {
     try {
       writeFileSync(keyPath, randomBytes(32), { flag: 'wx', mode: 0o600 });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw failure();
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw failure('signing-key-create');
     }
     const keyStat = lstatSync(keyPath);
     if (
@@ -334,20 +339,14 @@ export class IsolatedProjectProcess {
       (keyStat.mode & 0o777) !== 0o600 ||
       keyStat.size !== 32
     )
-      throw failure();
+      throw failure('signing-key-metadata');
     this.key = readFileSync(keyPath);
   }
 
   private verifyInputs(): void {
-    for (const pin of [
-      this.spec.native,
-      this.spec.bwrap,
-      this.spec.node,
-      this.spec.worker,
-      this.spec.executable,
-      ...this.spec.launchInputs,
-    ])
-      verifyPin(pin);
+    for (const label of ['native', 'bwrap', 'node', 'worker', 'executable'] as const)
+      verifyPin(this.spec[label], label);
+    for (const pin of this.spec.launchInputs) verifyPin(pin, 'launch-input');
   }
   private send(message: unknown): void {
     if (this.revoked || !this.input || this.input.destroyed) throw failure();
