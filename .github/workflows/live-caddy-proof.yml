@@ -147,6 +147,7 @@ jobs:
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
+          LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
           LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |

@@ -67,6 +67,9 @@ const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(pat
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
 const rootIdentity = lstatSync(root);
 const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
+const constructionOnly = process.env.LIVE_PRODUCTION_CONSTRUCTION_ONLY === '1';
+assert.ok(!(installationOnly && constructionOnly));
+if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
 if (installationOnly) report.proofKind = 'installation-only-no-native-launch';
 const appRoot = join(root, 'app'),
   privateRoot = join(root, 'private'),
@@ -600,11 +603,13 @@ try {
     }),
     { mode: 0o600 },
   );
-  caddy = spawn(process.env.LIVE_TEST_CADDY, ['run', '--config', caddyConfig], {
-    env: { PATH: '/usr/bin:/bin', HOME: caddyRoot },
-    stdio: 'ignore',
-  });
-  await until(() => existsSync(caddySocket), 'CADDY_START_DEADLINE');
+  if (!constructionOnly) {
+    caddy = spawn(process.env.LIVE_TEST_CADDY, ['run', '--config', caddyConfig], {
+      env: { PATH: '/usr/bin:/bin', HOME: caddyRoot },
+      stdio: 'ignore',
+    });
+    await until(() => existsSync(caddySocket), 'CADDY_START_DEADLINE');
+  }
   const auth = new SqliteAuthorizationStore(home, rp);
   const owner = auth.initializeOwner(randomBytes(32));
   auth.claimFirstDevice(owner, {
@@ -684,12 +689,15 @@ try {
     relyingParty: rp,
     liveConfigFile: configPath,
     installedCodexVersion: 'codex-cli 0.161.0',
+    startAppServers: true,
     xerj: 'off',
     profiles: {
       list: async () => [],
       require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
     },
   });
+  report.checks.soleProductionCompositionConstructed = true;
+  if (constructionOnly) throw new Error('CONSTRUCTION_ONLY_COMPLETE');
   report.stage = 'actual-owning-session';
   const session = await api('POST', '/api/sessions', {
     workspaceId: workspaceId(appRoot),
@@ -841,9 +849,12 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
-  if (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') {
+  if (
+    (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') ||
+    (constructionOnly && error?.message === 'CONSTRUCTION_ONLY_COMPLETE')
+  ) {
     report.passed = true;
-    report.stage = 'installation-only-complete';
+    report.stage = installationOnly ? 'installation-only-complete' : 'construction-only-complete';
   } else {
     generationDirectory ??= readdirSync(controller)
       .filter((name) => name.startsWith('generation-'))
@@ -854,6 +865,15 @@ try {
     report.failure = {
       stage: report.stage,
       installationStage: report.installationStage,
+      dependency: [
+        'owning-runtime-disabled',
+        'owning-runtime',
+        'event-authority',
+        'authenticated-preview',
+        'preview-connections',
+      ].includes(error?.liveDependency)
+        ? error.liveDependency
+        : undefined,
       code: /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code ?? '')
         ? error.code
         : [
@@ -919,7 +939,7 @@ try {
         processesClosed: !mobile && !caddy && !provider.listening,
       });
       report.disposableTreeRemoved = true;
-      if (installationOnly || report.failure?.stage === 'installation')
+      if (installationOnly || constructionOnly || report.failure?.stage === 'installation')
         report.cleanupComplete = true;
     } catch (error) {
       report.disposableCleanupFailure = [

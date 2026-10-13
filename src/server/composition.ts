@@ -253,6 +253,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       !options.relyingParty.publicOrigin.startsWith('https://'))
   )
     throw new Error('LIVE_PRODUCTION_COMPOSITION_UNAVAILABLE');
+  if (options.liveConfigFile && options.startAppServers !== true)
+    throw Object.assign(new Error('LIVE_DEPENDENCIES_UNAVAILABLE'), {
+      liveDependency: 'owning-runtime-disabled',
+    });
   const productionLive = options.liveConfigFile
     ? await createProductionLiveController(options.liveConfigFile)
     : undefined;
@@ -1875,7 +1879,15 @@ async function composeRelayAppOwned(
   }
   if (productionLive) {
     if (!runtime || !liveEventAuthority || !liveDesign || !previewConnections)
-      throw new Error('LIVE_DEPENDENCIES_UNAVAILABLE');
+      throw Object.assign(new Error('LIVE_DEPENDENCIES_UNAVAILABLE'), {
+        liveDependency: !runtime
+          ? 'owning-runtime'
+          : !liveEventAuthority
+            ? 'event-authority'
+            : !liveDesign
+              ? 'authenticated-preview'
+              : 'preview-connections',
+      });
     productionLive.bindProduction(
       {
         runtime,
