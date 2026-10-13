@@ -66,6 +66,9 @@ lines.on('line', (line) => {
           spec.appRoot,
           '--permission-profile',
           JSON.stringify(spec.permissionProfile),
+          // The native default mounts fresh procfs AFTER deny masks. Preserve the explicit
+          // /proc denial while retaining its fresh PID namespace; never inherit host procfs.
+          '--no-proc',
           '--',
           spec.executable,
           ...spec.argv,

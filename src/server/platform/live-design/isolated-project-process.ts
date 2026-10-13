@@ -32,6 +32,7 @@ import { observeLiveProcess, type LiveProcessIdentity } from './process-identity
 import { observeLoopbackListener } from './registered-dev-servers.js';
 import { isolatedProjectSocketFilter } from './project-network-filter.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
+import { observeNativeDeniedPath as masked } from './project-native-mask.js';
 
 type Pin = Readonly<{ path: string; sha256: string }>;
 export type IsolatedProjectSpecification = Readonly<{
@@ -121,20 +122,6 @@ function confined(pid: number): boolean {
   const s = status(pid);
   return /^0+$/.test(s.capabilities) && s.noNewPrivileges === '1' && s.seccomp === '2';
 }
-function masked(pid: number, path: string): boolean {
-  const actual = `/proc/${pid}/root${path}`;
-  try {
-    const info = lstatSync(path);
-    if (info.isDirectory()) readdirSync(actual);
-    else readFileSync(actual);
-    return false;
-  } catch (error) {
-    return ['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR'].includes(
-      (error as NodeJS.ErrnoException).code ?? '',
-    );
-  }
-}
-
 class ProjectPipeSocket extends Duplex {
   private idleMs = 0;
   private idleTimer?: ReturnType<typeof setTimeout>;
@@ -606,24 +593,21 @@ export class IsolatedProjectProcess {
     if (!relay || !target) return undefined;
     this.diagnostic.relayObserved = true;
     this.diagnostic.targetObserved = true;
-    if (targets !== 1) throw failure();
-    if (
-      !confined(relay.pid) ||
-      !confined(target.pid) ||
-      relay.namespaces.pid === host.namespaces.pid ||
-      relay.namespaces.mnt === host.namespaces.mnt ||
-      target.namespaces.pid === relay.namespaces.pid ||
-      target.namespaces.mnt === relay.namespaces.mnt ||
-      target.namespaces.user === relay.namespaces.user ||
-      target.uid !== host.uid
-    )
-      throw failure();
-    if (
-      ![this.spec.privateDirectory, ...this.spec.protectedPaths, '/proc'].every((path) =>
-        masked(target!.pid, path),
-      )
-    )
-      throw failure();
+    if (targets !== 1) throw failure('native-listener-ambiguity');
+    const attestations = {
+      'relay-privileges': confined(relay.pid),
+      'target-privileges': confined(target.pid),
+      'relay-pid-isolation': relay.namespaces.pid !== host.namespaces.pid,
+      'relay-mount-isolation': relay.namespaces.mnt !== host.namespaces.mnt,
+      'target-pid-isolation': target.namespaces.pid !== relay.namespaces.pid,
+      'target-mount-isolation': target.namespaces.mnt !== relay.namespaces.mnt,
+      'target-user-isolation': target.namespaces.user !== relay.namespaces.user,
+      'target-host-uid': target.uid === host.uid,
+      'native-private-mask': masked(target.pid, this.spec.privateDirectory),
+      'native-protected-mask': this.spec.protectedPaths.every((path) => masked(target!.pid, path)),
+      'native-proc-mask': masked(target.pid, '/proc'),
+    };
+    for (const [stage, passed] of Object.entries(attestations)) if (!passed) throw failure(stage);
     this.diagnostic.nativeMasksObserved = true;
     return { relay, target };
   }

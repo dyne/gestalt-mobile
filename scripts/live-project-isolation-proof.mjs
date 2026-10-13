@@ -261,7 +261,7 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   ]);
   const stage =
     typeof error?.stage === 'string' &&
-    /^(?:pin-(?:native|bwrap|node|worker|executable|launch-input)-(?:file|permissions|canonical|digest|read)|role|helper-fixed-launch|authority-shape|canonical-root|mutable-runtime-location|private-directory|fixed-launch-value|unapproved-environment|fixed-environment|filesystem-profile|filesystem-write-scope|private-denial-missing|private-denial-overridden|signing-key-create|signing-key-metadata|unspecified)$/.test(
+    /^(?:pin-(?:native|bwrap|node|worker|executable|launch-input)-(?:file|permissions|canonical|digest|read)|role|helper-fixed-launch|authority-shape|canonical-root|mutable-runtime-location|private-directory|fixed-launch-value|unapproved-environment|fixed-environment|filesystem-profile|filesystem-write-scope|private-denial-missing|private-denial-overridden|signing-key-create|signing-key-metadata|(?:relay|target)-(?:privileges|pid-isolation|mount-isolation|user-isolation|host-uid)|native-(?:listener-ambiguity|private-mask|protected-mask|proc-mask)|unspecified)$/.test(
       error.stage,
     )
       ? error.stage
