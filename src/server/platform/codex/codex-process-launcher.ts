@@ -9,7 +9,13 @@ import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { JsonRpcClient } from './json-rpc-client.js';
 import { profileAppServerCommand } from '../catalog/profile-command.js';
-import { observeLiveProcess, type LiveProcessIdentity } from '../live-design/process-identity.js';
+import {
+  observeLiveProcess,
+  observeOwnedDescendants,
+  observedBirthExited,
+  type OwnedProcessBirth,
+  type LiveProcessIdentity,
+} from '../live-design/process-identity.js';
 import { LIVE_CODEX_SHA256 } from '../live-design/native-contract.js';
 
 export type CodexProcess = {
@@ -19,6 +25,8 @@ export type CodexProcess = {
   onExit(listener: () => void): () => void;
   waitForExit(): Promise<void>;
   observeLiveLaunch(): LiveProcessIdentity;
+  observeLiveEnvironment(): Readonly<{ tmpdir: string; home: string; codexHome: string }>;
+  observeLiveDescendants(): void;
 };
 
 export function launchCodexAppServer(
@@ -48,11 +56,12 @@ export function launchCodexAppServer(
       throw new Error('LIVE_RUNTIME_BINARY_UNVERIFIED');
     }
   }
+  const environment = trusted
+    ? { ...trusted.environment, ...input.environment }
+    : codexChildEnvironment(input.environment);
   const child = spawn(trusted?.executable ?? launch.command, launch.args, {
     cwd: input.cwd,
-    env: trusted
-      ? { ...trusted.environment, ...input.environment }
-      : codexChildEnvironment(input.environment),
+    env: environment,
     shell: false,
     stdio: 'pipe',
   });
@@ -61,10 +70,42 @@ export function launchCodexAppServer(
   // Positive lifetime evidence from this exact ChildProcess; a missing PID is not an exit receipt.
   const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let birth: LiveProcessIdentity | undefined;
+  const descendants = new Map<string, OwnedProcessBirth>();
+  let treeObserved = false,
+    treeFailed = false;
+  const observeTree = () => {
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null)
+      throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
+    const owner = observeLiveProcess(child.pid);
+    birth ??= owner;
+    if (JSON.stringify(owner) !== JSON.stringify(birth))
+      throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
+    for (const identity of observeOwnedDescendants(owner))
+      descendants.set(`${identity.pid}:${identity.birth}`, identity);
+    treeObserved = true;
+  };
   return {
     child,
     rpc,
-    waitForExit: () => exited,
+    waitForExit: async () => {
+      await exited;
+      if (!treeObserved || treeFailed) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
+      const deadline = Date.now() + 5000;
+      while ([...descendants.values()].some((identity) => !observedBirthExited(identity))) {
+        if (Date.now() >= deadline) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    },
+    observeLiveDescendants: observeTree,
+    observeLiveEnvironment: () => {
+      if (!trusted || !environment.TMPDIR || !environment.HOME || !environment.CODEX_HOME)
+        throw new Error('LIVE_RUNTIME_ENVIRONMENT_UNVERIFIED');
+      return Object.freeze({
+        tmpdir: environment.TMPDIR,
+        home: environment.HOME,
+        codexHome: environment.CODEX_HOME,
+      });
+    },
     observeLiveLaunch: () => {
       if (!child.pid || child.exitCode !== null || child.signalCode !== null)
         throw new Error('LIVE_RUNTIME_UNAVAILABLE');
@@ -74,7 +115,16 @@ export function launchCodexAppServer(
         throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
       return current;
     },
-    close: () => child.kill('SIGTERM'),
+    close: () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          observeTree();
+        } catch {
+          if (!treeObserved || !birth || !observedBirthExited(birth)) treeFailed = true;
+        }
+        child.kill('SIGTERM');
+      }
+    },
     onExit: (listener) => {
       child.once('exit', listener);
       return () => child.off('exit', listener);

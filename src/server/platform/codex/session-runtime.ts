@@ -11,6 +11,7 @@ import {
 import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
 import type { LiveProcessIdentity } from '../live-design/process-identity.js';
 import { randomUUID } from 'node:crypto';
+import { lstatSync, realpathSync } from 'node:fs';
 import {
   createPlanMeasurementSnapshot,
   type RateLimitWindow,
@@ -70,6 +71,8 @@ export type AppServer = {
   waitForExit?(): Promise<void>;
   /** Trusted controller observation only; no raw host RPC crosses this port. */
   observeLiveLaunch?(): LiveProcessIdentity;
+  observeLiveEnvironment?(): Readonly<{ tmpdir: string; home: string; codexHome: string }>;
+  observeLiveDescendants?(): void;
 };
 
 export type AppServerLaunchInput = {
@@ -258,11 +261,23 @@ export class CodexSessionRuntime {
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
     private readonly liveDispatch?: LiveDispatchPolicy,
+    /** Private composition observation after actual start/resume, never a readiness grant. */
+    private readonly onOwnerStarted?: (session: RelaySessionSnapshot) => Promise<void>,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
   }
   private readonly sessions = new Map<string, SessionResource>();
+  private readonly liveConfigurations = new Map<
+    string,
+    {
+      modelConfig: Record<string, unknown>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    }
+  >();
+  liveOwnerIds(): readonly string[] {
+    return [...this.sessions.keys()];
+  }
   private readonly historyReads = new Map<
     string,
     Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
@@ -299,6 +314,7 @@ export class CodexSessionRuntime {
   /** Reads only the already-owned process. Admission must never launch a replacement reader. */
   async inspectLiveAdmission(session: RelaySessionSnapshot): Promise<{
     launch: LiveProcessIdentity;
+    launchEnvironment: Readonly<{ tmpdir: string; home: string; codexHome: string }> | null;
     configuration: unknown;
     thread: unknown;
     mcp: unknown;
@@ -349,6 +365,7 @@ export class CodexSessionRuntime {
       throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
     return {
       launch: before,
+      launchEnvironment: resource.process.observeLiveEnvironment?.() ?? null,
       configuration,
       thread,
       mcp,
@@ -378,12 +395,14 @@ export class CodexSessionRuntime {
       await this.verifyRetrieval(resource, session, true);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return this.withEffectiveRetrieval(
+      const started = this.withEffectiveRetrieval(
         RelaySession.rehydrate(session)
           .bindThread(resource.threadId!, now)
           .supportsAttentionTool(now).snapshot,
         resource,
       );
+      await this.onOwnerStarted?.(started);
+      return started;
     } catch (error) {
       resource.dispose();
       throw error;
@@ -431,7 +450,81 @@ export class CodexSessionRuntime {
       )
         throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
     };
-    assertHeld();
+    await this.releaseVerifiedOwner(session, assertHeld);
+  }
+
+  /** Read-only actual root/tree/terminal/approval observation through the existing owner. */
+  async inspectLiveQuiescence(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    threadIds: readonly string[];
+    outstanding: {
+      roots: number;
+      descendants: number;
+      commands: number;
+      approvals: number;
+      unknown: boolean;
+    };
+  }> {
+    const observed = await this.verifiedQuiescence(session, () => {});
+    return {
+      launch: observed.birth,
+      threadIds: observed.threads,
+      outstanding: { roots: 0, descendants: 0, commands: 0, approvals: 0, unknown: false },
+    };
+  }
+
+  /** Ordinary writer reservation is still held during controller preflight.
+   * This is accessible only to the private controller lifecycle, never a model tool.
+   */
+  async releaseLivePreparation(session: RelaySessionSnapshot): Promise<void> {
+    if (!this.liveDispatch) throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    await this.releaseVerifiedOwner(session, () => this.liveDispatch!.writer(session));
+  }
+  /** Revoke-first lifecycle cancellation of this exact owning process. No PID
+   * signaling or successor adoption; failure retains recovery authority locks.
+   */
+  async abortLiveOwner(
+    session: RelaySessionSnapshot,
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+    },
+  ): Promise<void> {
+    const run = authority.owners.assert(authority.fence);
+    if (
+      run.relayId !== session.id ||
+      run.rootThreadId !== session.threadId ||
+      !['starting', 'stopping', 'recoveryRequired'].includes(run.state)
+    )
+      throw new Error('LIVE_GENERATION_STALE');
+    const resource = this.sessions.get(session.id);
+    if (
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.waitForExit ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    resource.process.observeLiveLaunch();
+    resource.process.observeLiveDescendants?.();
+    resource.beginExplicitShutdown();
+    resource.dispose();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        resource.process.waitForExit(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')), 10000);
+        }),
+      ]);
+      authority.owners.assert(authority.fence);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async verifiedQuiescence(session: RelaySessionSnapshot, assertAuthority: () => void) {
+    assertAuthority();
     const resource = this.sessions.get(session.id);
     if (
       session.provider !== 'codex' ||
@@ -446,7 +539,7 @@ export class CodexSessionRuntime {
       throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
     const birth = resource.process.observeLiveLaunch();
     const bounded = async (work: () => Promise<unknown>): Promise<unknown> => {
-      assertHeld();
+      assertAuthority();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
@@ -458,7 +551,7 @@ export class CodexSessionRuntime {
             );
           }),
         ]);
-        assertHeld();
+        assertAuthority();
         return result;
       } finally {
         if (timer) clearTimeout(timer);
@@ -508,7 +601,16 @@ export class CodexSessionRuntime {
       JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(birth)
     )
       throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+
+    return { resource, birth, threads, bounded };
+  }
+  private async releaseVerifiedOwner(
+    session: RelaySessionSnapshot,
+    assertAuthority: () => void,
+  ): Promise<void> {
+    const { resource, threads, bounded } = await this.verifiedQuiescence(session, assertAuthority);
     resource.beginExplicitShutdown();
+    resource.process.observeLiveDescendants?.();
     try {
       for (const threadId of threads.reverse()) {
         const result = asRecord(
@@ -1446,9 +1548,109 @@ export class CodexSessionRuntime {
     return (await this.restoreWithOutcome(session, now)).session;
   }
 
+  /** Private claim-fenced composition calls this only after actual owner exit.
+   * A missing rollout fails; Live never silently creates a replacement thread.
+   */
+  async restoreLiveOwner(
+    session: RelaySessionSnapshot,
+    now: string,
+    configuration: {
+      modelConfig: Readonly<Record<string, unknown>>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    },
+  ): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session);
+    if (!session.threadId || this.sessions.has(session.id))
+      throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    this.liveConfigurations.set(session.id, structuredClone(configuration));
+    const result = await this.restoreWithOutcome(session, now, true);
+    if (result.replacementCreated || result.session.threadId !== session.threadId)
+      throw new Error('LIVE_SAME_THREAD_RESUME_UNAVAILABLE');
+    return result.session;
+  }
+
+  /** Fixed existing-owner admission probe. Never exposes a generic raw MCP call port. */
+  async probeLiveContext(session: RelaySessionSnapshot, privatePath: string): Promise<void> {
+    this.liveDispatch?.writer(session);
+    // ENOENT inside the sandbox is evidence only for a real, protected host file.
+    const canary = lstatSync(privatePath);
+    if (
+      !canary.isFile() ||
+      canary.isSymbolicLink() ||
+      canary.size !== 32 ||
+      canary.uid !== process.getuid?.() ||
+      (canary.mode & 0o077) !== 0 ||
+      realpathSync(privatePath) !== privatePath
+    )
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const resource = this.sessions.get(session.id);
+    if (
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const before = resource.process.observeLiveLaunch();
+    const code = `const fs = require('node:fs'); let denied = false; try { fs.readFileSync(${JSON.stringify(privatePath)}); } catch (e) { denied = ['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code); } console.log('LIVE_ADMISSION_PROBE_V1:'+JSON.stringify({privateReadDenied:denied}));`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: unknown;
+    try {
+      result = await Promise.race([
+        resource.process.rpc.request('mcpServer/tool/call', {
+          threadId: session.threadId,
+          server: 'context-mode',
+          tool: 'ctx_execute',
+          arguments: {
+            language: 'javascript',
+            code,
+            intent: 'Verify isolated Live private-state denial',
+          },
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE')), 30000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (
+      this.sessions.get(session.id) !== resource ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(before)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    const afterCanary = lstatSync(privatePath);
+    if (
+      afterCanary.dev !== canary.dev ||
+      afterCanary.ino !== canary.ino ||
+      afterCanary.size !== canary.size ||
+      afterCanary.mtimeMs !== canary.mtimeMs ||
+      afterCanary.ctimeMs !== canary.ctimeMs
+    )
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const reply = asRecord(result);
+    if (reply?.isError || !Array.isArray(reply?.content))
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const text = reply.content
+      .filter((item: unknown) => asRecord(item)?.type === 'text')
+      .map((item: unknown) => asRecord(item)?.text)
+      .join('\n');
+    if (text.length > 65536) throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const matches = [...text.matchAll(/LIVE_ADMISSION_PROBE_V1:(\{[^\n]*\})/g)];
+    if (matches.length !== 1) throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    try {
+      const proof = JSON.parse(matches[0]![1]!);
+      if (proof.privateReadDenied !== true || Object.keys(proof).length !== 1) throw new Error();
+    } catch {
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    }
+    this.liveDispatch?.writer(session);
+  }
+
   async restoreWithOutcome(
     session: RelaySessionSnapshot,
     now: string,
+    requireSameThread = false,
   ): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const resource = await this.createResource(session);
@@ -1485,6 +1687,7 @@ export class CodexSessionRuntime {
           replacementCreated: false,
         };
       } catch (error) {
+        if (requireSameThread) throw new Error('LIVE_SAME_THREAD_RESUME_UNAVAILABLE');
         if (!canRebindMissingRollout(session, error)) throw error;
         missingRollout = error;
         const replacementThreadId = await this.startThread(
@@ -1502,7 +1705,9 @@ export class CodexSessionRuntime {
       this.sessions.get(session.id)?.dispose();
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return { ...result, session: this.withEffectiveRetrieval(result.session, resource) };
+      const restored = this.withEffectiveRetrieval(result.session, resource);
+      await this.onOwnerStarted?.(restored);
+      return { ...result, session: restored };
     } catch (error) {
       resource.dispose();
       throw error;
@@ -1649,6 +1854,12 @@ export class CodexSessionRuntime {
       ...(process.observeLiveLaunch
         ? { observeLiveLaunch: process.observeLiveLaunch.bind(process) }
         : {}),
+      ...(process.observeLiveEnvironment
+        ? { observeLiveEnvironment: process.observeLiveEnvironment.bind(process) }
+        : {}),
+      ...(process.observeLiveDescendants
+        ? { observeLiveDescendants: process.observeLiveDescendants.bind(process) }
+        : {}),
       rpc: {
         request: async (method, params) => {
           const effect = !reads.has(method) && !safeStop.has(method);
@@ -1685,8 +1896,13 @@ export class CodexSessionRuntime {
       : undefined;
     try {
       const token = randomUUID();
-      const skillsConfig = await this.resolveSkills?.(session);
-      const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
+      const fixed = this.liveConfigurations.get(session.id);
+      const skillsConfig = fixed
+        ? structuredClone(fixed.skillsConfig)
+        : await this.resolveSkills?.(session);
+      const modelConfig = fixed
+        ? structuredClone(fixed.modelConfig)
+        : ((await this.resolveModelConfig?.(session)) ?? {});
       const process = this.launchGuarded(session, {
         profile: session.profile,
         cwd: session.workspacePath,

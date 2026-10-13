@@ -34,7 +34,7 @@ const packagePin = z
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
-const installationSchema = z
+export const installationSchema = z
   .object({
     manager: pin,
     node: pin,
@@ -126,6 +126,10 @@ export class InstalledLivePolicy {
     for (const entry of [...packages, runtime])
       if (measureInstalledLiveTree(entry.root) !== entry.sha256)
         throw new Error('LIVE_INSTALLATION_UNVERIFIED');
+  }
+  /** Installed-byte validation only; never a readiness/process admission claim. */
+  validateInstallation(): void {
+    this.verifyInstallation();
   }
   private async command(
     binary: string,

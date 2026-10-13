@@ -36,6 +36,7 @@ Options:
   --public-origin <origin> Exact HTTPS browser origin for passkeys (localhost may use HTTP)
   --disable-passkey-auth Disable passkey access control (unsafe on shared or network hosts)
   --data-dir <path>  Directory for persistent application data
+  --live-config <path> Private host configuration for production Live integration
   --icon <path>      SVG or PNG used as the installed PWA application icon
   --xerj <mode>     Source discovery: manual (default, no indexing), auto, off
   --skills <profile> Use a global skill profile for every session
@@ -353,6 +354,7 @@ export async function runCli(dependencies: CliDependencies = {}): Promise<number
     root: config.root,
     xerj: config.xerj,
     dataDir: config.dataDir,
+    liveConfigFile: config.liveConfigFile,
     relyingParty: config.relyingParty,
     passkeyAuthEnabled: config.passkeyAuthEnabled,
     staticDir: packagedClientDir(moduleUrl),

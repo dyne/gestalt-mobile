@@ -43,6 +43,7 @@ export const launchBody = {
 export async function previewAuthFixture(
   cleanup: (() => void | Promise<void>)[],
   revalidationMs = 5000,
+  control?: PreviewGrantDependencies['control'],
 ) {
   const home = mkdtempSync(join(tmpdir(), 'live-auth-'));
   cleanup.push(() => rmSync(home, { recursive: true, force: true }));
@@ -86,6 +87,7 @@ export async function previewAuthFixture(
     owners: { read: (id) => (id === 'relay' ? audience : null) },
     now: () => new Date(time),
     mobileOrigin,
+    control,
   };
   const connections = new PreviewConnections(deps, revalidationMs);
   deps.revocations = connections;

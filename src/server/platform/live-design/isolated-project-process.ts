@@ -209,6 +209,11 @@ export class IsolatedProjectProcess {
   private descriptors: number[] = [];
   private channels = new Map<number, ProjectPipeSocket>();
   private nextChannel = 0;
+  private nextCommand = 0;
+  private readonly commands = new Map<
+    number,
+    { resolve(value: unknown): void; reject(error: Error): void }
+  >();
   private exited?: Promise<void>;
   private diagnostic = {
     stage: 'constructed',
@@ -230,6 +235,21 @@ export class IsolatedProjectProcess {
 
   constructor(specification: IsolatedProjectSpecification) {
     this.spec = structuredClone(specification);
+    if (this.spec.role === 'helper') {
+      const fixed = {
+        IMPECCABLE_LIVE_COPY_AGENT: 'chat',
+        IMPECCABLE_LIVE_DEBUG_EVENTS: '0',
+        IMPECCABLE_SELF: this.spec.executable.path,
+      };
+      if (
+        Object.entries(fixed).some(
+          ([name, value]) =>
+            this.spec.environment[name] !== undefined && this.spec.environment[name] !== value,
+        )
+      )
+        throw failure('unapproved-environment');
+      this.spec = { ...this.spec, environment: { ...this.spec.environment, ...fixed } };
+    }
     const spec = this.spec;
     if (!['helper', 'devserver'].includes(spec.role)) throw failure('role');
     if (
@@ -279,6 +299,9 @@ export class IsolatedProjectProcess {
           'NODE_ENV',
           'IMPECCABLE_LIVE_CONFIG',
           'IMPECCABLE_LIVE_PUBLIC_BASE_URL',
+          ...(spec.role === 'helper'
+            ? ['IMPECCABLE_LIVE_COPY_AGENT', 'IMPECCABLE_LIVE_DEBUG_EVENTS', 'IMPECCABLE_SELF']
+            : []),
         ].includes(name)
       )
         throw failure('unapproved-environment');
@@ -346,6 +369,9 @@ export class IsolatedProjectProcess {
   private revokeChannels(): void {
     this.revoked = true;
     this.receipt = undefined;
+    for (const command of this.commands.values())
+      command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+    this.commands.clear();
     for (const stream of this.channels.values()) {
       stream.on('error', () => {});
       stream.destroy(failure());
@@ -476,6 +502,14 @@ export class IsolatedProjectProcess {
             : 'invalid-worker-response';
           throw failure();
         }
+        if (message.type === 'helper-command-result' || message.type === 'helper-command-failed') {
+          const command = this.commands.get(Number(message.requestId));
+          if (!command) return;
+          this.commands.delete(Number(message.requestId));
+          if (message.type === 'helper-command-result') command.resolve(message.result);
+          else command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+          return;
+        }
         const stream = this.channels.get(Number(message.id));
         if (!stream) return;
         if (message.type === 'connected') stream.emit('connect');
@@ -501,6 +535,7 @@ export class IsolatedProjectProcess {
       this.send({
         op: 'launch',
         specification: {
+          role: spec.role,
           native: spec.native.path,
           executable: spec.executable.path,
           argv: spec.argv,
@@ -663,6 +698,48 @@ export class IsolatedProjectProcess {
     this.channels.set(id, stream);
     this.send({ op: 'open', id });
     return stream;
+  }
+  /** Private canonical helper CLI only, in the SAME owned loopback namespace.
+   * The pinned worker independently rejects command/argument substitution and
+   * invokes each foreground command with native filesystem enforcement.
+   */
+  async helperCommand(
+    receipt: IsolatedProjectReceipt,
+    args: readonly string[],
+    deadlineMs = 20000,
+  ): Promise<unknown> {
+    this.verify(receipt);
+    if (
+      this.spec.role !== 'helper' ||
+      this.commands.size ||
+      !Number.isInteger(deadlineMs) ||
+      deadlineMs < 1000 ||
+      deadlineMs > 660000
+    )
+      throw new Error('LIVE_HELPER_COMMAND_UNAVAILABLE');
+    const requestId = ++this.nextCommand;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await new Promise<unknown>((resolve, reject) => {
+        this.commands.set(requestId, { resolve, reject });
+        timer = setTimeout(() => {
+          this.revokeChannels();
+          this.child?.kill('SIGTERM');
+          reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+        }, deadlineMs + 1000);
+        try {
+          this.send({ op: 'helper-command', requestId, args: [...args], deadlineMs });
+        } catch {
+          this.commands.delete(requestId);
+          reject(new Error('LIVE_HELPER_COMMAND_UNAVAILABLE'));
+        }
+      });
+      this.verify(receipt);
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.commands.delete(requestId);
+    }
   }
   async stop(): Promise<void> {
     this.revokeChannels();

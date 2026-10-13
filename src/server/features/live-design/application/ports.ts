@@ -84,4 +84,10 @@ export type PreviewGrantDependencies = {
   now(): Date;
   mobileOrigin: string;
   revocations?: PreviewRevocationBarrier;
+  control?: {
+    targetsForRelay(relayId: string): readonly { appId: string; targetId: string }[];
+    start(
+      request: import('../start/use-case.js').LiveStartRequest,
+    ): Promise<import('./ownership.js').LiveRun>;
+  };
 };

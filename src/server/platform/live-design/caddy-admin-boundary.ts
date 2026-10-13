@@ -5,8 +5,16 @@
  */
 
 import { spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UnixCaddyAdmin } from './caddy-admin.js';
 
@@ -15,8 +23,12 @@ export type ManagedProjectSandboxState = {
     type: 'managed';
     file_system: {
       type: 'restricted';
+      glob_scan_max_depth?: number;
       entries: readonly {
-        path: { type: 'path'; path: string } | { type: 'special'; value: { kind: string } };
+        path:
+          | { type: 'path'; path: string }
+          | { type: 'special'; value: { kind: string } }
+          | { type: 'glob_pattern'; pattern: string };
         access: 'read' | 'write' | 'deny';
       }[];
     };
@@ -88,6 +100,18 @@ console.log(JSON.stringify({ started:true, uid:process.getuid(), denied:!breache
 process.exitCode = breached ? 1 : 0;
 `;
 
+// With /proc explicitly denied, check the fixed aliases as well as the direct
+// endpoints. The old enumerating probe remains for its original diagnostic gate.
+const noProcProbe = projectProbe.replace(
+  "const pids = readdirSync('/proc').filter(name => /^[0-9]+$/.test(name));",
+  `readDenied('/proc/self/environ'); readDenied('/proc/self/root' + credential);
+await connect('/proc/self/root' + socket);
+let pids = []; try { pids = readdirSync('/proc').filter(name => /^[0-9]+$/.test(name)); } catch (e) {
+  if (!['ENOENT','EACCES','EPERM','ENOTDIR'].includes(e.code)) breached = true;
+}
+if (pids.length) breached = true;`,
+);
+
 /** Tests the actual admitted project policy through the native Codex sandbox, with no UID substitution. */
 export class ManagedCaddyAdminBoundary {
   constructor(
@@ -100,6 +124,8 @@ export class ManagedCaddyAdminBoundary {
       effectiveSandboxState(): ManagedProjectSandboxState;
       /** Controller-owned runtime environment; never copy a project env/secret into the probe. */
       sandboxEnvironment?: NodeJS.ProcessEnv;
+      /** Production uses the pinned native entrypoint and preserves denied procfs. */
+      nativeNoProc?: boolean;
     },
   ) {}
   async verify(): Promise<{ uid: number; procPidsChecked: number }> {
@@ -127,42 +153,84 @@ export class ManagedCaddyAdminBoundary {
     const admin = new UnixCaddyAdmin(options.socketPath);
     if ((await admin.request('GET', '/config/apps/http/servers')).status !== 200)
       throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
-    const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-      const child = spawn(
-        options.codexExecutable,
-        [
-          'sandbox',
-          '--sandbox-state-json',
-          JSON.stringify(state),
-          '--',
-          process.execPath,
-          '--input-type=module',
-          '-e',
-          projectProbe,
-          options.socketPath,
-          options.credentialPath,
-        ],
-        {
-          cwd: options.projectDirectory,
-          env: options.sandboxEnvironment ?? process.env,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        },
-      );
-      let output = '';
-      child.stdout.on('data', (data) => {
-        output += data;
-        if (output.length > 4096) child.kill('SIGKILL');
+    if (
+      options.nativeNoProc &&
+      !state.permissionProfile.file_system.entries.some(
+        (entry) =>
+          entry.access === 'deny' && entry.path.type === 'path' && entry.path.path === '/proc',
+      )
+    )
+      throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
+    // Native restricted networking denies getsockname on Node socket-based stdio.
+    // A private regular descriptor cannot act as a control or networking channel.
+    const outputDirectory = options.nativeNoProc
+      ? mkdtempSync(join(privateRoot, 'probe-'))
+      : undefined;
+    const outputPath = outputDirectory ? join(outputDirectory, 'result') : undefined;
+    const outputFd = outputPath ? openSync(outputPath, 'wx', 0o600) : undefined;
+    let result: { code: number | null; output: string };
+    try {
+      result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+        const child = spawn(
+          options.codexExecutable,
+          options.nativeNoProc
+            ? [
+                '--sandbox-policy-cwd',
+                options.projectDirectory,
+                '--permission-profile',
+                JSON.stringify(state.permissionProfile),
+                '--no-proc',
+                '--',
+                process.execPath,
+                '--input-type=module',
+                '-e',
+                noProcProbe,
+                options.socketPath,
+                options.credentialPath,
+              ]
+            : [
+                'sandbox',
+                '--sandbox-state-json',
+                JSON.stringify(state),
+                '--',
+                process.execPath,
+                '--input-type=module',
+                '-e',
+                projectProbe,
+                options.socketPath,
+                options.credentialPath,
+              ],
+          {
+            cwd: options.projectDirectory,
+            ...(options.nativeNoProc ? { argv0: 'codex-linux-sandbox' } : {}),
+            env: options.sandboxEnvironment ?? process.env,
+            stdio: ['ignore', outputFd ?? 'pipe', 'ignore'],
+          },
+        );
+        let output = '';
+        child.stdout?.on('data', (data) => {
+          output += data;
+          if (output.length > 4096) child.kill('SIGKILL');
+        });
+        const timeout = setTimeout(() => child.kill('SIGKILL'), 15000);
+        child.once('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        child.once('close', (code) => {
+          clearTimeout(timeout);
+          try {
+            if (outputPath && statSync(outputPath).size > 4096) throw new Error();
+            resolve({ code, output: outputPath ? readFileSync(outputPath, 'utf8') : output });
+          } catch {
+            reject(new Error('LIVE_CADDY_ADMIN_UNISOLATED'));
+          }
+        });
       });
-      const timeout = setTimeout(() => child.kill('SIGKILL'), 15000);
-      child.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-      child.once('exit', (code) => {
-        clearTimeout(timeout);
-        resolve({ code, output });
-      });
-    });
+    } finally {
+      if (outputFd !== undefined) closeSync(outputFd);
+      if (outputDirectory) rmSync(outputDirectory, { recursive: true, force: true });
+    }
     try {
       const proof = JSON.parse(result.output) as {
         started: unknown;
@@ -176,7 +244,7 @@ export class ManagedCaddyAdminBoundary {
         proof.denied !== true ||
         proof.uid !== process.getuid?.() ||
         typeof proof.procPidsChecked !== 'number' ||
-        proof.procPidsChecked < 1
+        (options.nativeNoProc ? proof.procPidsChecked !== 0 : proof.procPidsChecked < 1)
       )
         throw new Error();
       if ((await admin.request('GET', '/config/apps/http/servers')).status !== 200)

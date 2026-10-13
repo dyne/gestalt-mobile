@@ -276,6 +276,7 @@ checks with `npm run format:check`, `npm run license:check`, `npm run check`,
 | `--public-origin <origin>` | Loopback Vite origin | Exact browser origin for passkeys; required for non-loopback hosts |
 | `--disable-passkey-auth`   | Off                  | Disable passkey access control and serve every client directly     |
 | `--data-dir <path>`        | XDG state directory  | Directory containing `relay.sqlite`                                |
+| `--live-config <path>`     | Disabled             | Private host-controlled Live admission configuration               |
 | `--icon <path>`            | Gestalt icons        | SVG or PNG used when installing the PWA                            |
 | `--skills <profile>`       |                      | Apply a saved global profile to every session                      |
 | `--skills list`            |                      | List global profiles without starting the server                   |

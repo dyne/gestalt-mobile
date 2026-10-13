@@ -201,6 +201,10 @@ try {
   processes.push(helper);
   report.stage = 'helper-native-start';
   const helperReceipt = await helper.start();
+  report.stage = 'canonical-helper-cli-in-owned-namespace';
+  const canonicalStatus = await helper.helperCommand(helperReceipt, ['live-status']);
+  assert.equal(canonicalStatus.liveServer.port, 12181);
+  report.checks.canonicalNativeHelperCommand = true;
   report.stage = 'helper-controller-pipe-http';
   assert.equal((await http(helper, helperReceipt, '/health')).status, 200);
   const metadata = JSON.parse(readFileSync(join(app, '.impeccable/live/server.json'), 'utf8'));

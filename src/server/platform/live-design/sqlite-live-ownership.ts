@@ -228,6 +228,11 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
     this.db.prepare('UPDATE live_controller SET generation=? WHERE singleton=1').run(generation);
     return generation;
   }
+  /** Planning hint under the sole elected controller; claim still allocates atomically. */
+  preparationGeneration(): number {
+    this.assertController();
+    return this.generation();
+  }
   retry(input: LiveStartClaim): LiveRun | null {
     this.assertController();
     revalidateLiveApp(input.app);
@@ -555,6 +560,41 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         .prepare('DELETE FROM live_writers WHERE id=? AND relayId=?')
         .run(reservation.id, reservation.relayId);
       if (result.changes !== 1) throw new Error('LIVE_GENERATION_STALE');
+    });
+  }
+  /** Atomic narrowing after actual whole-tree quiescence, never a broader source claim. */
+  narrowQuiescentWriter(
+    reservation: WriterReservation,
+    effectiveScopes: readonly string[],
+    outstanding: Parameters<SqliteLiveOwnership['releaseQuiescentWriter']>[1],
+  ): WriterReservation {
+    if (
+      outstanding.unknown ||
+      Object.entries(outstanding).some(([key, value]) => key !== 'unknown' && value !== 0) ||
+      !effectiveScopes.length
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    const scopes = effectiveScopes.map(liveAppIdentity);
+    if (
+      reservation.scopes &&
+      scopes.some(
+        (scope) =>
+          !reservation.scopes!.some(
+            (parent) =>
+              scope.canonicalAppRoot === parent.canonicalAppRoot ||
+              scope.canonicalAppRoot.startsWith(parent.canonicalAppRoot + sep),
+          ),
+      )
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    return withImmediateTransaction(this.db, () => {
+      this.assertWriter(reservation);
+      this.checkOrdinary(reservation.relayId, effectiveScopes);
+      const updated = { ...reservation, scopes };
+      this.db
+        .prepare('UPDATE live_writers SET scopes=? WHERE id=? AND relayId=?')
+        .run(JSON.stringify(scopes), reservation.id, reservation.relayId);
+      return updated;
     });
   }
   close(): void {

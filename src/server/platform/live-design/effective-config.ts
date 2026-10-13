@@ -35,22 +35,28 @@ function hash(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function mergeConfig(
+export function mergeLiveConfig(
   base: Record<string, unknown>,
   override: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   const result = structuredClone(base);
   for (const [key, value] of Object.entries(override)) {
-    const prior = result[key];
-    result[key] =
+    const prior = Object.hasOwn(result, key) ? result[key] : undefined;
+    const merged =
       value &&
       typeof value === 'object' &&
       !Array.isArray(value) &&
       prior &&
       typeof prior === 'object' &&
       !Array.isArray(prior)
-        ? mergeConfig(prior as Record<string, unknown>, value as Record<string, unknown>)
+        ? mergeLiveConfig(prior as Record<string, unknown>, value as Record<string, unknown>)
         : structuredClone(value);
+    Object.defineProperty(result, key, {
+      value: merged,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return result;
 }
@@ -73,7 +79,7 @@ export function resolveLiveConfigFiles(input: {
       )
     )
       throw new Error();
-    const merged = mergeConfig(observed.config, input.threadConfig);
+    const merged = mergeLiveConfig(observed.config, input.threadConfig);
     if (
       !isDeepStrictEqual(merged.mcp_servers ?? {}, input.approved.mcpServers) ||
       !isDeepStrictEqual(merged.plugins ?? {}, input.approved.plugins)

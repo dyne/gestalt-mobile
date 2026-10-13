@@ -11,6 +11,7 @@ import { createConnection, type Socket } from 'node:net';
 import { createInterface } from 'node:readline';
 
 type Specification = {
+  role: 'helper' | 'devserver';
   native: string;
   executable: string;
   argv: string[];
@@ -21,6 +22,7 @@ type Specification = {
 };
 let spec: Specification | undefined;
 let target: ChildProcess | undefined;
+let command: ChildProcess | undefined;
 let stopping = false;
 const channels = new Map<number, Socket>();
 const send = (message: unknown) => {
@@ -38,6 +40,7 @@ const stop = () => {
   for (const socket of channels.values()) socket.destroy();
   channels.clear();
   target?.kill('SIGTERM');
+  command?.kill('SIGTERM');
   process.exit(1); // Outer PID namespace lifetime kills all descendants.
 };
 process.stdin.on('end', stop);
@@ -92,6 +95,79 @@ lines.on('line', (line) => {
       send({ type: 'namespace', network: readlinkSync('/proc/self/ns/net') });
       return;
     }
+    if (message.op === 'helper-command') {
+      const requestId = message.requestId;
+      const args = message.args;
+      const deadline = message.deadlineMs;
+      if (
+        spec.role !== 'helper' ||
+        command ||
+        !Number.isSafeInteger(requestId) ||
+        !Array.isArray(args) ||
+        args.length > 12 ||
+        args.some((arg) => typeof arg !== 'string' || arg.length > 65536 || arg.includes('\0')) ||
+        !Number.isInteger(deadline) ||
+        Number(deadline) < 1000 ||
+        Number(deadline) > 660000 ||
+        !helperArgs(args as string[])
+      )
+        throw new Error();
+      const id = Number(requestId);
+      const child = spawn(
+        spec.native,
+        [
+          '--sandbox-policy-cwd',
+          spec.appRoot,
+          '--permission-profile',
+          JSON.stringify(spec.permissionProfile),
+          '--no-proc',
+          '--',
+          spec.executable,
+          ...(args as string[]),
+          '--target',
+          spec.appRoot,
+        ],
+        {
+          argv0: 'codex-linux-sandbox',
+          cwd: spec.appRoot,
+          env: spec.environment,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      command = child;
+      let output = '',
+        bytes = 0,
+        failed = false;
+      const fail = () => {
+        failed = true;
+        child.kill('SIGTERM');
+      };
+      const timer = setTimeout(fail, Number(deadline));
+      child.stdout!.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 128 * 1024) fail();
+        else output += chunk.toString('utf8');
+      });
+      child.stderr!.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 128 * 1024) fail();
+      });
+      child.once('error', fail);
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        command = undefined;
+        if (code !== 0 || failed) {
+          send({ type: 'helper-command-failed', requestId: id, reason: 'native-command-exit' });
+          return;
+        }
+        try {
+          send({ type: 'helper-command-result', requestId: id, result: JSON.parse(output) });
+        } catch {
+          send({ type: 'helper-command-failed', requestId: id, reason: 'native-command-protocol' });
+        }
+      });
+      return;
+    }
     const id = message.id;
     if (!Number.isSafeInteger(id) || Number(id) < 1) throw new Error();
     if (message.op === 'open') {
@@ -131,3 +207,54 @@ lines.on('line', (line) => {
     stop();
   }
 });
+
+// Defense in depth at the pinned private worker: no arbitrary executable, target,
+// force flag, shell syntax, environment or management operation is admitted.
+function helperArgs(args: string[]): boolean {
+  const id = (value: string | undefined) =>
+    !!value && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
+  const [name, ...rest] = args;
+  if (name === 'live-status') return !rest.length;
+  if (name === 'live-inject') return !rest.length || (rest.length === 1 && rest[0] === '--remove');
+  if (name === 'live-resume')
+    return !rest.length || (rest.length === 2 && rest[0] === '--id' && id(rest[1]));
+  if (name === 'live-complete' || name === 'live-accept')
+    return (
+      rest[0] === '--id' &&
+      id(rest[1]) &&
+      (rest.length === 2 ||
+        (rest.length === 3 && rest[2] === (name === 'live-complete' ? '--discarded' : '--discard')))
+    );
+  if (name !== 'live-poll') return false;
+  if (rest.length === 1 && /^--timeout=\d+$/.test(rest[0]!)) {
+    const n = Number(rest[0]!.slice(10));
+    return n >= 1 && n <= 600000;
+  }
+  if (rest[0] !== '--reply' || !id(rest[1]) || !['done', 'steer_done', 'error'].includes(rest[2]!))
+    return false;
+  let message = false;
+  const seen = new Set<string>();
+  for (let i = 3; i < rest.length; i++) {
+    const flag = rest[i]!;
+    if (flag === '--file' || flag === '--data') {
+      if (seen.has(flag) || !rest[i + 1]) return false;
+      seen.add(flag);
+      const value = rest[++i]!;
+      if (
+        flag === '--file' &&
+        (value.startsWith('/') || value.split('/').includes('..') || value.startsWith('-'))
+      )
+        return false;
+      if (flag === '--data') {
+        try {
+          const data = JSON.parse(value);
+          if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+        } catch {
+          return false;
+        }
+      }
+    } else if (message || flag.startsWith('-')) return false;
+    else message = true;
+  }
+  return true;
+}

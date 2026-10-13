@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +22,7 @@ import { CaddyRouteStore } from './caddy-route-store.js';
 import { RegisteredPreviewTargets } from './preview-targets.js';
 import { UnixCaddyAdmin } from './caddy-admin.js';
 import { realCaddyFixture } from './caddy-routes.fixture.js';
+import { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -136,6 +138,45 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
       });
       const proof = await boundary.verify();
       expect(proof.uid).toBe(process.getuid!());
+      const nativePath = join(
+        process.env.RUNNER_TEMP!,
+        'live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex',
+      );
+      expect(createHash('sha256').update(readFileSync(nativePath)).digest('hex')).toBe(
+        LIVE_CODEX_SHA256,
+      );
+      const productionPolicy: ManagedProjectSandboxState = {
+        ...policy,
+        permissionProfile: {
+          ...policy.permissionProfile,
+          network: 'restricted',
+          file_system: {
+            ...policy.permissionProfile.file_system,
+            entries: [
+              ...policy.permissionProfile.file_system.entries,
+              { path: { type: 'path', path: '/proc' }, access: 'deny' },
+            ],
+          },
+        },
+      };
+      const productionBoundary = new ManagedCaddyAdminBoundary({
+        codexExecutable: nativePath,
+        nativeNoProc: true,
+        projectDirectory: f.appRoots[0]!,
+        controllerDirectory: f.controllerDirectory,
+        socketPath: f.socket,
+        credentialPath,
+        effectiveSandboxState: () => productionPolicy,
+        sandboxEnvironment: {
+          PATH: '/usr/bin:/bin',
+          HOME: sandboxHome,
+          CODEX_HOME: sandboxHome,
+          TMPDIR: '/tmp',
+          LANG: 'C.UTF-8',
+        },
+      });
+      const productionProof = await productionBoundary.verify();
+      expect(productionProof).toEqual({ uid: process.getuid!(), procPidsChecked: 0 });
       const store = new CaddyRouteStore(
         join(f.controllerDirectory, 'routes.sqlite'),
         'preview.example.test',
@@ -164,6 +205,7 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
       await f.stop();
       await f.start();
       const restartProof = await boundary.verify();
+      const productionRestartProof = await productionBoundary.verify();
       await broker.execute(credential, { action: 'reconcile' });
       await broker.execute(credential, { action: 'remove', appRoot: f.appRoots[0]! });
       if (process.env.LIVE_CADDY_EVIDENCE_DIR) {
@@ -181,6 +223,8 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
               noAlternateUid: true,
               beforeRestart: proof,
               afterRestart: restartProof,
+              productionRestrictedNoProcBeforeRestart: productionProof,
+              productionRestrictedNoProcAfterRestart: productionRestartProof,
               authenticatedNamespacedActivationReconcileTeardown: true,
             },
             null,
