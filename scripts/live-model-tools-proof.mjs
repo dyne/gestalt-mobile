@@ -25,6 +25,8 @@ import { createConnection, createServer as socketServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
+import { electLiveController } from '../dist/server/server/platform/live-design/elected-controller.js';
+import { liveAppIdentity } from '../dist/server/server/platform/live-design/sqlite-live-ownership.js';
 import { launchCodexAppServer } from '../dist/server/server/platform/codex/codex-process-launcher.js';
 import { RelaySession } from '../dist/server/server/features/sessions/model/relay-session.js';
 import { LIVE_CODEX_SHA256 } from '../dist/server/server/platform/live-design/installed-policy.js';
@@ -103,6 +105,7 @@ const report = {
 };
 let appServer,
   runtime,
+  election,
   session,
   owningSessionId,
   childThreadId,
@@ -543,10 +546,36 @@ try {
   report.checks.actualModelAndChildSocketAndDaemonDenials = true;
   report.checks.permittedNativeChildInheritedConfinement = true;
   report.checks.sameOwningThreadModelThinkingAndProcess = true;
-  report.stage = 'shutdown';
+  report.stage = 'elected-owning-runtime-handoff';
   const childProcess = appServer.child;
-  runtime.stopAll();
+  // Completion is grounded in the actual native notification and terminal reads above.
+  session = RelaySession.rehydrate(session).completeTurn(
+    session.activeTurnId,
+    new Date().toISOString(),
+  ).snapshot;
+  election = await electLiveController({
+    privateDirectory: controller,
+    controllerId: 'native-proof-controller',
+    initialize: true,
+  });
+  let handoff = election.ownership.claim({
+    relayId: session.id,
+    appId: 'native-proof-app',
+    rootThreadId: session.threadId,
+    provider: 'codex',
+    app: liveAppIdentity(app),
+    targetId: 'native-proof-fixed-target',
+    targetIdentity: 'native-proof-fixed-process',
+    operationId: 'native-proof-handoff',
+    authSessionHash: 'native-proof-auth',
+    deviceId: 'native-proof-device',
+    previewOrigin: 'https://native-proof.test',
+  }).run;
+  handoff = election.ownership.mutate(handoff, { event: 'phase', phase: 'quiesce:intent' });
+  await runtime.releaseLiveOwner(session, { owners: election.ownership, fence: handoff });
   await until(() => childProcess.exitCode !== null || childProcess.signalCode !== null, 10000);
+  assert.equal(launches, 1);
+  report.checks.electedOwnerNativeUnloadAndExit = true;
   report.checks.ownedRuntimeExited = true;
   report.passed = true;
   report.stage = 'complete';
@@ -563,8 +592,22 @@ try {
     'LIVE_PROCESS_IDENTITY_UNAVAILABLE',
     'NATIVE_PROOF_DEADLINE',
     'NATIVE_THREAD_READ_DEADLINE',
+    'LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE',
+    'LIVE_RUNTIME_UNLOAD_UNVERIFIED',
+    'LIVE_RUNTIME_IDENTITY_CHANGED',
+    'LIVE_SESSION_BUSY',
+    'LIVE_CHILD_TOPOLOGY_UNAVAILABLE',
+    'LIVE_CONTROLLER_BUSY',
+    'LIVE_CONTROLLER_UNAVAILABLE',
+    'LIVE_GENERATION_STALE',
   ]);
-  report.failure = { code: codes.has(error?.code) ? error.code : 'UNCLASSIFIED' };
+  report.failure = {
+    code: codes.has(error?.code)
+      ? error.code
+      : codes.has(error?.message)
+        ? error.message
+        : 'UNCLASSIFIED',
+  };
   report.waitState = {
     rootCompleted,
     childModelCompletionEmitted: childCompleted,
@@ -577,6 +620,7 @@ try {
   process.exitCode = 1;
 } finally {
   runtime?.stopAll();
+  await election?.close();
   provider.closeAllConnections();
   await new Promise((done) => provider.close(done));
   await new Promise((done) => admin.close(done));

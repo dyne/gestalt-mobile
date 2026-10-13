@@ -24,6 +24,7 @@ import { Agent, createServer, request } from 'node:http';
 import { createConnection, createServer as unixServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
+import { isolatedPreviewUpstreams } from '../dist/server/server/platform/live-design/isolated-preview-upstreams.js';
 import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
 import {
   LIVE_CODEX_SHA256,
@@ -117,9 +118,12 @@ const report = {
   },
 };
 const processes = [];
-async function http(process, receipt, path) {
+async function http(process, receipt, path, upstreams) {
   const agent = new Agent({ keepAlive: false });
-  agent.createConnection = () => process.open(receipt);
+  agent.createConnection = () =>
+    upstreams
+      ? upstreams.open(receipt.role === 'helper' ? 'helper' : 'app')
+      : process.open(receipt);
   try {
     return await new Promise((resolve, reject) => {
       const req = request(
@@ -221,8 +225,21 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.stage = 'devserver-native-start';
   const devReceipt = await devserver.start();
   assert.notEqual(devReceipt.target.namespaces.net, helperReceipt.target.namespaces.net);
+  const upstreams = isolatedPreviewUpstreams({
+    instance: {
+      relayId: 'isolation-owning-session',
+      appId: 'app',
+      liveId: 'isolation',
+      generation: 1,
+      previewOrigin: 'https://isolation.test',
+    },
+    appRoot: app,
+    helper: { process: helper, receipt: helperReceipt },
+    devserver: { process: devserver, receipt: devReceipt },
+  });
   report.stage = 'devserver-controller-pipe-http';
-  const observed = await http(devserver, devReceipt, '/');
+  const observed = await http(devserver, devReceipt, '/', upstreams);
+  assert.equal((await http(helper, helperReceipt, '/health', upstreams)).status, 200);
   assert.equal(observed.status, 200);
   const checks = JSON.parse(observed.body);
   assert.ok(Object.values(checks).every((value) => value === true));
@@ -241,6 +258,7 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   await new Promise((done) => setTimeout(done, 9000));
   await devserver.stop();
   assert.throws(() => devserver.open(devReceipt));
+  assert.throws(() => upstreams.open('helper'));
   assert.equal((await http(helper, helperReceipt, '/health')).status, 200);
   report.checks.staleReceiptRevokedHelperSurvives = true;
   report.stage = 'stop-helper';

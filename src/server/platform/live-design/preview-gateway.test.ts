@@ -6,6 +6,7 @@
 
 import { afterEach, expect, test } from 'vitest';
 import { createServer, request } from 'node:http';
+import { createConnection } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { previewAuthFixture, origin } from '../../features/live-design/preview-auth.fixture.js';
 import { createPreviewGateway } from './preview-gateway.js';
@@ -16,7 +17,7 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
-async function fixture() {
+async function fixture(isolatedTransport = false) {
   const auth = await previewAuthFixture(cleanup);
   const requests: { path: string; body: string; headers: Record<string, unknown> }[] = [];
   const upstream = createServer(async (req, res) => {
@@ -58,6 +59,7 @@ async function fixture() {
     helperPort,
     gatewayPort,
   });
+  const opened: ('app' | 'helper')[] = [];
   const gateway = await createPreviewGateway({
     deps: auth.deps,
     instance: {
@@ -71,6 +73,19 @@ async function fixture() {
     targets,
     registrationId,
     connections: auth.connections,
+    ...(isolatedTransport
+      ? {
+          upstreams: {
+            open(role: 'app' | 'helper') {
+              opened.push(role);
+              return createConnection({
+                host: '127.0.0.1',
+                port: role === 'app' ? address.port : helperPort,
+              });
+            },
+          },
+        }
+      : {}),
   });
   await gateway.listen();
   cleanup.push(() => gateway.close());
@@ -119,8 +134,42 @@ async function fixture() {
       },
     );
   }
-  return { ...auth, gateway, gatewayPort, headers, targets, registrationId, requests, send };
+  return {
+    ...auth,
+    gateway,
+    gatewayPort,
+    headers,
+    targets,
+    registrationId,
+    requests,
+    send,
+    opened,
+  };
 }
+
+test('routes HTTP and HMR through the supplied fixed transport only after preview authentication', async () => {
+  // Real HTTP/WebSocket transport fixture; this does not assert native confinement.
+  const f = await fixture(true);
+  expect((await f.send('/', undefined, { cookie: '' })).status).toBe(401);
+  expect(f.opened).toEqual([]);
+  expect((await f.send('/src/main.js')).status).toBe(200);
+  expect((await f.send('/__gestalt_live/live.js')).status).toBe(200);
+  const peer = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/`, 'vite-hmr', {
+    headers: f.headers,
+  });
+  cleanup.push(() => peer.terminate());
+  await new Promise<void>((resolve, reject) => {
+    peer.once('open', resolve);
+    peer.once('error', reject);
+  });
+  const frame = new Promise<string>((resolve) =>
+    peer.once('message', (data) => resolve(String(data))),
+  );
+  peer.send('pipe HMR');
+  expect(await frame).toBe('pipe HMR');
+  expect(f.opened).toEqual(['app', 'helper', 'app']);
+  await f.connections.revoke({ liveId: 'live' });
+});
 
 test('binds registered app/helper targets, relays JSON bodies and strips credentials and unsafe responses', async () => {
   const f = await fixture();

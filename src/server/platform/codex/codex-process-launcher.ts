@@ -17,6 +17,7 @@ export type CodexProcess = {
   rpc: JsonRpcClient;
   close(): void;
   onExit(listener: () => void): () => void;
+  waitForExit(): Promise<void>;
   observeLiveLaunch(): LiveProcessIdentity;
 };
 
@@ -57,10 +58,13 @@ export function launchCodexAppServer(
   });
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
   child.once('error', (error) => rpc.fail(error));
+  // Positive lifetime evidence from this exact ChildProcess; a missing PID is not an exit receipt.
+  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let birth: LiveProcessIdentity | undefined;
   return {
     child,
     rpc,
+    waitForExit: () => exited,
     observeLiveLaunch: () => {
       if (!child.pid || child.exitCode !== null || child.signalCode !== null)
         throw new Error('LIVE_RUNTIME_UNAVAILABLE');

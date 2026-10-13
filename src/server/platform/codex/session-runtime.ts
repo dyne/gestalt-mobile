@@ -66,6 +66,8 @@ export type AppServer = {
   };
   close(): void;
   onExit?(listener: () => void): () => void;
+  /** Positive completion from the exact owned ChildProcess, not a PID disappearance. */
+  waitForExit?(): Promise<void>;
   /** Trusted controller observation only; no raw host RPC crosses this port. */
   observeLiveLaunch?(): LiveProcessIdentity;
 };
@@ -407,6 +409,118 @@ export class CodexSessionRuntime {
       }
     }
     this.stop(sessionId);
+  }
+
+  /** Controller-only quiescent handoff. Refuse reconfiguration until native unload
+   * and the exact owning app-server's close event have both completed.
+   */
+  async releaseLiveOwner(
+    session: RelaySessionSnapshot,
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+    },
+  ): Promise<void> {
+    const assertHeld = () => {
+      const run = authority.owners.assert(authority.fence);
+      if (
+        run.relayId !== session.id ||
+        run.rootThreadId !== session.threadId ||
+        run.state !== 'starting' ||
+        run.phase !== 'quiesce:intent'
+      )
+        throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    };
+    assertHeld();
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      session.activeTurnId ||
+      resource.pendingRequests.size ||
+      !resource.process.observeLiveLaunch ||
+      !resource.process.waitForExit
+    )
+      throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    const birth = resource.process.observeLiveLaunch();
+    const bounded = async (work: () => Promise<unknown>): Promise<unknown> => {
+      assertHeld();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          work(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE')),
+              5000,
+            );
+          }),
+        ]);
+        assertHeld();
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const threads: string[] = [session.threadId];
+    for (let index = 0; index < threads.length; index++) {
+      const threadId = threads[index]!;
+      const read = asRecord(
+        await bounded(() =>
+          resource.process.rpc.request('thread/read', { threadId, includeTurns: false }),
+        ),
+      );
+      const thread = asRecord(read?.thread);
+      const status = asRecord(thread?.status)?.type;
+      if (thread?.id !== threadId || !['idle', 'notLoaded'].includes(String(status)))
+        throw new Error('LIVE_SESSION_BUSY');
+      const terminals = asRecord(
+        await bounded(() =>
+          resource.process.rpc.request('thread/backgroundTerminals/list', { threadId, limit: 64 }),
+        ),
+      );
+      if (!Array.isArray(terminals?.data) || terminals.data.length || terminals.nextCursor)
+        throw new Error('LIVE_SESSION_BUSY');
+      const children = asRecord(
+        await bounded(() =>
+          resource.process.rpc.request('thread/list', {
+            parentThreadId: threadId,
+            sourceKinds: ['subAgentThreadSpawn'],
+            limit: 64,
+          }),
+        ),
+      );
+      if (!Array.isArray(children?.data) || children.nextCursor)
+        throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+      for (const child of children.data) {
+        const row = asRecord(child);
+        const id = boundedString(row?.id, 256);
+        if (!id || row?.parentThreadId !== threadId || threads.includes(id) || threads.length >= 64)
+          throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+        threads.push(id);
+      }
+    }
+    if (
+      this.sessions.get(session.id) !== resource ||
+      resource.pendingRequests.size ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(birth)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    resource.beginExplicitShutdown();
+    try {
+      for (const threadId of threads.reverse()) {
+        const result = asRecord(
+          await bounded(() => resource.process.rpc.request('thread/unsubscribe', { threadId })),
+        );
+        if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(String(result?.status)))
+          throw new Error('LIVE_RUNTIME_UNLOAD_UNVERIFIED');
+      }
+    } finally {
+      resource.dispose();
+      await bounded(() => resource.process.waitForExit!());
+    }
   }
 
   /** Replaces only this session's app-server while retaining its durable root thread. */
@@ -1531,6 +1645,7 @@ export class CodexSessionRuntime {
     return {
       close: () => process.close(),
       ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
+      ...(process.waitForExit ? { waitForExit: process.waitForExit.bind(process) } : {}),
       ...(process.observeLiveLaunch
         ? { observeLiveLaunch: process.observeLiveLaunch.bind(process) }
         : {}),

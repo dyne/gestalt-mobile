@@ -6,7 +6,7 @@
 
 import cookie from '@fastify/cookie';
 import fastify from 'fastify';
-import { request as upstreamRequest } from 'node:http';
+import { Agent, request as upstreamRequest } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { Readable } from 'node:stream';
 import type { Socket } from 'node:net';
@@ -26,6 +26,7 @@ import {
 import { PreviewConnections } from './preview-connections.js';
 import type { PreviewConnectionPermit } from './preview-connections.js';
 import { RegisteredPreviewTargets } from './preview-targets.js';
+import type { PreviewUpstreams } from './isolated-preview-upstreams.js';
 import {
   ownedPreviewHttp,
   relayPreviewHttpBody,
@@ -41,6 +42,8 @@ export async function createPreviewGateway(options: {
   targets: RegisteredPreviewTargets;
   registrationId: string;
   connections: PreviewConnections;
+  /** Production isolated resources; every connect revalidates the owning receipts. */
+  upstreams?: PreviewUpstreams;
 }) {
   const { deps, instance, assignment, targets, registrationId, connections } = options;
   if (assignment.origin !== instance.previewOrigin) throw new Error('LIVE_ORIGIN_MISMATCH');
@@ -93,6 +96,9 @@ export async function createPreviewGateway(options: {
         const current = targets.read(registrationId, assignment.canonicalAppRoot);
         const route = helperRoute(req.raw.url ?? '/');
         const port = route.helper ? current.helperPort : current.appPort;
+        const agent = options.upstreams ? new Agent({ keepAlive: false }) : undefined;
+        if (agent)
+          agent.createConnection = () => options.upstreams!.open(route.helper ? 'helper' : 'app');
         reply.hijack();
         upstream = upstreamRequest(
           {
@@ -100,7 +106,7 @@ export async function createPreviewGateway(options: {
             port,
             method: req.method,
             path: route.path,
-            agent: false,
+            agent: agent ?? false,
             headers: { ...authorized.upstreamHeaders, host: `127.0.0.1:${port}` },
           },
           (response) => {
@@ -116,12 +122,14 @@ export async function createPreviewGateway(options: {
           },
         );
         upstream.once('error', () => {
+          agent?.destroy();
           authorized.release();
           reply.raw.destroy();
         });
         reply.raw.once('close', () => {
           authorized.release();
           upstream?.destroy();
+          agent?.destroy();
         });
         ((req.body as Readable | undefined) ?? req.raw).pipe(upstream);
       } catch (error) {
@@ -176,6 +184,9 @@ export async function createPreviewGateway(options: {
       delete headers['sec-websocket-protocol'];
       upstream = new WebSocket(`ws://127.0.0.1:${current.appPort}${req.url}`, protocols, {
         headers,
+        ...(options.upstreams
+          ? { createConnection: () => options.upstreams!.open('app') as Socket }
+          : {}),
       });
       owned.bind(upstream);
       upstream.once('open', () => {
