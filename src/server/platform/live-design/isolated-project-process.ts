@@ -9,8 +9,6 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import {
   constants,
   closeSync,
-  createReadStream,
-  createWriteStream,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -23,7 +21,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { createInterface } from 'node:readline';
 import { Duplex } from 'node:stream';
 import { once } from 'node:events';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
@@ -33,6 +30,7 @@ import { observeLoopbackListener } from './registered-dev-servers.js';
 import { isolatedProjectSocketFilter } from './project-network-filter.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
 import { observeNativeDeniedPath as masked } from './project-native-mask.js';
+import { ProjectControllerPipes } from './project-controller-pipes.js';
 
 type Pin = Readonly<{ path: string; sha256: string }>;
 export type IsolatedProjectSpecification = Readonly<{
@@ -207,8 +205,7 @@ export class IsolatedProjectProcess {
   private network?: string;
   private receipt?: IsolatedProjectReceipt;
   private revoked = false;
-  private input?: ReturnType<typeof createWriteStream>;
-  private output?: ReturnType<typeof createReadStream>;
+  private pipes?: ProjectControllerPipes;
   private descriptors: number[] = [];
   private channels = new Map<number, ProjectPipeSocket>();
   private nextChannel = 0;
@@ -220,6 +217,8 @@ export class IsolatedProjectProcess {
     targetObserved: false,
     nativeMasksObserved: false,
     workerFailure: 'none',
+    originalFailureStage: 'none',
+    pipeFailureCode: 'none',
   };
 
   diagnostics(): Readonly<typeof this.diagnostic> {
@@ -336,10 +335,10 @@ export class IsolatedProjectProcess {
     for (const pin of this.spec.launchInputs) verifyPin(pin, 'launch-input');
   }
   private send(message: unknown): void {
-    if (this.revoked || !this.input || this.input.destroyed) throw failure();
+    if (this.revoked || !this.pipes || this.pipes.input.destroyed) throw failure();
     const line = JSON.stringify(message) + '\n';
-    if (line.length > 256 * 1024 || this.input.writableLength > 1024 * 1024) throw failure();
-    this.input.write(line);
+    if (line.length > 256 * 1024 || this.pipes.input.writableLength > 1024 * 1024) throw failure();
+    this.pipes.input.write(line);
   }
   private revokeChannels(): void {
     this.revoked = true;
@@ -435,13 +434,15 @@ export class IsolatedProjectProcess {
       }),
     );
     this.child.once('error', () => this.revokeChannels());
-    this.input = createWriteStream('', { fd: input, autoClose: false });
-    this.output = createReadStream('', { fd: output, autoClose: false });
-    this.input.on('error', () => this.revokeChannels());
-    this.output.on('error', () => this.revokeChannels());
-    const lines = createInterface({ input: this.output, crlfDelay: Infinity });
+    this.pipes = new ProjectControllerPipes(input, output, (code) => {
+      this.diagnostic.pipeFailureCode = code;
+      this.revokeChannels();
+      this.child?.kill('SIGTERM');
+    });
+    this.descriptors = []; // Ownership transferred; only fs streams close these descriptors.
+    const lines = this.pipes.lines;
     let buffered = 0;
-    this.output.on('data', (bytes: Buffer | string) => {
+    this.pipes.output.on('data', (bytes: Buffer | string) => {
       buffered += bytes.length;
       if (buffered > 512 * 1024) this.revokeChannels();
     });
@@ -487,26 +488,26 @@ export class IsolatedProjectProcess {
         this.child?.kill('SIGTERM');
       }
     });
-    await once(this.child, 'spawn');
-    this.owner = observeLiveProcess(this.child.pid!);
-    if (this.owner.executableDigest !== spec.bwrap.sha256) {
-      await this.stop();
-      throw failure();
-    }
-    this.send({
-      op: 'launch',
-      specification: {
-        native: spec.native.path,
-        executable: spec.executable.path,
-        argv: spec.argv,
-        environment: spec.environment,
-        appRoot: spec.appRoot,
-        port: spec.port,
-        permissionProfile: { type: 'managed', file_system: spec.filesystem, network: 'enabled' },
-      },
-    });
-    const deadline = Date.now() + 15000;
     try {
+      await once(this.child, 'spawn');
+      this.owner = observeLiveProcess(this.child.pid!);
+      if (this.owner.executableDigest !== spec.bwrap.sha256) {
+        await this.stop();
+        throw failure();
+      }
+      this.send({
+        op: 'launch',
+        specification: {
+          native: spec.native.path,
+          executable: spec.executable.path,
+          argv: spec.argv,
+          environment: spec.environment,
+          appRoot: spec.appRoot,
+          port: spec.port,
+          permissionProfile: { type: 'managed', file_system: spec.filesystem, network: 'enabled' },
+        },
+      });
+      const deadline = Date.now() + 15000;
       while (Date.now() < deadline && !this.revoked) {
         if (this.child.pid && !this.owner) this.owner = observeLiveProcess(this.child.pid);
         if (this.owner && this.network) {
@@ -545,9 +546,18 @@ export class IsolatedProjectProcess {
         await sleep(25);
       }
       throw failure();
-    } catch {
-      await this.stop();
-      throw failure();
+    } catch (error) {
+      const stage = (error as { stage?: string }).stage ?? 'unspecified';
+      this.diagnostic.originalFailureStage = stage;
+      try {
+        await this.stop();
+      } catch {
+        throw Object.assign(new Error('LIVE_PROJECT_RECOVERY_REQUIRED'), {
+          code: 'LIVE_PROJECT_RECOVERY_REQUIRED',
+          stage,
+        });
+      }
+      throw error;
     }
   }
 
@@ -664,8 +674,7 @@ export class IsolatedProjectProcess {
       if (child && child.exitCode === null && child.signalCode === null)
         throw new Error('LIVE_PROJECT_RECOVERY_REQUIRED');
     }
-    this.input?.destroy();
-    this.output?.destroy();
+    await this.pipes?.close();
     for (const fd of this.descriptors) {
       try {
         closeSync(fd);
