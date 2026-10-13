@@ -29,6 +29,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
+import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -106,6 +107,7 @@ async function until(check, stage, budget = 30000) {
 }
 // Never read project configuration or remove metadata: the production resolver
 // still refuses every unproven project layer. Only bounded owned-fixture facts.
+let metadataNativePath;
 function ownedProjectMetadata() {
   const folder = join(appRoot, '.codex');
   try {
@@ -122,10 +124,45 @@ function ownedProjectMetadata() {
       directoryEntries: names
         .slice(0, 64)
         .filter((name) => lstatSync(join(folder, name)).isDirectory()).length,
+      registry: metadataNativePath
+        ? projectMetadataRegistryDiagnostics({
+            folder,
+            temporaryDirectory: '/tmp',
+            nativePath: metadataNativePath,
+          })
+        : undefined,
     };
   } catch (error) {
     return error?.code === 'ENOENT' ? { directoryPresent: false } : { inspectionUnavailable: true };
   }
+}
+function sampleNativeStartupMetadata() {
+  const facts = {
+    samples: 0,
+    metadataObserved: false,
+    syntheticMarkerObserved: false,
+    ownedNativeMarkerObserved: false,
+  };
+  const sample = () => {
+    if (facts.samples >= 512) return;
+    facts.samples++;
+    const metadata = ownedProjectMetadata();
+    const registry = projectMetadataRegistryDiagnostics({
+      folder: join(appRoot, '.codex'),
+      temporaryDirectory: '/tmp',
+      nativePath: metadataNativePath,
+    });
+    facts.metadataObserved ||= metadata.directoryPresent === true;
+    facts.syntheticMarkerObserved ||= registry.syntheticMarkers > 0;
+    facts.ownedNativeMarkerObserved ||= registry.liveOwnedNativeMarkers > 0;
+  };
+  sample();
+  const timer = setInterval(sample, 10);
+  return () => {
+    clearInterval(timer);
+    sample();
+    return facts;
+  };
 }
 function protect(path) {
   const info = lstatSync(path);
@@ -440,6 +477,7 @@ try {
     bwrap = pin(join(vendor, 'codex-resources/bwrap'));
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
+  metadataNativePath = native.path;
   report.installationStage = 'node-copy';
   const nodeRoot = join(installation, 'node-bin');
   mkdirSync(nodeRoot, { mode: 0o700 });
@@ -691,17 +729,24 @@ try {
     },
   });
   report.checks.soleProductionCompositionConstructed = true;
+  report.projectMetadata.afterComposition = ownedProjectMetadata();
   if (constructionOnly) throw new Error('CONSTRUCTION_ONLY_COMPLETE');
   report.stage = 'actual-owning-session';
-  const session = await api('POST', '/api/sessions', {
-    workspaceId: workspaceId(appRoot),
-    profile: 'default',
-    provider: 'codex',
-    model: 'gpt-6-sol',
-    reasoningEffort: 'medium',
-    sandbox: 'workspace-git',
-    approvalPolicy: 'never',
-  });
+  const stopMetadataSampling = sampleNativeStartupMetadata();
+  let session;
+  try {
+    session = await api('POST', '/api/sessions', {
+      workspaceId: workspaceId(appRoot),
+      profile: 'default',
+      provider: 'codex',
+      model: 'gpt-6-sol',
+      reasoningEffort: 'medium',
+      sandbox: 'workspace-git',
+      approvalPolicy: 'never',
+    });
+  } finally {
+    report.projectMetadata.duringSessionCreate = stopMetadataSampling();
+  }
   report.projectMetadata.afterSessionCreate = ownedProjectMetadata();
   await api('POST', `/api/sessions/${session.id}/turns`, {
     text: 'Seed owning thread persistence.',
@@ -893,6 +938,8 @@ try {
     try {
       await mobile.close();
       mobile = undefined;
+      if (report.projectMetadata)
+        report.projectMetadata.afterOwnerShutdown = ownedProjectMetadata();
     } catch {
       report.shutdownFailure = 'LIVE_CLEANUP_REQUIRED';
       process.exitCode = 1;
