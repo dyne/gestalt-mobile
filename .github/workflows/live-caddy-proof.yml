@@ -14,6 +14,7 @@ on:
       - scripts/live-remote-*.mjs
       - scripts/live-model-tools-proof.mjs
       - scripts/live-native-proof-preflight.mjs
+      - scripts/live-project-isolation-proof.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -102,6 +103,16 @@ jobs:
           node scripts/live-native-proof-preflight.mjs
           native_binary="$RUNNER_TEMP/live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
+      - name: Actual pinned helper and project process namespaces with native confinement
+        timeout-minutes: 3
+        env:
+          LIVE_PROJECT_ISOLATION_PROOF: '1'
+          LIVE_PROJECT_ISOLATION_EVIDENCE: test-results/live-caddy-proof/project-isolation
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          native_binary="$RUNNER_TEMP/live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-project-isolation-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
         timeout-minutes: 5
         env:

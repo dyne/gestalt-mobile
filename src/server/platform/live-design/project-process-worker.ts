@@ -1,0 +1,130 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+// Private executable entry point. No listening management endpoint or project-selected target.
+import { spawn, type ChildProcess } from 'node:child_process';
+import { readlinkSync } from 'node:fs';
+import { createConnection, type Socket } from 'node:net';
+import { createInterface } from 'node:readline';
+
+type Specification = {
+  native: string;
+  executable: string;
+  argv: string[];
+  environment: Record<string, string>;
+  appRoot: string;
+  permissionProfile: unknown;
+  port: number;
+};
+let spec: Specification | undefined;
+let target: ChildProcess | undefined;
+let stopping = false;
+const channels = new Map<number, Socket>();
+const send = (message: unknown) => {
+  if (!stopping) {
+    if (process.stdout.writableLength > 1024 * 1024) {
+      stop();
+      return;
+    }
+    process.stdout.write(JSON.stringify(message) + '\n');
+  }
+};
+const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  for (const socket of channels.values()) socket.destroy();
+  channels.clear();
+  target?.kill('SIGTERM');
+  process.exit(1); // Outer PID namespace lifetime kills all descendants.
+};
+process.stdin.on('end', stop);
+process.stdout.on('error', stop);
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let inputBytes = 0;
+process.stdin.on('data', (data: Buffer) => {
+  inputBytes += data.length;
+  if (inputBytes > 512 * 1024) stop();
+});
+lines.on('line', (line) => {
+  inputBytes = 0;
+  try {
+    if (line.length > 256 * 1024) throw new Error();
+    const message = JSON.parse(line) as Record<string, unknown>;
+    if (!spec) {
+      if (message.op !== 'launch') throw new Error();
+      spec = message.specification as Specification;
+      if (!spec || !Array.isArray(spec.argv) || !Number.isSafeInteger(spec.port)) throw new Error();
+      target = spawn(
+        spec.native,
+        [
+          '--sandbox-policy-cwd',
+          spec.appRoot,
+          '--permission-profile',
+          JSON.stringify(spec.permissionProfile),
+          '--',
+          spec.executable,
+          ...spec.argv,
+        ],
+        {
+          argv0: 'codex-linux-sandbox',
+          cwd: spec.appRoot,
+          env: spec.environment,
+          // Never inherit the controller relay's pipe/socket/control descriptors.
+          stdio: ['ignore', 'ignore', 'ignore'],
+        },
+      );
+      target.once('error', () => {
+        send({ type: 'failed', reason: 'native-launch' });
+        stop();
+      });
+      target.once('exit', () => {
+        send({ type: 'failed', reason: 'native-exited' });
+        stop();
+      });
+      send({ type: 'namespace', network: readlinkSync('/proc/self/ns/net') });
+      return;
+    }
+    const id = message.id;
+    if (!Number.isSafeInteger(id) || Number(id) < 1) throw new Error();
+    if (message.op === 'open') {
+      if (channels.has(Number(id)) || channels.size >= 32) throw new Error();
+      const socket = createConnection({ host: '127.0.0.1', port: spec.port });
+      channels.set(Number(id), socket);
+      socket.once('connect', () => send({ type: 'connected', id }));
+      socket.on('data', (chunk: Buffer) => {
+        for (let offset = 0; offset < chunk.length; offset += 65536)
+          send({
+            type: 'data',
+            id,
+            data: chunk.subarray(offset, offset + 65536).toString('base64'),
+          });
+      });
+      socket.once('error', () => send({ type: 'channel-error', id }));
+      socket.once('end', () => send({ type: 'end', id }));
+      socket.once('close', () => {
+        channels.delete(Number(id));
+        send({ type: 'closed', id });
+      });
+      return;
+    }
+    const socket = channels.get(Number(id));
+    if (!socket) return;
+    if (message.op === 'data') {
+      if (typeof message.data !== 'string' || message.data.length > 87384) throw new Error();
+      if (socket.writableLength > 1024 * 1024) throw new Error();
+      socket.write(Buffer.from(message.data, 'base64'));
+    } else if (message.op === 'end') socket.end();
+    else if (message.op === 'close') socket.destroy();
+    else if (message.op === 'pause') socket.pause();
+    else if (message.op === 'resume') socket.resume();
+    else throw new Error();
+  } catch {
+    send({ type: 'failed', reason: 'controller-protocol' });
+    stop();
+  }
+});

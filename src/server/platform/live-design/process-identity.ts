@@ -15,7 +15,7 @@ export type LiveProcessIdentity = Readonly<{
   executable: string;
   executableDigest: string;
   cwd: string;
-  namespaces: Readonly<Record<'mnt' | 'user' | 'pid', string>>;
+  namespaces: Readonly<Record<'mnt' | 'user' | 'pid' | 'net', string>>;
 }>;
 
 /** Observation alone never grants ownership. Callers retain the actual ChildProcess handle. */
@@ -43,6 +43,7 @@ export function observeLiveProcess(pid: number): LiveProcessIdentity {
         mnt: readlinkSync(`${root}/ns/mnt`),
         user: readlinkSync(`${root}/ns/user`),
         pid: readlinkSync(`${root}/ns/pid`),
+        net: readlinkSync(`${root}/ns/net`),
       }),
     });
     // CPU/accounting fields change normally; only birth and state fence identity.
