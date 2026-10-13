@@ -49,6 +49,7 @@ it('authenticates Start and admits only opaque registered selections, never a su
     { pid: 1 },
     { url: 'http://127.0.0.1' },
     { receipt: {} },
+    { globallyExclusive: false },
   ])
     expect(
       (await f.mobile.inject({ method: 'POST', url, payload: { ...payload, ...extra }, headers }))

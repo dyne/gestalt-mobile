@@ -57,14 +57,12 @@ export function registerLiveStart(app: FastifyInstance, deps: PreviewGrantDepend
     limit(deps, `start:${identity.deviceId}`);
     try {
       const run = await deps.control!.start({ relayId, ...input, ...identity });
-      return reply
-        .code(200)
-        .send({
-          state: run.state,
-          liveId: run.liveId,
-          generation: run.generation,
-          previewOrigin: run.previewOrigin,
-        });
+      return reply.code(200).send({
+        state: run.state,
+        liveId: run.liveId,
+        generation: run.generation,
+        previewOrigin: run.previewOrigin,
+      });
     } catch (error) {
       if (error instanceof LiveAuthError) throw error;
       const code = publicFailures.has((error as Error)?.message)

@@ -21,6 +21,7 @@ import { InstalledLivePolicy } from './installed-policy.js';
 import { observeLiveProcess } from './process-identity.js';
 import type { ProductionLiveConfiguration } from './production-configuration.js';
 import { owningPermissions } from './owning-permissions.js';
+import { prepareHelperControlLayout } from './helper-control-layout.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 export type PreparedProductionPolicy = {
@@ -99,6 +100,7 @@ export async function prepareProductionPolicy(input: {
   }
   const policy = new InstalledLivePolicy(cfg.installation);
   policy.validateInstallation();
+  const controlState = prepareHelperControlLayout(app.appRoot, baselineState);
   mkdirSync(directory, { mode: 0o700 }); // No authority key until the baseline exclusions above pass.
   const runtimeHome = join(directory, 'native-worker-home');
   mkdirSync(runtimeHome, { mode: 0o700 });
@@ -126,18 +128,14 @@ export async function prepareProductionPolicy(input: {
   const controller = observeLiveProcess(process.pid);
   const gestalt = cfg.installation.packages.find((entry) => entry.name === 'gestalt')!;
   const state: ManagedProjectSandboxState = {
-    ...baselineState,
+    ...controlState,
     permissionProfile: {
-      ...baselineState.permissionProfile,
+      ...controlState.permissionProfile,
       file_system: {
-        ...baselineState.permissionProfile.file_system,
+        ...controlState.permissionProfile.file_system,
         entries: [
-          ...baselineState.permissionProfile.file_system.entries,
+          ...controlState.permissionProfile.file_system.entries,
           { path: { type: 'path', path: '/proc' }, access: 'deny' },
-          ...helperControlPaths(app.appRoot).map((path) => ({
-            path: { type: 'path' as const, path },
-            access: 'deny' as const,
-          })),
         ],
       },
     },
@@ -184,7 +182,6 @@ export async function prepareProductionPolicy(input: {
       writable: true,
     });
   }
-  for (const path of helperControlPaths(app.appRoot)) filesystem[path] = 'deny';
   if (state.permissionProfile.file_system.glob_scan_max_depth !== undefined)
     filesystem.glob_scan_max_depth = state.permissionProfile.file_system.glob_scan_max_depth;
   const active = selection.activePermissionProfile as { id: string; extends?: string | null };

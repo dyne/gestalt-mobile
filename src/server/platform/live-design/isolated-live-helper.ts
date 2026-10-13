@@ -11,6 +11,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
@@ -23,6 +24,7 @@ import type {
   LiveRun,
 } from '../../features/live-design/application/ownership.js';
 import type { IsolatedProjectProcess, IsolatedProjectReceipt } from './isolated-project-process.js';
+import { readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
 
 const id = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
 type CommandRecord = {
@@ -32,6 +34,7 @@ type CommandRecord = {
   controllerEpoch: number;
   receiptSignature: string;
   pending: null | { name: string; digest: string; ambiguous: boolean };
+  cancelled?: { name: string; digest: string; ambiguous: true; foregroundClosed: true };
 };
 
 /** Canonical foreground helper CLI inside its verified owned namespace. Browser
@@ -42,6 +45,8 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
   private readonly run: LiveRun;
   private readonly metadata: string;
   private inFlight = false;
+  private finished?: Promise<void>;
+  private serverRecord?: LiveConfigFile;
   constructor(
     private readonly input: {
       owners: LiveOwnershipStore;
@@ -104,7 +109,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     this.input.process.verify(this.receipt);
     return current;
   }
-  private record(): CommandRecord {
+  private record(cleanup = false, pending = false): CommandRecord {
     const stat = lstatSync(this.metadata);
     if (
       !stat.isFile() ||
@@ -122,7 +127,8 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       record.generation !== this.run.generation ||
       record.controllerEpoch !== this.run.controllerEpoch ||
       record.receiptSignature !== this.receipt.signature ||
-      record.pending !== null
+      (!pending && record.pending !== null) ||
+      (!cleanup && record.cancelled !== undefined)
     )
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     return record;
@@ -136,7 +142,8 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     const run = this.verify();
     if (this.inFlight || (args[0] === 'live-poll' && run.state !== 'active'))
       throw new Error('LIVE_HELPER_COMMAND_UNAVAILABLE');
-    const record = this.record();
+    const removal = args[0] === 'live-inject' && args[1] === '--remove' && run.state === 'stopping';
+    const record = this.record(removal);
     record.pending = {
       name: args[0]!,
       digest: createHash('sha256').update(JSON.stringify(args)).digest('hex'),
@@ -144,6 +151,10 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     };
     this.save(record); // Durable intent precedes any helper/source/journal IO.
     this.inFlight = true;
+    let finish!: () => void;
+    this.finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     try {
       const result = await this.input.process.helperCommand(this.receipt, args, deadlineMs);
       this.verify();
@@ -156,6 +167,26 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       throw new Error('LIVE_HELPER_COMMAND_AMBIGUOUS');
     } finally {
       this.inFlight = false;
+      finish();
+    }
+  }
+  async settle(): Promise<void> {
+    const run = this.verify();
+    if (run.state !== 'stopping') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    if (this.inFlight) {
+      const finished = this.finished;
+      await this.input.process.cancelHelperCommand(this.receipt);
+      await finished;
+    }
+    this.verify();
+    const record = this.record(true, true);
+    if (record.pending) {
+      // Closing a poll does not prove that an upstream lease/source effect did
+      // not occur. Retain its ambiguity and permit only injection removal.
+      if (record.pending.name !== 'live-poll') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+      record.cancelled = { ...record.pending, ambiguous: true, foregroundClosed: true };
+      record.pending = null;
+      this.save(record);
     }
   }
   async inject(remove = false): Promise<unknown> {
@@ -187,7 +218,21 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     )
       throw new Error('LIVE_HELPER_NOT_READY');
     this.verify();
+    this.serverRecord = readLiveConfigFile(path);
     return value;
+  }
+  /** Remove only the record verified against this exact owned server, after
+   * positive namespace/descriptor closure. Never inspect/adopt an external PID.
+   */
+  forgetExitedServerRecord(): void {
+    const proof = this.input.process.diagnostics();
+    if (!proof.namespaceExited || !proof.pipeDescriptorsClosed)
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    const path = join(this.run.app.canonicalAppRoot, '.impeccable/live/server.json');
+    if (!existsSync(path)) return;
+    if (!this.serverRecord || readLiveConfigFile(path).sha256 !== this.serverRecord.sha256)
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    unlinkSync(path);
   }
   poll(): Promise<unknown> {
     return this.command(['live-poll', '--timeout=600000'], 660000);

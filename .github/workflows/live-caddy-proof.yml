@@ -15,6 +15,7 @@ on:
       - scripts/live-model-tools-proof.mjs
       - scripts/live-native-proof-preflight.mjs
       - scripts/live-project-isolation-proof.mjs
+      - scripts/live-production-entrypoint-proof.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,6 +33,20 @@ jobs:
           node-version: 24.21.0
           cache: npm
       - run: npm ci
+      - name: Read-only accepted Manager input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: dyne/gestalt
+          ref: 4a01397a7939a1f633db1aea73dc24d243210883
+          path: .host-manager-input
+          persist-credentials: false
+      - name: Read-only accepted Agents input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: dyne/gestalt-agents
+          ref: 51331acf760609aa71703538b3493d187d9e8064
+          path: .host-agents-input
+          persist-credentials: false
       - name: Prepare pinned test tools in runner temporary state
         run: |
           set -Eeuo pipefail
@@ -55,6 +70,11 @@ jobs:
           echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
           tar -xzf "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" impeccable
           echo "LIVE_TEST_IMPECCABLE=$RUNNER_TEMP/live-proof-tools/impeccable" >> "$GITHUB_ENV"
+          install -m0500 .host-manager-input/public/gestalt "$RUNNER_TEMP/live-proof-tools/gestalt"
+          printf '%s  %s\n' 785f300578a98f214724b1f65b9a52d880cecf9429ab2dc30a099dbafd049ea7 "$RUNNER_TEMP/live-proof-tools/gestalt" | sha256sum --check --status
+          npm install --prefix "$RUNNER_TEMP/live-proof-bun" --no-save bun@1.3.14
+          echo "LIVE_HOST_MANAGER_BINARY=$RUNNER_TEMP/live-proof-tools/gestalt" >> "$GITHUB_ENV"
+          echo "LIVE_HOST_AGENTS_ROOT=$GITHUB_WORKSPACE/.host-agents-input" >> "$GITHUB_ENV"
       - name: Prepare disposable browser trust and network prerequisites
         run: |
           set -Eeuo pipefail
@@ -122,6 +142,17 @@ jobs:
           set -Eeuo pipefail
           npm run build:server
           node scripts/live-remote-proof.mjs
+      - name: Sole production composition admission and owning native tools
+        timeout-minutes: 8
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          native_binary="$RUNNER_TEMP/live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-production-entrypoint-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

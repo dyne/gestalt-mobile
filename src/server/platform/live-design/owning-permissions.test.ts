@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CodexSessionRuntime } from '../codex/session-runtime.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
-import { owningPermissions } from './owning-permissions.js';
+import { livePolicyAppConfined, owningPermissions } from './owning-permissions.js';
 import { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
@@ -67,6 +67,18 @@ function fixture() {
   };
 }
 describe('actual owning selections to production permission admission', () => {
+  it('never ignores writable scratch when classifying scope and honors native inherited exclusions', () => {
+    const f = fixture();
+    expect(livePolicyAppConfined(owningPermissions(f).state, f.appRoot)).toBe(false);
+    f.observation.configuration = {
+      ...(f.observation.configuration as object),
+      config: {
+        permissions: { live: f.profile },
+        sandbox_workspace_write: { exclude_slash_tmp: true, exclude_tmpdir_env_var: true },
+      },
+    };
+    expect(livePolicyAppConfined(owningPermissions(f).state, f.appRoot)).toBe(true);
+  });
   it('retains inherited roots, temp access, private denial and selected thinking', () => {
     const f = fixture(),
       result = owningPermissions(f);

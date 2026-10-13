@@ -48,6 +48,26 @@ afterEach(() => {
 });
 
 describe('shared durable Live ownership', () => {
+  it('retains global exclusion for actual broader production rights, including recovery and retry', () => {
+    const f = fixture();
+    const broad = { ...f.claim(), globallyExclusive: true };
+    const { run } = f.store.claim(broad);
+    expect(() => f.second.checkOrdinary('other-session', [f.other])).toThrow('LIVE_MODE_ACTIVE');
+    expect(() => f.second.claim(f.claim('other-session', f.other))).toThrow('LIVE_APP_BUSY');
+    expect(() => f.second.retry({ ...broad, globallyExclusive: false })).toThrow(
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    const recovered = f.store.mutate(run, { event: 'recover', code: 'LIVE_SCOPE_CHANGED' });
+    expect(recovered.globallyExclusive).toBe(true);
+    expect(() => f.second.reserveWriter('other-session', [f.other])).toThrow('LIVE_MODE_ACTIVE');
+  });
+  it('refuses a global production claim while even an unrelated proven writer remains', () => {
+    const f = fixture();
+    f.store.reserveWriter('other-session', [f.other]);
+    expect(() => f.second.claim({ ...f.claim(), globallyExclusive: true })).toThrow(
+      'LIVE_SESSION_BUSY',
+    );
+  });
   it('atomically claims both relay and app across independent Mobile connections', () => {
     const f = fixture();
     const first = f.store.claim(f.claim()).run;

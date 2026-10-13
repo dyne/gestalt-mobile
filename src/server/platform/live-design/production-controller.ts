@@ -5,7 +5,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -43,7 +51,7 @@ import {
   resolveLiveConfigFiles,
   type LiveConfigFile,
 } from './effective-config.js';
-import { owningPermissions } from './owning-permissions.js';
+import { livePolicyAppConfined, owningPermissions } from './owning-permissions.js';
 import { InstalledLivePolicy, measureInstalledLiveTree } from './installed-policy.js';
 import {
   IsolatedProjectProcess,
@@ -216,13 +224,14 @@ export class ProductionLiveController {
         appRoot: app.appRoot,
         protectedPaths,
       });
+      if (!livePolicyAppConfined(state, app.appRoot)) {
+        this.scopesBySession.delete(session.id);
+        return; // The actual existing unknown/global reservation remains held.
+      }
       const scopes = [
         ...new Set(
           state.permissionProfile.file_system.entries.flatMap((entry) =>
-            entry.access === 'write' &&
-            entry.path.type === 'path' &&
-            entry.path.path !== '/tmp' &&
-            entry.path.path !== observation.launchEnvironment?.tmpdir
+            entry.access === 'write' && entry.path.type === 'path'
               ? [
                   lstatSync(entry.path.path).isDirectory()
                     ? entry.path.path
@@ -332,6 +341,7 @@ export class ProductionLiveController {
     const b = this.requireBindings();
     await b.settleAuxiliary();
     this.verifyHost();
+    this.owners.checkOrdinary(session.id, this.scopes(session));
     const observation = await b.runtime.inspectLiveAdmission(session);
     const idle = await b.runtime.inspectLiveQuiescence(session);
     const expected = this.owners.preparationGeneration();
@@ -342,6 +352,7 @@ export class ProductionLiveController {
       devserver: IsolatedProjectProcess | undefined;
     let ownerReleased = false;
     let ownerReleaseAttempted = false;
+    let stage = 'original-config';
     try {
       let helperReceipt!: IsolatedProjectReceipt, devReceipt!: IsolatedProjectReceipt;
       await b.guard.livePreparation(session, async () => {
@@ -351,6 +362,7 @@ export class ProductionLiveController {
           threadConfig: observation.threadConfig,
           approved: { mcpServers: {}, plugins: {} },
         });
+        stage = 'original-permissions';
         owningPermissions({
           session,
           observation,
@@ -364,8 +376,10 @@ export class ProductionLiveController {
           ],
         });
         ownerReleaseAttempted = true;
+        stage = 'owning-unload';
         await b.runtime.releaseLivePreparation(session);
         ownerReleased = true;
+        stage = 'policy-preparation';
         policy = await prepareProductionPolicy({
           configuration: this.cfg,
           source: this.source,
@@ -385,6 +399,7 @@ export class ProductionLiveController {
           node: this.cfg.project.node,
           worker: this.cfg.project.worker,
         };
+        stage = 'helper-construction';
         helper = new IsolatedProjectProcess({
           ...common,
           role: 'helper',
@@ -407,6 +422,7 @@ export class ProductionLiveController {
           ],
           launchInputs: [readLiveConfigFile(join(app.appRoot, '.impeccable/live/config.json'))],
         });
+        stage = 'helper-start';
         helperReceipt = await helper.start();
         const caches = app.devserver.cacheDirectories.map((value) => {
           const path = join(app.appRoot, value);
@@ -432,6 +448,7 @@ export class ProductionLiveController {
             },
           ],
         };
+        stage = 'devserver-construction';
         devserver = new IsolatedProjectProcess({
           ...common,
           role: 'devserver',
@@ -449,6 +466,7 @@ export class ProductionLiveController {
             join(app.appRoot, '.impeccable'),
           ],
         });
+        stage = 'devserver-start';
         devReceipt = await devserver.start();
       });
       b.guard.settle(session.id, idle.outstanding);
@@ -457,10 +475,9 @@ export class ProductionLiveController {
         provider: 'codex',
         rootThreadId: session.threadId!,
         app: liveAppIdentity(app.appRoot),
-        targetIdentity: JSON.stringify({
-          signature: devReceipt.signature,
-          target: devReceipt.target,
-        }),
+        globallyExclusive: !livePolicyAppConfined(policy!.state, app.appRoot),
+        // The bounded opaque HMAC binds the full process birth/namespace/spec.
+        targetIdentity: devReceipt.signature,
         previewOrigin: assignment.origin,
       };
       this.generations.set(session.id, {
@@ -480,6 +497,28 @@ export class ProductionLiveController {
       });
       return claim;
     } catch (error) {
+      // Bounded private diagnostics. Never write argv, response bodies, paths,
+      // source configuration, prompts or environment values into this record.
+      try {
+        writeFileSync(
+          join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
+          JSON.stringify({
+            schemaVersion: 1,
+            stage,
+            code:
+              error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
+                ? error.message
+                : 'UNCLASSIFIED',
+            ownerReleased,
+            ownerReleaseAttempted,
+            helper: helper?.diagnostics(),
+            devserver: devserver?.diagnostics(),
+          }) + '\n',
+          { mode: 0o600, flag: 'wx' },
+        );
+      } catch {
+        /* Diagnostic IO cannot waive failure or prevent cleanup. */
+      }
       // Independent resources must all be attempted; failed teardown retains the
       // original writer exclusion and authority key for explicit reconciliation.
       const closed = await Promise.allSettled([devserver?.stop(), helper?.stop()]);
@@ -702,8 +741,19 @@ export class ProductionLiveController {
   }
   private async cleanup(run: LiveRun): Promise<void> {
     const g = this.generation(run);
-    await this.revoke(run);
     let failed = false;
+    try {
+      await this.revoke(run);
+    } catch {
+      failed = true;
+    }
+    if (g.loop) {
+      try {
+        await g.loop.drain(run);
+      } catch {
+        failed = true;
+      }
+    }
     if (g.resumed) {
       try {
         await this.requireBindings().runtime.abortLiveOwner(g.session, {
@@ -734,6 +784,11 @@ export class ProductionLiveController {
       }
     }
     if (!g.resumed && processesClosed) {
+      try {
+        g.cli?.forgetExitedServerRecord();
+      } catch {
+        failed = true;
+      }
       if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
       g.retired = true;
     }
@@ -779,8 +834,49 @@ export class ProductionLiveController {
           try {
             if (g.run) {
               let run = this.owners.current(g.run.liveId);
-              if (!run || run.generation !== g.plannedGeneration)
+              if (
+                !run ||
+                run.controllerEpoch !== g.run.controllerEpoch ||
+                run.rootThreadId !== g.session.threadId
+              )
                 throw new Error('LIVE_GENERATION_STALE');
+              if (run.generation !== g.plannedGeneration) {
+                // Recovery has already revoked the old generation. Never reuse
+                // its CLI authority, but still retire these exact owned lifetimes.
+                try {
+                  await this.connections?.revoke({
+                    liveId: run.liveId,
+                    throughGeneration: run.generation,
+                  });
+                } catch {
+                  failed = true;
+                }
+                if (g.resumed) {
+                  try {
+                    await this.requireBindings().runtime.abortLiveOwner(g.session, {
+                      owners: this.owners,
+                      fence: run,
+                    });
+                    g.resumed = false;
+                  } catch {
+                    failed = true;
+                  }
+                }
+                const retired = await Promise.allSettled([
+                  g.devserver.stop(),
+                  g.helper.stop(),
+                  g.gateway?.close(),
+                ]);
+                if (retired.some((result) => result.status === 'rejected'))
+                  throw new Error('LIVE_CLEANUP_REQUIRED');
+                if (!g.resumed) {
+                  if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
+                  g.retired = true;
+                }
+                // Source/route reconciliation remains required under its durable lock.
+                failed = true;
+                continue;
+              }
               if (['starting', 'active', 'error', 'recoveryRequired'].includes(run.state))
                 run = this.owners.mutate(run, { event: 'stop' });
               g.run = run;

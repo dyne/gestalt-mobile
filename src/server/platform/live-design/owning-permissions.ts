@@ -30,6 +30,13 @@ const inside = (root: string, path: string) => {
   const tail = relative(root, path);
   return !tail || (tail !== '..' && !tail.startsWith(`..${sep}`) && !isAbsolute(tail));
 };
+/** Uncertain or broader writable roots are global, never omitted as scratch. */
+export function livePolicyAppConfined(state: ManagedProjectSandboxState, appRoot: string): boolean {
+  return state.permissionProfile.file_system.entries.every(
+    (entry) =>
+      entry.access !== 'write' || (entry.path.type === 'path' && inside(appRoot, entry.path.path)),
+  );
+}
 
 /** Pinned native 0.161 exact/scoped paths and bounded deny-glob subset. Parent-first merge and built-in
  * read/workspace inheritance follow config/permissions.rs + permissions_toml.rs.
@@ -68,6 +75,10 @@ export function owningPermissions(input: {
     const configuration = record.parse(record.parse(observation.configuration).config);
     const merged = mergeLiveConfig(configuration, observation.threadConfig);
     const profiles = record.parse(merged.permissions);
+    const workspace =
+      merged.sandbox_workspace_write === undefined
+        ? {}
+        : record.parse(merged.sandbox_workspace_write);
     const visited = new Set<string>();
     const resolve = (name: string): Record<string, unknown> => {
       if (name === ':read-only') return { filesystem: { ':root': 'read' } };
@@ -76,8 +87,8 @@ export function owningPermissions(input: {
           filesystem: {
             ':root': 'read',
             ':workspace_roots': 'write',
-            ':slash_tmp': 'write',
-            ':tmpdir': 'write',
+            ...(workspace.exclude_slash_tmp === true ? {} : { ':slash_tmp': 'write' }),
+            ...(workspace.exclude_tmpdir_env_var === true ? {} : { ':tmpdir': 'write' }),
           },
         };
       if (visited.has(name) || visited.size >= 16) throw new Error();

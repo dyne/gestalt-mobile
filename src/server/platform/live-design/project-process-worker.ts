@@ -23,6 +23,8 @@ type Specification = {
 let spec: Specification | undefined;
 let target: ChildProcess | undefined;
 let command: ChildProcess | undefined;
+let commandRequest: number | undefined;
+let commandCancelled = false;
 let stopping = false;
 const channels = new Map<number, Socket>();
 const send = (message: unknown) => {
@@ -95,6 +97,13 @@ lines.on('line', (line) => {
       send({ type: 'namespace', network: readlinkSync('/proc/self/ns/net') });
       return;
     }
+    if (message.op === 'helper-command-cancel') {
+      if (command && message.requestId === commandRequest) {
+        commandCancelled = true;
+        command.kill('SIGTERM');
+      }
+      return;
+    }
     if (message.op === 'helper-command') {
       const requestId = message.requestId;
       const args = message.args;
@@ -135,6 +144,8 @@ lines.on('line', (line) => {
         },
       );
       command = child;
+      commandRequest = id;
+      commandCancelled = false;
       let output = '',
         bytes = 0,
         failed = false;
@@ -156,6 +167,12 @@ lines.on('line', (line) => {
       child.once('close', (code) => {
         clearTimeout(timer);
         command = undefined;
+        commandRequest = undefined;
+        if (commandCancelled) {
+          send({ type: 'helper-command-cancelled', requestId: id });
+          commandCancelled = false;
+          return;
+        }
         if (code !== 0 || failed) {
           send({ type: 'helper-command-failed', requestId: id, reason: 'native-command-exit' });
           return;

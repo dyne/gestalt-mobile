@@ -1,0 +1,866 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+// Supported-host production construction and real native tools. The provider is
+// controlled and credential-free; this never substitutes for genuine proof.
+import assert from 'node:assert/strict';
+import { spawn, execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { createServer } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { createServer as portServer } from 'node:net';
+import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
+import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
+import { composeRelayApp } from '../dist/server/server/composition.js';
+import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
+import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
+import {
+  measureInstalledLiveTree,
+  LIVE_MANAGER_SHA256,
+} from '../dist/server/server/platform/live-design/installed-policy.js';
+import {
+  LIVE_CODEX_SHA256,
+  LIVE_CODEX_BWRAP_SHA256,
+} from '../dist/server/server/platform/live-design/native-contract.js';
+import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
+import { observedBirthExited } from '../dist/server/server/platform/live-design/process-identity.js';
+import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
+
+assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
+const evidence = resolve(
+  process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
+);
+mkdirSync(evidence, { recursive: true, mode: 0o700 });
+const report = {
+  schemaVersion: 1,
+  passed: false,
+  genuine: false,
+  stage: 'installation',
+  checks: {},
+  provider: { requestCount: 0 },
+  cleanupComplete: false,
+  limitations: [
+    'Controlled provider, not genuine credential-dependent proof.',
+    'Admission/model-tool probe does not claim a successful generated UI variant or acceptance.',
+  ],
+};
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
+const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
+const appRoot = join(root, 'app'),
+  privateRoot = join(root, 'private'),
+  installation = join(root, 'installed');
+for (const path of [appRoot, privateRoot, installation]) mkdirSync(path, { mode: 0o700 });
+const home = join(privateRoot, 'home'),
+  owningHome = join(privateRoot, 'owning'),
+  controller = join(privateRoot, 'controller'),
+  caddyRoot = join(privateRoot, 'caddy');
+for (const path of [home, owningHome, controller, caddyRoot]) mkdirSync(path, { mode: 0o700 });
+let mobile, caddy, stream, baselineBirth, generationDirectory;
+const privateCanary = randomBytes(32).toString('hex'),
+  privateFile = join(privateRoot, 'canary');
+writeFileSync(privateFile, privateCanary, { mode: 0o600 });
+const mobileOrigin = 'https://mobile.entrypoint.test';
+const rp = { publicOrigin: mobileOrigin, rpId: 'mobile.entrypoint.test', rpName: 'Gestalt Mobile' };
+const browserSession = previewSecrets.token();
+const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browserSession}` };
+const roles = new Map();
+let seed = true,
+  seedStep = 0,
+  owningThread,
+  owningNativeSession,
+  childThread,
+  providerFailure;
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+async function until(check, stage, budget = 30000) {
+  const deadline = Date.now() + budget;
+  while (Date.now() < deadline) {
+    if (providerFailure) throw new Error('CONTROLLED_PROVIDER_FAILED');
+    if (await check()) return;
+    await wait(50);
+  }
+  throw new Error(stage);
+}
+function protect(path) {
+  const info = lstatSync(path);
+  assert.equal(info.isSymbolicLink(), false);
+  if (info.isDirectory()) {
+    for (const name of readdirSync(path)) protect(join(path, name));
+    chmodSync(path, 0o500);
+  } else {
+    assert.ok(info.isFile());
+    chmodSync(path, info.mode & 0o111 ? 0o500 : 0o400);
+  }
+}
+function copyFile(source, target, executable = false) {
+  writeFileSync(target, readFileSync(source), { flag: 'wx', mode: executable ? 0o500 : 0o400 });
+  return pin(target);
+}
+async function port() {
+  const server = portServer();
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const value = server.address().port;
+  await new Promise((done) => server.close(done));
+  return value;
+}
+function toolsIn(tools, namespace) {
+  return tools.flatMap((tool) =>
+    tool.type === 'namespace' ? toolsIn(tool.tools, tool.name) : [{ ...tool, namespace }],
+  );
+}
+function call(tool, id, value, custom = false) {
+  const item = custom
+    ? { type: 'custom_tool_call', call_id: id, name: tool.name, input: value }
+    : { type: 'function_call', call_id: id, name: tool.name, arguments: JSON.stringify(value) };
+  if (tool.namespace) item.namespace = tool.namespace;
+  return { type: 'response.output_item.done', item };
+}
+function final(id, text) {
+  return {
+    type: 'response.output_item.done',
+    item: {
+      type: 'message',
+      role: 'assistant',
+      phase: 'final_answer',
+      id,
+      content: [{ type: 'output_text', text }],
+    },
+  };
+}
+function quote(value) {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+function childCompletion() {
+  if (!childThread) return false;
+  let found = false;
+  const walk = (path, depth = 0) => {
+    if (depth > 5 || !existsSync(path)) return;
+    for (const name of readdirSync(path)) {
+      const file = join(path, name),
+        info = lstatSync(file);
+      if (info.isDirectory()) walk(file, depth + 1);
+      else if (
+        name.endsWith('.jsonl') &&
+        name.includes(childThread) &&
+        info.size < 4 * 1024 * 1024
+      ) {
+        const lines = readFileSync(file, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        found ||= lines.some(
+          (line) =>
+            line.type === 'event_msg' &&
+            ['task_complete', 'turn_complete'].includes(line.payload?.type),
+        );
+      }
+    }
+  };
+  walk(join(owningHome, 'sessions'));
+  return found;
+}
+async function eventFor(body) {
+  assert.equal(body.model, 'gpt-6-sol');
+  assert.equal(body.reasoning?.effort, 'medium');
+  const metadata = body.client_metadata;
+  assert.equal(typeof metadata?.thread_id, 'string');
+  if (seed) {
+    owningThread = metadata.thread_id;
+    owningNativeSession = metadata.session_id;
+    if (seedStep++ === 0) {
+      const initialTools = toolsIn([
+        ...(body.tools ?? []),
+        ...(body.input ?? [])
+          .filter((item) => item.type === 'additional_tools')
+          .flatMap((item) => item.tools ?? []),
+      ]);
+      const direct = initialTools.find((tool) => tool.name === 'exec_command');
+      const args = {
+        cmd: '/usr/bin/true',
+        workdir: appRoot,
+        yield_time_ms: 1000,
+        max_output_tokens: 1000,
+      };
+      if (direct) return call(direct, 'seed-exec', args);
+      const code = initialTools.find((tool) => tool.name === 'exec' && tool.type === 'custom');
+      assert.ok(code?.description?.includes('declare const tools: { exec_command('));
+      return call(
+        code,
+        'seed-exec',
+        `text(await tools.exec_command(${JSON.stringify(args)}));`,
+        true,
+      );
+    }
+    assert.ok(
+      body.input.some(
+        (item) =>
+          item.call_id === 'seed-exec' &&
+          ['function_call_output', 'custom_tool_call_output'].includes(item.type),
+      ),
+    );
+    return final('seed', 'Seed completed.');
+  }
+  assert.equal(metadata.session_id, owningNativeSession);
+  const role = metadata.thread_id === owningThread ? 'root' : 'child';
+  if (role === 'child') {
+    assert.ok(!childThread || childThread === metadata.thread_id);
+    childThread = metadata.thread_id;
+  }
+  const step = roles.get(role) ?? 0;
+  roles.set(role, step + 1);
+  report.provider.lastCall = { role, step };
+  const available = toolsIn([
+    ...(body.tools ?? []),
+    ...(body.input ?? [])
+      .filter((x) => x.type === 'additional_tools')
+      .flatMap((x) => x.tools ?? []),
+  ]);
+  const code = available.find((tool) => tool.name === 'exec' && tool.type === 'custom');
+  const toolCall = (name, args, custom = false) => {
+    const direct = available.find((tool) => tool.name === name);
+    if (direct) return call(direct, `${role}-${step}`, args, custom);
+    assert.ok(code?.description?.includes(`declare const tools: { ${name}(`));
+    return call(
+      code,
+      `${role}-${step}`,
+      `text(await tools.${name}(${JSON.stringify(args)}));`,
+      true,
+    );
+  };
+  if (step === 1) {
+    const output = body.input.find(
+      (x) =>
+        x.call_id === `${role}-0` &&
+        ['function_call_output', 'custom_tool_call_output'].includes(x.type),
+    );
+    assert.ok(output);
+    for (const marker of [
+      'production-private-denied',
+      'production-control-parent-denied',
+      'production-legacy-directory-denied',
+    ])
+      assert.ok(JSON.stringify(output.output).includes(marker));
+  }
+  if (step === 0) {
+    const artifact = join(appRoot, '.impeccable/live/artifacts', `${role}-exec.txt`);
+    const python = `import os\nopen(${JSON.stringify(artifact)},'w').write('permitted-artifact')\nfor p,m in [(${JSON.stringify(privateFile)},'r'),(${JSON.stringify(join(appRoot, '.impeccable/live/future-control.json'))},'w'),(${JSON.stringify(join(appRoot, '.impeccable-live/future-control.json'))},'w')]:\n try:\n  open(p,m).close(); raise RuntimeError('breach')\n except OSError as e:\n  if e.errno not in [1,2,13,20,30]: raise\n  print(['production-private-denied','production-control-parent-denied','production-legacy-directory-denied'][[${JSON.stringify(privateFile)},${JSON.stringify(join(appRoot, '.impeccable/live/future-control.json'))},${JSON.stringify(join(appRoot, '.impeccable-live/future-control.json'))}].index(p)])\n`;
+    return toolCall('exec_command', {
+      cmd: `/usr/bin/python3 -c ${quote(python)}`,
+      workdir: appRoot,
+      yield_time_ms: 1000,
+      max_output_tokens: 1000,
+    });
+  }
+  if (step === 1)
+    return toolCall(
+      'apply_patch',
+      `*** Begin Patch\n*** Add File: ${join(appRoot, '.impeccable/live/artifacts', `${role}-patch.txt`)}\n+permitted-patch\n*** End Patch`,
+      true,
+    );
+  if (step === 2)
+    return toolCall(
+      'apply_patch',
+      `*** Begin Patch\n*** Add File: ${join(privateRoot, `${role}-forbidden.txt`)}\n+forbidden\n*** End Patch`,
+      true,
+    );
+  if (role === 'root' && step === 3) {
+    const ctx = available.find((tool) => /ctx_execute$/.test(tool.name));
+    const nested = code?.description?.match(
+      /declare const tools: \{ ([A-Za-z0-9_]*ctx_execute)\(/,
+    )?.[1];
+    assert.ok(ctx || nested);
+    const args = {
+      language: 'javascript',
+      code: `const fs=require('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
+      intent: 'Controlled production context confinement probe',
+    };
+    return ctx ? call(ctx, `${role}-${step}`, args) : toolCall(nested, args);
+  }
+  if (role === 'root' && step === 4) {
+    assert.ok(JSON.stringify(body.input).includes('production-context-denied'));
+    const spawnTool = available.find((tool) => tool.name === 'spawn_agent');
+    assert.ok(spawnTool);
+    const properties = spawnTool.parameters?.properties ?? {};
+    assert.ok(properties.fork_turns || properties.fork_context);
+    return call(spawnTool, `${role}-${step}`, {
+      message: 'Run the controlled inherited-confinement probe and finish.',
+      agent_type: 'default',
+      ...(properties.task_name ? { task_name: 'confined_probe' } : {}),
+      ...(properties.fork_turns ? { fork_turns: 'none' } : { fork_context: false }),
+    });
+  }
+  if (role === 'root' && step === 5) {
+    const spawned = body.input.find(
+      (x) => x.call_id === 'root-4' && x.type === 'function_call_output',
+    );
+    assert.ok(spawned);
+    await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
+  }
+  return final(
+    `${role}-final`,
+    role === 'root'
+      ? JSON.stringify({
+          status: 'error',
+          message: 'Controlled admission probe; no UI variant success claimed.',
+        })
+      : 'Child confinement probe completed.',
+  );
+}
+const provider = createServer(async (req, res) => {
+  try {
+    if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({ data: [{ id: 'gpt-6-sol', object: 'model', owned_by: 'controlled' }] }),
+      );
+      return;
+    }
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, '/v1/responses');
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      assert.ok(size < 4 * 1024 * 1024);
+      chunks.push(chunk);
+    }
+    const raw = Buffer.concat(chunks),
+      encoding = req.headers['content-encoding'];
+    const decode = { gzip: gunzipSync, deflate: inflateSync, zstd: zstdDecompressSync }[encoding];
+    assert.ok(!encoding || encoding === 'identity' || decode);
+    const bytes = decode ? decode(raw, { maxOutputLength: 4 * 1024 * 1024 }) : raw;
+    assert.ok(!bytes.includes(Buffer.from(privateCanary)));
+    report.provider.requestCount++;
+    assert.ok(report.provider.requestCount <= 20);
+    const body = JSON.parse(bytes),
+      id = `production-${report.provider.requestCount}`,
+      event = await eventFor(body);
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+    for (const data of [
+      { type: 'response.created', response: { id } },
+      event,
+      {
+        type: 'response.completed',
+        response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+      },
+    ])
+      res.write(`event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`);
+    res.end();
+  } catch (error) {
+    providerFailure = true;
+    report.provider.failureCode =
+      error?.code === 'ERR_ASSERTION' ? 'ERR_ASSERTION' : 'CONTROLLED_PROVIDER_FAILED';
+    res.writeHead(503);
+    res.end();
+  }
+});
+const sourceIndex = '<!doctype html><html><head></head><body><h1>Owning app</h1></body></html>\n';
+let preview, previewCookie;
+async function remote(path, { method = 'GET', body, streamResponse = false } = {}) {
+  return new Promise((done, reject) => {
+    const req = httpsRequest(
+      new URL(path, preview),
+      {
+        method,
+        ca: readFileSync(join(caddyRoot, 'tls.pem')),
+        lookup: (_name, options, callback) =>
+          options.all
+            ? callback(null, [{ address: '127.0.0.1', family: 4 }])
+            : callback(null, '127.0.0.1', 4),
+        headers: {
+          origin: preview,
+          ...(previewCookie ? { cookie: previewCookie } : {}),
+          ...(body ? { 'content-type': 'application/json' } : {}),
+        },
+      },
+      (res) => {
+        if (streamResponse) {
+          res.on('data', () => {});
+          done(res);
+          return;
+        }
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.once('end', () =>
+          done({
+            status: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString(),
+          }),
+        );
+      },
+    );
+    req.once('error', reject);
+    req.setTimeout(30000, () => req.destroy(new Error('REMOTE_DEADLINE')));
+    req.end(body ? JSON.stringify(body) : undefined);
+  });
+}
+async function api(method, path, payload) {
+  const res = await mobile.inject({ method, url: path, payload, headers });
+  if (res.statusCode >= 400) {
+    report.apiFailure = { status: res.statusCode, code: res.json()?.code ?? 'UNCLASSIFIED' };
+    throw new Error('PRODUCTION_API_REFUSED');
+  }
+  return res.json();
+}
+try {
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  assert.equal(head, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  report.provenance = {
+    head,
+    tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
+    agents: '9866e6f7abef7a3226052d803ce963c49f88cd0f',
+    manager: LIVE_MANAGER_SHA256,
+  };
+  const vendor = join(installation, 'vendor');
+  cpSync(dirname(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY))), vendor, {
+    recursive: true,
+  });
+  protect(vendor);
+  const native = pin(join(vendor, 'bin/codex')),
+    bwrap = pin(join(vendor, 'codex-resources/bwrap'));
+  assert.equal(native.sha256, LIVE_CODEX_SHA256);
+  assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
+  const nodeRoot = join(installation, 'node-bin');
+  mkdirSync(nodeRoot, { mode: 0o700 });
+  const node = copyFile(process.execPath, join(nodeRoot, 'node'), true);
+  const manager = copyFile(
+    process.env.LIVE_HOST_MANAGER_BINARY,
+    join(installation, 'gestalt'),
+    true,
+  );
+  assert.equal(manager.sha256, LIVE_MANAGER_SHA256);
+  const helper = copyFile(process.env.LIVE_TEST_IMPECCABLE, join(installation, 'impeccable'), true);
+  assert.equal(helper.sha256, LIVE_HELPER_BINARY_SHA256);
+  const worker = copyFile(
+    resolve('dist/server/server/platform/live-design/project-process-worker.js'),
+    join(installation, 'project-worker.mjs'),
+  );
+  const agentsRoot = realpathSync(process.env.LIVE_HOST_AGENTS_ROOT);
+  assert.equal(
+    execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: agentsRoot, encoding: 'utf8' }).trim(),
+    report.provenance.agents,
+  );
+  const packages = ['context-mode', 'gestalt'].map((name) => {
+    const target = join(installation, name);
+    cpSync(join(agentsRoot, 'plugins', name), target, {
+      recursive: true,
+      filter: (path) =>
+        !path
+          .split('/')
+          .some(
+            (part) =>
+              part === 'node_modules' ||
+              part === 'build' ||
+              part.startsWith('.context-mode-prepare'),
+          ) && !path.endsWith('.bundle.mjs'),
+    });
+    return { name, root: target };
+  });
+  const { prepareLiveRuntime } = await import(
+    pathToFileURL(join(installation, 'gestalt/scripts/prepare-live-runtime.mjs')).href
+  );
+  const preparedRuntime = await prepareLiveRuntime(
+    join(installation, 'context-mode'),
+    join(installation, 'context-runtime'),
+  );
+  for (const entry of packages) {
+    protect(entry.root);
+    entry.sha256 = measureInstalledLiveTree(entry.root);
+  }
+  protect(preparedRuntime.root);
+  const runtime = {
+    root: preparedRuntime.root,
+    sha256: measureInstalledLiveTree(preparedRuntime.root),
+  };
+  const mobileRoot = realpathSync(resolve('dist/server'));
+  protect(mobileRoot);
+  report.checks.exactInstalledPreparedBytes = true;
+  mkdirSync(join(appRoot, '.impeccable/live'), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(appRoot, 'package.json'),
+    '{"name":"production-owning-fixture","type":"module"}\n',
+    { mode: 0o600 },
+  );
+  writeFileSync(join(appRoot, 'index.html'), sourceIndex, { mode: 0o600 });
+  writeFileSync(
+    join(appRoot, '.impeccable/live/config.json'),
+    JSON.stringify({ files: ['index.html'], insertBefore: '</body>', commentSyntax: 'html' }),
+    { mode: 0o600 },
+  );
+  const [helperPort, appPort, gatewayPort, previewPort] = await Promise.all(
+    Array.from({ length: 4 }, port),
+  );
+  assert.equal(new Set([helperPort, appPort, gatewayPort, previewPort]).size, 4);
+  const devScript = join(installation, 'devserver.mjs');
+  writeFileSync(
+    devScript,
+    `import {createServer} from 'node:http';import {readFileSync} from 'node:fs';createServer((_q,r)=>r.end(readFileSync(${JSON.stringify(join(appRoot, 'index.html'))}))).listen(${appPort},'127.0.0.1');`,
+    { mode: 0o400 },
+  );
+  await new Promise((done) => provider.listen(0, '127.0.0.1', done));
+  const providerPort = provider.address().port;
+  const originalConfig = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  writeFileSync(join(owningHome, 'config.toml'), originalConfig, { mode: 0o600 });
+  execFileSync(
+    'openssl',
+    [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      join(caddyRoot, 'tls.key'),
+      '-out',
+      join(caddyRoot, 'tls.pem'),
+      '-days',
+      '1',
+      '-subj',
+      '/CN=*.preview.entrypoint.test',
+      '-addext',
+      'subjectAltName=DNS:preview.entrypoint.test,DNS:*.preview.entrypoint.test',
+    ],
+    { stdio: 'ignore' },
+  );
+  const caddySocket = join(caddyRoot, 'admin.sock'),
+    credential = join(caddyRoot, 'credential'),
+    caddyConfig = join(caddyRoot, 'caddy.json');
+  writeFileSync(credential, previewSecrets.token(), { mode: 0o600 });
+  writeFileSync(
+    caddyConfig,
+    JSON.stringify({
+      admin: { listen: `unix/${caddySocket}` },
+      apps: {
+        tls: {
+          certificates: {
+            load_files: [
+              { certificate: join(caddyRoot, 'tls.pem'), key: join(caddyRoot, 'tls.key') },
+            ],
+          },
+        },
+        http: {
+          servers: {
+            fixture: {
+              listen: ['127.0.0.1:0'],
+              routes: [{ handle: [{ handler: 'static_response', body: 'fixture' }] }],
+            },
+          },
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  caddy = spawn(process.env.LIVE_TEST_CADDY, ['run', '--config', caddyConfig], {
+    env: { PATH: '/usr/bin:/bin', HOME: caddyRoot },
+    stdio: 'ignore',
+  });
+  await until(() => existsSync(caddySocket), 'CADDY_START_DEADLINE');
+  const auth = new SqliteAuthorizationStore(home, rp);
+  const owner = auth.initializeOwner(randomBytes(32));
+  auth.claimFirstDevice(owner, {
+    id: 'fixture-device',
+    credentialId: 'fixture-credential',
+    publicKey: new Uint8Array([1]),
+    counter: 0,
+    version: 0,
+    transports: ['internal'],
+    deviceType: 'singleDevice',
+    backedUp: false,
+    nickname: 'Fixture device',
+    createdAt: new Date().toISOString(),
+  });
+  auth.saveSession(browserSession, {
+    deviceId: 'fixture-device',
+    expiresAt: new Date(Date.now() + 86400000).toISOString(),
+  });
+  auth.close();
+  const configPath = join(privateRoot, 'production.json');
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      privateDirectory: controller,
+      installation: { manager, node, packages, runtime },
+      mobile: { root: mobileRoot, sha256: measureInstalledLiveTree(mobileRoot) },
+      native,
+      nativeEnvironment: {
+        PATH: '/usr/bin:/bin',
+        HOME: owningHome,
+        CODEX_HOME: owningHome,
+        TMPDIR: '/tmp',
+        LANG: 'C.UTF-8',
+      },
+      providerCredentialEnvironment: [],
+      project: { bwrap, node, worker, helper },
+      components: {
+        manager: '9b55cd1281a167f8cc19476a6ebf0b9c2d513bfe',
+        mobile: report.provenance.tree,
+        agents: report.provenance.agents,
+      },
+      caddy: {
+        controllerDirectory: caddyRoot,
+        socketPath: caddySocket,
+        credentialPath: credential,
+        hostname: 'preview.entrypoint.test',
+        previewPorts: [previewPort],
+      },
+      apps: [
+        {
+          appId: 'owning-app',
+          targetId: 'owned-devserver',
+          appRoot,
+          workspaceRoot: appRoot,
+          plans: [],
+          helperPort,
+          gatewayPort,
+          devserver: {
+            executable: node,
+            argv: [devScript],
+            environment: { PATH: '/usr/bin:/bin', HOME: '/tmp', TMPDIR: '/tmp', LANG: 'C.UTF-8' },
+            launchInputs: [pin(devScript)],
+            port: appPort,
+            cacheDirectories: [],
+          },
+        },
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  report.stage = 'sole-production-composition';
+  mobile = await composeRelayApp({
+    root: appRoot,
+    dataDir: join(privateRoot, 'relay'),
+    homeDirectory: home,
+    relyingParty: rp,
+    liveConfigFile: configPath,
+    installedCodexVersion: 'codex-cli 0.161.0',
+    xerj: 'off',
+    profiles: {
+      list: async () => [],
+      require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
+    },
+  });
+  report.stage = 'actual-owning-session';
+  const session = await api('POST', '/api/sessions', {
+    workspaceId: workspaceId(appRoot),
+    profile: 'default',
+    provider: 'codex',
+    model: 'gpt-6-sol',
+    reasoningEffort: 'medium',
+    sandbox: 'workspace-git',
+    approvalPolicy: 'never',
+  });
+  await api('POST', `/api/sessions/${session.id}/turns`, {
+    text: 'Seed owning thread persistence.',
+  });
+  await until(async () => {
+    const current = await api('GET', `/api/sessions/${session.id}`);
+    return !current.activeTurnId && report.provider.requestCount === 2;
+  }, 'OWNING_SEED_DEADLINE');
+  seed = false;
+  assert.equal(owningThread, session.threadId);
+  const operation = {
+    appId: 'owning-app',
+    targetId: 'owned-devserver',
+    operationId: 'production-admission',
+  };
+  report.stage = 'production-start-admission';
+  const started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  assert.equal(started.state, 'active');
+  preview = started.previewOrigin;
+  generationDirectory = readdirSync(controller)
+    .filter((name) => name.startsWith('generation-'))
+    .map((name) => join(controller, name))[0];
+  assert.ok(generationDirectory);
+  const observed = JSON.parse(
+    readFileSync(join(generationDirectory, 'owning-configuration.json'), 'utf8'),
+  );
+  const liveDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+  try {
+    const live = JSON.parse(
+      liveDb.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+    );
+    assert.equal(live.globallyExclusive, true);
+    assert.equal(live.rootThreadId, owningThread);
+    report.checks.actualBroadScratchScopeRemainsGloballyExclusive = true;
+  } finally {
+    liveDb.close();
+  }
+  baselineBirth = observed.launch;
+  assert.equal(observedBirthExited(baselineBirth), true);
+  assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), originalConfig);
+  for (const name of ['policy-receipt.json', 'admission-receipt.json'])
+    report.checks[name.replaceAll('-', '_')] = existsSync(join(generationDirectory, name));
+  report.checks.originalOwnerUnloadedAndExited = true;
+  report.checks.productionContextNativeAdmissionProbe = true; // active follows the actual fixed context probe, never a fixture callback.
+  const reused = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  assert.equal(reused.liveId, started.liveId);
+  assert.equal(reused.generation, started.generation);
+  report.checks.sameSessionReuseNoReplacement = true;
+  const verifier = previewSecrets.token();
+  const grant = await api('POST', `/api/sessions/${session.id}/live/launch-grants`, {
+    liveId: started.liveId,
+    generation: started.generation,
+    codeChallenge: previewSecrets.challenge(verifier),
+    codeChallengeMethod: 'S256',
+  });
+  const exchanged = await remote('/__gestalt_live/exchange', {
+    method: 'POST',
+    body: { grantId: grant.grantId, grant: grant.grant, codeVerifier: verifier },
+  });
+  assert.equal(exchanged.status, 200);
+  previewCookie = exchanged.headers['set-cookie'].map((cookie) => cookie.split(';')[0]).join('; ');
+  assert.equal((await remote('/')).status, 200);
+  const token = JSON.parse(
+    readFileSync(join(appRoot, '.impeccable/live/server.json'), 'utf8'),
+  ).token;
+  stream = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
+    streamResponse: true,
+  });
+  assert.equal(stream.statusCode, 200);
+  report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
+  report.stage = 'production-owning-model-tools';
+  const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
+    method: 'POST',
+    body: {
+      type: 'generate',
+      id: 'f00df00d',
+      count: 1,
+      action: 'polish',
+      element: { outerHTML: '<h1>Owning app</h1>' },
+    },
+  });
+  assert.equal(event.status, 200);
+  await until(
+    () => roles.get('root') >= 6 && roles.get('child') >= 4 && childCompletion(),
+    'PRODUCTION_MODEL_CHILD_DEADLINE',
+    60000,
+  );
+  for (const role of ['root', 'child']) {
+    assert.equal(
+      readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-exec.txt`), 'utf8'),
+      'permitted-artifact',
+    );
+    assert.equal(
+      readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-patch.txt`), 'utf8'),
+      'permitted-patch\n',
+    );
+    assert.equal(existsSync(join(privateRoot, `${role}-forbidden.txt`)), false);
+  }
+  assert.equal(
+    readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8'),
+    'confined-context',
+  );
+  assert.equal(existsSync(join(appRoot, '.impeccable/live/future-control.json')), false);
+  assert.equal(existsSync(join(appRoot, '.impeccable-live/future-control.json')), false);
+  assert.equal(readFileSync(privateFile, 'utf8'), privateCanary);
+  report.checks.actualModelToolsAndChildInheritedConfinement = true;
+  report.checks.nativeModelContextToolConfined = true;
+  report.checks.futureControlDenialsAndArtifactCarveouts = true;
+  await until(() => {
+    const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), { readOnly: true });
+    try {
+      return db
+        .prepare('SELECT record FROM live_event_inbox')
+        .all()
+        .some((row) => {
+          const r = JSON.parse(row.record);
+          return r.upstreamId === 'f00df00d' && r.stage === 'acknowledged';
+        });
+    } finally {
+      db.close();
+    }
+  }, 'CANONICAL_INBOX_ACK_DEADLINE');
+  const current = await api('GET', `/api/sessions/${session.id}`);
+  assert.equal(current.threadId, owningThread);
+  assert.equal(current.model, 'gpt-6-sol');
+  assert.equal(current.modelSettings.reasoningEffort, 'medium');
+  report.checks.sameOwningThreadModelThinkingAndDurableInbox = true;
+  report.stage = 'revoke-and-production-shutdown';
+  stream.destroy();
+  stream = undefined;
+  await mobile.close();
+  mobile = undefined;
+  assert.equal(existsSync(join(generationDirectory, 'policy-key')), false);
+  assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
+  assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+  await assert.rejects(() => remote('/'));
+  report.cleanupComplete = true;
+  report.checks.revokeCloseAndInjectionRestore = true;
+  assert.ok(Object.values(report.checks).every(Boolean));
+  report.passed = true;
+  report.stage = 'complete';
+} catch (error) {
+  generationDirectory ??= readdirSync(controller)
+    .filter((name) => name.startsWith('generation-'))
+    .map((name) => join(controller, name))[0];
+  report.preparationDiagnostics = readdirSync(controller)
+    .filter((name) => /^preparation-failure-[a-f0-9-]+\.json$/.test(name))
+    .map((name) => JSON.parse(readFileSync(join(controller, name), 'utf8')));
+  report.failure = {
+    stage: report.stage,
+    code:
+      error?.code === 'ERR_ASSERTION'
+        ? 'ERR_ASSERTION'
+        : /^[A-Z][A-Z0-9_]+$/.test(error?.message ?? '')
+          ? error.message
+          : 'UNCLASSIFIED',
+  };
+  process.exitCode = 1;
+} finally {
+  stream?.destroy();
+  if (mobile) {
+    try {
+      await mobile.close();
+    } catch {
+      report.shutdownFailure = 'LIVE_CLEANUP_REQUIRED';
+      process.exitCode = 1;
+    }
+  }
+  if (caddy) {
+    const exited = new Promise((done) => caddy.once('close', done));
+    if (caddy.exitCode === null && caddy.signalCode === null) caddy.kill('SIGTERM');
+    else caddy = undefined;
+    if (caddy) await exited;
+  }
+  await new Promise((done) => provider.close(done));
+  if (generationDirectory && existsSync(generationDirectory))
+    report.generationEvidence = readdirSync(generationDirectory)
+      .filter((name) => /receipt|manifest|bootstrap|owning-configuration/.test(name))
+      .map((name) => ({ name, sha256: hash(readFileSync(join(generationDirectory, name))) }));
+  writeFileSync(
+    join(evidence, 'production-entrypoint-proof.json'),
+    JSON.stringify(report, null, 2) + '\n',
+    { mode: 0o600 },
+  );
+  process.stdout.write(
+    JSON.stringify({
+      passed: report.passed,
+      stage: report.stage,
+      failure: report.failure,
+      checks: report.checks,
+      genuine: false,
+      cleanupComplete: report.cleanupComplete,
+    }) + '\n',
+  );
+  if (!report.shutdownFailure) rmSync(root, { recursive: true, force: true });
+}

@@ -212,7 +212,11 @@ export class IsolatedProjectProcess {
   private nextCommand = 0;
   private readonly commands = new Map<
     number,
-    { resolve(value: unknown): void; reject(error: Error): void }
+    {
+      resolve(value: unknown): void;
+      reject(error: Error): void;
+      closure?: { resolve(): void; reject(error: Error): void };
+    }
   >();
   private exited?: Promise<void>;
   private diagnostic = {
@@ -369,8 +373,10 @@ export class IsolatedProjectProcess {
   private revokeChannels(): void {
     this.revoked = true;
     this.receipt = undefined;
-    for (const command of this.commands.values())
+    for (const command of this.commands.values()) {
       command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+      command.closure?.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+    }
     this.commands.clear();
     for (const stream of this.channels.values()) {
       stream.on('error', () => {});
@@ -502,12 +508,18 @@ export class IsolatedProjectProcess {
             : 'invalid-worker-response';
           throw failure();
         }
-        if (message.type === 'helper-command-result' || message.type === 'helper-command-failed') {
+        if (
+          ['helper-command-result', 'helper-command-failed', 'helper-command-cancelled'].includes(
+            String(message.type),
+          )
+        ) {
           const command = this.commands.get(Number(message.requestId));
           if (!command) return;
           this.commands.delete(Number(message.requestId));
           if (message.type === 'helper-command-result') command.resolve(message.result);
           else command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+          // Sent only after the actual foreground ChildProcess close event.
+          command.closure?.resolve();
           return;
         }
         const stream = this.channels.get(Number(message.id));
@@ -739,6 +751,28 @@ export class IsolatedProjectProcess {
     } finally {
       if (timer) clearTimeout(timer);
       this.commands.delete(requestId);
+    }
+  }
+  async cancelHelperCommand(receipt: IsolatedProjectReceipt): Promise<void> {
+    this.verify(receipt);
+    const entry = [...this.commands.entries()][0];
+    if (!entry) return;
+    const [requestId, command] = entry;
+    if (command.closure) throw new Error('LIVE_HELPER_COMMAND_UNAVAILABLE');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        command.closure = { resolve, reject };
+        timer = setTimeout(() => {
+          this.revokeChannels();
+          this.child?.kill('SIGTERM');
+          reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+        }, 5000);
+        this.send({ op: 'helper-command-cancel', requestId });
+      });
+      this.verify(receipt);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   async stop(): Promise<void> {

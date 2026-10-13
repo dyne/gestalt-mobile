@@ -43,6 +43,7 @@ const runSchema = z
     provider: z.literal('codex'),
     appId: id,
     app: appSchema,
+    globallyExclusive: z.boolean().optional(),
     targetId: id,
     targetIdentity: z.string().min(1).max(256),
     previewOrigin: z.url(),
@@ -251,6 +252,7 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         prior.app.inode !== input.app.inode ||
         prior.rootThreadId !== input.rootThreadId ||
         prior.targetIdentity !== input.targetIdentity ||
+        Boolean(prior.globallyExclusive) !== Boolean(input.globallyExclusive) ||
         prior.previewOrigin !== input.previewOrigin
       )
         throw new Error('IDEMPOTENCY_KEY_REUSED');
@@ -284,7 +286,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         runs.some(
           (run) =>
             run.state !== 'idle' &&
-            (overlaps(run.app.canonicalAppRoot, input.app.canonicalAppRoot) ||
+            (run.globallyExclusive ||
+              input.globallyExclusive ||
+              overlaps(run.app.canonicalAppRoot, input.app.canonicalAppRoot) ||
               (run.app.device === input.app.device && run.app.inode === input.app.inode)),
         )
       )
@@ -292,6 +296,7 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       if (
         this.writers().some(
           (writer) =>
+            input.globallyExclusive ||
             writer.relayId === input.relayId ||
             writer.scopes === null ||
             writer.scopes.some((scope) =>
@@ -379,7 +384,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         (other) =>
           other.liveId !== run.liveId &&
           (other.generation > run.generation || other.state !== 'idle') &&
-          (other.relayId === run.relayId ||
+          (other.globallyExclusive ||
+            run.globallyExclusive ||
+            other.relayId === run.relayId ||
             overlaps(other.app.canonicalAppRoot, run.app.canonicalAppRoot) ||
             (other.app.device === run.app.device && other.app.inode === run.app.inode)),
       )
@@ -448,7 +455,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       this.list().some(
         (run) =>
           run.state !== 'idle' &&
-          (run.relayId === relayId ||
+          (run.globallyExclusive ||
+            run.relayId === relayId ||
             scopes === null ||
             scopes.some(
               (scope) =>
@@ -490,7 +498,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         this.list().some(
           (run) =>
             run.state !== 'idle' &&
-            (run.relayId === relayId ||
+            (run.globallyExclusive ||
+              run.relayId === relayId ||
               scopes === null ||
               scopes.some((scope) => overlaps(scope.canonicalAppRoot, run.app.canonicalAppRoot))),
         )

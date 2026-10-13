@@ -31,6 +31,8 @@ export type LiveRun = LiveAudience &
     rootThreadId: string;
     provider: 'codex';
     app: AppIdentity;
+    /** Trusted production admission: broader/scratch rights retain global exclusion. */
+    globallyExclusive?: boolean;
     targetId: string;
     targetIdentity: string;
     operationId: string;
