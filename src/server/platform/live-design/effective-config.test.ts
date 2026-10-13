@@ -33,6 +33,44 @@ function fixture() {
   return { root, path, bytes, layer, input };
 }
 describe('owning configuration inventory', () => {
+  it('pins the original supported snapshot-disabled source without exempting project or launch surfaces', () => {
+    const { input, path, layer, root } = fixture();
+    const bytes = '[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\n';
+    writeFileSync(path, bytes, { mode: 0o600 });
+    const config = { features: { shell_snapshot: false, shell_snapshot_v2: false } };
+    const observed = {
+      ...input,
+      configuration: { config, layers: [{ ...layer, config }] },
+    };
+    expect(resolveLiveConfigFiles(observed)).toEqual([
+      { path, sha256: createHash('sha256').update(bytes).digest('hex') },
+    ]);
+    expect(observed.configuration.config).toEqual(config);
+    mkdirSync(join(root, '.codex'), { mode: 0o700 });
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...observed,
+        configuration: {
+          config,
+          layers: [
+            ...observed.configuration.layers,
+            {
+              name: { type: 'project', dotCodexFolder: join(root, '.codex') },
+              version: 'native-project',
+              config: {},
+              disabledReason: null,
+            },
+          ],
+        },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...observed,
+        threadConfig: { mcp_servers: { unsupported: { command: 'unapproved' } } },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+  });
   it('refuses native directory-only project provenance even when config.toml does not exist', () => {
     const { input, layer, root } = fixture();
     const folder = join(root, '.codex');

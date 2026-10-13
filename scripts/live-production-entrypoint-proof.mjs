@@ -583,7 +583,11 @@ try {
   );
   await new Promise((done) => provider.listen(0, '127.0.0.1', done));
   const providerPort = provider.address().port;
-  const originalConfig = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  const originalConfig = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  // Configure optional shell snapshot caching OFF in the original source before
+  // any Native owner starts. Actual shell/model tools and their sandbox remain
+  // mandatory below. Live never overrides an existing owner's snapshot setting
+  // or accepts/deletes unproven metadata to make admission pass.
   writeFileSync(join(owningHome, 'config.toml'), originalConfig, { mode: 0o600 });
   execFileSync(
     'openssl',
@@ -756,6 +760,12 @@ try {
     return !current.activeTurnId && report.provider.requestCount === 1;
   }, 'OWNING_SEED_DEADLINE');
   report.projectMetadata.afterSeed = ownedProjectMetadata();
+  report.stage = 'compatible-original-startup';
+  assert.equal(report.projectMetadata.afterSessionCreate.directoryPresent, false);
+  assert.equal(report.projectMetadata.afterSeed.directoryPresent, false);
+  assert.equal(report.projectMetadata.duringSessionCreate.metadataObserved, false);
+  assert.equal(report.projectMetadata.duringSessionCreate.syntheticMarkerObserved, false);
+  report.checks.originalStartupWithoutSyntheticProjectMetadata = true;
   report.checks.persistedBaselineWithoutPreAdmissionCommands = true;
   seed = false;
   assert.equal(owningThread, session.threadId);
@@ -775,6 +785,18 @@ try {
   const observed = JSON.parse(
     readFileSync(join(generationDirectory, 'owning-configuration.json'), 'utf8'),
   );
+  assert.equal(observed.configuration.config.features.shell_snapshot, false);
+  assert.equal(observed.configuration.config.features.shell_snapshot_v2, false);
+  assert.equal(
+    observed.configuration.layers.some(
+      (layer) =>
+        layer.name.type === 'user' &&
+        layer.config.features?.shell_snapshot === false &&
+        layer.config.features?.shell_snapshot_v2 === false,
+    ),
+    true,
+  );
+  report.checks.actualOriginalSnapshotConfigurationPreserved = true;
   const liveDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
   try {
     const live = JSON.parse(
