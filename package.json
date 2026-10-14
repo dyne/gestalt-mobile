@@ -52,6 +52,7 @@
     "test:auth:stress": "AUTH_CONTENTION_STRESS=1 vitest run --config vitest.auth-stress.config.ts --reporter=default --reporter=json --outputFile=test-results/auth-stress.json",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "test:open-profile-smoke": "tsx scripts/open-profile-smoke.ts",
+    "test:org-plan-integration": "node scripts/test-org-plan-integration.mjs",
     "test:watch": "vitest",
     "test:package": "node scripts/smoke-packed-cli.mjs",
     "test:e2e": "playwright test",

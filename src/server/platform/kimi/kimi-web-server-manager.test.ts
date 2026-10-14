@@ -10,12 +10,13 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { KimiWebServerManager } from './kimi-web-server-manager.js';
+import { KimiWebServerManager, kimiChildEnvironment } from './kimi-web-server-manager.js';
 import type { SkillSelection } from '../../features/skills/model/skill-profile.js';
 
 const roots: string[] = [];
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 async function sandbox(): Promise<string> {
@@ -218,4 +219,11 @@ describe('KimiWebServerManager', () => {
     await manager.stopAll();
     expect(manager.list()).toEqual([]);
   });
+});
+
+it('does not advertise an ambient Org capability to Kimi children', () => {
+  vi.stubEnv('GESTALT_MOBILE_ORG_PLAN_CAPABILITIES', 'suspension-v1');
+  expect(kimiChildEnvironment({ KIMI_SHARE_DIR: '/private/kimi' })).not.toHaveProperty(
+    'GESTALT_MOBILE_ORG_PLAN_CAPABILITIES',
+  );
 });

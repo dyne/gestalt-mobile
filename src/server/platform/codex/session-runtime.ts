@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
+
 import {
   RelaySession,
   type RelaySessionSnapshot,
@@ -1162,7 +1164,10 @@ export class CodexSessionRuntime {
           ? {
               environment: {
                 ...(lease
-                  ? { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory }
+                  ? {
+                      GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory,
+                      GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: ORG_PLAN_CAPABILITIES,
+                    }
                   : {}),
                 ...(this.planMeasurementBaseUrl
                   ? {

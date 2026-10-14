@@ -71,8 +71,8 @@ export type ExecutorLifecycle = Readonly<{
   canonicalTaskName: string;
   taskPath: string;
   threadId: string;
-  l1State: 'TODO' | 'WIP' | 'DONE';
-  l2State?: 'TODO' | 'WIP' | 'DONE';
+  l1State: 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
+  l2State?: 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
   lastActivityAt: string;
   ownedProcesses: readonly OwnedExecutorProcess[];
   outcome: ExecutorOutcome;
@@ -117,6 +117,8 @@ export type ExecutorCommand = Readonly<{
   generation: number;
   /** Explicitly rejected logical attempt; omitted for the legacy initial attempt. */
   attempt?: number;
+  /** Durable proof that supersession happened before the issue boundary. */
+  supersededBeforeIssue?: true;
   trigger: 'partial' | 'processExited' | 'processResourceLimit';
   /** An external process mutation; its opaque key fences PID/process-id reuse. */
   processAction?: Readonly<{
@@ -370,8 +372,8 @@ export function parsePersistedSupervisedLifecycle(
   const canonicalTaskName = boundedText(executorValue.canonicalTaskName);
   const taskPath = boundedText(executorValue.taskPath);
   const threadId = boundedText(executorValue.threadId);
-  const l1State = stringValue(executorValue.l1State, ['TODO', 'WIP', 'DONE']);
-  const l2State = stringValue(executorValue.l2State, ['TODO', 'WIP', 'DONE']);
+  const l1State = stringValue(executorValue.l1State, ['TODO', 'WIP', 'DONE', 'SUSPENDED']);
+  const l2State = stringValue(executorValue.l2State, ['TODO', 'WIP', 'DONE', 'SUSPENDED']);
   const lastActivityAt = boundedText(executorValue.lastActivityAt);
   const outcome = stringValue(executorValue.outcome, [
     'objective_complete',
@@ -493,6 +495,8 @@ export function parsePersistedSupervisedLifecycle(
       typeof generation === 'number' &&
       typeof attempt === 'number' &&
       trigger &&
+      (command.supersededBeforeIssue === undefined ||
+        (command.supersededBeforeIssue === true && ['cancelled', 'superseded'].includes(status))) &&
       createdAt &&
       updatedAt &&
       (command.processAction === undefined ||
@@ -509,6 +513,7 @@ export function parsePersistedSupervisedLifecycle(
             threadId: commandThreadId,
             generation,
             ...(attempt ? { attempt } : {}),
+            ...(command.supersededBeforeIssue ? { supersededBeforeIssue: true as const } : {}),
             trigger,
             ...(processActionValue && processActionKind && processActionKey
               ? { processAction: { kind: processActionKind, processKey: processActionKey } }
@@ -787,6 +792,15 @@ export function decideSupervisedLifecycle(
       finalAllowed: true,
       action: { kind: 'invokeAttention', ...input.attention },
     };
+
+  if (
+    input.executor &&
+    (input.executor.l1State === 'SUSPENDED' ||
+      input.executor.l2State === 'SUSPENDED' ||
+      input.plan.steps[Number(input.executor.canonicalPosition.slice(1)) - 1]?.state ===
+        'SUSPENDED')
+  )
+    return { finalAllowed: false, action: { kind: 'continueSupervisor' } };
 
   const processes = input.executor?.ownedProcesses ?? [];
   const overBudget = processes.find(

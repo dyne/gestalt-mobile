@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { parseSupervisedPlan } from '../../plans/application/parse-supervised-plan.js';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
@@ -3030,7 +3033,7 @@ describe('AutopilotCoordinator', () => {
       const diagnostic = vi.fn();
       const controls = new Map<string, import('./ports.js').AutopilotControl>();
       let planIdentity = 'p';
-      let currentPlan = {
+      let currentPlan: import('../../plans/domain/supervised-plan.js').SupervisedPlan = {
         ...plan,
         steps: [
           {
@@ -3184,6 +3187,198 @@ describe('AutopilotCoordinator', () => {
         },
       };
     }
+
+    it('hands accepted L10 to exactly one root turn, then resumes the same L11 owner from the supported transition', async () => {
+      const fixture = subject();
+      const directory = await mkdtemp(join(tmpdir(), 'suspended-checkpoint-handoff-'));
+      const path = join(directory, 'plan.org');
+      const source =
+        `#+TITLE: Dependency handoff
+#+SUBTITLE: Regression
+#+DATE: 2026-10-13
+#+KEYWORDS: suspension
+` +
+        Array.from(
+          { length: 11 },
+          (_, index) => `* ${index === 10 ? 'SUSPENDED' : 'DONE'} [#A] L${index + 1}
+:PROPERTIES:
+:ID: l${index + 1}
+:SKILLS: $vertical-slice-architecture
+:REVIEW_STATUS: ${index === 10 ? 'UNREVIEWED' : 'REVIEWED'}
+${index === 10 ? ':SUSPENDED_FOR: l9\n' : ''}:END:
+- Effort :: Small
+- Goal :: Dependency correction
+- Notes :: Preserve owning thread
+`,
+        ).join('') +
+        `** SUSPENDED [#A] L11.1
+:PROPERTIES:
+:ID: l11-1
+:END:
+- Why :: Resume after review
+- Change :: Preserve progress
+- Tests :: Checkpoint handoff
+- Done when :: One owning executor
+`;
+      const parse = (text: string) => {
+        const result = parseSupervisedPlan({
+          source: text,
+          planPath: path,
+          workspacePath: directory,
+        });
+        if (result.kind !== 'available') throw new Error(result.reason);
+        return result.plan;
+      };
+      try {
+        await writeFile(path, source);
+        fixture.plan = parse(source);
+        fixture.activity = {
+          ...fixture.activity,
+          aggregateSubagents: 'disconnected',
+          subagents: [
+            {
+              ...fixture.activity.subagents[0]!,
+              id: 'thread-l10',
+              threadId: 'thread-l10',
+              taskPath: '/root/l10',
+              canonicalTaskName: 'l10',
+              canonicalPosition: 'L10',
+              state: 'disconnected',
+            },
+            {
+              ...fixture.activity.subagents[0]!,
+              id: 'thread-l11',
+              threadId: 'thread-l11',
+              taskPath: '/root/l11',
+              canonicalTaskName: 'l11',
+              canonicalPosition: 'L11',
+            },
+          ],
+        };
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: 'accepted-l10-turn' };
+        const checkpoint = {
+          version: 1 as const,
+          kind: 'l1Accepted' as const,
+          planIdentity: 'p',
+          l1Id: 'l10',
+          position: 'L10',
+          verdict: 'ACCEPT' as const,
+          commit: { kind: 'notRequired' as const },
+        };
+        fixture.state = {
+          ...fixture.state!,
+          checkpoints: {
+            protocolVersion: 1,
+            planIdentity: 'p',
+            reportedL1Ids: Array.from({ length: 9 }, (_, index) => `l${index + 1}`),
+            reportedL2Ids: [],
+            acceptedKeys: [],
+            pendingTurnId: null,
+            terminalReviewAccepted: false,
+          },
+        };
+        expect(
+          fixture.coordinator.checkpointAccepted('s', checkpoint, 'accepted-l10-turn', now),
+        ).toBe('recorded');
+        expect(fixture.timers).toHaveLength(0);
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: null };
+        expect(fixture.coordinator.turnCompleted('s', 'accepted-l10-turn')).toBe(true);
+        const rootTimer = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+        fixture.rootStart.mockImplementation(async () => {
+          fixture.session = {
+            state: 'ready',
+            threadId: 'root',
+            activeTurnId: 'resume-l11-root-turn',
+          };
+        });
+        await fixture.runNext();
+        rootTimer.callback(); // Duplicate delivery cannot start another root.
+        await Promise.resolve();
+        expect(fixture.rootStart).toHaveBeenCalledTimes(1);
+        expect(fixture.rootStart).toHaveBeenCalledWith(
+          's',
+          'root-control',
+          expect.any(Number),
+          undefined,
+        );
+        expect(fixture.resume).not.toHaveBeenCalled();
+        expect(fixture.state?.checkpoints?.rootContinuationFromTurnId).toBeUndefined();
+        fixture.coordinator.evaluate('s');
+        expect(fixture.timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(0);
+        // Unit tests exercise coordinator selection with projection data.
+        // test:org-plan-integration (required in CI) invokes the pinned actual helper
+        // on this disposable file, never on a retained session plan.
+        const helper = process.env.GESTALT_TEST_ORG_PLAN_HELPER;
+        if (helper) {
+          await promisify(execFile)(helper, ['resume', path, 'l11'], {
+            env: { PATH: process.env.PATH },
+            timeout: 15000,
+          });
+        } else {
+          await writeFile(
+            path,
+            source.replaceAll('SUSPENDED [#A]', 'WIP [#A]').replace(':SUSPENDED_FOR: l9\n', ''),
+          );
+        }
+        fixture.plan = parse(await readFile(path, 'utf8'));
+        expect(fixture.plan.currentStepId).toBe('l11-1');
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: null };
+        fixture.coordinator.planStatusChanged('s');
+        await vi.waitFor(() =>
+          expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true),
+        );
+        await fixture.runNext();
+        await vi.waitFor(() => expect(fixture.resume).toHaveBeenCalledOnce());
+        expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l11', 3, { kind: 'partial' });
+        expect(fixture.rootStart).toHaveBeenCalledOnce();
+        expect(fixture.state?.executor).toMatchObject({
+          canonicalPosition: 'L11',
+          taskPath: '/root/l11',
+          threadId: 'thread-l11',
+          continuationGeneration: 1,
+        });
+      } finally {
+        fixture.coordinator.dispose('s');
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
+    it('fences a queued continuation on suspension and resumes the same physical owner after restoration', async () => {
+      const fixture = subject();
+      const running = fixture.plan;
+      fixture.coordinator.activitySettled('s', 'executorTurnEnded');
+      await fixture.runNext();
+      const delayed = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+      fixture.plan = {
+        ...running,
+        steps: running.steps.map((parent) => ({
+          ...parent,
+          state: 'SUSPENDED',
+          children: parent.children.map((child) => ({ ...child, state: 'SUSPENDED' })),
+        })),
+      };
+      fixture.coordinator.planStatusChanged('s');
+      expect(fixture.state?.executor).toMatchObject({
+        l1State: 'SUSPENDED',
+        l2State: 'SUSPENDED',
+        threadId: 'thread-l1',
+      });
+      delayed.callback();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fixture.resume).not.toHaveBeenCalled();
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+      fixture.plan = running;
+      fixture.coordinator.planStatusChanged('s');
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l1', 2, { kind: 'partial' });
+      expect(fixture.state?.executor).toMatchObject({
+        taskPath: '/root/l1',
+        threadId: 'thread-l1',
+      });
+      fixture.coordinator.dispose('s');
+    });
 
     it.each(['rootFinalAttempt', 'checkpoint', 'waitTimeout', 'userStatusAnswered'] as const)(
       'resumes the same executor after %s while L1 remains WIP',

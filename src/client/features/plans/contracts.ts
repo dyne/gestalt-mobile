@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type PlanTodoState = 'TODO' | 'WIP' | 'DONE';
+export type PlanTodoState = 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
 export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
 export type { PlanSignalReason } from '../../../shared/contracts/plan-signal.js';

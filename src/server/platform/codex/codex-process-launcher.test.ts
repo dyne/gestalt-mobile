@@ -8,10 +8,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { codexChildEnvironment } from './codex-process-launcher.js';
 
+const inheritedCapabilities = process.env.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
 const inheritedPlanStatus = process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
 const inheritedPlanStatusDirectory = process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
 
 afterEach(() => {
+  if (inheritedCapabilities === undefined) delete process.env.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
+  else process.env.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES = inheritedCapabilities;
   if (inheritedPlanStatus === undefined) delete process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   else process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE = inheritedPlanStatus;
   if (inheritedPlanStatusDirectory === undefined)
@@ -21,10 +24,27 @@ afterEach(() => {
 
 describe('codexChildEnvironment', () => {
   it('does not pass an ambient plan status path to catalog or model discovery children', () => {
+    process.env.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES = 'spoofed';
+    expect(codexChildEnvironment()).not.toHaveProperty('GESTALT_MOBILE_ORG_PLAN_CAPABILITIES');
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE = '/ambient/session.json';
     process.env.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY = '/ambient/session';
     expect(codexChildEnvironment()).not.toHaveProperty('GESTALT_MOBILE_ORG_PLAN_STATUS_FILE');
     expect(codexChildEnvironment()).not.toHaveProperty('GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY');
+  });
+
+  it('scrubs capability assertions from fixed native launch environments too', () => {
+    expect(
+      codexChildEnvironment(undefined, {
+        PATH: '/trusted',
+        GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'untrusted',
+      }),
+    ).toEqual({ PATH: '/trusted' });
+    expect(
+      codexChildEnvironment(
+        { GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1' },
+        { PATH: '/trusted', GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'untrusted' },
+      ),
+    ).toEqual({ PATH: '/trusted', GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1' });
   });
 
   it('merges only the explicit session runtime path while retaining other inherited values', () => {

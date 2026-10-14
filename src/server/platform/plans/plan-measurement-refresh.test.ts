@@ -45,6 +45,56 @@ const active = (stepId = 'l2', planPath = '/work/plan.org'): PlanStatusUpdate =>
 });
 
 describe('PlanMeasurementRefresh', () => {
+  it('cancels an in-flight snapshot before any suspended-step write and resumes the same step', async () => {
+    vi.useFakeTimers();
+    let resolveSnapshot!: (value: {
+      capturedAt: string;
+      weeklyRemainingPercent: null;
+      threadTokens: null;
+    }) => void;
+    const checkpoint = vi.fn(async () => {});
+    const refresh = new PlanMeasurementRefresh(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+      checkpoint,
+    );
+    try {
+      const update = active();
+      refresh.accept('one', update);
+      refresh.refreshNow('one');
+      if (update.kind !== 'updated') throw new Error('fixture');
+      refresh.accept('one', {
+        ...update,
+        plan: {
+          ...update.plan,
+          steps: update.plan.steps.map((parent) => ({
+            ...parent,
+            state: 'SUSPENDED',
+            children: parent.children.map((child) => ({ ...child, state: 'SUSPENDED' })),
+          })),
+        },
+      });
+      resolveSnapshot({ capturedAt: 'now', weeklyRemainingPercent: null, threadTokens: null });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(PLAN_MEASUREMENT_REFRESH_MS * 2);
+      expect(checkpoint).not.toHaveBeenCalled();
+      refresh.accept('one', update);
+      refresh.refreshNow('one');
+      resolveSnapshot({ capturedAt: 'after', weeklyRemainingPercent: null, threadTokens: null });
+      await Promise.resolve();
+      expect(checkpoint).toHaveBeenCalledOnce();
+      expect(checkpoint).toHaveBeenCalledWith(
+        '/work/plan.org',
+        'l2',
+        expect.objectContaining({ capturedAt: 'after' }),
+      );
+    } finally {
+      refresh.stopAll();
+      vi.useRealTimers();
+    }
+  });
   it('refreshes once per interval and never overlaps an unresolved checkpoint', async () => {
     vi.useFakeTimers();
     let resolveCheckpoint: (() => void) | undefined;

@@ -13,7 +13,10 @@ import {
 } from '../domain/executor-commands.js';
 import { deriveSessionStatus } from '../../sessions/session-status.js';
 import { createHash } from 'node:crypto';
-import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import {
+  currentExecutableL1Index,
+  type SupervisedPlan,
+} from '../../plans/domain/supervised-plan.js';
 import type {
   OrgPlanCheckpoint,
   OrgPlanCheckpointRecordStatus,
@@ -1045,6 +1048,26 @@ export class AutopilotCoordinator {
       return;
     }
     this.supersedeExecutorCommands(sessionId, plan.identity, plan.plan);
+    const retainedExecutor = this.deps.store.find(sessionId)?.executor;
+    const assignedStep = retainedExecutor
+      ? plan.plan.steps[Number(retainedExecutor.canonicalPosition.slice(1)) - 1]
+      : undefined;
+    if (
+      retainedExecutor &&
+      assignedStep?.state === 'SUSPENDED' &&
+      retainedExecutor.l1State !== 'SUSPENDED'
+    ) {
+      const latest = this.deps.store.find(sessionId)!;
+      this.persist({
+        ...latest,
+        executor: {
+          ...retainedExecutor,
+          l1State: 'SUSPENDED',
+          ...(retainedExecutor.l2State === 'WIP' ? { l2State: 'SUSPENDED' } : {}),
+        },
+        updatedAt: this.deps.now(),
+      });
+    }
     // Supersession persists independently. Re-read before reopening epochs so
     // this update cannot restore commands from the stale pre-supersession row.
     const current = this.deps.store.find(sessionId) ?? prior;
@@ -1579,7 +1602,12 @@ export class AutopilotCoordinator {
           ...executor,
           commands: executor.commands.map((command) =>
             command.status === 'scheduled'
-              ? { ...command, status: 'cancelled' as const, updatedAt: this.deps.now() }
+              ? {
+                  ...command,
+                  status: 'cancelled' as const,
+                  supersededBeforeIssue: true as const,
+                  updatedAt: this.deps.now(),
+                }
               : command,
           ),
         },
@@ -1795,12 +1823,13 @@ export class AutopilotCoordinator {
     };
     return plan.steps.some(
       (l1) =>
-        l1.children.some(
-          (l2) =>
-            l2.state === 'DONE' &&
-            (!reportedL2.has(JSON.stringify([l1.id, l2.id])) ||
-              epochNeedsReport(checkpointTarget('l2', l1.id, l2.id))),
-        ) ||
+        (l1.state !== 'SUSPENDED' &&
+          l1.children.some(
+            (l2) =>
+              l2.state === 'DONE' &&
+              (!reportedL2.has(JSON.stringify([l1.id, l2.id])) ||
+                epochNeedsReport(checkpointTarget('l2', l1.id, l2.id))),
+          )) ||
         (l1.state === 'DONE' &&
           l1.reviewStatus === 'REVIEWED' &&
           (!reportedL1.has(l1.id) || epochNeedsReport(checkpointTarget('l1', l1.id)))),
@@ -1814,11 +1843,7 @@ export class AutopilotCoordinator {
     persisted?: ExecutorLifecycle,
     activity: AgentActivitySnapshot | null = this.deps.activity(sessionId),
   ): ExecutorLifecycle | undefined {
-    const stepIndex = plan.steps.findIndex(
-      (step) => step.id === plan.currentStepId || step.state === 'WIP',
-    );
-    const index =
-      stepIndex >= 0 ? stepIndex : plan.steps.findIndex((step) => step.state !== 'DONE');
+    const index = currentExecutableL1Index(plan);
     if (index < 0) return undefined;
     const step = plan.steps[index]!;
     const canonicalPosition = `L${index + 1}`;
@@ -2016,6 +2041,21 @@ export class AutopilotCoordinator {
     generation: number,
     trigger: Parameters<NonNullable<AutopilotDependencies['executorController']>['resume']>[3],
   ): ExecutorCommand {
+    const unissued = (executor.commands ?? [])
+      .filter(
+        (command) =>
+          command.supersededBeforeIssue &&
+          !command.processAction &&
+          command.planIdentity === fence.planIdentity &&
+          command.planFingerprint === fence.planFingerprint &&
+          command.threadId === fence.executorThreadId &&
+          command.taskPath === executor.taskPath &&
+          command.canonicalTaskName === executor.canonicalTaskName &&
+          command.generation === generation &&
+          command.trigger === trigger.kind,
+      )
+      .map((command) => command.commandId)
+      .sort();
     const commandId = createHash('sha256')
       .update(
         JSON.stringify([
@@ -2028,6 +2068,7 @@ export class AutopilotCoordinator {
           generation,
           ...(executor.resumeFailures ? [executor.resumeFailures] : []),
           trigger.kind,
+          ...(unissued.length ? [unissued] : []),
         ]),
       )
       .digest('hex');
@@ -2107,6 +2148,9 @@ export class AutopilotCoordinator {
     return state?.requestedEnabled &&
       retained &&
       executor &&
+      (command.processAction ||
+        currentExecutableL1Index(retained.plan) ===
+          Number(command.canonicalPosition.slice(1)) - 1) &&
       executor.commands?.some(
         (entry) =>
           entry.commandId === command.commandId &&
@@ -2334,7 +2378,12 @@ export class AutopilotCoordinator {
         ownershipMismatch;
       if (!stale || !['scheduled', 'issued'].includes(command.status)) return command;
       changed = true;
-      return { ...command, status: 'superseded' as const, updatedAt: this.deps.now() };
+      return {
+        ...command,
+        status: 'superseded' as const,
+        ...(command.status === 'scheduled' ? { supersededBeforeIssue: true as const } : {}),
+        updatedAt: this.deps.now(),
+      };
     });
     if (!changed) return false;
     this.persist({
@@ -2376,11 +2425,7 @@ export class AutopilotCoordinator {
     if (replacement && this.validReplacement(sessionId, replacement)) return replacement;
     const plan = this.deps.plan(sessionId)?.plan;
     if (!plan) return undefined;
-    const stepIndex = plan.steps.findIndex(
-      (step) => step.id === plan.currentStepId || step.state === 'WIP',
-    );
-    const index =
-      stepIndex >= 0 ? stepIndex : plan.steps.findIndex((step) => step.state !== 'DONE');
+    const index = currentExecutableL1Index(plan);
     if (index < 0) return undefined;
     const canonicalTaskName = `l${index + 1}`;
     // A root boundary starts a root turn, not a replacement executor.  The
@@ -2416,9 +2461,7 @@ export class AutopilotCoordinator {
       fingerprint(retained.plan) !== replacement.planFingerprint
     )
       return false;
-    const index = retained.plan.steps.findIndex(
-      (step) => step.id === retained.plan.currentStepId || step.state === 'WIP',
-    );
+    const index = currentExecutableL1Index(retained.plan);
     return index >= 0 && replacement.canonicalPosition === `L${index + 1}`;
   }
 
@@ -2863,10 +2906,7 @@ export class AutopilotCoordinator {
     activity: AgentActivitySnapshot | null,
   ): boolean {
     if (!plan || activity?.confidence !== 'fresh') return false;
-    const selected = plan.steps.findIndex(
-      (step) => step.id === plan.currentStepId || step.state === 'WIP',
-    );
-    const index = selected >= 0 ? selected : plan.steps.findIndex((step) => step.state !== 'DONE');
+    const index = currentExecutableL1Index(plan);
     if (index < 0) return false;
     const position = `L${index + 1}`;
     const taskName = `l${index + 1}`;

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type PlanTodoState = 'TODO' | 'WIP' | 'DONE';
+export type PlanTodoState = 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
 export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanLevel = 1 | 2;
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
@@ -81,3 +81,18 @@ export type PlanUnavailableReason =
 export type PlanProjectionResult =
   | Readonly<{ kind: 'available'; plan: SupervisedPlan }>
   | Readonly<{ kind: 'unavailable'; reason: PlanUnavailableReason }>;
+
+/** Suspended work is a barrier: no later implementation may be selected. */
+export function currentExecutableL1Index(plan: SupervisedPlan): number {
+  const boundary = plan.steps.findIndex((step) => step.state === 'SUSPENDED');
+  const eligible = (index: number) => boundary < 0 || index < boundary;
+  const selected = plan.steps.findIndex(
+    (step, index) =>
+      eligible(index) &&
+      (step.id === plan.currentStepId ||
+        step.children.some((child) => child.id === plan.currentStepId) ||
+        step.state === 'WIP'),
+  );
+  if (selected >= 0) return selected;
+  return plan.steps.findIndex((step, index) => eligible(index) && step.state !== 'DONE');
+}
