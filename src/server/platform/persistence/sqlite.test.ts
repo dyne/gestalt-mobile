@@ -207,6 +207,49 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  it('retains 48 hours across bursts, sessions, and database reopening', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-retention-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    let database = openRelayDatabase(path);
+    migrate(database);
+    for (const id of ['s', 'other'])
+      database
+        .prepare(
+          "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,created_at,updated_at) VALUES (?,'w','/w','default','ready','active','t','t')",
+        )
+        .run(id);
+    const journal = new SqliteEventJournal(database);
+    journal.append('other', 'old-other', {}, '2026-10-11T12:00:00.000Z');
+    journal.append('s', 'expired', {}, '2026-10-12T11:59:59.999Z');
+    journal.append('s', 'boundary', {}, '2026-10-12T12:00:00.000Z');
+    journal.append('s', 'boundary-offset', {}, '2026-10-12T11:00:00.000-01:00');
+    journal.append('s', 'expired-offset', {}, '2026-10-12T13:59:59.999+02:00');
+    journal.append('s', 'org-plan.step-reported', {}, '2026-10-14T12:00:00.000Z');
+    expect(journal.since('s', 0).map((event) => event.type)).toEqual([
+      'boundary',
+      'boundary-offset',
+      'org-plan.step-reported',
+    ]);
+    for (let index = 0; index < 2050; index++)
+      journal.append('s', 'agent.activity.updated', {}, '2026-10-14T12:00:00.000Z');
+    expect(journal.since('s', 0)).toHaveLength(2053);
+    expect(journal.since('other', 0)).toHaveLength(1);
+    database.close();
+    database = openRelayDatabase(path);
+    migrate(database);
+    try {
+      const reopened = new SqliteEventJournal(database);
+      expect(reopened.since('s', 0)).toHaveLength(2053);
+      const next = reopened.append('s', 'next', {}, '2026-10-14T12:00:00.001Z');
+      expect(next.sequence).toBe(2056);
+      expect(reopened.since('s', 0)).toHaveLength(2052);
+      expect(reopened.since('s', 0)[0]!.type).toBe('org-plan.step-reported');
+    } finally {
+      database.close();
+    }
+  });
+
   it('orders events atomically and prunes the oldest entries', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
     directories.push(directory);
