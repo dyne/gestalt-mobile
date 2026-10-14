@@ -98,6 +98,12 @@ describe('runCli', () => {
     const compose = vi.fn();
     const exportTrace = vi.fn(() => ({
       schemaVersion: 1 as const,
+      selection: {
+        statusEventLimit: 100,
+        transitionEventLimit: 4900,
+        omittedStatusEvents: 0,
+        omittedTransitionEvents: 0,
+      },
       sessionId: 'session-1',
       generatedAt: '2026-01-01T00:00:00.000Z',
       events: [],

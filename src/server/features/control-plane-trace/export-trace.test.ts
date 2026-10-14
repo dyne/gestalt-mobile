@@ -24,6 +24,48 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('keeps the failed boundary when interleaved status polling exceeds the export budget', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-trace-flood-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const database = new DatabaseSync(path);
+    database.exec(
+      'CREATE TABLE session_events (session_id TEXT, sequence INTEGER, occurred_at TEXT, type TEXT, payload_json TEXT)',
+    );
+    const insert = database.prepare('INSERT INTO session_events VALUES (?,?,?,?,?)');
+    const at = '2026-01-01T00:00:00.000Z';
+    insert.run(
+      's1',
+      1,
+      at,
+      'autopilot.operation-failed',
+      JSON.stringify({ kind: 'executorResume', rpcCode: -32600, prompt: 'private-content' }),
+    );
+    database.exec('BEGIN');
+    for (let index = 0; index < 6000; index++) {
+      const type = ['autopilot.updated', 'agent.activity.updated', 'session.status.updated'][
+        index % 3
+      ]!;
+      insert.run('s1', index + 2, at, type, JSON.stringify({ state: 'idle', observedAt: at }));
+    }
+    insert.run('other-session', 1, at, 'autopilot.turn-failed', '{}');
+    database.exec('COMMIT');
+    database.close();
+    const trace = exportControlPlaneTrace(path, 's1', at);
+    expect(trace.events).toHaveLength(101);
+    expect(trace.events[0]).toMatchObject({
+      sequence: 1,
+      type: 'autopilot.operation-failed',
+      payload: { kind: 'executorResume', rpcCode: -32600 },
+    });
+    expect(trace.events.at(-1)?.sequence).toBe(6001);
+    expect(trace.selection).toMatchObject({
+      omittedStatusEvents: 5900,
+      omittedTransitionEvents: 0,
+    });
+    expect(formatControlPlaneTrace(trace)).toContain('5900 status snapshots');
+    expect(JSON.stringify(trace)).not.toMatch(/private-content|other-session/);
+  });
   it('retains structural RPC failure codes while excluding exception prose', () => {
     expect(
       redactDiagnosticPayload({
