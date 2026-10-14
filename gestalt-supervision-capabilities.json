@@ -12,6 +12,7 @@
     "canonical-agent-identity",
     "session-verdict",
     "acknowledgement-safe-composer",
-    "org-plan-contract"
+    "org-plan-contract",
+    "suspension-v1"
   ]
 }

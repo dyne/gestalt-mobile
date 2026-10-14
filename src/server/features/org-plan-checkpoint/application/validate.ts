@@ -12,6 +12,7 @@ export type OrgPlanCheckpointFailureReason =
   | 'rootNotOwner'
   | 'planIdentityMismatch'
   | 'terminalReviewIncomplete'
+  | 'l1Suspended'
   | 'l1NotFound'
   | 'l2NotFound'
   | 'checkpointPositionMismatch'
@@ -82,7 +83,7 @@ export function resolveOrgPlanCheckpointSignal(
   );
   const reviewed = reviewedId || !unreportedReviewed.length ? allReviewed : unreportedReviewed;
   const allCompleted = plan.steps.flatMap((parent) =>
-    parent.reviewStatus === 'UNREVIEWED'
+    parent.state !== 'SUSPENDED' && parent.reviewStatus === 'UNREVIEWED'
       ? parent.children
           .filter(
             (child) =>
@@ -174,6 +175,7 @@ export function validateOrgPlanCheckpoint(
   }
   const l1 = plan.steps.find((step) => step.id === checkpoint.l1Id);
   if (!l1) return { valid: false, reasonCode: 'l1NotFound' };
+  if (l1.state === 'SUSPENDED') return { valid: false, reasonCode: 'l1Suspended' };
   const position = `L${plan.steps.indexOf(l1) + 1}`;
   if (checkpoint.kind === 'l2Completed') {
     const l2 = l1.children.find((step) => step.id === checkpoint.l2Id);

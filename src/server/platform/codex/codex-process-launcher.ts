@@ -43,8 +43,10 @@ export function launchCodexAppServer(input: {
 /** Prevents a relay's own ambient status path from reaching discovery-only children. */
 export function codexChildEnvironment(
   environment?: Readonly<Record<string, string>>,
+  launchEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const inherited = { ...process.env };
+  const inherited = { ...launchEnvironment };
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL;

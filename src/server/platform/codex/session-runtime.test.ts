@@ -1773,7 +1773,10 @@ describe('CodexSessionRuntime', () => {
       {
         profile: 'default',
         cwd: '/workspace',
-        environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json' },
+        environment: {
+          GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json',
+          GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1',
+        },
       },
     ]);
     runtime.stop('session-1');

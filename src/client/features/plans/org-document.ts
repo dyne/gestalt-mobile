@@ -7,7 +7,7 @@
 export type OrgDocumentSection = Readonly<{
   level: number;
   title: string;
-  state?: 'TODO' | 'WIP' | 'DONE';
+  state?: 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
   priority?: 'A' | 'B' | 'C';
   properties: readonly (readonly [string, string])[];
   descriptions: readonly (readonly [string, string])[];
@@ -20,7 +20,7 @@ export type OrgDocument = Readonly<{
   sections: readonly OrgDocumentSection[];
 }>;
 
-const headingPattern = /^(\*+)\s+(?:(TODO|WIP|DONE)\s+)?(?:\[#([ABC])\]\s+)?(.+)$/;
+const headingPattern = /^(\*+)\s+(?:(TODO|WIP|DONE|SUSPENDED)\s+)?(?:\[#([ABC])\]\s+)?(.+)$/;
 const metadataPattern = /^#\+([A-Z][A-Z0-9_-]*):\s*(.*)$/i;
 const propertyPattern = /^:([A-Z][A-Z0-9_]*):\s*(.*)$/;
 const descriptionPattern = /^-\s+([^:]+?)\s+::\s*(.*)$/;
@@ -34,7 +34,7 @@ export function parseOrgDocument(source: string): OrgDocument {
   let current: {
     level: number;
     title: string;
-    state?: 'TODO' | 'WIP' | 'DONE';
+    state?: 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED';
     priority?: 'A' | 'B' | 'C';
     properties: Array<readonly [string, string]>;
     descriptions: Array<readonly [string, string]>;
@@ -61,7 +61,7 @@ export function parseOrgDocument(source: string): OrgDocument {
       current = {
         level: heading[1]!.length,
         title: heading[4]!.trim(),
-        ...(heading[2] ? { state: heading[2] as 'TODO' | 'WIP' | 'DONE' } : {}),
+        ...(heading[2] ? { state: heading[2] as 'TODO' | 'WIP' | 'DONE' | 'SUSPENDED' } : {}),
         ...(heading[3] ? { priority: heading[3] as 'A' | 'B' | 'C' } : {}),
         properties: [],
         descriptions: [],

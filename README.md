@@ -545,6 +545,15 @@ across three jobs instead of nine. These are measured runner durations, not a
 guarantee about elapsed time or GitHub's runner allocation queue. The full Vitest
 job took 77 seconds and remains in the default gate.
 
+The Vitest CI job also checks out the compatible Agents helper at the immutable
+revision recorded in `scripts/test-org-plan-integration.mjs` and runs
+`npm run test:org-plan-integration -- <agents-checkout>`. To repeat locally, use a
+separate `dyne/gestalt-agents` checkout at that exact revision and pass its path.
+The command rejects a missing helper or mismatched revision and proves the
+accepted dependency → one root continuation → same-owner resume using the real
+helper on a disposable plan. Ordinary unit tests require no network or Agents
+checkout; their coordinator case supplies equivalent projection data.
+
 Local aggregate commands remain unchanged: `npm test` runs every Vitest test and
 `npm run test:e2e` runs every browser test except the isolated real-auth journey.
 
