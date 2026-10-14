@@ -3315,6 +3315,125 @@ describe('production composition', () => {
       expect(starts()).toHaveLength(1);
     });
 
+    it('reports a completed L2 despite a disconnected auxiliary helper in the authoritative roster', async () => {
+      const handles: LiveServerHandle[] = [];
+      const launch = liveAppServer(handles);
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        launchAppServer: () => {
+          const server = launch();
+          handles.at(-1)!.respond = (method) => {
+            if (method === 'thread/list')
+              return {
+                data: [
+                  {
+                    id: 'old-helper',
+                    status: { type: 'notLoaded' },
+                    source: {
+                      subAgent: { thread_spawn: { agent_path: '/root/editorial_review' } },
+                    },
+                  },
+                  {
+                    id: 'previous-executor',
+                    status: { type: 'idle' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                  },
+                  {
+                    id: 'executor',
+                    status: { type: 'idle' },
+                    source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
+                  },
+                ],
+              };
+            if (method === 'thread/backgroundTerminals/list') return { terminals: [] };
+            return undefined;
+          };
+          return server;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      await fixture.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${fixture.sessionId}/autopilot`,
+        payload: { enabled: false },
+      });
+      await writeFile(
+        join(fixture.workspacePath, 'autopilot.org'),
+        acceptedL1WithNextTodoPlanText()
+          .replace('* TODO [#B] Next parent', '* WIP [#B] Next parent')
+          .replace('** TODO [#B] Next child', '** DONE [#B] Next child'),
+      );
+      await expect
+        .poll(
+          async () =>
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
+              .currentStepId,
+        )
+        .toBe('next-parent');
+      await fixture.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+      });
+      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
+        {
+          agentActivity: {
+            confidence: 'fresh',
+            aggregateSubagents: 'idle',
+            subagents: expect.arrayContaining([
+              expect.objectContaining({ id: 'old-helper', state: 'disconnected' }),
+              expect.objectContaining({ id: 'previous-executor', state: 'idle' }),
+              expect.objectContaining({ id: 'executor', state: 'idle' }),
+            ]),
+          },
+        },
+      );
+      await fixture.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${fixture.sessionId}/autopilot`,
+        payload: { enabled: true },
+      });
+      const starts = () =>
+        handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+        expect(timer).toBeDefined();
+        timer!.fired = true;
+        timer!.callback();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      await vi.waitFor(() => expect(starts()).toHaveLength(1));
+      const rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+        .threadId;
+      expect(starts()[0]!.params).toMatchObject({ threadId: rootThreadId });
+      // Replayed timers cannot start a second root turn or resume the executor
+      // past the mandatory L2 answer boundary.
+      for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(starts()).toHaveLength(1);
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        expect(
+          database
+            .prepare(
+              "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.control-issued'",
+            )
+            .get(fixture.sessionId),
+        ).toMatchObject({ count: 1 });
+      } finally {
+        database.close();
+      }
+    });
+
     it('refreshes unchanged idle evidence so a stale handoff can continue', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({

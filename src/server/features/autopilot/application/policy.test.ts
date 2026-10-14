@@ -53,6 +53,128 @@ const plan = (reviewStatus: 'REVIEWED' | 'UNREVIEWED' = 'UNREVIEWED'): Supervise
 });
 
 describe('autopilot policy', () => {
+  it('continues an idle canonical executor despite an exited auxiliary helper', () => {
+    const base = createAgentActivitySnapshot('s', now);
+    const helper = {
+      id: 'old-helper',
+      taskPath: '/root/editorial_review',
+      state: 'disconnected' as const,
+      reason: 'processExited' as const,
+      observedAt: now,
+      lastActivityAt: now,
+      ownedProcesses: [],
+    };
+    const activity: AgentActivitySnapshot = {
+      ...base,
+      confidence: 'fresh',
+      root: { ...base.root, state: 'idle' },
+      subagents: [
+        helper,
+        {
+          id: 'previous-executor',
+          taskPath: '/root/l1',
+          canonicalPosition: 'L1',
+          canonicalTaskName: 'l1',
+          state: 'idle',
+          reason: 'turnCompleted',
+          observedAt: now,
+          lastActivityAt: now,
+        },
+        {
+          id: 'executor',
+          taskPath: '/root/l2',
+          canonicalPosition: 'L2',
+          canonicalTaskName: 'l2',
+          state: 'idle',
+          reason: 'turnCompleted',
+          observedAt: now,
+          lastActivityAt: now,
+        },
+      ],
+      aggregateSubagents: 'idle',
+    };
+    const input = {
+      state: { ...disabledAutopilot('s', now), requestedEnabled: true },
+      plan: {
+        ...plan(),
+        currentStepId: 'next',
+        allDone: false,
+        executionComplete: false,
+        steps: [
+          plan('REVIEWED').steps[0]!,
+          { ...plan().steps[0]!, id: 'next', state: 'WIP' as const },
+        ],
+      },
+      activity,
+      hasPendingInteraction: false,
+      now,
+      policy: defaultAutopilotPolicy,
+    };
+    expect(decideAutopilot(input)).toMatchObject({ kind: 'scheduleContinuation' });
+    expect(
+      decideAutopilot({ ...input, activity: { ...activity, aggregateSubagents: 'disconnected' } }),
+    ).toMatchObject({ kind: 'scheduleContinuation' });
+    expect(decideAutopilot({ ...input, hasPendingInteraction: true })).toEqual({ kind: 'observe' });
+    expect(decideAutopilot({ ...input, activity: { ...activity, confidence: 'stale' } })).toEqual({
+      kind: 'reconcile',
+    });
+    for (const state of ['working', 'awaitingHuman'] as const) {
+      expect(
+        decideAutopilot({
+          ...input,
+          activity: {
+            ...activity,
+            subagents: [{ ...helper, state }, ...activity.subagents.slice(1)],
+          },
+        }),
+      ).toEqual({ kind: 'observe' });
+    }
+    expect(
+      decideAutopilot({
+        ...input,
+        activity: {
+          ...activity,
+          subagents: [{ ...helper, taskPath: undefined }, ...activity.subagents.slice(1)],
+        },
+      }),
+    ).toEqual({ kind: 'reconcile' });
+    for (const [state, ownership, expected] of [
+      ['detached-active', 'supervisor', 'observe'],
+      ['running', 'executor', 'reconcile'],
+      ['exited-awaiting-result', 'executor', 'reconcile'],
+      ['result-consumed', 'executor', 'scheduleContinuation'],
+      ['terminated-for-budget', 'executor', 'scheduleContinuation'],
+    ] as const) {
+      expect(
+        decideAutopilot({
+          ...input,
+          activity: {
+            ...activity,
+            subagents: [
+              {
+                ...helper,
+                ownedProcesses: [
+                  {
+                    processId: 'owned-process',
+                    itemId: 'item',
+                    ownerThreadId: helper.id,
+                    ownerTaskPath: helper.taskPath,
+                    ownership,
+                    state,
+                    observedAt: now,
+                    elapsedMs: 0,
+                    cpuPercent: 0,
+                    rssBytes: 0,
+                  },
+                ],
+              },
+              ...activity.subagents.slice(1),
+            ],
+          },
+        }),
+      ).toMatchObject({ kind: expected });
+    }
+  });
   it('retains safetyPaused when a late checkpoint final requests evaluation', () => {
     expect(
       decideAutopilot({
