@@ -36,6 +36,9 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
   database.exec(
+    'CREATE INDEX IF NOT EXISTS session_events_retention ON session_events(session_id, julianday(occurred_at))',
+  );
+  database.exec(
     'CREATE TABLE IF NOT EXISTS autopilot_state_quarantine (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE, record_json TEXT NOT NULL, created_at TEXT NOT NULL)',
   );
   database.exec(

@@ -5,10 +5,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { eventRetention, retainedSequences } from './retention.js';
-describe('retainedSequences', () => {
-  it('keeps the newest 2,000 events', () =>
-    expect(
-      retainedSequences(Array.from({ length: eventRetention + 1 }, (_, index) => index)).length,
-    ).toBe(eventRetention));
+import { eventRetentionCutoff, eventRetentionMs } from './retention.js';
+describe('event retention', () => {
+  it('defaults to 48 hours independent of event volume', () => {
+    expect(eventRetentionMs).toBe(172_800_000);
+    expect(eventRetentionCutoff('2026-10-14T12:00:00.000Z')).toBe('2026-10-12T12:00:00.000Z');
+    expect(eventRetentionCutoff('2026-10-14T14:00:00+02:00')).toBe('2026-10-12T12:00:00.000Z');
+  });
+  it('does not expire evidence using an invalid timestamp', () => {
+    expect(eventRetentionCutoff('invalid')).toBeNull();
+  });
 });

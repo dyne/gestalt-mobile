@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
+import { eventRetentionCutoff } from './retention.js';
 
 export const autopilotAuditEventTypes = [
   'autopilot.turn-started',
@@ -41,7 +42,7 @@ const renderableAutopilotAuditWhere = `
 export class SqliteEventJournal {
   constructor(
     private readonly db: DatabaseSync,
-    private readonly retain = 2000,
+    private readonly retain?: number,
   ) {}
 
   append(
@@ -90,11 +91,21 @@ export class SqliteEventJournal {
       this.db
         .prepare('UPDATE relay_sessions SET next_sequence = next_sequence + 1 WHERE id = ?')
         .run(sessionId);
-      this.db
-        .prepare(
-          'DELETE FROM session_events WHERE session_id = ? AND sequence NOT IN (SELECT sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT ?)',
-        )
-        .run(sessionId, sessionId, this.retain);
+      if (this.retain !== undefined) {
+        this.db
+          .prepare(
+            'DELETE FROM session_events WHERE session_id = ? AND sequence NOT IN (SELECT sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT ?)',
+          )
+          .run(sessionId, sessionId, this.retain);
+      } else {
+        const cutoff = eventRetentionCutoff(occurredAt);
+        if (cutoff)
+          this.db
+            .prepare(
+              'DELETE FROM session_events WHERE session_id = ? AND julianday(occurred_at) < julianday(?)',
+            )
+            .run(sessionId, cutoff);
+      }
       const event = { sessionId, sequence: row.sequence, type, occurredAt, payload };
       this.db.exec('COMMIT');
       return event;
