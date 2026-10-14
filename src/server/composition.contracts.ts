@@ -3315,75 +3315,88 @@ describe('production composition', () => {
       expect(starts()).toHaveLength(1);
     });
 
-    it('reports a completed L2 despite a disconnected auxiliary helper in the authoritative roster', async () => {
-      const handles: LiveServerHandle[] = [];
-      const launch = liveAppServer(handles);
-      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
-      const fixture = await createProductionAutopilotFixture({
-        activitySchedule: () => () => {},
-        autopilotSchedule: (callback) => {
-          const timer = { callback, cancelled: false, fired: false };
-          timers.push(timer);
-          return () => {
-            timer.cancelled = true;
-          };
-        },
-        launchAppServer: () => {
-          const server = launch();
-          handles.at(-1)!.respond = (method) => {
-            if (method === 'thread/list')
-              return {
-                data: [
-                  {
-                    id: 'old-helper',
-                    status: { type: 'notLoaded' },
-                    source: {
-                      subAgent: { thread_spawn: { agent_path: '/root/editorial_review' } },
+    it.each([false, true])(
+      'continues past a disconnected auxiliary helper after L2 completion, reported=%s',
+      async (reported) => {
+        const handles: LiveServerHandle[] = [];
+        const launch = liveAppServer(handles);
+        const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+        const fixture = await createProductionAutopilotFixture({
+          activitySchedule: () => () => {},
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false, fired: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+          launchAppServer: () => {
+            const server = launch();
+            handles.at(-1)!.respond = (method) => {
+              if (method === 'thread/list')
+                return {
+                  data: [
+                    {
+                      id: 'old-helper',
+                      status: { type: 'notLoaded' },
+                      source: {
+                        subAgent: { thread_spawn: { agent_path: '/root/editorial_review' } },
+                      },
                     },
-                  },
-                  {
-                    id: 'previous-executor',
-                    status: { type: 'idle' },
-                    source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
-                  },
-                  {
-                    id: 'executor',
-                    status: { type: 'idle' },
-                    source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
-                  },
-                ],
-              };
-            if (method === 'thread/backgroundTerminals/list') return { terminals: [] };
-            return undefined;
-          };
-          return server;
-        },
-      });
-      onTestFinished(() => fixture.app.close());
-      await fixture.app.inject({
-        method: 'PUT',
-        url: `/api/sessions/${fixture.sessionId}/autopilot`,
-        payload: { enabled: false },
-      });
-      await writeFile(
-        join(fixture.workspacePath, 'autopilot.org'),
-        acceptedL1WithNextTodoPlanText()
-          .replace('* TODO [#B] Next parent', '* WIP [#B] Next parent')
-          .replace('** TODO [#B] Next child', '** DONE [#B] Next child'),
-      );
-      await expect
-        .poll(
-          async () =>
-            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
-              .currentStepId,
-        )
-        .toBe('next-parent');
-      await fixture.app.inject({
-        method: 'POST',
-        url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
-      });
-      expect((await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()).toMatchObject(
-        {
+                    {
+                      id: 'previous-executor',
+                      status: { type: 'idle' },
+                      source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                    },
+                    {
+                      id: 'executor',
+                      status: { type: 'idle' },
+                      source: { subAgent: { thread_spawn: { agent_path: '/root/l2' } } },
+                    },
+                  ],
+                };
+              if (method === 'thread/backgroundTerminals/list') return { terminals: [] };
+              return undefined;
+            };
+            return server;
+          },
+        });
+        onTestFinished(() => fixture.app.close());
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: false },
+        });
+        await writeFile(
+          join(fixture.workspacePath, 'autopilot.org'),
+          acceptedL1WithNextTodoPlanText()
+            .replace('* TODO [#B] Next parent', '* WIP [#B] Next parent')
+            .replace('** TODO [#B] Next child', '** DONE [#B] Next child') +
+            `
+** TODO [#B] Next child two
+:PROPERTIES:
+:ID: next-child-two
+:END:
+- Why :: Continue the same L1 after its first report.
+- Change :: Resume the canonical executor.
+- Tests :: Verify one fenced continuation.
+- Done when :: The next L2 starts.
+`,
+        );
+        await expect
+          .poll(
+            async () =>
+              (await fixture.app.inject(`/api/sessions/${fixture.sessionId}/plan`)).json()
+                .currentStepId,
+          )
+          .toBe('next-parent');
+        await fixture.app.inject({
+          method: 'POST',
+          url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+        });
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json(),
+        ).toMatchObject({
           agentActivity: {
             confidence: 'fresh',
             aggregateSubagents: 'idle',
@@ -3393,46 +3406,79 @@ describe('production composition', () => {
               expect.objectContaining({ id: 'executor', state: 'idle' }),
             ]),
           },
-        },
-      );
-      await fixture.app.inject({
-        method: 'PUT',
-        url: `/api/sessions/${fixture.sessionId}/autopilot`,
-        payload: { enabled: true },
-      });
-      const starts = () =>
-        handles
-          .flatMap((handle) => handle.requests)
-          .filter((request) => request.method === 'turn/start');
-      for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
-        const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
-        expect(timer).toBeDefined();
-        timer!.fired = true;
-        timer!.callback();
+        });
+        if (reported) {
+          const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+          try {
+            const row = database
+              .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+              .get(fixture.sessionId) as { lifecycle_json: string };
+            const lifecycle = JSON.parse(row.lifecycle_json);
+            lifecycle.checkpoints = {
+              protocolVersion: 1,
+              planIdentity: createHash('sha256')
+                .update(join(fixture.workspacePath, 'autopilot.org'))
+                .digest('hex'),
+              reportedL1Ids: ['parent'],
+              reportedL2Ids: [
+                JSON.stringify(['parent', 'child']),
+                JSON.stringify(['next-parent', 'next-child']),
+              ],
+              acceptedKeys: [],
+              pendingTurnId: null,
+              terminalReviewAccepted: false,
+            };
+            database
+              .prepare('UPDATE autopilot_sessions SET lifecycle_json = ? WHERE session_id = ?')
+              .run(JSON.stringify(lifecycle), fixture.sessionId);
+          } finally {
+            database.close();
+          }
+        }
+        await fixture.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${fixture.sessionId}/autopilot`,
+          payload: { enabled: true },
+        });
+        const starts = () =>
+          handles
+            .flatMap((handle) => handle.requests)
+            .filter((request) => request.method === 'turn/start');
+        for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
+          const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+          expect(timer).toBeDefined();
+          timer!.fired = true;
+          timer!.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(starts()).toHaveLength(1));
+        const rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
+          .threadId;
+        expect(starts()[0]!.params).toMatchObject({
+          threadId: reported ? 'executor' : rootThreadId,
+        });
+        // Replayed timers cannot duplicate the root report or the later
+        // continuation of the same canonical executor.
+        for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
         await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      await vi.waitFor(() => expect(starts()).toHaveLength(1));
-      const rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
-        .threadId;
-      expect(starts()[0]!.params).toMatchObject({ threadId: rootThreadId });
-      // Replayed timers cannot start a second root turn or resume the executor
-      // past the mandatory L2 answer boundary.
-      for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(starts()).toHaveLength(1);
-      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
-      try {
-        expect(
-          database
-            .prepare(
-              "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.control-issued'",
-            )
-            .get(fixture.sessionId),
-        ).toMatchObject({ count: 1 });
-      } finally {
-        database.close();
-      }
-    });
+        expect(starts()).toHaveLength(1);
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        try {
+          expect(
+            database
+              .prepare(
+                'SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = ?',
+              )
+              .get(
+                fixture.sessionId,
+                reported ? 'autopilot.executor-resumed' : 'autopilot.control-issued',
+              ),
+          ).toMatchObject({ count: 1 });
+        } finally {
+          database.close();
+        }
+      },
+    );
 
     it('refreshes unchanged idle evidence so a stale handoff can continue', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
