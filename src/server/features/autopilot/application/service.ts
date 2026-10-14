@@ -1823,6 +1823,9 @@ export class AutopilotCoordinator {
     };
     return plan.steps.some(
       (l1) =>
+        // A finished executor cannot review its own milestone. Even after all
+        // L2 reports, the root must run the review before work can advance.
+        (l1.state === 'DONE' && l1.reviewStatus !== 'REVIEWED') ||
         (l1.state !== 'SUSPENDED' &&
           l1.children.some(
             (l2) =>
@@ -2974,9 +2977,11 @@ export class AutopilotCoordinator {
     });
   }
   private semanticSnapshot(next: AutopilotSession, control?: AutopilotControl): string {
+    const snapshot = this.snapshotFor(next, control);
     return JSON.stringify({
-      ...this.snapshotFor(next, control),
+      ...snapshot,
       updatedAt: '',
+      health: { ...snapshot.health, observedAt: '', lastTransitionAt: '' },
     });
   }
   private snapshotEvents(
@@ -3166,6 +3171,8 @@ export class AutopilotCoordinator {
         Date.parse(this.deps.now()) - Date.parse(activity.root.observedAt) <=
           this.deps.policy.staleAfterMs
       ) {
+        if (current.stopReason === 'reconcileFailed')
+          this.persist({ ...current, stopReason: null, updatedAt: this.deps.now() });
         this.evaluate(sessionId);
       } else {
         // A compatible read that did not yield fresh actor evidence is not a

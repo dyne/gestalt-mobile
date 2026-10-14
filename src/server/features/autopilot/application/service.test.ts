@@ -6040,6 +6040,7 @@ ${index === 10 ? ':SUSPENDED_FOR: l9\n' : ''}:END:
   });
   it('does not publish an autopilot update for a timestamp-only persistence change', () => {
     let state: AutopilotSession | null = null;
+    let clock = now;
     const events: string[] = [];
     const coordinator = new AutopilotCoordinator({
       store: {
@@ -6052,7 +6053,7 @@ ${index === 10 ? ':SUSPENDED_FOR: l9\n' : ''}:END:
         saveControl: () => {},
         controlIds: () => new Set(),
       },
-      now: () => now,
+      now: () => clock,
       policy: defaultAutopilotPolicy,
       plan: () => ({ plan, identity: 'p' }),
       session: () => ({ state: 'ready', threadId: 't', activeTurnId: null }),
@@ -6069,8 +6070,10 @@ ${index === 10 ? ':SUSPENDED_FOR: l9\n' : ''}:END:
       publish: (_id, type) => events.push(type),
     });
     coordinator.enable('s');
+    coordinator.manualSend('s');
     const published = events.filter((type) => type === 'autopilot.updated').length;
-    coordinator.enable('s');
+    clock = '2026-08-20T12:00:01.000Z';
+    coordinator.manualSend('s');
     expect(events.filter((type) => type === 'autopilot.updated')).toHaveLength(published);
   });
   it('does not schedule duplicate active observations and tears down callbacks', () => {

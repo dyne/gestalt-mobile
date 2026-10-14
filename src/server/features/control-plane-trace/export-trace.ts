@@ -20,9 +20,16 @@ export type ControlPlaneTrace = Readonly<{
   generatedAt: string;
   events: readonly TraceRow[];
   diagnoses: readonly string[];
+  selection: Readonly<{
+    statusEventLimit: number;
+    transitionEventLimit: number;
+    omittedStatusEvents: number;
+    omittedTransitionEvents: number;
+  }>;
 }>;
 
 const relevant = /^(?:org-plan\.|autopilot\.|agent\.activity\.|session\.status\.)/;
+const statusTypes = ['autopilot.updated', 'agent.activity.updated', 'session.status.updated'];
 
 // Export structural telemetry only. Event types alone do not imply payload safety.
 const diagnosticFields = new Set([
@@ -143,11 +150,32 @@ export function exportControlPlaneTrace(
 ): ControlPlaneTrace {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
+    database.exec('BEGIN');
+    // Reserve the diagnostic budget for causal transitions. Polling status
+    // snapshots must not evict the failed handoff from an otherwise retained
+    // journal. Keep a recent status tail and disclose every omitted row.
+    const statusEventLimit = 100;
+    const transitionEventLimit = 4900;
+    const relevantWhere =
+      "(type LIKE 'org-plan.%' OR type LIKE 'autopilot.%' OR type LIKE 'agent.activity.%' OR type LIKE 'session.status.%')";
+    const statusWhere = `type IN (${statusTypes.map(() => '?').join(',')})`;
+    const counts = database
+      .prepare(
+        `SELECT SUM(CASE WHEN ${statusWhere} THEN 1 ELSE 0 END) AS statuses, COUNT(*) AS total FROM session_events WHERE session_id = ? AND ${relevantWhere}`,
+      )
+      .get(...statusTypes, sessionId) as { statuses: number | null; total: number };
     const rows = database
       .prepare(
-        "SELECT sequence,occurred_at,type,payload_json FROM session_events WHERE session_id = ? AND (type LIKE 'org-plan.%' OR type LIKE 'autopilot.%' OR type LIKE 'agent.activity.%' OR type LIKE 'session.status.%') ORDER BY sequence DESC LIMIT 5000",
+        `SELECT * FROM (SELECT sequence,occurred_at,type,payload_json FROM session_events WHERE session_id = ? AND ${statusWhere} ORDER BY sequence DESC LIMIT ?) UNION ALL SELECT * FROM (SELECT sequence,occurred_at,type,payload_json FROM session_events WHERE session_id = ? AND ${relevantWhere} AND NOT (${statusWhere}) ORDER BY sequence DESC LIMIT ?) ORDER BY sequence DESC`,
       )
-      .all(sessionId) as Array<{
+      .all(
+        sessionId,
+        ...statusTypes,
+        statusEventLimit,
+        sessionId,
+        ...statusTypes,
+        transitionEventLimit,
+      ) as Array<{
       sequence: number;
       occurred_at: string;
       type: string;
@@ -169,7 +197,22 @@ export function exportControlPlaneTrace(
           traceId: correlation(payload),
         };
       });
-    return { schemaVersion: 1, sessionId, generatedAt, events, diagnoses: diagnose(events) };
+    return {
+      schemaVersion: 1,
+      sessionId,
+      generatedAt,
+      events,
+      diagnoses: diagnose(events),
+      selection: {
+        statusEventLimit,
+        transitionEventLimit,
+        omittedStatusEvents: Math.max(0, (counts.statuses ?? 0) - statusEventLimit),
+        omittedTransitionEvents: Math.max(
+          0,
+          counts.total - (counts.statuses ?? 0) - transitionEventLimit,
+        ),
+      },
+    };
   } finally {
     database.close();
   }
@@ -179,6 +222,7 @@ export function formatControlPlaneTrace(trace: ControlPlaneTrace): string {
   const lines = [
     `Control-plane trace for ${trace.sessionId}`,
     `Generated: ${trace.generatedAt}`,
+    `Omitted by export limits: ${trace.selection.omittedStatusEvents} status snapshots, ${trace.selection.omittedTransitionEvents} transitions.`,
     '',
   ];
   for (const event of trace.events) {

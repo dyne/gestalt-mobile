@@ -3339,6 +3339,9 @@ describe('production composition', () => {
           },
           autopilot: { enabled: true },
         });
+        expect(
+          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot.reason,
+        ).toBeUndefined();
         expect(timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true);
       });
       for (let attempt = 0; attempt < 8 && starts().length === 0; attempt += 1) {
@@ -3360,9 +3363,13 @@ describe('production composition', () => {
       expect(starts()).toHaveLength(1);
     });
 
-    it.each([false, true])(
-      'continues past a disconnected auxiliary helper after L2 completion, reported=%s',
-      async (reported) => {
+    it.each([
+      { reported: false, completed: false },
+      { reported: true, completed: false },
+      { reported: true, completed: true },
+    ])(
+      'continues past a disconnected auxiliary helper after L2 completion, %j',
+      async ({ reported, completed }) => {
         const handles: LiveServerHandle[] = [];
         const launch = liveAppServer(handles);
         const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
@@ -3415,9 +3422,11 @@ describe('production composition', () => {
         await writeFile(
           join(fixture.workspacePath, 'autopilot.org'),
           acceptedL1WithNextTodoPlanText()
-            .replace('* TODO [#B] Next parent', '* WIP [#B] Next parent')
+            .replace('* TODO [#B] Next parent', `* ${completed ? 'DONE' : 'WIP'} [#B] Next parent`)
             .replace('** TODO [#B] Next child', '** DONE [#B] Next child') +
-            `
+            (completed
+              ? ''
+              : `
 ** TODO [#B] Next child two
 :PROPERTIES:
 :ID: next-child-two
@@ -3426,7 +3435,7 @@ describe('production composition', () => {
 - Change :: Resume the canonical executor.
 - Tests :: Verify one fenced continuation.
 - Done when :: The next L2 starts.
-`,
+`),
         );
         await expect
           .poll(
@@ -3500,7 +3509,7 @@ describe('production composition', () => {
         const rootThreadId = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json()
           .threadId;
         expect(starts()[0]!.params).toMatchObject({
-          threadId: reported ? 'executor' : rootThreadId,
+          threadId: reported && !completed ? 'executor' : rootThreadId,
         });
         // Replayed timers cannot duplicate the root report or the later
         // continuation of the same canonical executor.
@@ -3516,7 +3525,7 @@ describe('production composition', () => {
               )
               .get(
                 fixture.sessionId,
-                reported ? 'autopilot.executor-resumed' : 'autopilot.control-issued',
+                reported && !completed ? 'autopilot.executor-resumed' : 'autopilot.control-issued',
               ),
           ).toMatchObject({ count: 1 });
         } finally {
