@@ -8,7 +8,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { exportControlPlaneTrace, formatControlPlaneTrace } from './export-trace.js';
+import {
+  exportControlPlaneTrace,
+  formatControlPlaneTrace,
+  redactDiagnosticPayload,
+} from './export-trace.js';
 import { toAgentActivityDto } from '../agent-activity/activity-dto.js';
 import { createAgentActivitySnapshot, projectAgentActivity } from '../agent-activity/model.js';
 import { migrate } from '../../platform/persistence/migrate.js';
@@ -20,6 +24,17 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('retains structural RPC failure codes while excluding exception prose', () => {
+    expect(
+      redactDiagnosticPayload({
+        kind: 'executorResume',
+        rpcCode: -32603,
+        message: 'private exception',
+        prompt: 'private prompt',
+        environment: { KEY: 'secret' },
+      }),
+    ).toEqual({ kind: 'executorResume', rpcCode: -32603 });
+  });
   it('preserves owned process evidence from the activity projection through the journal', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-trace-'));
     directories.push(directory);

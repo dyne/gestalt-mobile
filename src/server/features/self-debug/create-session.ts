@@ -14,17 +14,17 @@ import { RelaySession, type RelaySessionSnapshot } from '../sessions/model/relay
 export type CreateDebugDependencies = {
   createId(): string;
   now(): string;
-  settings(): Promise<SelfDebugSession['agent']>;
+  settings(source: RelaySessionSnapshot): Promise<SelfDebugSession['agent']>;
   capture(
     id: string,
     context: DebugContext,
     agent: SelfDebugSession['agent'],
   ): Promise<{ root: string; debug: SelfDebugSession; absoluteTracePath: string }>;
-  askSource(id: string, context: DebugContext, debug: SelfDebugSession): Promise<void>;
   createSession(
     id: string,
     root: string,
     agent: SelfDebugSession['agent'],
+    source: RelaySessionSnapshot,
   ): Promise<RelaySessionSnapshot>;
   start(session: RelaySessionSnapshot): Promise<RelaySessionSnapshot>;
   startTurn(
@@ -42,15 +42,12 @@ export async function createSelfDebugSession(
   deps: CreateDebugDependencies,
 ): Promise<RelaySessionSnapshot> {
   const id = deps.createId();
-  const agent = await deps.settings();
+  const source = deps.find(context.mobileSession);
+  if (!source || source.threadId !== (context.sourceThread ?? context.codexThread))
+    throw new Error('DEBUG_SOURCE_UNAVAILABLE');
+  const agent = await deps.settings(source);
   const captured = await deps.capture(id, context, agent);
-  // Diagnostic collection is best effort; source-agent failure never blocks the new root.
-  try {
-    await deps.askSource(id, context, captured.debug);
-  } catch {
-    /* Captured evidence remains sufficient to begin. */
-  }
-  let session = await deps.createSession(id, captured.root, agent);
+  let session = await deps.createSession(id, captured.root, agent, source);
   session = { ...session, selfDebug: captured.debug };
   deps.save(session);
   try {

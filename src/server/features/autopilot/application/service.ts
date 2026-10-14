@@ -3192,6 +3192,7 @@ export class AutopilotCoordinator {
       | 'processTerminate' = 'queuedOperation',
   ): void {
     const code = operationFailureCode(error);
+    const rpcCode = operationRpcCode(error);
     try {
       this.deps.diagnostic?.(sessionId, `operationFailed:${code}`);
     } catch {
@@ -3219,12 +3220,28 @@ export class AutopilotCoordinator {
     }
     if (!current?.requestedEnabled) return;
     const now = this.deps.now();
+    const protocol = current.supervision ?? startSupervisionProtocol(this.progressKey(sessionId));
+    const requireRootRecovery =
+      operation === 'executorResume' &&
+      !['attentionRequired', 'safetyPaused'].includes(protocol.outcome);
     const recovery: AutopilotSession = {
       ...current,
       state: 'monitoring',
       generation: current.generation + 1,
       nextEvaluationAt: null,
       stopReason: 'reconcileFailed',
+      ...(requireRootRecovery
+        ? {
+            supervision: {
+              ...protocol,
+              outcome: 'probeRequired' as const,
+              probeKey: this.progressKey(sessionId),
+              waitLease: null,
+              retryKey: null,
+              safetyPauseReason: null,
+            },
+          }
+        : {}),
       updatedAt: now,
     };
     try {
@@ -3234,7 +3251,12 @@ export class AutopilotCoordinator {
           {
             sessionId,
             type: 'autopilot.operation-failed',
-            payload: { code, kind: operation, reason: operationErrorKind(error) },
+            payload: {
+              code,
+              kind: operation,
+              reason: operationErrorKind(error),
+              ...(rpcCode !== undefined ? { rpcCode } : {}),
+            },
             occurredAt: now,
           },
         ],
@@ -3256,6 +3278,16 @@ export class AutopilotCoordinator {
       return;
     }
     try {
+      if (requireRootRecovery) {
+        // The issued executor command must stay fenced: a lost reply may hide
+        // accepted work. Reinspection alone cannot resolve that uncertainty.
+        // Give the root one diagnostic continuation through the normal gates
+        // instead of mechanically retrying the same executor indefinitely.
+        this.cancelWaitTimer(sessionId);
+        this.parkedSubscriptions.delete(sessionId);
+        this.evaluate(sessionId);
+        if (this.timers.has(sessionId)) return;
+      }
       this.armExecutorRefresh(sessionId, this.deps.policy.executorContinuationMaxMs);
     } catch {
       // Scheduling is the last recovery capability. If it is unavailable,
@@ -3321,6 +3353,18 @@ function operationFailureCode(error: unknown): 'PERSISTENCE' | 'PUBLICATION' | '
 }
 
 /** Fixed protocol categories only; exception prose and arbitrary codes stay private. */
+function operationRpcCode(error: unknown): number | undefined {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof error.code === 'number' &&
+    Number.isSafeInteger(error.code)
+  )
+    return error.code;
+  return undefined;
+}
+
 function operationErrorKind(error: unknown): string {
   if (
     error &&

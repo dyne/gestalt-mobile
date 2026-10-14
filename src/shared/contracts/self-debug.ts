@@ -23,7 +23,7 @@ export type DebugConfirmation = { confirmationId: string; context: DebugContext 
 export type SelfDebugSession = Readonly<{
   context: DebugContext;
   tracePath: string;
-  agent: { name: 'org-plan-executor'; model: string; reasoningEffort?: ThinkingLevel };
+  agent: { name: 'root' | 'org-plan-executor'; model: string; reasoningEffort?: ThinkingLevel };
 }>;
 
 export function debugIdentifierRows(context: DebugContext): readonly [string, string][] {

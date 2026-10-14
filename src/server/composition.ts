@@ -482,9 +482,18 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const continuationPrompt = launchIdentity
           ? autopilotExecutorLaunchPrompt(launchIdentity)
           : AUTOPILOT_CONTINUATION_PROMPT;
+        const recovery = autopilotStore.find(sessionId);
+        const executorRecovery =
+          recovery?.supervision?.outcome === 'probeRequired' &&
+          recovery.executor?.commands?.some(
+            (command) => command.status === 'issued' && !command.processAction,
+          );
+        const recoveryInstruction = executorRecovery
+          ? ' The previous executor resume has an unconfirmed outcome. Inspect the existing canonical executor and its latest turn before continuing. Preserve its physical identity; do not replay an active turn or replace the executor merely because the resume reply failed. Resolve this probe with verified actionable work, a valid wait lease, or genuine structured attention.'
+          : '';
         const started = await runtime.startTurn(
           writer.session,
-          continuationPrompt,
+          continuationPrompt + recoveryInstruction,
           controlId,
           new Date().toISOString(),
         );
@@ -1794,20 +1803,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               createSelfDebugSession(context, {
                 createId: randomUUID,
                 now: () => new Date().toISOString(),
-                settings: async () => {
-                  const installed = await debugWorkspace.settings();
-                  const source = sessions.find(context.mobileSession);
-                  const defaults = await sessionDefaults.read();
+                settings: async (source) => {
+                  if (!source.model || !source.effectiveSkillSelection)
+                    throw new Error('DEBUG_SOURCE_SETTINGS_UNAVAILABLE');
                   return {
-                    ...installed,
-                    model:
-                      source?.modelSettings?.executorModel ??
-                      defaults?.executorModel ??
-                      installed.model,
-                    reasoningEffort:
-                      source?.modelSettings?.executorReasoningEffort ??
-                      defaults?.executorReasoningEffort ??
-                      installed.reasoningEffort,
+                    name: 'root',
+                    model: source.model,
+                    reasoningEffort: source.modelSettings?.reasoningEffort,
                   };
                 },
                 capture: async (id, capturedContext, agent) => {
@@ -1817,47 +1819,14 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                     absoluteTracePath: join(captured.root, captured.debug.tracePath),
                   };
                 },
-                askSource: async (id, context, debug) => {
-                  const source = sessions.find(context.mobileSession);
-                  if (source && source.threadId === (context.sourceThread ?? context.codexThread))
-                    await debugWorkspace.askSource(id, source, debug, async (prompt) => {
-                      const sourceRuntime = ownerRuntime(source);
-                      // Never resume or replace the source writer merely to ask for diagnostics.
-                      if (!sourceRuntime?.ownsWriter(source.id))
-                        throw new Error('DEBUG_SOURCE_UNAVAILABLE');
-                      if (source.state === 'turnActive' && source.activeTurnId)
-                        await sourceRuntime.queueTurnInput(
-                          source,
-                          source.activeTurnId,
-                          prompt,
-                          `self-debug-${id}`,
-                        );
-                      else if (source.state === 'ready') {
-                        const started = await sourceRuntime.startTurn(
-                          source,
-                          prompt,
-                          `self-debug-${id}`,
-                          new Date().toISOString(),
-                        );
-                        saveSession(started);
-                        activity.observe({
-                          sessionId: source.id,
-                          occurredAt: started.updatedAt,
-                          kind: 'turnStarted',
-                          threadId: started.threadId!,
-                          turnId: started.activeTurnId!,
-                        });
-                      } else throw new Error('DEBUG_SOURCE_UNAVAILABLE');
-                    });
-                },
-                createSession: async (id, root, agent) => {
+                createSession: async (id, root, agent, source) => {
                   await debugWorkspace.prepare();
                   const debugCatalog = new FilesystemWorkspaceCatalog(root);
                   const [workspace] = await debugCatalog.list();
                   return startSession(
                     {
                       workspaceId: workspace!.id,
-                      profile: 'default',
+                      profile: source.profile,
                       provider: 'codex',
                       model: agent.model,
                       reasoningEffort: agent.reasoningEffort,
@@ -1872,6 +1841,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                       profiles: options.profiles,
                       skillProfiles,
                       skillCatalog,
+                      inheritedSkillSelection: source.effectiveSkillSelection,
                       sessionModels,
                     },
                   );

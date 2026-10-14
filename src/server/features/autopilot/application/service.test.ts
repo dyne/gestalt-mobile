@@ -3707,11 +3707,13 @@ describe('AutopilotCoordinator', () => {
         );
         expect(fixture.state).toMatchObject({
           requestedEnabled: true,
-          state: 'monitoring',
+          state: 'backoff',
           stopReason: 'reconcileFailed',
+          supervision: { outcome: 'probeRequired' },
         });
         await fixture.runNext();
-        expect(fixture.refresh).toHaveBeenCalledOnce();
+        expect(fixture.rootStart).toHaveBeenCalledOnce();
+        expect(fixture.resume).toHaveBeenCalledOnce();
         expect(
           fixture.published.filter((type) => type === 'autopilot.operation-failed'),
         ).toHaveLength(1);
@@ -3739,6 +3741,7 @@ describe('AutopilotCoordinator', () => {
         expect(failed.payload).toEqual({
           code: 'OPERATION',
           kind: 'executorResume',
+          rpcCode: -32600,
           reason: kind === 'SECRET_ARBITRARY_KIND' ? 'UNKNOWN' : kind,
         });
         expect(JSON.stringify(failed)).not.toMatch(/secret|prompt|token|private|SECRET/);

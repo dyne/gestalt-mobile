@@ -41,6 +41,25 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('does not flood dialogue with repeated recovery health snapshots', () => {
+    let projection = createChatProjection();
+    for (let sequence = 1; sequence <= 100; sequence++)
+      projection = applyProjectionEvent(projection, {
+        sequence,
+        type: 'autopilot.updated',
+        occurredAt: '2026-10-14T06:07:31.000Z',
+        payload: { state: 'monitoring', enabled: true, reason: 'reconcileFailed' },
+      });
+    expect(projection.messages).toHaveLength(0);
+    projection = applyProjectionEvent(projection, {
+      sequence: 101,
+      type: 'autopilot.executor-resumed',
+      occurredAt: '2026-10-14T06:08:00.000Z',
+      payload: {},
+    });
+    expect(projection.messages).toHaveLength(1);
+    expect(projection.messages[0]!.text).toBe('Resumed the assigned executor');
+  });
   it('retains bounded attention dialogue metadata through live replay and history reload', () => {
     const attention = {
       requestId: 'r',

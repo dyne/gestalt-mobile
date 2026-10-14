@@ -39,6 +39,7 @@ const diagnosticFields = new Set([
   'status',
   'reason',
   'code',
+  'rpcCode',
   'enabled',
   'requestedEnabled',
   'desiredState',
