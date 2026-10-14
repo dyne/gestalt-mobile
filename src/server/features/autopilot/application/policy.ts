@@ -8,6 +8,7 @@ import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
 import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
+import { parseOrgPlanAgentIdentity } from '../../../../shared/org-plan-position.js';
 
 export const AUTOPILOT_PROMPT_VERSION = 'v13';
 export const AUTOPILOT_CONTINUATION_PROMPT =
@@ -123,6 +124,22 @@ function classifySupervisedActivity(
   if (index < 0) return classifyAgentActivity(activity);
   const position = index + 1;
   const retained = activity.subagents.filter((child) => {
+    // An authoritative roster retains unloaded auxiliary threads after their
+    // work ends. They have no canonical assignment to resume, and rereading
+    // that same terminal status cannot advance the current Org milestone.
+    // Keep unknown identities and any outstanding process/result in the gate.
+    const retiredAuxiliary =
+      child.state === 'disconnected' &&
+      child.reason === 'processExited' &&
+      child.taskPath &&
+      !child.canonicalPosition &&
+      !child.canonicalTaskName &&
+      !parseOrgPlanAgentIdentity(child.taskPath) &&
+      !child.ownedProcesses?.some(
+        (process) =>
+          process.state !== 'result-consumed' && process.state !== 'terminated-for-budget',
+      );
+    if (retiredAuxiliary) return false;
     const match = /^L([1-9]\d*)$/.exec(child.canonicalPosition ?? '');
     if (!match) return true;
     const historical = Number(match[1]) < position;
