@@ -49,8 +49,8 @@ export function autopilotAuditLabel(type: string, payload: unknown): string | nu
   const state = property(payload, 'state');
   const reason = property(payload, 'reason');
   if (state === 'completed') return 'Completed the supervised plan';
-  if (state === 'monitoring' && reason === 'reconcileFailed')
-    return 'Automatic continuation waiting for recovery: agent status unavailable';
+  // Recovery health updates belong to the status and notification pipeline.
+  // They may repeat on every reconciliation and are not dialogue milestones.
   if (state === 'attentionRequired' && reason === 'noPlanProgress')
     return 'Automatic continuation stopped: no agent progress';
   if (state === 'attentionRequired' && reason === 'reconcileFailed')

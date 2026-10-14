@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { RelaySession, type RelaySessionSnapshot } from '../model/relay-session.js';
+import {
+  RelaySession,
+  type RelaySessionSnapshot,
+  type EffectiveSkillSelection,
+} from '../model/relay-session.js';
 import type { ProfileCatalog, WorkspaceCatalog } from '../../catalog/application/ports.js';
 import type { ModelCatalog } from '../../catalog/application/ports.js';
 import { DEFAULT_SESSION_MODEL, type StartSessionSettings } from '../application/start-settings.js';
@@ -31,6 +35,8 @@ export async function startSession(
     skillProfiles: Pick<SkillProfileStore, 'readGlobalProfile' | 'readWorkspaceDefault'>;
     skillCatalog(provider: LlmProvider, profile: string): Pick<SkillCatalog, 'list'>;
     defaultSkillProfile?: SkillProfile;
+    /** Internal independent sessions may inherit an existing immutable selection. */
+    inheritedSkillSelection?: EffectiveSkillSelection;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
@@ -61,32 +67,35 @@ export async function startSession(
   } else {
     model ??= DEFAULT_SESSION_MODEL;
   }
-  const selectedProfile = input.skillProfile
-    ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
-    : deps.defaultSkillProfile;
-  if (input.skillProfile && !selectedProfile)
-    throw new SkillProfileError(
-      'UNKNOWN_SKILL_PROFILE',
-      'The selected skill profile does not exist.',
-    );
-  const [projectProfile, catalog] = await Promise.all([
-    deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
-    deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
-  ]);
-  const sourceProfile = selectedProfile ?? projectProfile;
-  const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
-  const effectiveSkillSelection = {
-    ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
-    skills: [
-      ...reconciledSkills.skills.map((skill) => ({
-        name: skill.name,
-        path: skill.path,
-        enabled: skill.enabled,
-      })),
-      ...reconciledSkills.missing,
-    ],
-    ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
-  };
+  let effectiveSkillSelection = deps.inheritedSkillSelection;
+  if (!effectiveSkillSelection) {
+    const selectedProfile = input.skillProfile
+      ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
+      : deps.defaultSkillProfile;
+    if (input.skillProfile && !selectedProfile)
+      throw new SkillProfileError(
+        'UNKNOWN_SKILL_PROFILE',
+        'The selected skill profile does not exist.',
+      );
+    const [projectProfile, catalog] = await Promise.all([
+      deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
+      deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
+    ]);
+    const sourceProfile = selectedProfile ?? projectProfile;
+    const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
+    effectiveSkillSelection = {
+      ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
+      skills: [
+        ...reconciledSkills.skills.map((skill) => ({
+          name: skill.name,
+          path: skill.path,
+          enabled: skill.enabled,
+        })),
+        ...reconciledSkills.missing,
+      ],
+      ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
+    };
+  }
   const branch = await deps.gitBranch?.(workspace.realPath);
   const session = RelaySession.create({
     id: deps.createId(),

@@ -3005,11 +3005,12 @@ describe('production composition', () => {
     );
 
     it.each([
-      ['transport-lost', new Error('CODEX_CONNECTION_LOST')],
-      ['ambiguous RPC failure', new CodexJsonRpcError(-32603, 'internal error')],
+      ['transport-lost', new Error('CODEX_CONNECTION_LOST'), false],
+      ['ambiguous RPC failure', new CodexJsonRpcError(-32603, 'internal error'), false],
+      ['manual Off after RPC failure', new CodexJsonRpcError(-32603, 'internal error'), true],
     ])(
-      'production leaves a %s executor command issued and never replays it as a replacement',
-      async (_scenario, failure) => {
+      'production recovers through the root after %s without replaying or replacing the executor',
+      async (_scenario, failure, disableBeforeRecovery) => {
         const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
         const fixture = await createProductionAutopilotFixture({
           autopilotActivity: (sessionId) => {
@@ -3076,16 +3077,28 @@ describe('production composition', () => {
               .filter((request) => request.method === 'turn/start'),
           ).toHaveLength(1),
         );
-        // Drive the bounded reinspection once: the durable issued command blocks replay.
-        const refresh = timers.find((candidate) => !candidate.cancelled && !candidate.fired)!;
-        refresh.fired = true;
-        refresh.callback();
-        await Promise.resolve();
-        await Promise.resolve();
         const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        const operationQuery = database.prepare(
+          "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'autopilot.operation-failed' ORDER BY sequence LIMIT 1",
+        );
+        for (let attempt = 0; attempt < 8 && !operationQuery.get(fixture.sessionId); attempt++) {
+          const pending = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+          expect(pending).toBeDefined();
+          pending!.fired = true;
+          pending!.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(operationQuery.get(fixture.sessionId)).toBeDefined());
+        const operation = operationQuery.get(fixture.sessionId) as { payload_json: string };
         const lifecycle = database
           .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
           .get(fixture.sessionId) as { lifecycle_json: string };
+        if (failure instanceof CodexJsonRpcError)
+          expect(JSON.parse(operation.payload_json)).toMatchObject({
+            kind: 'executorResume',
+            rpcCode: -32603,
+          });
+        else expect(JSON.parse(operation.payload_json)).not.toHaveProperty('rpcCode');
         const replacements = database
           .prepare(
             "SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = 'autopilot.executor-replacement-scheduled'",
@@ -3098,11 +3111,43 @@ describe('production composition', () => {
           },
         });
         expect(replacements.count).toBe(0);
-        expect(
+        const starts = () =>
           fixture.handles
             .flatMap((candidate) => candidate.requests)
-            .filter((request) => request.method === 'turn/start'),
+            .filter((request) => request.method === 'turn/start');
+        const rootStarts = () =>
+          starts().filter(
+            (request) => (request.params as { threadId: string }).threadId !== 'child-1',
+          );
+        if (disableBeforeRecovery) {
+          const pending = timers.filter((candidate) => !candidate.cancelled && !candidate.fired);
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          });
+          for (const timer of pending) timer.callback();
+        } else {
+          for (let attempt = 0; attempt < 8 && rootStarts().length === 0; attempt++) {
+            const timer = timers.find((candidate) => !candidate.cancelled && !candidate.fired);
+            expect(timer).toBeDefined();
+            timer!.fired = true;
+            timer!.callback();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          await vi.waitFor(() => expect(rootStarts()).toHaveLength(1));
+          expect(
+            (rootStarts()[0]!.params as { input: { text: string }[] }).input[0]!.text,
+          ).toContain('unconfirmed outcome');
+        }
+        for (const timer of timers.filter((candidate) => candidate.fired)) timer.callback();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(
+          starts().filter(
+            (request) => (request.params as { threadId: string }).threadId === 'child-1',
+          ),
         ).toHaveLength(1);
+        expect(rootStarts()).toHaveLength(disableBeforeRecovery ? 0 : 1);
         await fixture.app.close();
       },
     );
@@ -5137,7 +5182,7 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
-    it('starts Self DEBUG as an independent root with the installed executor settings and persists its incident packet', async () => {
+    it('starts Self DEBUG with the source root model and exact skill profile instead of executor defaults', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-debug-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-debug-state-'));
       const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-debug-home-'));
@@ -5178,7 +5223,9 @@ describe('production composition', () => {
         startAppServers: true,
         launchAppServer: liveAppServer(handles),
         componentVersions: [{ id: 'codex', label: 'Codex', version: '0.144.3' }],
-        sessionModelCatalog: { list: async () => ['gpt-5.6-terra', 'configured-debug-model'] },
+        sessionModelCatalog: {
+          list: async () => ['gpt-5.6-terra', 'configured-debug-model', 'source-root-model'],
+        },
         profiles: {
           list: async () => [],
           require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
@@ -5186,7 +5233,30 @@ describe('production composition', () => {
       });
       onTestFinished(() => app.close());
       const sourceId = await createComposedSession(app);
-      await app.inject({ method: 'POST', url: `/api/sessions/${sourceId}/stop`, payload: {} });
+      const inheritedSkills = {
+        selectedProfileName: 'js-devel',
+        skills: [
+          { name: 'disabled', path: '/skills/disabled/SKILL.md', enabled: false },
+          { name: 'selected', path: '/skills/selected/SKILL.md', enabled: true },
+        ],
+      };
+      const database = new DatabaseSync(join(dataDir, 'relay.sqlite'));
+      database
+        .prepare(
+          'UPDATE relay_sessions SET model = ?, profile = ?, model_settings_json = ?, effective_skill_selection_json = ? WHERE id = ?',
+        )
+        .run(
+          'source-root-model',
+          'supervisor',
+          JSON.stringify({
+            reasoningEffort: 'medium',
+            executorModel: 'configured-debug-model',
+            executorReasoningEffort: 'high',
+          }),
+          JSON.stringify(inheritedSkills),
+          sourceId,
+        );
+      database.close();
       const confirmation = (await app.inject(`/api/sessions/${sourceId}/debug`)).json();
       expect(confirmation.context.mobileSession).toBe(sourceId);
       const response = await app.inject({
@@ -5198,8 +5268,25 @@ describe('production composition', () => {
       const debug = response.json();
       expect(debug.id).not.toBe(sourceId);
       expect(debug.workspacePath).toBe(debugRoot);
-      expect(debug.model).toBe('configured-debug-model');
+      expect(debug.model).toBe('source-root-model');
+      expect(debug.profile).toBe('supervisor');
+      expect(debug.effectiveSkillSelection).toEqual(inheritedSkills);
+      expect(debug.selfDebug.agent.name).toBe('root');
       expect(debug.threadId).not.toBe(confirmation.context.codexThread);
+      expect((await app.inject(`/api/sessions/${sourceId}`)).json()).toMatchObject({
+        state: 'ready',
+        activeTurnId: null,
+      });
+      expect(
+        handles
+          .flatMap((handle) => handle.requests)
+          .filter(
+            (request) =>
+              request.method === 'turn/start' &&
+              (request.params as { threadId?: string }).threadId ===
+                confirmation.context.codexThread,
+          ),
+      ).toHaveLength(0);
       const request = handles
         .flatMap((handle) => handle.requests)
         .find(
@@ -5208,8 +5295,8 @@ describe('production composition', () => {
             (request.params as { threadId?: string }).threadId === debug.threadId,
         );
       expect(request?.params).toMatchObject({
-        model: 'configured-debug-model',
-        effort: 'high',
+        model: 'source-root-model',
+        effort: 'medium',
         input: [{ type: 'text', text: expect.stringContaining('User detected an error') }],
       });
       expect(

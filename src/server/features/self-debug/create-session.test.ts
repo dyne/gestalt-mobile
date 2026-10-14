@@ -23,10 +23,27 @@ function fixture() {
   const order: string[] = [];
   let saved: RelaySessionSnapshot | null = null;
   const agent = {
-    name: 'org-plan-executor' as const,
+    name: 'root' as const,
     model: 'configured-model',
     reasoningEffort: 'high' as const,
   };
+  const source = RelaySession.create({
+    id: 'source',
+    workspaceId: 'source-workspace',
+    workspacePath: '/source',
+    provider: 'codex',
+    profile: 'supervisor',
+    model: agent.model,
+    modelSettings: { reasoningEffort: 'high' },
+    effectiveSkillSelection: {
+      selectedProfileName: 'js-devel',
+      skills: [
+        { name: 'selected', path: '/skills/selected/SKILL.md', enabled: true },
+        { name: 'disabled', path: '/skills/disabled/SKILL.md', enabled: false },
+      ],
+    },
+    now,
+  }).bindThread('source-thread', now).snapshot;
   const startTurn = vi.fn(
     async (session: RelaySessionSnapshot) =>
       RelaySession.rehydrate(session).startTurn('debug-turn', now).snapshot,
@@ -43,27 +60,23 @@ function fixture() {
         debug: { context, tracePath: 'traces/debug.json', agent },
       };
     },
-    askSource: vi.fn(async () => {
-      order.push('ask-source');
-      throw new Error('source unavailable');
-    }),
-    createSession: async (id, root, settings) => {
+    createSession: async (id, root, settings, source) => {
       order.push('create-root');
       return RelaySession.create({
         id,
         workspacePath: root,
         workspaceId: 'debug-workspace',
         provider: 'codex',
-        profile: 'default',
+        profile: source.profile,
         model: settings.model,
-        effectiveSkillSelection: { skills: [] },
+        effectiveSkillSelection: source.effectiveSkillSelection!,
         now,
       }).snapshot;
     },
     start: async (session) =>
       RelaySession.rehydrate(session).bindThread('independent-thread', now).snapshot,
     startTurn,
-    find: () => saved,
+    find: (id) => (id === source.id ? source : saved),
     save: (session) => {
       saved = session;
     },
@@ -73,14 +86,22 @@ function fixture() {
 }
 
 describe('Self DEBUG creation', () => {
-  it('captures first and starts an independent root using configured executor settings despite source failure', async () => {
+  it('captures first and starts an independent root using the source supervisor settings without steering the source', async () => {
     const { deps, order, startTurn } = fixture();
     const result = await createSelfDebugSession(context, deps);
-    expect(order).toEqual(['capture', 'ask-source', 'create-root']);
+    expect(order).toEqual(['capture', 'create-root']);
     expect(result).toMatchObject({
       id: 'debug',
       threadId: 'independent-thread',
       model: 'configured-model',
+      profile: 'supervisor',
+      effectiveSkillSelection: {
+        selectedProfileName: 'js-devel',
+        skills: [
+          { name: 'disabled', enabled: false },
+          { name: 'selected', enabled: true },
+        ],
+      },
       state: 'turnActive',
       selfDebug: { context, agent: { reasoningEffort: 'high' } },
     });
@@ -93,6 +114,14 @@ describe('Self DEBUG creation', () => {
       'Do not publish either before the user confirms',
     );
     expect(deps.onStarted).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a changed source thread before creating or capturing a debug session', async () => {
+    const { deps, order } = fixture();
+    await expect(
+      createSelfDebugSession({ ...context, codexThread: 'different' }, deps),
+    ).rejects.toThrow('DEBUG_SOURCE_UNAVAILABLE');
+    expect(order).toEqual([]);
   });
 
   it('retains identifiers, trace, and a recoverable state when the new runtime fails', async () => {
