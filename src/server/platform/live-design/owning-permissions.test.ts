@@ -11,6 +11,7 @@ import type { CodexSessionRuntime } from '../codex/session-runtime.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import {
   livePolicyAppConfined,
+  liveControllerPrivateRoots,
   owningPermissions,
   removeRedundantLiveDenials,
 } from './owning-permissions.js';
@@ -72,6 +73,55 @@ function fixture() {
   };
 }
 describe('actual owning selections to production permission admission', () => {
+  it('declares an existing covering private denial without changing elected roots or reopened branches', () => {
+    const f = fixture();
+    const controller = join(f.privateRoot, 'controller');
+    mkdirSync(controller);
+    const state = owningPermissions(f).state;
+    expect(liveControllerPrivateRoots(state, controller, f.appRoot)).toEqual([
+      f.privateRoot,
+      controller,
+    ]);
+    const withEntry = (path: string, access: 'read' | 'deny'): ManagedProjectSandboxState => ({
+      ...state,
+      permissionProfile: {
+        ...state.permissionProfile,
+        file_system: {
+          ...state.permissionProfile.file_system,
+          entries: [
+            ...state.permissionProfile.file_system.entries,
+            { path: { type: 'path', path }, access },
+          ],
+        },
+      },
+    });
+    const reopened = withEntry(join(f.privateRoot, 'public'), 'read');
+    expect(liveControllerPrivateRoots(reopened, controller, f.appRoot)).toEqual([controller]);
+    const overlap = withEntry('/', 'deny');
+    expect(liveControllerPrivateRoots(overlap, controller, f.appRoot)).toEqual([
+      f.privateRoot,
+      controller,
+    ]);
+    const specialGrant: ManagedProjectSandboxState = {
+      ...state,
+      permissionProfile: {
+        ...state.permissionProfile,
+        file_system: {
+          type: 'restricted',
+          entries: [
+            { path: { type: 'path', path: '/tmp' }, access: 'deny' },
+            { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'write' },
+          ],
+        },
+      },
+    };
+    expect(liveControllerPrivateRoots(specialGrant, controller, process.cwd())).toEqual([
+      controller,
+    ]);
+    expect(state.permissionProfile.file_system.entries).toEqual(
+      owningPermissions(f).state.permissionProfile.file_system.entries,
+    );
+  });
   it('keeps private/config denials effective without nested mask mounts, preserving reopened outputs', () => {
     const state: ManagedProjectSandboxState = {
       sandboxCwd: 'file:///app',

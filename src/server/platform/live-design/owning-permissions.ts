@@ -5,7 +5,7 @@
  */
 
 import { isAbsolute, normalize, relative, sep } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -138,6 +138,40 @@ export function removeRedundantLiveDenials(
       file_system: { ...state.permissionProfile.file_system, entries: retained },
     },
   };
+}
+
+/** Manager composes its private roots into Native's policy. Declare an already
+ * covering denial too, so it does not recreate child masks beneath that frozen
+ * parent. Never absorb a reopened branch or a directory containing the app. */
+export function liveControllerPrivateRoots(
+  state: ManagedProjectSandboxState,
+  controllerDirectory: string,
+  appRoot: string,
+): string[] {
+  const entries = state.permissionProfile.file_system.entries;
+  const covering = entries.flatMap((entry) => {
+    if (entry.access !== 'deny' || entry.path.type !== 'path') return [];
+    const path = entry.path.path;
+    if (
+      !inside(path, controllerDirectory) ||
+      inside(path, appRoot) ||
+      entries.some((child) => {
+        if (child.access === 'deny') return false;
+        const grant =
+          child.path.type === 'path'
+            ? child.path.path
+            : child.path.type === 'special'
+              ? ({ root: '/', slash_tmp: '/tmp' } as Record<string, string>)[child.path.value.kind]
+              : undefined;
+        return !grant || inside(path, grant);
+      })
+    )
+      return [];
+    if (!lstatSync(path).isDirectory() || realpathSync(path) !== path)
+      throw new Error('LIVE_OWNING_POLICY_UNVERIFIED');
+    return [path];
+  });
+  return [...new Set([controllerDirectory, ...covering])].sort();
 }
 /** Uncertain or broader writable roots are global, never omitted as scratch. */
 export function livePolicyAppConfined(state: ManagedProjectSandboxState, appRoot: string): boolean {

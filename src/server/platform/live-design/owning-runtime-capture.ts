@@ -18,7 +18,7 @@ import { prepareHelperControlLayout } from './helper-control-layout.js';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
-import { removeRedundantLiveDenials } from './owning-permissions.js';
+import { liveControllerPrivateRoots, removeRedundantLiveDenials } from './owning-permissions.js';
 
 type Election = Awaited<ReturnType<typeof electLiveController>>['election'];
 export type OwningRuntimeCapture = Readonly<{
@@ -192,7 +192,7 @@ export async function captureOwningRuntime(input: {
       components: cfg.components,
       privatePaths: {
         auth: [input.authenticationDirectory, cfg.nativeEnvironment.CODEX_HOME],
-        controller: [cfg.privateDirectory],
+        controller: liveControllerPrivateRoots(state, cfg.privateDirectory, app.appRoot),
         caddy: [cfg.caddy.controllerDirectory],
         daemon: [`/tmp/codex-daemon-${process.getuid!()}`],
       },
