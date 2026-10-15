@@ -36,6 +36,7 @@ function fixture(
   const calls: { method: string; params: unknown }[] = [];
   let configuration: () => Promise<unknown> = async () => ({ config: {}, layers: [] });
   let children: () => Promise<unknown> = async () => ({ data: [], nextCursor: null });
+  let mcp: (params: unknown) => Promise<unknown> = async () => ({ data: [], nextCursor: null });
   let notify: Parameters<AppServer['rpc']['onNotification']>[0] = () => {};
   const process: AppServer = {
     rpc: {
@@ -69,7 +70,7 @@ function fixture(
                   ),
           };
         }
-        if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
+        if (method === 'mcpServerStatus/list') return mcp(params);
         return {};
       },
       onNotification: (listener) => {
@@ -96,6 +97,9 @@ function fixture(
     },
     setChildren: (read: typeof children) => {
       children = read;
+    },
+    setMcp: (read: typeof mcp) => {
+      mcp = read;
     },
   };
 }
@@ -319,9 +323,16 @@ describe('owning runtime admission observations', () => {
       const result = await runtime.inspectLiveAdmission(owning);
       expect(launch).toHaveBeenCalledTimes(1);
       expect(calls.slice(before)).toEqual([
+        {
+          method: 'mcpServerStatus/list',
+          params: { threadId: 'same-thread', serverName: 'context-mode', detail: 'full' },
+        },
+        {
+          method: 'mcpServerStatus/list',
+          params: { threadId: 'same-thread', serverName: 'gestalt-org-plan', detail: 'full' },
+        },
         { method: 'config/read', params: { cwd: owning.workspacePath, includeLayers: true } },
         { method: 'thread/read', params: { threadId: 'same-thread', includeTurns: false } },
-        { method: 'mcpServerStatus/list', params: { threadId: 'same-thread', detail: 'full' } },
       ]);
       expect(result.thread).toEqual({
         thread: {
@@ -357,15 +368,125 @@ describe('owning runtime admission observations', () => {
     const { runtime, setConfiguration } = fixture();
     const owning = await runtime.start(session(), 'time');
     let release: (value: unknown) => void = () => {};
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     setConfiguration(
       () =>
         new Promise((resolve) => {
           release = resolve;
+          entered();
         }),
     );
     const pending = runtime.inspectLiveAdmission(owning);
+    const rejected = expect(pending).rejects.toThrow('LIVE_RUNTIME_UNAVAILABLE');
+    await reading;
     runtime.stopAll();
     release({ config: {}, layers: [] });
-    await expect(pending).rejects.toThrow('LIVE_RUNTIME_IDENTITY_CHANGED');
+    await rejected;
+  });
+  it('awaits a cold owning catalog beyond five seconds and reads current sources afterwards', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    let release!: (value: unknown) => void;
+    f.setMcp(async (params) => {
+      const name = (params as { serverName: string }).serverName;
+      if (name === 'context-mode') return new Promise((resolve) => (release = resolve));
+      return { data: [{ name, runtimeStatus: 'connected', tools: {} }], nextCursor: null };
+    });
+    vi.useFakeTimers();
+    try {
+      let complete = false;
+      const observed = f.runtime.inspectLiveAdmission(owning).then((value) => {
+        complete = true;
+        return value;
+      });
+      await vi.advanceTimersByTimeAsync(33_654);
+      expect(complete).toBe(false);
+      f.setConfiguration(async () => ({ config: { current: true }, layers: [] }));
+      release({
+        data: [{ name: 'context-mode', runtimeStatus: 'connected', tools: { actual: {} } }],
+        nextCursor: null,
+      });
+      const result = await observed;
+      expect(result.configuration).toEqual({ config: { current: true }, layers: [] });
+      expect(result.mcp).toMatchObject({ data: [{ tools: { actual: {} } }, {}] });
+      expect(f.launch).toHaveBeenCalledTimes(1);
+      expect(f.calls.some((call) => call.method === 'turn/start')).toBe(false);
+    } finally {
+      f.runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
+  it('observes terminal owning statuses instead of accepting an asynchronously starting proxy', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    let attempts = 0;
+    f.setMcp(async (params) => {
+      const name = (params as { serverName: string }).serverName;
+      return {
+        data: [
+          {
+            name,
+            runtimeStatus: name === 'context-mode' && attempts++ === 0 ? 'starting' : 'failed',
+            tools: {},
+          },
+        ],
+        nextCursor: null,
+      };
+    });
+    try {
+      const result = await f.runtime.inspectLiveAdmission(owning);
+      expect(result.mcp).toMatchObject({
+        data: [{ runtimeStatus: 'failed' }, { runtimeStatus: 'failed' }],
+      });
+      const queries = f.calls.filter((call) => call.method === 'mcpServerStatus/list');
+      expect(queries).toHaveLength(3);
+      expect(
+        queries.every((call) => (call.params as { threadId: string }).threadId === owning.threadId),
+      ).toBe(true);
+      expect(queries.every((call) => (call.params as { serverName?: string }).serverName)).toBe(
+        true,
+      );
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
+  it('bounds a stalled owning catalog without launching a replacement or observing stale sources', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    f.setMcp(() => new Promise(() => {}));
+    vi.useFakeTimers();
+    try {
+      const before = f.calls.length;
+      const rejected = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
+        'LIVE_RUNTIME_UNAVAILABLE',
+      );
+      await vi.advanceTimersByTimeAsync(125_000);
+      await rejected;
+      expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+      expect(f.launch).toHaveBeenCalledTimes(1);
+    } finally {
+      f.runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
+  it('cancels pending owning catalog discovery on stop and fences a late reply', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    let release!: (value: unknown) => void;
+    f.setMcp(() => new Promise((resolve) => (release = resolve)));
+    const before = f.calls.length;
+    const rejected = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
+      'LIVE_RUNTIME_UNAVAILABLE',
+    );
+    f.runtime.stop(owning.id);
+    await rejected;
+    release({ data: [], nextCursor: null });
+    await Promise.resolve();
+    expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+    expect(f.runtime.liveOwnerIds()).toEqual([]);
+    expect(f.launch).toHaveBeenCalledTimes(1);
   });
 });

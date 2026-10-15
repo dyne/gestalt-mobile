@@ -47,14 +47,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: dyne/gestalt-agents
-          ref: 8e659ca0563984682db07481c1d4a86244c177c1 # accepted Agents tree 7f5ab679
+          ref: 8fcb931eeb57c6eaba6cf1c55c4483973c521ebb # accepted Agents tree 66379905; canonical f7a142b
           path: .host-agents-input
           persist-credentials: false
       - name: Verify exact accepted dependency trees
         run: |
           set -Eeuo pipefail
           test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = d5dd7127d67e487f09eea94911ba7999c751500c
-          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 7f5ab679ff547621c55dea55cd0ae16afbd418cd
+          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 663799058b4c0146a74906061d0b334ae7c0d62c
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: verified-archives
         with:

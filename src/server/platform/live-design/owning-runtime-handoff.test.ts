@@ -62,6 +62,7 @@ async function fixture() {
             nextCursor: null,
           };
         if (method === 'thread/unsubscribe') return { status: unloadStatus };
+        if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
         return {};
       },
       onNotification: () => () => {},

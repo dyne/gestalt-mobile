@@ -24,6 +24,36 @@ import type { ProductionLiveConfiguration } from './production-configuration.js'
 import { normalizedLivePermissions as normalize, owningPermissions } from './owning-permissions.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
+
+/** Old unadmitted clients must have terminally refused before receipts exist.
+ * A still-starting proxy must never acquire authority when sealing completes. */
+export function assertUnadmittedLiveMcp(value: unknown): void {
+  const mcp = value as {
+    data?: { name?: unknown; runtimeStatus?: unknown; tools?: unknown; httpOrigin?: unknown }[];
+    nextCursor?: unknown;
+  } | null;
+  if (
+    !mcp ||
+    !Array.isArray(mcp.data) ||
+    mcp.data.length !== 2 ||
+    mcp.nextCursor !== null ||
+    !isDeepStrictEqual(mcp.data.map((server) => server?.name).sort(), [
+      'context-mode',
+      'gestalt-org-plan',
+    ]) ||
+    mcp.data.some(
+      (server) =>
+        !server ||
+        server.runtimeStatus !== 'failed' ||
+        server.httpOrigin ||
+        !server.tools ||
+        typeof server.tools !== 'object' ||
+        Array.isArray(server.tools) ||
+        Object.keys(server.tools).length !== 0,
+    )
+  )
+    throw new Error('LIVE_PRESEAL_MCP_UNVERIFIED');
+}
 export type PreparedProductionPolicy = {
   directory: string;
   capture: OwningRuntimeCapture;
@@ -280,6 +310,7 @@ export async function prepareProductionPolicy(input: {
     throw new Error('LIVE_CONFIG_CHANGED');
   await input.reconfigure(modelConfig);
   const actual = await input.observe();
+  assertUnadmittedLiveMcp(actual.mcp);
   const effective = owningPermissions({
     session,
     observation: actual,

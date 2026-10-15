@@ -15,6 +15,7 @@ import type { LiveProcessIdentity } from '../live-design/process-identity.js';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   createPlanMeasurementSnapshot,
   type RateLimitWindow,
@@ -159,6 +160,7 @@ export type OwnedChildProcess = Readonly<{
 /** One private owner for every resource acquired for a live Codex child. */
 class SessionResource {
   liveCaptureId?: string;
+  readonly lifetime = new AbortController();
   private disposed = false;
   private explicitShutdown = false;
   readonly pendingRequests = new Map<string, PendingRequest>();
@@ -193,6 +195,7 @@ class SessionResource {
   dispose(): boolean {
     if (this.disposed) return false;
     this.disposed = true;
+    this.lifetime.abort(new Error('LIVE_RUNTIME_UNAVAILABLE'));
     for (const pending of this.pendingRequests.values()) {
       pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
     }
@@ -357,19 +360,70 @@ export class CodexSessionRuntime {
       throw new Error('LIVE_RUNTIME_UNAVAILABLE');
     const before = resource.process.observeLiveLaunch();
     resource.process.observeLiveDescendants?.();
-    const bounded = async (method: string, params: unknown): Promise<unknown> => {
+    const bounded = async (method: string, params: unknown, timeoutMs = 5000): Promise<unknown> => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
       try {
+        resource.lifetime.signal.throwIfAborted();
+        if (timeoutMs <= 0) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
         return await Promise.race([
           resource.process.rpc.request(method, params),
           new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), 5000);
+            timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), timeoutMs);
+            abort = () => reject(new Error('LIVE_RUNTIME_UNAVAILABLE'));
+            resource.lifetime.signal.addEventListener('abort', abort, { once: true });
+            if (resource.lifetime.signal.aborted) abort();
           }),
         ]);
       } finally {
         if (timeout) clearTimeout(timeout);
+        if (abort) resource.lifetime.signal.removeEventListener('abort', abort);
       }
     };
+    // Native's broad query creates threadless clients. Only these supported
+    // owning-thread queries inspect the existing two admitted connections.
+    // Cold full catalogs can take over thirty seconds; one shared deadline
+    // bounds both servers, and disposal cancels pending discovery immediately.
+    const mcpDeadline = Date.now() + 125_000;
+    const servers: unknown[] = [];
+    for (const serverName of ['context-mode', 'gestalt-org-plan']) {
+      for (;;) {
+        const page = asRecord(
+          await bounded(
+            'mcpServerStatus/list',
+            { threadId: session.threadId, serverName, detail: 'full' },
+            mcpDeadline - Date.now(),
+          ),
+        );
+        if (
+          !page ||
+          !Array.isArray(page.data) ||
+          page.data.length > 1 ||
+          page.nextCursor !== null ||
+          page.data.some((server: unknown) => asRecord(server)?.name !== serverName)
+        )
+          throw new Error('LIVE_MCP_UNAVAILABLE');
+        const status = asRecord(page.data[0])?.runtimeStatus;
+        if (status === 'notStarted' || status === 'starting') {
+          if (Date.now() >= mcpDeadline) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+          await delay(Math.min(250, mcpDeadline - Date.now()), undefined, {
+            signal: resource.lifetime.signal,
+          });
+          continue;
+        }
+        if (
+          page.data.length &&
+          !['connected', 'failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(
+            String(status),
+          )
+        )
+          throw new Error('LIVE_MCP_UNAVAILABLE');
+        servers.push(...page.data);
+        break;
+      }
+    }
+    // Observe mutable sources after catalog initialization, never return a
+    // configuration snapshot taken before a long asynchronous startup.
     const configuration = await bounded('config/read', {
       includeLayers: true,
       cwd: session.workspacePath,
@@ -377,10 +431,6 @@ export class CodexSessionRuntime {
     const thread = await bounded('thread/read', {
       threadId: session.threadId,
       includeTurns: false,
-    });
-    const mcp = await bounded('mcpServerStatus/list', {
-      threadId: session.threadId,
-      detail: 'full',
     });
     if (
       this.sessions.get(session.id) !== resource ||
@@ -393,7 +443,7 @@ export class CodexSessionRuntime {
       launchEnvironment: resource.process.observeLiveEnvironment?.() ?? null,
       configuration,
       thread,
-      mcp,
+      mcp: { data: servers, nextCursor: null },
       threadSelection: this.nativeThreadSelections.has(resource.process)
         ? structuredClone(this.nativeThreadSelections.get(resource.process)!)
         : null,

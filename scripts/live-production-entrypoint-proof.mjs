@@ -487,7 +487,9 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: '7f5ab679ff547621c55dea55cd0ae16afbd418cd',
+    agents: '663799058b4c0146a74906061d0b334ae7c0d62c',
+    agentsAcceptedCommit: 'f7a142bbe6bce2e587c53be299226dea1d28cf20',
+    agentsProofSnapshot: '8fcb931eeb57c6eaba6cf1c55c4483973c521ebb',
     manager: LIVE_MANAGER_SHA256,
   };
   report.installationStage = 'vendor-copy';
