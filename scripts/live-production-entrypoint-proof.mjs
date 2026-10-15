@@ -1361,7 +1361,7 @@ try {
     for (const [method, suffix, payload] of [
       ['POST', '/turns', { text: 'An ordinary writer must not run.' }],
       ['PUT', '/autopilot', { enabled: true }],
-      ['POST', '/plan', {}],
+      ['PUT', '/plan', { planName: 'picker-proof.org' }],
     ]) {
       const denied = await mobile.inject({
         method,
@@ -1369,7 +1369,14 @@ try {
         payload,
         headers,
       });
+      (report.writerProbes ??= []).push({
+        method,
+        suffix,
+        status: denied.statusCode,
+        code: denied.json().code,
+      });
       assert.equal(denied.statusCode, 409);
+      assert.equal(denied.json().code, 'LIVE_MODE_ACTIVE');
     }
     assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
     report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
