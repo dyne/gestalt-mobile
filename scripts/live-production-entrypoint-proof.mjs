@@ -551,6 +551,7 @@ async function remote(path, { method = 'GET', body, streamResponse = false } = {
             : callback(null, '127.0.0.1', 4),
         headers: {
           origin: preview,
+          'sec-fetch-site': 'same-origin',
           ...(previewCookie ? { cookie: previewCookie } : {}),
           ...(body ? { 'content-type': 'application/json' } : {}),
         },
@@ -1056,13 +1057,18 @@ try {
   report.previewExchangeStatus = exchanged.status;
   assert.equal(exchanged.status, 201);
   previewCookie = exchanged.headers['set-cookie'].map((cookie) => cookie.split(';')[0]).join('; ');
-  assert.equal((await remote('/')).status, 200);
+  report.stage = 'authenticated-preview-app';
+  const previewApp = await remote('/');
+  report.previewAppStatus = previewApp.status;
+  assert.equal(previewApp.status, 200);
   const token = JSON.parse(
     readFileSync(join(appRoot, '.impeccable/live/server.json'), 'utf8'),
   ).token;
+  report.stage = 'authenticated-helper-stream';
   stream = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
     streamResponse: true,
   });
+  report.previewStreamStatus = stream.statusCode;
   assert.equal(stream.statusCode, 200);
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
   report.stage = 'production-owning-model-tools';
