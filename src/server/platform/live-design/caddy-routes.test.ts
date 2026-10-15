@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CaddyRouteStore } from './caddy-route-store.js';
@@ -166,7 +167,36 @@ describe.runIf(Boolean(process.env.LIVE_TEST_CADDY))('real isolated Caddy route 
     );
     await f.raw('DELETE', '/config/apps/http/servers/collision');
     const occupied = createServer();
-    await new Promise<void>((resolve) => occupied.listen(assignment.port, '127.0.0.1', resolve));
+    // Caddy can acknowledge the config deletion before its old listener closes.
+    // Proceed only when the OS has actually granted this fixture the same port.
+    const bindDeadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const ready = () => {
+            occupied.off('error', failed);
+            resolve();
+          };
+          const failed = (error: Error) => {
+            occupied.off('listening', ready);
+            reject(error);
+          };
+          occupied.once('error', failed);
+          occupied.once('listening', ready);
+          occupied.listen(assignment.port, '127.0.0.1');
+        });
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !('code' in error) ||
+          error.code !== 'EADDRINUSE' ||
+          Date.now() >= bindDeadline
+        )
+          throw error;
+        await delay(25);
+      }
+    }
     cleanup.push(() => new Promise<void>((resolve) => occupied.close(() => resolve())));
     await expect(f.routes.activate(f.appRoots[0]!, f.ids[0]!)).rejects.toThrow(
       'LIVE_CADDY_UPDATE_FAILED',
