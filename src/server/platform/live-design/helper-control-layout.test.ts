@@ -9,13 +9,14 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { prepareHelperControlLayout } from './helper-control-layout.js';
+import { prepareHelperControlLayout, prepareHelperOutputRoots } from './helper-control-layout.js';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 
 const roots: string[] = [];
@@ -77,6 +78,48 @@ it('never grants an output carveout forbidden by the existing policy', () => {
   ];
   expect(() => prepareHelperControlLayout(app, state)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
   expect(existsSync(join(app, '.impeccable/live/artifacts'))).toBe(false);
+});
+it('prepares a removed preview output root after owned startup while preserving content and authority records', () => {
+  const { app, state } = fixture();
+  prepareHelperControlLayout(app, state);
+  const before = structuredClone(state);
+  const preview = join(app, '.impeccable/live/previews');
+  const artifact = join(app, '.impeccable/live/artifacts/existing.txt');
+  const record = join(app, '.impeccable/live/server.json');
+  writeFileSync(artifact, 'existing-model-artifact');
+  writeFileSync(record, 'existing-helper-record');
+  rmSync(preview, { recursive: true });
+  prepareHelperOutputRoots(app, state);
+  expect(existsSync(preview)).toBe(true);
+  expect(readFileSync(artifact, 'utf8')).toBe('existing-model-artifact');
+  expect(readFileSync(record, 'utf8')).toBe('existing-helper-record');
+  expect(existsSync(join(app, '.codex'))).toBe(false);
+  expect(state).toEqual(before);
+});
+it('does not prepare outputs after permission narrowing or replace missing control parents', () => {
+  const { app, state } = fixture();
+  const preview = join(app, '.impeccable/live/previews');
+  state.permissionProfile.file_system.entries = [
+    ...state.permissionProfile.file_system.entries,
+    { path: { type: 'path', path: preview }, access: 'deny' },
+  ];
+  expect(() => prepareHelperOutputRoots(app, state)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
+  expect(existsSync(preview)).toBe(false);
+  rmSync(join(app, '.impeccable/live'), { recursive: true });
+  expect(() => prepareHelperOutputRoots(app, state)).toThrow();
+  expect(existsSync(join(app, '.impeccable/live'))).toBe(false);
+});
+it('refuses output and control-parent aliases during output preparation', () => {
+  const { app, state } = fixture();
+  const control = join(app, '.impeccable/live');
+  const external = join(app, 'external');
+  mkdirSync(external);
+  symlinkSync(external, join(control, 'previews'));
+  expect(() => prepareHelperOutputRoots(app, state)).toThrow('LIVE_UNAPPROVED_LAUNCH_SURFACE');
+  rmSync(control, { recursive: true });
+  symlinkSync(external, control);
+  expect(() => prepareHelperOutputRoots(app, state)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
+  expect(existsSync(join(external, 'previews'))).toBe(false);
 });
 it.each(['symlink', 'hardlink', 'legacy-server'])(
   'refuses %s aliases or external state before constructing layout',

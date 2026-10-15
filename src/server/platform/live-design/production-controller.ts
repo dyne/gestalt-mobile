@@ -29,6 +29,7 @@ import type {
 import { CodexSessionRuntime, type AppServerLaunchInput } from '../codex/session-runtime.js';
 import { launchCodexAppServer } from '../codex/codex-process-launcher.js';
 import { electLiveController } from './elected-controller.js';
+import { prepareHelperOutputRoots } from './helper-control-layout.js';
 import {
   liveAppIdentity,
   revalidateLiveApp,
@@ -845,6 +846,9 @@ export class ProductionLiveController {
         });
         stage = 'devserver-start';
         devReceipt = await devserver.start();
+        stage = 'model-output-layout';
+        assertProductionSourceObservation(policy, await b.runtime.inspectLiveAdmission(session));
+        prepareHelperOutputRoots(app.appRoot, capture.projectState);
       });
       b.guard.settle(session.id, idle.outstanding);
       const claim: LiveStartClaim = {
@@ -1082,6 +1086,8 @@ export class ProductionLiveController {
     if (injected?.ok !== true) throw new Error('LIVE_HELPER_NOT_READY');
     g.injected = true;
     await g.cli.status();
+    assertProductionSourceObservation(g.policy, await b.runtime.inspectLiveAdmission(g.session));
+    prepareHelperOutputRoots(g.app.appRoot, g.policy.capture.projectState);
     await b.guard.liveMaintenance(run, async () => {
       g.resumed = true;
       await b.runtime.probeLiveContext(g.session, g.policy.probePath);
