@@ -214,6 +214,17 @@ jobs:
             src/server/platform/live-design/stop-resume.test.ts \
             src/server/platform/live-design/live-autopilot.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Actual owning native model tools and permitted child with deterministic provider
+        timeout-minutes: 3
+        env:
+          LIVE_NATIVE_MODEL_PROOF: '1'
+          LIVE_MODEL_EVIDENCE: test-results/live-caddy-proof/native-model-tools
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          node scripts/live-native-proof-preflight.mjs
+          native_binary="$LIVE_HOST_CODEX_BINARY"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Sole production composition admission and owning native tools
         timeout-minutes: 8
         env:
@@ -229,17 +240,6 @@ jobs:
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-production-entrypoint-proof.mjs
-      - name: Actual owning native model tools and permitted child with deterministic provider
-        timeout-minutes: 3
-        env:
-          LIVE_NATIVE_MODEL_PROOF: '1'
-          LIVE_MODEL_EVIDENCE: test-results/live-caddy-proof/native-model-tools
-          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -Eeuo pipefail
-          node scripts/live-native-proof-preflight.mjs
-          native_binary="$LIVE_HOST_CODEX_BINARY"
-          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Actual pinned helper and project process namespaces with native confinement
         timeout-minutes: 3
         env:

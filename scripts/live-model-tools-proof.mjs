@@ -17,6 +17,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -112,6 +113,39 @@ let appServer,
   rootCompleted = false,
   childCompleted = false,
   providerFailure = false;
+const proofStarted = Date.now();
+const nativeMarkers = new Set();
+const progress = setInterval(() => {
+  try {
+    const target = join(evidence, 'native-model-tools-progress.json');
+    writeFileSync(
+      target + '.next',
+      JSON.stringify(
+        {
+          ...report,
+          passed: false,
+          inProgress: true,
+          elapsedMs: Date.now() - proofStarted,
+          native: {
+            constructed: !!appServer,
+            exitCode: appServer?.child.exitCode ?? null,
+            exitedBySignal:
+              appServer?.child.signalCode !== null && appServer?.child.signalCode !== undefined,
+            writerOwned: runtime?.ownsWriter('l11-native-proof') ?? false,
+            stderrMarkers: [...nativeMarkers].sort(),
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+      { mode: 0o600 },
+    );
+    renameSync(target + '.next', target);
+  } catch {
+    /* Diagnostics never alter proof or resource ownership. */
+  }
+}, 5000);
+progress.unref();
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 async function until(condition, budget = 60000) {
   const deadline = Date.now() + budget;
@@ -433,7 +467,27 @@ try {
           args: ['cli', '--', 'app-server', '--stdio'],
         },
       });
-      appServer.child.stderr.resume();
+      appServer.child.stderr.on('data', (bytes) => {
+        const lower = bytes.toString('utf8').toLowerCase();
+        for (const marker of [
+          'plugin',
+          'context-mode',
+          'missing',
+          'config',
+          'not found',
+          'failed',
+          'permission denied',
+          'usage',
+          'expected',
+          'unsafe',
+          'discovery',
+          'diagnostic',
+          'shell snapshot',
+          'bwrap',
+          'refused',
+        ])
+          if (lower.includes(marker)) nativeMarkers.add(marker);
+      });
       return appServer;
     },
     undefined,
@@ -623,13 +677,19 @@ try {
   };
   process.exitCode = 1;
 } finally {
+  report.cleanupStage = 'runtime-stop';
   runtime?.stopAll();
+  report.cleanupStage = 'election-close';
   await election?.close();
+  report.cleanupStage = 'provider-close';
   provider.closeAllConnections();
   await new Promise((done) => provider.close(done));
+  report.cleanupStage = 'admin-close';
   await new Promise((done) => admin.close(done));
   rmSync(socketController, { recursive: true, force: true });
   closeSync(privateFd);
+  report.cleanupStage = 'settled';
+  clearInterval(progress);
   writeFileSync(
     join(evidence, 'native-model-tools-proof.json'),
     `${JSON.stringify(report, null, 2)}\n`,
