@@ -161,10 +161,18 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       record.pending = null;
       this.save(record);
       return result;
-    } catch {
+    } catch (error) {
       if (record.pending) record.pending.ambiguous = true;
       this.save(record); // Never replay a command whose effects/response are unknown.
-      throw new Error('LIVE_HELPER_COMMAND_AMBIGUOUS');
+      throw Object.assign(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'), {
+        stage:
+          error instanceof Error &&
+          'stage' in error &&
+          typeof error.stage === 'string' &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(error.stage)
+            ? error.stage
+            : 'helper-command-unverified',
+      });
     } finally {
       this.inFlight = false;
       finish();

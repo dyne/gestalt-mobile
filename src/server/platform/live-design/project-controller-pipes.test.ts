@@ -6,10 +6,39 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { closeSync, constants, mkdtempSync, openSync, rmSync } from 'node:fs';
+import { closeSync, constants, existsSync, mkdtempSync, openSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ProjectControllerPipes } from './project-controller-pipes.js';
+import { projectNativeStdioCommand } from './project-process-worker.js';
+
+it('gives Native real FIFO stdio and preserves helper argv0 and literal arguments', async () => {
+  const root = mkdtempSync('/tmp/live-native-stdio-');
+  try {
+    const marker = join(root, 'not-created');
+    const literal = `$(touch ${marker})`;
+    const code = `const fs=require('node:fs'); console.log(JSON.stringify({fifo:[0,1,2].map(fd=>fs.fstatSync(fd).isFIFO()),argv0:process.argv0,args:process.argv.slice(1)}));`;
+    const bridge = projectNativeStdioCommand(process.execPath, ['-e', code, '--', literal]);
+    const child = spawn(bridge.executable, bridge.args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {},
+    });
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+    });
+    const [status] = await once(child, 'close');
+    expect(status).toBe(0);
+    expect(JSON.parse(output)).toEqual({
+      fifo: [true, true, true],
+      argv0: 'codex-linux-sandbox',
+      args: [literal],
+    });
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function pair(path: string) {
   const bootstrap = openSync(path, constants.O_RDWR);

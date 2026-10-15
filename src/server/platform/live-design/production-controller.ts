@@ -704,12 +704,15 @@ export class ProductionLiveController {
   ): void {
     try {
       const phase = this.owners.read(sessionId)?.phase;
+      const generation = this.generations.get(sessionId);
       writeFileSync(
         join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
         JSON.stringify({
           schemaVersion: 1,
           stage,
           lifecycleStage,
+          helper: generation?.helper.diagnostics(),
+          devserver: generation?.devserver.diagnostics(),
           admission: error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
           phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
           code:

@@ -31,6 +31,7 @@ import { isolatedProjectSocketFilter } from './project-network-filter.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
 import { observeNativeDeniedPath as masked } from './project-native-mask.js';
 import { ProjectControllerPipes } from './project-controller-pipes.js';
+import { projectStdioExecutables } from './project-process-worker.js';
 
 type Pin = Readonly<{ path: string; sha256: string }>;
 export type IsolatedProjectSpecification = Readonly<{
@@ -200,6 +201,7 @@ export class IsolatedProjectProcess {
   private readonly spec: IsolatedProjectSpecification;
   private readonly key: Buffer;
   private readonly specificationDigest: string;
+  private readonly stdioBridge?: readonly { path: string; sha256: string }[];
   private child?: ChildProcess;
   private owner?: LiveProcessIdentity;
   private network?: string;
@@ -231,6 +233,11 @@ export class IsolatedProjectProcess {
     pipeErrorCodes: [] as readonly string[],
     pipeDescriptorsClosed: false,
     namespaceExited: false,
+    commandFailure: 'none',
+    commandExitCode: null as number | null,
+    commandStdoutBytes: 0,
+    commandStderrBytes: 0,
+    commandMarkers: [] as readonly string[],
   };
 
   diagnostics(): Readonly<typeof this.diagnostic> {
@@ -355,8 +362,14 @@ export class IsolatedProjectProcess {
         if (entry.access !== 'deny' && entry.path.type === 'path' && inside(path, entry.path.path))
           throw failure('private-denial-overridden');
     }
+    if (spec.role === 'helper') {
+      this.stdioBridge = projectStdioExecutables.map((path) => {
+        if (inside(spec.appRoot, path)) throw failure('mutable-runtime-location');
+        return { path, sha256: hash(readFileSync(path)) };
+      });
+    }
     this.verifyInputs();
-    this.specificationDigest = hash(JSON.stringify(spec));
+    this.specificationDigest = hash(JSON.stringify({ ...spec, stdioBridge: this.stdioBridge }));
     const keyPath = join(spec.privateDirectory, 'project-process-signing-key');
     try {
       writeFileSync(keyPath, randomBytes(32), { flag: 'wx', mode: 0o600 });
@@ -379,6 +392,7 @@ export class IsolatedProjectProcess {
     for (const label of ['native', 'bwrap', 'node', 'worker', 'executable'] as const)
       verifyPin(this.spec[label], label);
     for (const pin of this.spec.launchInputs) verifyPin(pin, 'launch-input');
+    for (const pin of this.stdioBridge ?? []) verifyPin(pin, 'stdio-bridge');
   }
   private send(message: unknown): void {
     if (this.revoked || !this.pipes || this.pipes.input.destroyed) throw failure();
@@ -533,7 +547,48 @@ export class IsolatedProjectProcess {
           if (!command) return;
           this.commands.delete(Number(message.requestId));
           if (message.type === 'helper-command-result') command.resolve(message.result);
-          else command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
+          else {
+            this.diagnostic.commandFailure = [
+              'native-command-exit',
+              'native-command-launch',
+              'native-command-deadline',
+              'native-command-oversized',
+              'native-command-protocol',
+            ].includes(String(message.reason))
+              ? String(message.reason)
+              : 'native-command-cancelled';
+            const detail = message.diagnostic as Record<string, unknown> | undefined;
+            this.diagnostic.commandExitCode = Number.isSafeInteger(detail?.exitCode)
+              ? Number(detail!.exitCode)
+              : null;
+            this.diagnostic.commandStdoutBytes =
+              Number.isSafeInteger(detail?.stdoutBytes) && Number(detail!.stdoutBytes) <= 131072
+                ? Number(detail!.stdoutBytes)
+                : 0;
+            this.diagnostic.commandStderrBytes =
+              Number.isSafeInteger(detail?.stderrBytes) && Number(detail!.stderrBytes) <= 131072
+                ? Number(detail!.stderrBytes)
+                : 0;
+            const markers = [
+              'permission denied',
+              'operation not permitted',
+              'read-only file system',
+              'no such file',
+              'unknown option',
+              'unexpected argument',
+              'connection refused',
+              'bwrap',
+              'timeout',
+            ];
+            this.diagnostic.commandMarkers = markers.filter(
+              (marker) => Array.isArray(detail?.markers) && detail.markers.includes(marker),
+            );
+            command.reject(
+              Object.assign(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'), {
+                stage: this.diagnostic.commandFailure,
+              }),
+            );
+          }
           // Sent only after the actual foreground ChildProcess close event.
           command.closure?.resolve();
           return;
@@ -751,6 +806,7 @@ export class IsolatedProjectProcess {
       const result = await new Promise<unknown>((resolve, reject) => {
         this.commands.set(requestId, { resolve, reject });
         timer = setTimeout(() => {
+          this.diagnostic.commandFailure = 'native-command-deadline';
           this.revokeChannels();
           this.child?.kill('SIGTERM');
           reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));

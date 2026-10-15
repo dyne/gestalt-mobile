@@ -1302,5 +1302,10 @@ try {
       genuine: false,
       cleanupComplete: report.cleanupComplete,
     }) + '\n',
+    () => {
+      // Failed disposable proofs may intentionally retain a recovery lock.
+      // Parent exit ends that owned lifetime; it never claims cleanup passed.
+      if (!report.passed) process.exit(1);
+    },
   );
 }
