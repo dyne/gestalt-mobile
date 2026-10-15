@@ -148,7 +148,10 @@ export class InstalledLivePolicy {
     canonical(manifestPath);
     z.uuid({ version: 'v4' }).parse(captureId);
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    if (manifest.schemaVersion !== 2) throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    if (manifest.schemaVersion !== 2)
+      throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
+        code: 'LIVE_RUNTIME_MANIFEST_INVALID',
+      });
     const result = await this.command(
       this.installation.manager.path,
       ['live-policy', action, '--manifest', manifestPath, '--capture-id', captureId, ...tail],
@@ -157,7 +160,9 @@ export class InstalledLivePolicy {
       action !== 'revoke-runtime',
     );
     if (result.schemaVersion !== 2 || result.captureId !== captureId)
-      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+      throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
+        code: 'LIVE_RUNTIME_RECEIPT_INVALID',
+      });
     return result;
   }
   captureRuntime(manifestPath: string, captureId: string): Promise<Record<string, unknown>> {

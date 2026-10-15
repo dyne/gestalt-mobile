@@ -82,7 +82,9 @@ export async function prepareProductionPolicy(input: {
     capture.directory !== directory ||
     capture.captured.appRoot !== app.appRoot
   )
-    throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
+      code: 'LIVE_OWNING_CAPTURE_MISMATCH',
+    });
   const original = observation.configuration as { config?: Record<string, unknown> };
   const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
   if (!Array.isArray(mcp?.data) || mcp.data.length || mcp.nextCursor)

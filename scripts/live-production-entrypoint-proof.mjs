@@ -164,6 +164,31 @@ function sampleNativeStartupMetadata() {
     return facts;
   };
 }
+function ancestorMetadata() {
+  const observations = [];
+  for (let path = appRoot, depth = 0; ; path = dirname(path), depth++) {
+    try {
+      const info = lstatSync(join(path, '.codex'));
+      observations.push({
+        depth,
+        present: true,
+        directory: info.isDirectory(),
+        symlink: info.isSymbolicLink(),
+        currentOwner: info.uid === process.getuid(),
+        entries: info.isDirectory()
+          ? Math.min(readdirSync(join(path, '.codex')).length, 1000)
+          : undefined,
+      });
+    } catch (error) {
+      observations.push({
+        depth,
+        present: error?.code === 'ENOENT' ? false : undefined,
+        unavailable: error?.code !== 'ENOENT',
+      });
+    }
+    if (path === '/') return observations;
+  }
+}
 function protect(path) {
   const info = lstatSync(path);
   assert.equal(info.isSymbolicLink(), false);
@@ -749,7 +774,10 @@ try {
     }),
     { mode: 0o600 },
   );
-  report.projectMetadata = { beforeOwner: ownedProjectMetadata() };
+  report.projectMetadata = {
+    beforeOwner: ownedProjectMetadata(),
+    ancestorsBeforeComposition: ancestorMetadata(),
+  };
   report.stage = 'sole-production-composition';
   mobile = await composeRelayApp({
     root: appRoot,

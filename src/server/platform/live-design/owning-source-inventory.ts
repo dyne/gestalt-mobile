@@ -112,7 +112,10 @@ export function captureLiveSources(
   const directories: string[] = [];
   for (let root = appRoot; ; root = dirname(root)) {
     const path = join(root, '.codex');
-    if (!absent(path)) throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    if (!absent(path))
+      throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
+        code: 'LIVE_PROJECT_METADATA_PRESENT',
+      });
     directories.push(path);
     if (root === '/') break;
   }

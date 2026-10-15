@@ -58,7 +58,9 @@ export async function captureOwningRuntime(input: {
 }): Promise<OwningRuntimeCapture> {
   const { configuration: cfg, app, session } = input;
   if (!app.owningPolicy || session.provider !== 'codex' || session.workspacePath !== app.appRoot)
-    throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
+      code: 'LIVE_OWNING_CAPTURE_TARGET_MISMATCH',
+    });
   // The accepted Manager original handoff has a fixed environment. Never start
   // a captured owner after silently dropping requested provider credentials.
   if (cfg.providerCredentialEnvironment.length)
