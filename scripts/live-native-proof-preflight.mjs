@@ -9,10 +9,12 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   LIVE_CODEX_SHA256,
   LIVE_CODEX_BWRAP_SHA256,
+  LIVE_CODEX_SANDBOX_SHA256,
+  LIVE_CODEX_CODE_MODE_HOST_SHA256,
 } from '../dist/server/server/platform/live-design/native-contract.js';
 
 const evidence = resolve(process.env.LIVE_MODEL_EVIDENCE ?? 'test-results/live-model-tools');
@@ -27,14 +29,13 @@ try {
   assert.equal(head, process.env.LIVE_PROOF_EXPECTED_HEAD);
   report.provenance = { head, tree, expectedHead: process.env.LIVE_PROOF_EXPECTED_HEAD };
   assert.ok(process.env.RUNNER_TEMP);
-  // Exact layout from the pinned 0.161.0 platform package and its bin/codex.js loader.
-  const platform = join(
-    process.env.RUNNER_TEMP,
-    'live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl',
-  );
+  // Reviewed GNU candidate and signed official same-source code-mode host.
+  const platform = dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY));
   for (const [name, relative, expected] of [
-    ['native-binary', 'bin/codex', LIVE_CODEX_SHA256],
+    ['native-binary', 'codex', LIVE_CODEX_SHA256],
     ['bundled-bwrap', 'codex-resources/bwrap', LIVE_CODEX_BWRAP_SHA256],
+    ['sandbox-helper', 'codex-linux-sandbox', LIVE_CODEX_SANDBOX_SHA256],
+    ['code-mode-host', 'codex-code-mode-host', LIVE_CODEX_CODE_MODE_HOST_SHA256],
   ]) {
     report.stage = `${name}-discovery`;
     const path = join(platform, relative);

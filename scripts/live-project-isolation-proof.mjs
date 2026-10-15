@@ -74,7 +74,7 @@ function prepareFile(source, name, executable) {
   return pin(target);
 }
 const native = pin(join(vendor, 'bin/codex'));
-const bwrap = pin(join(vendor, 'codex-resources/bwrap'));
+const bwrap = pin(join(vendor, 'bin/codex-resources/bwrap'));
 const node = prepareFile(process.execPath, 'node', true);
 const worker = prepareFile(
   resolve('dist/server/server/platform/live-design/project-process-worker.js'),

@@ -360,7 +360,8 @@ async function composeRelayAppOwned(
   };
   const launchAuxiliary: NonNullable<ComposeRelayAppOptions['launchAppServer']> = (input) => {
     admitAuxiliary();
-    if (productionLive?.preflightBlocked()) throw new LiveDispatchError();
+    if (productionLive?.preflightBlocked() && !productionLive.auxiliaryConstructionAllowed())
+      throw new LiveDispatchError();
     const process = (options.launchAppServer ?? launchCodexAppServer)(input);
     auxiliaryLifetimes.record(process);
     return process;
@@ -1625,6 +1626,9 @@ async function composeRelayAppOwned(
         },
         liveDispatch,
         productionLive ? (session) => productionLive.observeOwnerStarted(session) : undefined,
+        productionLive?.prepareOwningLaunch,
+        productionLive?.validateOriginalThreadFlags,
+        productionLive ? { run: productionLive.withOwningAdmission } : undefined,
       )
     : null;
   const handleKimiNotification = (

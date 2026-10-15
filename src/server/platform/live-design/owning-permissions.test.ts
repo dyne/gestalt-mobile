@@ -67,6 +67,15 @@ function fixture() {
   };
 }
 describe('actual owning selections to production permission admission', () => {
+  it('preserves an originally enabled network policy and refuses disagreement with Native', () => {
+    const f = fixture();
+    Object.assign(f.profile, { network: { enabled: true } });
+    expect(() => owningPermissions(f)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
+    f.selection.sandbox = { type: 'workspaceWrite', networkAccess: true };
+    expect(owningPermissions(f).state.permissionProfile.network).toBe('enabled');
+    Object.assign(f.profile, { network: { enabled: false } });
+    expect(() => owningPermissions(f)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
+  });
   it('never ignores writable scratch when classifying scope and honors native inherited exclusions', () => {
     const f = fixture();
     expect(livePolicyAppConfined(owningPermissions(f).state, f.appRoot)).toBe(false);

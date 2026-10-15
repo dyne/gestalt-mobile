@@ -147,6 +147,10 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       `);
       if (!exists)
         this.db.prepare('INSERT INTO live_controller VALUES (1,1,?,1,0)').run(controllerId);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS live_admission_generations (
+        generation INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, relayId TEXT NOT NULL,
+        appRoot TEXT NOT NULL, claimed INTEGER NOT NULL DEFAULT 0
+      )`);
       this.admittedEpoch = this.controller().epoch;
       this.list();
     } catch (error) {
@@ -234,6 +238,31 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
     this.assertController();
     return this.generation();
   }
+  reserveAdmissionGeneration(relayId: string, appRoot: string): number {
+    this.assertController();
+    id.parse(relayId);
+    const app = liveAppIdentity(appRoot);
+    return withImmediateTransaction(this.db, () => {
+      const generation = this.generation();
+      this.db
+        .prepare(
+          'INSERT INTO live_admission_generations(generation,epoch,relayId,appRoot) VALUES (?,?,?,?)',
+        )
+        .run(generation, this.controller().epoch, relayId, app.canonicalAppRoot);
+      return generation;
+    });
+  }
+  assertCaptureWriters(relayId: string, quietProtectedOwners: readonly string[]): void {
+    this.assertController();
+    if (
+      this.writers().some(
+        (writer) =>
+          writer.auxiliary ||
+          (writer.relayId !== relayId && !quietProtectedOwners.includes(writer.relayId)),
+      )
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+  }
   retry(input: LiveStartClaim): LiveRun | null {
     this.assertController();
     revalidateLiveApp(input.app);
@@ -253,6 +282,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         prior.rootThreadId !== input.rootThreadId ||
         prior.targetIdentity !== input.targetIdentity ||
         Boolean(prior.globallyExclusive) !== Boolean(input.globallyExclusive) ||
+        (input.admissionGeneration !== undefined &&
+          prior.generation !== input.admissionGeneration) ||
         prior.previewOrigin !== input.previewOrigin
       )
         throw new Error('IDEMPOTENCY_KEY_REUSED');
@@ -306,12 +337,32 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       )
         throw new Error('LIVE_SESSION_BUSY');
       const now = new Date().toISOString();
+      const { admissionGeneration, ...claim } = input;
+      let generation: number;
+      if (admissionGeneration !== undefined) {
+        integer.parse(admissionGeneration);
+        const row = this.db
+          .prepare('SELECT * FROM live_admission_generations WHERE generation=?')
+          .get(admissionGeneration);
+        if (
+          !row ||
+          row.epoch !== this.controller().epoch ||
+          row.relayId !== input.relayId ||
+          row.appRoot !== input.app.canonicalAppRoot ||
+          row.claimed !== 0
+        )
+          throw new Error('LIVE_GENERATION_STALE');
+        this.db
+          .prepare('UPDATE live_admission_generations SET claimed=1 WHERE generation=?')
+          .run(admissionGeneration);
+        generation = admissionGeneration;
+      } else generation = this.generation();
       const run: LiveRun = {
-        ...input,
+        ...claim,
         version: 1,
         revision: 1,
         liveId: randomUUID(),
-        generation: this.generation(),
+        generation,
         controllerId: this.controllerId,
         controllerEpoch: this.controller().epoch,
         state: 'starting',

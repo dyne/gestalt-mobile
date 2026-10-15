@@ -125,6 +125,16 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     }
   }
   /** Trusted preflight lifecycle only. Never authorizes a model turn/executor. */
+  reacquirePreparation(session: RelaySessionSnapshot): void {
+    if (!this.input.preflightBlocked?.()) throw new LiveDispatchError('LIVE_RUNTIME_UNISOLATED');
+    const reservation = this.writers.get(session.id);
+    if (reservation) this.input.owners.assertWriter(reservation, this.input.scopes(session));
+    else
+      this.writers.set(
+        session.id,
+        this.input.owners.reserveWriter(session.id, this.input.scopes(session)),
+      );
+  }
   async livePreparation<T>(session: RelaySessionSnapshot, work: () => Promise<T>): Promise<T> {
     const reservation = this.writers.get(session.id);
     if (!reservation || !this.input.preflightBlocked?.())
@@ -134,7 +144,7 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     return this.preparation.run(authority, async () => {
       try {
         const result = await work();
-        this.input.owners.assertWriter(reservation, this.input.scopes(session));
+        this.input.owners.assertWriter(authority.reservation, this.input.scopes(session));
         return result;
       } finally {
         authority.active = false;
@@ -198,9 +208,14 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
   ): void {
     const reservation = this.writers.get(sessionId);
     if (!reservation) throw new LiveDispatchError('LIVE_GENERATION_STALE');
-    this.writers.set(
-      sessionId,
-      this.input.owners.narrowQuiescentWriter(reservation, scopes, proof),
-    );
+    const updated = this.input.owners.narrowQuiescentWriter(reservation, scopes, proof);
+    this.writers.set(sessionId, updated);
+    const preparation = this.preparation.getStore();
+    if (
+      preparation?.active &&
+      preparation.session.id === sessionId &&
+      preparation.reservation.id === reservation.id
+    )
+      preparation.reservation = updated;
   }
 }

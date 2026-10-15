@@ -40,6 +40,9 @@ export function launchCodexAppServer(
     executable: string;
     sha256: string;
     environment: Readonly<Record<string, string>>;
+    /** Controller-authenticated Manager handoff; Native remains the verified
+     * original image, and the managed CLI exec preserves the child handle. */
+    managedLaunch?: Readonly<{ command: string; args: readonly string[] }>;
   },
 ): CodexProcess {
   const launch = profileAppServerCommand();
@@ -56,15 +59,17 @@ export function launchCodexAppServer(
       throw new Error('LIVE_RUNTIME_BINARY_UNVERIFIED');
     }
   }
-  const environment = trusted
-    ? { ...trusted.environment, ...input.environment }
-    : codexChildEnvironment(input.environment);
-  const child = spawn(trusted?.executable ?? launch.command, launch.args, {
-    cwd: input.cwd,
-    env: environment,
-    shell: false,
-    stdio: 'pipe',
-  });
+  const environment = codexChildEnvironment(input.environment, trusted?.environment);
+  const child = spawn(
+    trusted?.managedLaunch?.command ?? trusted?.executable ?? launch.command,
+    trusted?.managedLaunch ? [...trusted.managedLaunch.args] : launch.args,
+    {
+      cwd: input.cwd,
+      env: environment,
+      shell: false,
+      stdio: 'pipe',
+    },
+  );
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
   child.once('error', (error) => rpc.fail(error));
   // Positive lifetime evidence from this exact ChildProcess; a missing PID is not an exit receipt.
@@ -135,8 +140,10 @@ export function launchCodexAppServer(
 /** Prevents a relay's own ambient status path from reaching discovery-only children. */
 export function codexChildEnvironment(
   environment?: Readonly<Record<string, string>>,
+  launchEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const inherited = { ...process.env };
+  const inherited = { ...launchEnvironment };
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL;

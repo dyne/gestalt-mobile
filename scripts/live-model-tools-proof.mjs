@@ -413,8 +413,8 @@ try {
   const config = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled native proof"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(app)} = "write"\n${JSON.stringify(controller)} = "deny"\n${JSON.stringify(socketController)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
   writeFileSync(join(nativeHome, 'config.toml'), config, { mode: 0o600 });
   const env = {
-    PATH: '/usr/bin:/bin',
-    HOME: nativeHome,
+    PATH: `${dirname(process.execPath)}:${dirname(binary)}:/usr/bin:/bin`,
+    HOME: root,
     CODEX_HOME: nativeHome,
     TMPDIR: '/tmp',
     LANG: 'C.UTF-8',
@@ -428,6 +428,10 @@ try {
         executable: binary,
         sha256: LIVE_CODEX_SHA256,
         environment: env,
+        managedLaunch: {
+          command: process.env.LIVE_HOST_MANAGER_BINARY,
+          args: ['cli', '--', 'app-server', '--stdio'],
+        },
       });
       appServer.child.stderr.resume();
       return appServer;

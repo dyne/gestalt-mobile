@@ -24,7 +24,7 @@ export { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 const runFile = promisify(execFile);
 export const LIVE_MANAGER_SHA256 =
-  '785f300578a98f214724b1f65b9a52d880cecf9429ab2dc30a099dbafd049ea7';
+  'ea653b0802fbafae8baac7c194e15baf03d770abb74848bb892e81e739743d82';
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const pin = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const packagePin = z
@@ -45,7 +45,7 @@ export const installationSchema = z
 export type TrustedLiveInstallation = z.infer<typeof installationSchema>;
 const replySchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     available: z.literal(true),
     liveReady: z.literal(false),
   })
@@ -107,8 +107,8 @@ export class InstalledLivePolicy {
     )
       throw new Error('LIVE_INSTALLATION_UNVERIFIED');
   }
-  private verifyInstallation(): void {
-    const { manager, node, packages, runtime } = this.installation;
+  private verifyHostExecutables(): void {
+    const { manager, node } = this.installation;
     for (const binary of [manager, node]) {
       canonical(binary.path);
       if (
@@ -123,6 +123,10 @@ export class InstalledLivePolicy {
         stable(readdirSync(dirname(node.path)).sort()) !== stable(['node']))
     )
       throw new Error('LIVE_INSTALLATION_UNVERIFIED');
+  }
+  private verifyInstallation(): void {
+    this.verifyHostExecutables();
+    const { packages, runtime } = this.installation;
     for (const entry of [...packages, runtime])
       if (measureInstalledLiveTree(entry.root) !== entry.sha256)
         throw new Error('LIVE_INSTALLATION_UNVERIFIED');
@@ -131,11 +135,84 @@ export class InstalledLivePolicy {
   validateInstallation(): void {
     this.verifyInstallation();
   }
+  /** Manager signs only for its direct elected-controller parent. These typed
+   * operations never accept a command, environment, or project-provided argv. */
+  private async runtimeCommand(
+    manifestPath: string,
+    action: 'capture-runtime' | 'seal-runtime' | 'revoke-runtime',
+    captureId: string,
+    tail: readonly string[] = [],
+  ): Promise<Record<string, unknown>> {
+    if (action === 'revoke-runtime') this.verifyHostExecutables();
+    else this.verifyInstallation();
+    canonical(manifestPath);
+    z.uuid({ version: 'v4' }).parse(captureId);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    if (manifest.schemaVersion !== 2) throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    const result = await this.command(
+      this.installation.manager.path,
+      ['live-policy', action, '--manifest', manifestPath, '--capture-id', captureId, ...tail],
+      dirname(manifestPath),
+      z.string().parse(manifest.runtimeHome),
+      action !== 'revoke-runtime',
+    );
+    if (result.schemaVersion !== 2 || result.captureId !== captureId)
+      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    return result;
+  }
+  captureRuntime(manifestPath: string, captureId: string): Promise<Record<string, unknown>> {
+    return this.runtimeCommand(manifestPath, 'capture-runtime', captureId);
+  }
+  sealRuntime(
+    manifestPath: string,
+    captureId: string,
+    runtimePid: number,
+    sourcesPath: string,
+  ): Promise<Record<string, unknown>> {
+    z.number().int().positive().safe().parse(runtimePid);
+    canonical(sourcesPath);
+    return this.runtimeCommand(manifestPath, 'seal-runtime', captureId, [
+      '--runtime-pid',
+      String(runtimePid),
+      '--sources',
+      sourcesPath,
+    ]);
+  }
+  async revokeRuntime(manifestPath: string, captureId: string): Promise<void> {
+    await this.runtimeCommand(manifestPath, 'revoke-runtime', captureId);
+  }
+  async bootstrapRuntime(manifestPath: string): Promise<void> {
+    this.verifyInstallation();
+    canonical(manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    try {
+      await runFile(
+        this.installation.manager.path,
+        ['cli', '--', '--live-policy-bootstrap', '--manifest', manifestPath],
+        {
+          cwd: dirname(manifestPath),
+          env: {
+            PATH: [...new Set([dirname(this.installation.node.path), '/usr/bin', '/bin'])].join(
+              ':',
+            ),
+            HOME: z.string().parse(manifest.runtimeHome),
+            LANG: 'C.UTF-8',
+          },
+          timeout: 30000,
+          maxBuffer: 16384,
+        },
+      );
+      this.verifyInstallation();
+    } catch {
+      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    }
+  }
   private async command(
     binary: string,
     args: string[],
     cwd: string,
     home: string,
+    verifyComplete = true,
   ): Promise<Record<string, unknown>> {
     try {
       const { stdout } = await runFile(binary, args, {
@@ -149,7 +226,8 @@ export class InstalledLivePolicy {
         maxBuffer: 16384,
       });
       const result = replySchema.parse(JSON.parse(stdout));
-      this.verifyInstallation();
+      if (verifyComplete) this.verifyInstallation();
+      else this.verifyHostExecutables();
       return result;
     } catch {
       // execFile errors contain argv, output and potentially configuration secrets.
@@ -214,6 +292,31 @@ export class InstalledLivePolicy {
    * Stage adds only L10's generated config; it never replaces resolved owning config.
    * Failed staging/preparation remains unavailable and preserves recovery evidence.
    */
+  async stage(
+    manifestPath: string,
+    bootstrapPath: string,
+    files: readonly LiveConfigFile[],
+  ): Promise<string> {
+    const input = this.inputs(manifestPath, bootstrapPath, files);
+    const before = readLiveConfigFile(manifestPath).sha256;
+    const bootstrap = readLiveConfigFile(bootstrapPath).sha256;
+    const gestalt = this.installation.packages.find((entry) => entry.name === 'gestalt')!;
+    const staged = await this.command(
+      this.installation.node.path,
+      [join(gestalt.root, 'scripts/live-admission.mjs'), 'stage', '--bootstrap', bootstrapPath],
+      input.directory,
+      input.home,
+    );
+    const configPath = join(input.directory, 'live-mcp-config.json');
+    if (
+      staged.configPath !== configPath ||
+      staged.sha256 !== readLiveConfigFile(configPath).sha256 ||
+      readLiveConfigFile(manifestPath).sha256 !== before ||
+      readLiveConfigFile(bootstrapPath).sha256 !== bootstrap
+    )
+      throw new Error('LIVE_CONFIG_CHANGED');
+    return configPath;
+  }
   async prepare(
     manifestPath: string,
     bootstrapPath: string,

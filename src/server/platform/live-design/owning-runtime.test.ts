@@ -6,7 +6,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
-import { CodexSessionRuntime, type AppServer } from '../codex/session-runtime.js';
+import {
+  CodexSessionRuntime,
+  type AppServer,
+  type AppServerLaunchInput,
+} from '../codex/session-runtime.js';
 import { observeLiveProcess } from './process-identity.js';
 
 function session() {
@@ -22,7 +26,13 @@ function session() {
   }).snapshot;
 }
 // Deterministic RPC fixture; the Linux observation test separately uses an actual owned child.
-function fixture(observe = true) {
+function fixture(
+  observe = true,
+  hooks: {
+    beforeLaunch?: ConstructorParameters<typeof CodexSessionRuntime>[16];
+    beforeThread?: ConstructorParameters<typeof CodexSessionRuntime>[17];
+  } = {},
+) {
   const calls: { method: string; params: unknown }[] = [];
   let configuration: () => Promise<unknown> = async () => ({ config: {}, layers: [] });
   let children: () => Promise<unknown> = async () => ({ data: [], nextCursor: null });
@@ -38,10 +48,27 @@ function fixture(observe = true) {
             cwd: globalThis.process.cwd(),
             activePermissionProfile: { id: 'workspace-git', extends: ':workspace' },
             runtimeWorkspaceRoots: [globalThis.process.cwd()],
+            sandbox: { type: 'workspaceWrite', networkAccess: false },
+            instructionSources: [],
           };
         if (method === 'config/read') return configuration();
         if (method === 'thread/list') return children();
-        if (method === 'thread/read') return { thread: { id: 'same-thread' } };
+        if (method === 'thread/read') {
+          const id = (params as { threadId: string }).threadId;
+          return {
+            thread:
+              id === 'same-thread'
+                ? {
+                    id,
+                    sessionId: 'native-session',
+                    parentThreadId: null,
+                    status: { type: 'idle' },
+                  }
+                : ((await children()) as { data: { id: string }[] }).data.find(
+                    (thread) => thread.id === id,
+                  ),
+          };
+        }
         if (method === 'mcpServerStatus/list') return { data: [], nextCursor: null };
         return {};
       },
@@ -54,8 +81,11 @@ function fixture(observe = true) {
     close: vi.fn(),
     ...(observe ? { observeLiveLaunch: () => observeLiveProcess(globalThis.process.pid) } : {}),
   };
-  const launch = vi.fn(() => process);
-  const runtime = new CodexSessionRuntime(launch);
+  const launch = vi.fn<(input: AppServerLaunchInput) => AppServer>(() => process);
+  const arguments_: ConstructorParameters<typeof CodexSessionRuntime> = [launch];
+  arguments_[16] = hooks.beforeLaunch;
+  arguments_[17] = hooks.beforeThread;
+  const runtime = new CodexSessionRuntime(...arguments_);
   return {
     runtime,
     launch,
@@ -70,6 +100,42 @@ function fixture(observe = true) {
   };
 }
 describe('owning runtime admission observations', () => {
+  it('awaits private capture before launching the original process and refuses a failed capture', async () => {
+    const beforeLaunch = vi.fn(async (_session, input) => ({
+      ...input,
+      liveCaptureId: 'controller-token',
+    }));
+    const f = fixture(true, { beforeLaunch });
+    try {
+      await f.runtime.start(session(), 'time');
+      expect(beforeLaunch).toHaveBeenCalledTimes(1);
+      expect(f.launch.mock.calls[0]![0]).toMatchObject({ liveCaptureId: 'controller-token' });
+    } finally {
+      f.runtime.stopAll();
+    }
+    const denied = fixture(true, {
+      beforeLaunch: async () => {
+        throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+      },
+    });
+    await expect(denied.runtime.start(session(), 'time')).rejects.toThrow(
+      'LIVE_RUNTIME_PROVENANCE_UNAVAILABLE',
+    );
+    expect(denied.launch).not.toHaveBeenCalled();
+  });
+  it('checks final original thread flags before native startup can execute configured delegates', async () => {
+    const beforeThread = vi.fn(() => {
+      throw new Error('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    });
+    const f = fixture(true, { beforeThread });
+    await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+      'LIVE_ORIGINAL_LAUNCH_UNVERIFIED',
+    );
+    expect(beforeThread).toHaveBeenCalledTimes(1);
+    expect(f.calls.some((call) => call.method === 'initialize')).toBe(true);
+    expect(f.calls.some((call) => call.method === 'thread/start')).toBe(false);
+    expect(f.runtime.liveOwnerIds()).toEqual([]);
+  });
   it('enumerates native spawned children through the sole owner without detached readers or resume', async () => {
     const { runtime, launch, calls, setChildren } = fixture();
     const owning = await runtime.start(session(), 'time');
@@ -78,6 +144,7 @@ describe('owning runtime admission observations', () => {
         {
           id: 'actual-child',
           parentThreadId: owning.threadId,
+          sessionId: 'native-session',
           model: 'selected-model',
           reasoningEffort: 'medium',
           status: { type: 'idle' },
@@ -90,14 +157,21 @@ describe('owning runtime admission observations', () => {
       const roster = await runtime.inspectLiveSpawnedChildren(owning);
       expect(launch).toHaveBeenCalledTimes(1);
       expect(calls.slice(before)).toEqual([
+        { method: 'thread/read', params: { threadId: owning.threadId, includeTurns: false } },
         {
           method: 'thread/list',
           params: {
-            parentThreadId: owning.threadId,
-            sourceKinds: ['subAgentThreadSpawn'],
+            sourceKinds: [
+              'subAgent',
+              'subAgentReview',
+              'subAgentCompact',
+              'subAgentThreadSpawn',
+              'subAgentOther',
+            ],
             limit: 64,
           },
         },
+        { method: 'thread/read', params: { threadId: 'actual-child', includeTurns: false } },
       ]);
       expect(roster.threads[0]).toMatchObject({
         id: 'actual-child',
@@ -108,12 +182,43 @@ describe('owning runtime admission observations', () => {
       runtime.stopAll();
     }
   });
+  it('ignores unrelated global children and refuses changed lineage before adopting an own child', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    const own = {
+      id: 'own-child',
+      parentThreadId: owning.threadId,
+      sessionId: 'native-session',
+      status: { type: 'idle' },
+    };
+    const foreign = {
+      id: 'foreign',
+      parentThreadId: 'other-root',
+      sessionId: 'other-session',
+      status: { type: 'idle' },
+    };
+    f.setChildren(async () => ({ data: [own, foreign] }));
+    try {
+      expect(
+        (await f.runtime.inspectLiveSpawnedChildren(owning)).threads.map((thread) => thread.id),
+      ).toEqual(['own-child']);
+      let reads = 0;
+      f.setChildren(async () => ({
+        data: [++reads === 1 ? own : { ...own, parentThreadId: 'retargeted-root' }],
+      }));
+      await expect(f.runtime.inspectLiveSpawnedChildren(owning)).rejects.toThrow(
+        'LIVE_CHILD_TOPOLOGY_UNAVAILABLE',
+      );
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
   it.each([
-    { data: [{ id: 'foreign', parentThreadId: 'another-thread' }] },
+    { data: [{ id: 'foreign', parentThreadId: 'same-thread', sessionId: 'another-session' }] },
     {
       data: [
-        { id: 'duplicate', parentThreadId: 'same-thread' },
-        { id: 'duplicate', parentThreadId: 'same-thread' },
+        { id: 'duplicate', parentThreadId: 'same-thread', sessionId: 'native-session' },
+        { id: 'duplicate', parentThreadId: 'same-thread', sessionId: 'native-session' },
       ],
     },
     { data: [], nextCursor: 'incomplete-roster' },
@@ -133,13 +238,19 @@ describe('owning runtime admission observations', () => {
     const { runtime, setChildren } = fixture();
     const owning = await runtime.start(session(), 'time');
     let release: (value: unknown) => void = () => {};
+    let entered!: () => void;
+    const listing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     setChildren(
       () =>
         new Promise((resolve) => {
           release = resolve;
+          entered();
         }),
     );
     const pending = runtime.inspectLiveSpawnedChildren(owning);
+    await listing;
     runtime.stopAll();
     release({ data: [] });
     await expect(pending).rejects.toThrow('LIVE_RUNTIME_IDENTITY_CHANGED');
@@ -164,6 +275,22 @@ describe('owning runtime admission observations', () => {
       expect(
         (await runtime.inspectLiveAdmission(owning)).threadSelection?.activePermissionProfile,
       ).toEqual({ id: 'workspace-git', extends: ':workspace' });
+      notify({
+        method: 'thread/settings/updated',
+        params: {
+          threadId: owning.threadId,
+          threadSettings: {
+            model: 'selected-model',
+            cwd: owning.workspacePath,
+            activePermissionProfile: { id: 'workspace-git', extends: ':workspace' },
+            sandboxPolicy: { type: 'workspaceWrite', networkAccess: false },
+            effort: 'medium',
+          },
+        },
+      });
+      expect(
+        (await runtime.inspectLiveAdmission(owning)).threadSelection?.runtimeWorkspaceRoots,
+      ).toEqual([owning.workspacePath]);
       notify({
         method: 'thread/settings/updated',
         params: {
@@ -196,7 +323,14 @@ describe('owning runtime admission observations', () => {
         { method: 'thread/read', params: { threadId: 'same-thread', includeTurns: false } },
         { method: 'mcpServerStatus/list', params: { threadId: 'same-thread', detail: 'full' } },
       ]);
-      expect(result.thread).toEqual({ thread: { id: owning.threadId } });
+      expect(result.thread).toEqual({
+        thread: {
+          id: owning.threadId,
+          sessionId: 'native-session',
+          parentThreadId: null,
+          status: { type: 'idle' },
+        },
+      });
       await expect(runtime.inspectLiveAdmission({ ...owning, provider: 'kimi' })).rejects.toThrow(
         'LIVE_RUNTIME_UNAVAILABLE',
       );

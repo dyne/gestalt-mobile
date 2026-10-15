@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { threadSkillConfig, type CodexSessionRuntime } from '../codex/session-runtime.js';
@@ -18,14 +18,17 @@ import {
   type LiveConfigFile,
 } from './effective-config.js';
 import { InstalledLivePolicy } from './installed-policy.js';
-import { observeLiveProcess } from './process-identity.js';
+import type { OwningRuntimeCapture } from './owning-runtime-capture.js';
+import { resolveLiveSourceInventory } from './owning-source-inventory.js';
 import type { ProductionLiveConfiguration } from './production-configuration.js';
-import { owningPermissions } from './owning-permissions.js';
-import { prepareHelperControlLayout } from './helper-control-layout.js';
+import { normalizedLivePermissions as normalize, owningPermissions } from './owning-permissions.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 export type PreparedProductionPolicy = {
   directory: string;
+  capture: OwningRuntimeCapture;
+  sourceInventory: ReturnType<typeof resolveLiveSourceInventory>;
+  expectedServers: Record<string, unknown>;
   manifestPath: string;
   bootstrapPath: string;
   keyPath: string;
@@ -40,6 +43,22 @@ export type PreparedProductionPolicy = {
 const json = (path: string, value: unknown) =>
   writeFileSync(path, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' });
 
+/** Canonical declared Org source surface; the restricted Live proxy keeps env: {}. */
+export function productionOrgMcpSource(root: string) {
+  return {
+    name: 'gestalt-org-plan',
+    command: 'node',
+    args: ['./org-plan-mcp.mjs'],
+    cwd: root,
+    env_vars: [
+      'GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY',
+      'GESTALT_MOBILE_ORG_PLAN_STATUS_FILE',
+      'GESTALT_MOBILE_ORG_PLAN_CAPABILITIES',
+    ],
+    default_tools_approval_mode: 'approve',
+  };
+}
+
 /** Owning source bytes are inventoried independently of the prepared tool surface.
  * Empty original inventories are accepted only after actual config/read plus full
  * resolved layers; additional original launch surfaces never disappear via overrides.
@@ -52,19 +71,30 @@ export async function prepareProductionPolicy(input: {
   app: ProductionLiveConfiguration['apps'][number];
   directory: string;
   authenticationDirectory: string;
+  capture: OwningRuntimeCapture;
+  reconfigure(modelConfig: Readonly<Record<string, unknown>>): Promise<void>;
+  observe(): Promise<Observation>;
 }): Promise<PreparedProductionPolicy> {
   const { configuration: cfg, session, observation, app, directory } = input;
+  const { capture } = input;
+  if (
+    capture.sessionId !== session.id ||
+    capture.directory !== directory ||
+    capture.captured.appRoot !== app.appRoot
+  )
+    throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
   const original = observation.configuration as { config?: Record<string, unknown> };
   const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
   if (!Array.isArray(mcp?.data) || mcp.data.length || mcp.nextCursor)
     throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
   const merged = mergeLiveConfig(original.config ?? {}, observation.threadConfig);
-  // v1 supports no pre-existing host delegates. The installed two Live packages
+  // Original host delegates remain unsupported. The installed two Live packages
   // below are explicitly selected by the trusted host configuration, not claimed
   // to be the observed original inventory.
   const files = resolveLiveConfigFiles({
     configuration: observation.configuration,
     appRoot: app.appRoot,
+    capturedProjectSources: capture.captured.directories,
     threadConfig: observation.threadConfig,
     approved: { mcpServers: {}, plugins: {} },
   });
@@ -79,6 +109,7 @@ export async function prepareProductionPolicy(input: {
     cfg.nativeEnvironment.CODEX_HOME,
     cfg.caddy.controllerDirectory,
     `/tmp/codex-daemon-${process.getuid!()}`,
+    '/proc',
   ];
   const { state: baselineState, selection } = owningPermissions({
     session,
@@ -99,17 +130,18 @@ export async function prepareProductionPolicy(input: {
     )
       throw new Error('LIVE_CONFIG_CHANGED');
   }
+  if (
+    !isDeepStrictEqual(normalize(baselineState), normalize(capture.baselineState)) ||
+    !isDeepStrictEqual(
+      [...files].sort((a, b) => a.path.localeCompare(b.path)),
+      [...(app.owningPolicy?.configFiles ?? [])].sort((a, b) => a.path.localeCompare(b.path)),
+    )
+  )
+    throw new Error('LIVE_OWNING_POLICY_UNVERIFIED');
   const policy = new InstalledLivePolicy(cfg.installation);
   policy.validateInstallation();
-  const controlState = prepareHelperControlLayout(app.appRoot, baselineState);
-  mkdirSync(directory, { mode: 0o700 }); // No authority key until the baseline exclusions above pass.
-  const runtimeHome = join(directory, 'native-worker-home');
-  mkdirSync(runtimeHome, { mode: 0o700 });
+  const runtimeHome = capture.runtimeHome;
   const workerConfig = join(runtimeHome, 'config.toml');
-  writeFileSync(workerConfig, '[shell_environment_policy]\ninherit = "none"\n', {
-    mode: 0o600,
-    flag: 'wx',
-  });
   const snapshot = join(directory, 'owning-configuration.json');
   json(snapshot, {
     launch: observation.launch,
@@ -121,27 +153,13 @@ export async function prepareProductionPolicy(input: {
     selection,
     files,
   });
-  const keyPath = join(directory, 'policy-key');
-  writeFileSync(keyPath, randomBytes(32), { mode: 0o600, flag: 'wx' });
+  const keyPath = capture.keyPath;
   const probePath = join(directory, 'private-denial-probe');
   writeFileSync(probePath, randomBytes(32), { mode: 0o600, flag: 'wx' });
-  const manifestPath = join(directory, 'manifest.json'),
+  const manifestPath = capture.manifestPath,
     bootstrapPath = join(directory, 'bootstrap.json');
-  const controller = observeLiveProcess(process.pid);
   const gestalt = cfg.installation.packages.find((entry) => entry.name === 'gestalt')!;
-  const state: ManagedProjectSandboxState = {
-    ...controlState,
-    permissionProfile: {
-      ...controlState.permissionProfile,
-      file_system: {
-        ...controlState.permissionProfile.file_system,
-        entries: [
-          ...controlState.permissionProfile.file_system.entries,
-          { path: { type: 'path', path: '/proc' }, access: 'deny' },
-        ],
-      },
-    },
-  };
+  const state = capture.state;
   const expectedServers = Object.fromEntries(
     ['context-mode', 'gestalt-org-plan'].map((server) => [
       server,
@@ -197,7 +215,7 @@ export async function prepareProductionPolicy(input: {
       [active.id]: {
         ...(active.extends ? { extends: active.extends } : {}),
         filesystem,
-        network: { enabled: false },
+        network: { enabled: state.permissionProfile.network === 'enabled' },
       },
     },
   });
@@ -217,50 +235,13 @@ export async function prepareProductionPolicy(input: {
     readLiveConfigFile(snapshot),
     readLiveConfigFile(overridePath),
   ];
-  json(manifestPath, {
-    schemaVersion: 1,
-    profileId: String((selection.activePermissionProfile as { id: string }).id),
-    appRoot: app.appRoot,
-    controller: {
-      pid: controller.pid,
-      birth: controller.birth,
-      uid: controller.uid,
-      namespaces: {
-        mnt: controller.namespaces.mnt,
-        user: controller.namespaces.user,
-        pid: controller.namespaces.pid,
-      },
-    },
-    binary: { ...cfg.native, version: '0.161.0' },
-    sandboxState: state,
-    configFiles: configs,
-    components: cfg.components,
-    privatePaths: {
-      auth: [input.authenticationDirectory, cfg.nativeEnvironment.CODEX_HOME],
-      controller: [cfg.privateDirectory],
-      caddy: [cfg.caddy.controllerDirectory],
-      daemon: [`/tmp/codex-daemon-${process.getuid!()}`],
-    },
-    keyFile: keyPath,
-    runtimeHome,
-    environment: { PATH: '/usr/bin:/bin', HOME: runtimeHome, TMPDIR: '/tmp' },
-    commands: {
-      'context-mode-call': {
-        executable: cfg.installation.node.path,
-        sha256: cfg.installation.node.sha256,
-        args: [
-          join(gestalt.root, 'live-context-worker.mjs'),
-          '--runtime',
-          cfg.installation.runtime.root,
-          '--workspace',
-          app.appRoot,
-        ],
-        timeoutMs: 120000,
-      },
-    },
-  });
   json(bootstrapPath, {
     schemaVersion: 1,
+    consumer: {
+      schemaVersion: 1,
+      component: cfg.components.mobile,
+      capabilities: ['suspension-v1'],
+    },
     manifestPath,
     workspaceRoot: app.workspaceRoot,
     packages: cfg.installation.packages,
@@ -278,17 +259,7 @@ export async function prepareProductionPolicy(input: {
               env: { CONTEXT_MODE_PLATFORM: 'codex' },
               default_tools_approval_mode: 'approve',
             }
-          : {
-              name: 'gestalt-org-plan',
-              command: 'node',
-              args: ['./org-plan-mcp.mjs'],
-              cwd: root,
-              env_vars: [
-                'GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY',
-                'GESTALT_MOBILE_ORG_PLAN_STATUS_FILE',
-              ],
-              default_tools_approval_mode: 'approve',
-            },
+          : productionOrgMcpSource(root),
       ),
       hooks: [],
       remoteMcp: [],
@@ -296,15 +267,70 @@ export async function prepareProductionPolicy(input: {
     },
     plans: app.plans,
   });
-  const digests = await policy.prepare(manifestPath, bootstrapPath, configs);
-  const prepared = JSON.parse(readFileSync(join(directory, 'live-mcp-config.json'), 'utf8')) as {
+  const stagedPath = await policy.stage(manifestPath, bootstrapPath, [
+    ...files,
+    readLiveConfigFile(workerConfig),
+  ]);
+  const prepared = JSON.parse(readFileSync(stagedPath, 'utf8')) as {
     mcpServers: Record<string, unknown>;
   };
   if (!isDeepStrictEqual(prepared.mcpServers, expectedServers))
     throw new Error('LIVE_CONFIG_CHANGED');
+  await input.reconfigure(modelConfig);
+  const actual = await input.observe();
+  const effective = owningPermissions({
+    session,
+    observation: actual,
+    appRoot: app.appRoot,
+    protectedPaths,
+  });
+  if (!isDeepStrictEqual(normalize(effective.state), normalize(state)))
+    throw new Error('LIVE_OWNING_POLICY_UNVERIFIED');
+  if (
+    !isDeepStrictEqual(
+      actual.threadSelection?.instructionSources,
+      observation.threadSelection?.instructionSources,
+    )
+  )
+    throw new Error('LIVE_INSTRUCTION_DISCOVERY_CHANGED');
+  const sourceInventory = resolveLiveSourceInventory({
+    captured: capture.captured,
+    configuration: actual.configuration,
+    threadConfig: actual.threadConfig,
+    selection: {
+      ...actual.threadSelection,
+      threadConfig: actual.threadConfig,
+      skillsConfig: actual.skillsConfig ?? null,
+    },
+    runtime: actual.launch,
+    policyDigest: capture.policyDigest,
+    workerConfig: readLiveConfigFile(workerConfig),
+    approved: { mcpServers: expectedServers, plugins: {} },
+  });
+  if (!isDeepStrictEqual(actual.threadConfig, modelConfig)) throw new Error('LIVE_CONFIG_CHANGED');
+  const sourcesPath = join(directory, 'owning-sources.json');
+  json(sourcesPath, sourceInventory);
+  await policy.sealRuntime(manifestPath, capture.captureId, actual.launch.pid, sourcesPath);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  manifest.runtimeProvenance = {
+    captureId: capture.captureId,
+    effectiveConfigDigest: sourceInventory.effectiveConfigDigest,
+    sessionFlagsDigest: sourceInventory.sessionFlagsDigest,
+  };
+  manifest.configFiles = configs;
+  const temporary = join(directory, 'sealed-manifest.tmp');
+  json(temporary, manifest);
+  renameSync(temporary, manifestPath);
+  const digests = await policy.prepare(manifestPath, bootstrapPath, configs);
+  // Initial MCP startup preceded signed receipts and could not grant work.
+  // Cold-resume the same idle thread to connect its now-admitted descriptors.
+  await input.reconfigure(modelConfig);
 
   return {
     directory,
+    capture,
+    sourceInventory,
+    expectedServers,
     manifestPath,
     bootstrapPath,
     keyPath,
@@ -316,6 +342,29 @@ export async function prepareProductionPolicy(input: {
     modelConfig,
     digests,
   };
+}
+
+/** Re-resolve actual owning RPC state at every Live model admission. Stored
+ * digests and signed receipts alone cannot assert that current session flags match. */
+export function assertProductionSourceObservation(
+  policy: PreparedProductionPolicy,
+  observation: Observation,
+): void {
+  const current = resolveLiveSourceInventory({
+    captured: policy.capture.captured,
+    configuration: observation.configuration,
+    threadConfig: observation.threadConfig,
+    selection: {
+      ...observation.threadSelection,
+      threadConfig: observation.threadConfig,
+      skillsConfig: observation.skillsConfig ?? null,
+    },
+    runtime: observation.launch,
+    policyDigest: policy.capture.policyDigest,
+    workerConfig: readLiveConfigFile(join(policy.capture.runtimeHome, 'config.toml')),
+    approved: { mcpServers: policy.expectedServers, plugins: {} },
+  });
+  if (!isDeepStrictEqual(current, policy.sourceInventory)) throw new Error('LIVE_CONFIG_CHANGED');
 }
 
 /** Control records are distinct from model-facing screenshots/variant artifacts. */

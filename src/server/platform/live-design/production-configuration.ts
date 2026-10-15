@@ -17,6 +17,43 @@ const pin = z
   .strict();
 const identity = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const port = z.number().int().min(1024).max(65535);
+const nativeState = z
+  .object({
+    permissionProfile: z
+      .object({
+        type: z.literal('managed'),
+        file_system: z
+          .object({
+            type: z.literal('restricted'),
+            entries: z
+              .array(
+                z
+                  .object({
+                    path: z.union([
+                      z.object({ type: z.literal('path'), path: z.string() }).strict(),
+                      z.object({ type: z.literal('glob_pattern'), pattern: z.string() }).strict(),
+                      z
+                        .object({
+                          type: z.literal('special'),
+                          value: z.object({ kind: z.string() }).strict(),
+                        })
+                        .strict(),
+                    ]),
+                    access: z.enum(['read', 'write', 'deny']),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(256),
+          })
+          .strict(),
+        network: z.enum(['restricted', 'enabled']),
+      })
+      .strict(),
+    sandboxCwd: z.string(),
+    useLegacyLandlock: z.literal(false),
+  })
+  .strict();
 const schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -70,6 +107,17 @@ const schema = z
             appRoot: z.string(),
             workspaceRoot: z.string(),
             plans: z.array(z.string()).max(32),
+            // Private host expectation, checked against the actual original
+            // config/selection after birth. It never substitutes for observation.
+            owningPolicy: z
+              .object({
+                profileId: z.string().min(1).max(128),
+                sandboxState: nativeState,
+                configFiles: z.array(pin).min(1).max(64),
+                instructionFiles: z.array(z.string()).max(64).default([]),
+              })
+              .strict()
+              .optional(),
             helperPort: port,
             gatewayPort: port,
             devserver: z

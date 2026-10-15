@@ -8,7 +8,7 @@
 // controlled and credential-free; this never substitutes for genuine proof.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import {
   chmodSync,
   cpSync,
@@ -462,19 +462,19 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: '9866e6f7abef7a3226052d803ce963c49f88cd0f',
+    agents: '7f5ab679ff547621c55dea55cd0ae16afbd418cd',
     manager: LIVE_MANAGER_SHA256,
   };
   report.installationStage = 'vendor-copy';
   const vendor = join(installation, 'vendor');
-  cpSync(dirname(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY))), vendor, {
+  cpSync(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY)), join(vendor, 'bin'), {
     recursive: true,
   });
   report.installationStage = 'vendor-immutability';
   protect(vendor);
   report.installationStage = 'native-and-bwrap-pins';
   const native = pin(join(vendor, 'bin/codex')),
-    bwrap = pin(join(vendor, 'codex-resources/bwrap'));
+    bwrap = pin(join(vendor, 'bin/codex-resources/bwrap'));
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
   metadataNativePath = native.path;
@@ -564,6 +564,12 @@ try {
     { mode: 0o600 },
   );
   writeFileSync(join(appRoot, 'index.html'), sourceIndex, { mode: 0o600 });
+  writeFileSync(join(appRoot, 'AGENTS.md'), 'Preserve private state.\n', { mode: 0o644 });
+  writeFileSync(
+    join(appRoot, 'AGENTS.override.md'),
+    'Preserve private state and use the owning session.\n',
+    { mode: 0o644 },
+  );
   // A real project marker bounds Native discovery to this owned fixture.
   execFileSync('git', ['init', '--quiet', appRoot], { stdio: 'ignore' });
   writeFileSync(
@@ -583,7 +589,9 @@ try {
   );
   await new Promise((done) => provider.listen(0, '127.0.0.1', done));
   const providerPort = provider.address().port;
-  const originalConfig = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  const originalConfig =
+    `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n` +
+    `[projects.${JSON.stringify(appRoot)}]\ntrust_level = "trusted"\n`;
   // Configure optional shell snapshot caching OFF in the original source before
   // any Native owner starts. Actual shell/model tools and their sandbox remain
   // mandatory below. Live never overrides an existing owner's snapshot setting
@@ -675,7 +683,7 @@ try {
       native,
       nativeEnvironment: {
         PATH: '/usr/bin:/bin',
-        HOME: owningHome,
+        HOME: home,
         CODEX_HOME: owningHome,
         TMPDIR: '/tmp',
         LANG: 'C.UTF-8',
@@ -683,7 +691,7 @@ try {
       providerCredentialEnvironment: [],
       project: { bwrap, node, worker, helper },
       components: {
-        manager: '9b55cd1281a167f8cc19476a6ebf0b9c2d513bfe',
+        manager: '4ea4e0c92b156b6979eff04dbd9cdc9862674ea5',
         mobile: report.provenance.tree,
         agents: report.provenance.agents,
       },
@@ -701,6 +709,31 @@ try {
           appRoot,
           workspaceRoot: appRoot,
           plans: [],
+          owningPolicy: {
+            profileId: 'workspace-git',
+            configFiles: [pin(join(owningHome, 'config.toml'))],
+            instructionFiles: [],
+            sandboxState: {
+              permissionProfile: {
+                type: 'managed',
+                network: 'restricted',
+                file_system: {
+                  type: 'restricted',
+                  entries: [
+                    { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+                    { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'write' },
+                    { path: { type: 'path', path: '/tmp' }, access: 'write' },
+                    { path: { type: 'path', path: appRoot }, access: 'write' },
+                    ...[privateRoot, `/tmp/codex-daemon-${process.getuid()}`, '/proc'].map(
+                      (path) => ({ path: { type: 'path', path }, access: 'deny' }),
+                    ),
+                  ],
+                },
+              },
+              sandboxCwd: pathToFileURL(appRoot).href,
+              useLegacyLandlock: false,
+            },
+          },
           helperPort,
           gatewayPort,
           devserver: {
@@ -761,11 +794,17 @@ try {
   }, 'OWNING_SEED_DEADLINE');
   report.projectMetadata.afterSeed = ownedProjectMetadata();
   report.stage = 'compatible-original-startup';
-  assert.equal(report.projectMetadata.afterSessionCreate.directoryPresent, false);
-  assert.equal(report.projectMetadata.afterSeed.directoryPresent, false);
-  assert.equal(report.projectMetadata.duringSessionCreate.metadataObserved, false);
-  assert.equal(report.projectMetadata.duringSessionCreate.syntheticMarkerObserved, false);
-  report.checks.originalStartupWithoutSyntheticProjectMetadata = true;
+  for (const facts of [
+    report.projectMetadata.afterSessionCreate,
+    report.projectMetadata.afterSeed,
+  ]) {
+    if (facts.directoryPresent) {
+      assert.equal(facts.canonicalDirectory, true);
+      assert.equal(facts.ownedByCurrentUser, true);
+      assert.equal(facts.entryCount, 0);
+    }
+  }
+  report.checks.originalStartupMetadataRetainedWithoutDeletion = true;
   report.checks.persistedBaselineWithoutPreAdmissionCommands = true;
   seed = false;
   assert.equal(owningThread, session.threadId);
@@ -779,7 +818,7 @@ try {
   assert.equal(started.state, 'active');
   preview = started.previewOrigin;
   generationDirectory = readdirSync(controller)
-    .filter((name) => name.startsWith('generation-'))
+    .filter((name) => name.startsWith('owner-'))
     .map((name) => join(controller, name))[0];
   assert.ok(generationDirectory);
   const observed = JSON.parse(
@@ -809,11 +848,56 @@ try {
     liveDb.close();
   }
   baselineBirth = observed.launch;
-  assert.equal(observedBirthExited(baselineBirth), true);
+  assert.equal(observedBirthExited(baselineBirth), false);
   assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), originalConfig);
   for (const name of ['policy-receipt.json', 'admission-receipt.json'])
     report.checks[name.replaceAll('-', '_')] = existsSync(join(generationDirectory, name));
-  report.checks.originalOwnerUnloadedAndExited = true;
+  const stable = (value) =>
+    JSON.stringify(value, (_key, item) =>
+      item && typeof item === 'object' && !Array.isArray(item)
+        ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : item,
+    );
+  const signingKey = readFileSync(join(controller, 'live-policy.key'));
+  const signed = (path) => {
+    const receipt = JSON.parse(readFileSync(path));
+    assert.equal(
+      createHmac('sha256', signingKey).update(stable(receipt.body)).digest('hex'),
+      receipt.mac,
+    );
+    return receipt.body;
+  };
+  const manifest = JSON.parse(readFileSync(join(generationDirectory, 'manifest.json')));
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.generation.sessionId, session.id);
+  assert.equal(manifest.generation.generation, started.generation);
+  const captureId = manifest.runtimeProvenance.captureId;
+  const before = signed(join(generationDirectory, `birth-${captureId}.json`));
+  const image = signed(join(generationDirectory, `image-${captureId}.json`));
+  const sealed = signed(join(generationDirectory, `runtime-${captureId}.json`));
+  assert.equal(before.kind, 'before-runtime-birth');
+  assert.equal(image.process.pid, baselineBirth.pid);
+  assert.equal(sealed.runtime.process.pid, baselineBirth.pid);
+  assert.equal(sealed.runtime.process.birth, baselineBirth.birth);
+  assert.ok(
+    sealed.inventory.sources.some(
+      (source) =>
+        source.kind === 'instruction' && source.path === join(appRoot, 'AGENTS.override.md'),
+    ),
+  );
+  assert.ok(
+    sealed.inventory.sources.some(
+      (source) =>
+        source.kind === 'instruction-candidate' && source.path === join(appRoot, 'AGENTS.md'),
+    ),
+  );
+  report.sourceInventory = {
+    schemaVersion: sealed.inventory.schemaVersion,
+    signatureVerified: true,
+    sourceKinds: sealed.inventory.sources.map((source) => source.kind),
+    captureGenerationMatchesLiveGeneration: true,
+  };
+  report.checks.originalManagedOwnerRetainedWithSignedV2Sources = true;
   report.checks.productionContextNativeAdmissionProbe = true; // active follows the actual fixed context probe, never a fixture callback.
   const reused = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
   assert.equal(reused.liveId, started.liveId);
@@ -903,7 +987,12 @@ try {
   stream = undefined;
   await mobile.close();
   mobile = undefined;
-  assert.equal(existsSync(join(generationDirectory, 'policy-key')), false);
+  assert.equal(existsSync(join(controller, 'live-policy.key')), true);
+  const fence = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+  assert.equal(fence.status, 'revoked');
+  assert.equal(fence.captureId, captureId);
+  assert.equal(observedBirthExited(baselineBirth), true);
+  report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
   assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
   assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
   await assert.rejects(() => remote('/'));
@@ -921,7 +1010,7 @@ try {
     report.stage = installationOnly ? 'installation-only-complete' : 'construction-only-complete';
   } else {
     generationDirectory ??= readdirSync(controller)
-      .filter((name) => name.startsWith('generation-'))
+      .filter((name) => name.startsWith('owner-'))
       .map((name) => join(controller, name))[0];
     report.preparationDiagnostics = readdirSync(controller)
       .filter((name) => /^preparation-failure-[a-f0-9-]+\.json$/.test(name))

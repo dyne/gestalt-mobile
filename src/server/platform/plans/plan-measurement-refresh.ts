@@ -70,7 +70,10 @@ export class PlanMeasurementRefresh {
     if (!active || this.inFlight.has(sessionId)) return;
     this.inFlight.add(sessionId);
     try {
-      await this.checkpoint(active.planPath, active.stepId, await this.readSnapshot(sessionId));
+      const snapshot = await this.readSnapshot(sessionId);
+      // Suspension/reselection may arrive while the provider read is in flight.
+      if (this.active.get(sessionId) === active)
+        await this.checkpoint(active.planPath, active.stepId, snapshot);
     } catch {
       // A transient Codex or helper failure makes this tick unavailable only.
     } finally {

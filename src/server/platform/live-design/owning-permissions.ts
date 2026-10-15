@@ -14,6 +14,7 @@ import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-s
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { mergeLiveConfig } from './effective-config.js';
 import { LIVE_CODEX_SHA256 } from './native-contract.js';
+import { liveSourceDigest } from './owning-source-inventory.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 const record = z.record(z.string(), z.unknown());
@@ -30,6 +31,29 @@ const inside = (root: string, path: string) => {
   const tail = relative(root, path);
   return !tail || (tail !== '..' && !tail.startsWith(`..${sep}`) && !isAbsolute(tail));
 };
+export function normalizedLivePermissions(
+  state: ManagedProjectSandboxState,
+): ManagedProjectSandboxState {
+  return {
+    ...state,
+    permissionProfile: {
+      ...state.permissionProfile,
+      file_system: {
+        ...state.permissionProfile.file_system,
+        entries: [
+          ...new Map(
+            state.permissionProfile.file_system.entries.map((entry) => [
+              liveSourceDigest(entry),
+              entry,
+            ]),
+          ).entries(),
+        ]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([, entry]) => entry),
+      },
+    },
+  };
+}
 /** Uncertain or broader writable roots are global, never omitted as scratch. */
 export function livePolicyAppConfined(state: ManagedProjectSandboxState, appRoot: string): boolean {
   return state.permissionProfile.file_system.entries.every(
@@ -100,7 +124,7 @@ export function owningPermissions(input: {
     const declared = profileSchema.parse(profiles[active.id]);
     if (!isDeepStrictEqual(active.extends ?? null, declared.extends ?? null)) throw new Error();
     const profile = profileSchema.parse(resolve(active.id));
-    if (profile.network?.enabled === true) throw new Error();
+    const networkEnabled = profile.network?.enabled === true;
     const roots = z.array(z.string()).max(32).parse(selection.runtimeWorkspaceRoots);
     if (
       !roots.length ||
@@ -197,7 +221,7 @@ export function owningPermissions(input: {
     }
     const legacy = record.parse(selection.sandbox);
     if (
-      legacy.networkAccess === true ||
+      (legacy.networkAccess === true) !== networkEnabled ||
       !['workspaceWrite', 'workspace-write', 'readOnly', 'read-only'].includes(String(legacy.type))
     )
       throw new Error();
@@ -210,7 +234,7 @@ export function owningPermissions(input: {
             entries,
             ...(depth !== undefined ? { glob_scan_max_depth: Number(depth) } : {}),
           },
-          network: 'restricted',
+          network: networkEnabled ? 'enabled' : 'restricted',
         },
         sandboxCwd: pathToFileURL(appRoot).href,
         useLegacyLandlock: false,

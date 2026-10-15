@@ -56,7 +56,11 @@ export type LiveStartClaim = Omit<
   | 'updatedAt'
   | 'priorControls'
   | 'controlsRestored'
->;
+> & {
+  /** Private controller reservation made before original Native birth. Never a
+   * browser input or permission to reuse another session's admission. */
+  admissionGeneration?: number;
+};
 export type LiveMutation =
   | { event: 'phase'; phase: string }
   | { event: 'captureControls'; intent: LiveControlIntent }

@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { ORG_PLAN_CAPABILITIES } from './org-plan-capabilities.js';
 import type { PlanMeasurementSnapshot } from '../../features/plans/application/measurement-snapshot.js';
 
 const execute = promisify(execFile);
@@ -20,6 +21,7 @@ export async function checkpointPlanMeasurement(
   snapshot: PlanMeasurementSnapshot,
 ): Promise<void> {
   await execute(helperPath, ['measure', 'checkpoint', planPath, stepId, JSON.stringify(snapshot)], {
+    env: { ...process.env, GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: ORG_PLAN_CAPABILITIES },
     shell: false,
     timeout: PLAN_MEASUREMENT_COMMAND_TIMEOUT_MS,
   });

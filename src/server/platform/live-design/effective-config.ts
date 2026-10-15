@@ -6,7 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { constants, closeSync, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 
@@ -69,6 +69,9 @@ export function resolveLiveConfigFiles(input: {
   approved: LiveApprovedLaunchSurfaces;
   /** Registered root for bounded diagnostics only; never grants project trust. */
   appRoot?: string;
+  /** Inventory only. Manager must independently seal these captured directory
+   * sources before they can confer any admission authority. */
+  capturedProjectSources?: readonly string[];
 }): readonly LiveConfigFile[] {
   let stage = 'response-shape';
   let launchInventory: unknown;
@@ -127,10 +130,14 @@ export function resolveLiveConfigFiles(input: {
     const paths = new Set<string>();
     const roles = new Set<string>();
     const inspect = (config: Record<string, unknown>) => {
+      stage = 'instruction-discovery';
+      if (config.project_doc_max_bytes === 0) throw new Error();
       for (const key of [
         'hooks',
         'remote_mcp',
         'executables',
+        'notify',
+        'apps',
         'browser_use',
         'computer_use',
         'desktop',
@@ -173,6 +180,23 @@ export function resolveLiveConfigFiles(input: {
       inspect(layer.config);
       stage = 'layer-provenance';
       const type = layer.name.type;
+      if (type === 'project' && input.capturedProjectSources) {
+        const path = layer.name.dotCodexFolder;
+        const ancestry: string[] = [];
+        if (!input.appRoot) throw new Error();
+        for (let root = input.appRoot; ; root = dirname(root)) {
+          ancestry.push(join(root, '.codex'));
+          if (root === '/') break;
+        }
+        if (
+          typeof path !== 'string' ||
+          !ancestry.includes(path) ||
+          !input.capturedProjectSources.includes(path) ||
+          Object.keys(layer.config).length
+        )
+          throw new Error();
+        continue;
+      }
       if (
         type === 'project' ||
         type === 'mdm' ||

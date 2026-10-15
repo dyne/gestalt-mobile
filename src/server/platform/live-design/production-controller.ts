@@ -5,15 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -45,13 +38,21 @@ import {
   readProductionLiveConfiguration,
   type ProductionLiveConfiguration,
 } from './production-configuration.js';
-import { prepareProductionPolicy, type PreparedProductionPolicy } from './production-policy.js';
+import {
+  assertProductionSourceObservation,
+  prepareProductionPolicy,
+  type PreparedProductionPolicy,
+} from './production-policy.js';
 import {
   readLiveConfigFile,
   resolveLiveConfigFiles,
   type LiveConfigFile,
 } from './effective-config.js';
-import { livePolicyAppConfined, owningPermissions } from './owning-permissions.js';
+import {
+  livePolicyAppConfined,
+  normalizedLivePermissions,
+  owningPermissions,
+} from './owning-permissions.js';
 import { InstalledLivePolicy, measureInstalledLiveTree } from './installed-policy.js';
 import {
   IsolatedProjectProcess,
@@ -69,6 +70,9 @@ import { createPreviewGateway } from './preview-gateway.js';
 import { isolatedPreviewUpstreams } from './isolated-preview-upstreams.js';
 import { PreviewConnections } from './preview-connections.js';
 import { SqliteLiveEventInbox } from './sqlite-event-inbox.js';
+import { captureOwningRuntime, type OwningRuntimeCapture } from './owning-runtime-capture.js';
+import { assertLiveNativeInstallation } from './native-contract.js';
+import { validateOriginalLaunchSources } from './original-launch-sources.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 type App = ProductionLiveConfiguration['apps'][number];
@@ -116,6 +120,14 @@ export class ProductionLiveController {
   private readonly preflight = new Set<string>();
   private readonly failedPreparations = new Set<string>();
   private readonly targets = new RegisteredPreviewTargets();
+  private readonly captures = new Map<string, OwningRuntimeCapture>();
+  private readonly revokedCaptures = new Set<string>();
+  private readonly pendingLaunches = new Map<string, OwningRuntimeCapture>();
+  private readonly capturedProcesses = new Map<string, ReturnType<typeof launchCodexAppServer>>();
+  private readonly preparedOwners = new Map<string, PreparedProductionPolicy>();
+  private readonly originalObservations = new Map<string, Observation>();
+  private readonly privateOwners = new Set<string>();
+  private readonly construction = new AsyncLocalStorage<{ sessionId: string; active: boolean }>();
   private readonly origins: CaddyRouteStore;
   private serial: Promise<unknown> = Promise.resolve();
   private closed = false;
@@ -125,6 +137,7 @@ export class ProductionLiveController {
     private readonly cfg: ProductionLiveConfiguration,
     private readonly source: LiveConfigFile,
     private readonly releaseElection: () => Promise<void>,
+    private readonly election: Awaited<ReturnType<typeof electLiveController>>['election'],
   ) {
     this.cfg = structuredClone(cfg);
     this.origins = new CaddyRouteStore(
@@ -153,6 +166,45 @@ export class ProductionLiveController {
   scopes = (session: RelaySessionSnapshot): readonly string[] | null =>
     this.scopesBySession.get(session.id) ?? null;
   preflightBlocked = (): boolean => this.preflight.size > 0 || this.failedPreparations.size > 0;
+  auxiliaryConstructionAllowed = (): boolean => {
+    const owner = this.construction.getStore();
+    return !!owner?.active && !this.captures.has(owner.sessionId);
+  };
+  withOwningAdmission = async <T>(
+    session: RelaySessionSnapshot,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const app = this.cfg.apps.find((item) => item.appRoot === session.workspacePath);
+    if (!app?.owningPolicy || session.provider !== 'codex' || this.captures.has(session.id))
+      return work();
+    const b = this.requireBindings();
+    b.guard.writer(session);
+    this.preflight.add(session.id);
+    const authority = { sessionId: session.id, active: true };
+    try {
+      await b.settleAuxiliary();
+      const peers = b.runtime.liveOwnerIds().filter((id) => id !== session.id);
+      for (const id of peers) {
+        const peer = b.sessions.find(id);
+        if (!peer || !this.privateOwners.has(id)) throw new Error('LIVE_SESSION_BUSY');
+        await b.runtime.inspectLiveQuiescence(peer);
+      }
+      this.owners.assertCaptureWriters(session.id, peers);
+      return await this.construction.run(authority, () => b.guard.livePreparation(session, work));
+    } catch (error) {
+      const capture = this.captures.get(session.id);
+      if (capture)
+        try {
+          await this.revokeCapture(capture);
+        } catch {
+          this.failedPreparations.add(session.id);
+        }
+      throw error;
+    } finally {
+      authority.active = false;
+      this.preflight.delete(session.id);
+    }
+  };
   private verifyHost(): void {
     if (this.closed || readLiveConfigFile(this.source.path).sha256 !== this.source.sha256)
       throw new Error('LIVE_CONFIG_CHANGED');
@@ -163,21 +215,103 @@ export class ProductionLiveController {
     )
       throw new Error('LIVE_MOBILE_COMPONENT_UNVERIFIED');
     new InstalledLivePolicy(this.cfg.installation).validateInstallation();
+    assertLiveNativeInstallation(this.cfg.native.path);
   }
   launchNative(input: AppServerLaunchInput) {
     this.verifyHost();
+    for (const app of this.cfg.apps)
+      if (app.owningPolicy)
+        validateOriginalLaunchSources({
+          owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
+          files: app.owningPolicy.configFiles,
+          threadConfig: {},
+        });
+    const capture = input.liveCaptureId ? this.pendingLaunches.get(input.liveCaptureId) : undefined;
+    if (input.liveCaptureId && !capture) throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    if (capture) this.pendingLaunches.delete(capture.captureId);
     const environment: Record<string, string> = { ...this.cfg.nativeEnvironment };
+    environment.PATH = `${dirname(this.cfg.installation.node.path)}:${dirname(this.cfg.native.path)}:${environment.PATH}`;
+    if (capture) {
+      environment.HOME = this.cfg.nativeEnvironment.CODEX_HOME;
+      environment.TMPDIR = '/tmp';
+    }
     for (const name of this.cfg.providerCredentialEnvironment) {
       // Forward only explicit host-authorized standard bindings; never discover
       // credentials or read unrelated credential/configuration files.
       if (process.env[name]) environment[name] = process.env[name]!;
     }
-    return launchCodexAppServer(input, {
+    const nativeProcess = launchCodexAppServer(input, {
       executable: this.cfg.native.path,
       sha256: this.cfg.native.sha256,
       environment,
+      managedLaunch: {
+        command: this.cfg.installation.manager.path,
+        args: capture
+          ? [
+              'cli',
+              '--',
+              '--live-policy-owning-runtime',
+              '--manifest',
+              capture.manifestPath,
+              '--capture-id',
+              capture.captureId,
+            ]
+          : ['cli', '--', 'app-server', '--stdio'],
+      },
     });
+    if (capture) this.capturedProcesses.set(capture.captureId, nativeProcess);
+    return nativeProcess;
   }
+  prepareOwningLaunch = async (
+    session: RelaySessionSnapshot,
+    input: AppServerLaunchInput,
+    modelConfig: Readonly<Record<string, unknown>>,
+  ): Promise<AppServerLaunchInput> => {
+    const app = this.cfg.apps.find((item) => item.appRoot === session.workspacePath);
+    if (!app?.owningPolicy || session.provider !== 'codex') return input;
+    const selected = session.executionPolicy?.sandbox;
+    if (selected && (selected !== 'workspace-git' || app.owningPolicy.profileId !== selected))
+      return input;
+    const previous = this.captures.get(session.id);
+    if (previous) {
+      if (this.revokedCaptures.has(previous.captureId)) return input; // Normal restored chat has no Live admission.
+      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    }
+    this.verifyHost();
+    const b = this.requireBindings();
+    await b.settleAuxiliary();
+    this.owners.assertCaptureWriters(
+      session.id,
+      b.runtime.liveOwnerIds().filter((id) => id !== session.id && this.privateOwners.has(id)),
+    );
+    const generation = this.owners.reserveAdmissionGeneration(session.id, app.appRoot);
+    const capture = await captureOwningRuntime({
+      configuration: this.cfg,
+      app,
+      session,
+      election: this.election,
+      generation,
+      authenticationDirectory: b.authenticationDirectory,
+      threadConfig: modelConfig,
+    });
+    this.captures.set(session.id, capture);
+    this.pendingLaunches.set(capture.captureId, capture);
+    return { ...input, liveCaptureId: capture.captureId };
+  };
+  validateOriginalThreadFlags = (
+    session: RelaySessionSnapshot,
+    modelConfig: Readonly<Record<string, unknown>>,
+  ): void => {
+    const capture = this.captures.get(session.id);
+    if (!capture || this.revokedCaptures.has(capture.captureId)) return;
+    const app = this.cfg.apps.find((item) => item.appRoot === session.workspacePath);
+    if (!app?.owningPolicy) throw new Error('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    validateOriginalLaunchSources({
+      owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
+      files: app.owningPolicy.configFiles,
+      threadConfig: modelConfig,
+    });
+  };
   private requireBindings() {
     if (!this.bindings || !this.controls || !this.preview || !this.connections || !this.pollFactory)
       throw new Error('LIVE_DEPENDENCIES_UNAVAILABLE');
@@ -198,7 +332,7 @@ export class ProductionLiveController {
   }
   /** Called after actual native start/resume, before exposing ordinary writer readiness. */
   async observeOwnerStarted(session: RelaySessionSnapshot): Promise<void> {
-    if (this.generations.has(session.id) || this.preflight.has(session.id)) return;
+    if (this.generations.has(session.id) || this.preparedOwners.has(session.id)) return;
     try {
       const bindings = this.requireBindings();
       const app = this.appFor(session);
@@ -209,10 +343,12 @@ export class ProductionLiveController {
         this.cfg.nativeEnvironment.CODEX_HOME,
         this.cfg.caddy.controllerDirectory,
         `/tmp/codex-daemon-${process.getuid!()}`,
+        '/proc',
       ];
-      resolveLiveConfigFiles({
+      const files = resolveLiveConfigFiles({
         configuration: observation.configuration,
         appRoot: app.appRoot,
+        capturedProjectSources: this.captures.get(session.id)?.captured.directories,
         threadConfig: observation.threadConfig,
         approved: { mcpServers: {}, plugins: {} },
       });
@@ -225,6 +361,64 @@ export class ProductionLiveController {
         appRoot: app.appRoot,
         protectedPaths,
       });
+      const capture = this.captures.get(session.id);
+      if (
+        capture &&
+        (!isDeepStrictEqual(
+          normalizedLivePermissions(state),
+          normalizedLivePermissions(capture.baselineState),
+        ) ||
+          !isDeepStrictEqual(
+            [...files].sort((a, b) => a.path.localeCompare(b.path)),
+            [...(app.owningPolicy?.configFiles ?? [])].sort((a, b) => a.path.localeCompare(b.path)),
+          ))
+      )
+        throw new Error('LIVE_OWNING_POLICY_UNVERIFIED');
+      if (capture && !this.revokedCaptures.has(capture.captureId)) {
+        const policy = await prepareProductionPolicy({
+          configuration: this.cfg,
+          source: this.source,
+          session,
+          observation,
+          app,
+          directory: capture.directory,
+          authenticationDirectory: bindings.authenticationDirectory,
+          capture,
+          reconfigure: (modelConfig) =>
+            bindings.runtime.reconfigureLiveOwner(session, {
+              modelConfig,
+              skillsConfig: observation.skillsConfig,
+            }),
+          observe: () => bindings.runtime.inspectLiveAdmission(session),
+        });
+        const current = await bindings.runtime.inspectLiveAdmission(session);
+        assertProductionSourceObservation(policy, current);
+        const tools = current.mcp as {
+          data?: {
+            name: string;
+            runtimeStatus?: string;
+            toolsError?: unknown;
+            httpOrigin?: unknown;
+          }[];
+          nextCursor?: unknown;
+        };
+        if (
+          !Array.isArray(tools.data) ||
+          tools.data.length !== 2 ||
+          tools.nextCursor ||
+          !isDeepStrictEqual(tools.data.map((tool) => tool.name).sort(), [
+            'context-mode',
+            'gestalt-org-plan',
+          ]) ||
+          tools.data.some(
+            (tool) => tool.runtimeStatus !== 'connected' || tool.toolsError || tool.httpOrigin,
+          )
+        )
+          throw new Error('LIVE_MCP_UNAVAILABLE');
+        this.preparedOwners.set(session.id, policy);
+        this.originalObservations.set(session.id, observation);
+      }
+      this.privateOwners.add(session.id);
       if (!livePolicyAppConfined(state, app.appRoot)) {
         this.scopesBySession.delete(session.id);
         return; // The actual existing unknown/global reservation remains held.
@@ -245,10 +439,19 @@ export class ProductionLiveController {
       const idle = await bindings.runtime.inspectLiveQuiescence(session);
       bindings.guard.narrowQuiescentWriter(session.id, scopes, idle.outstanding);
       this.scopesBySession.set(session.id, scopes);
-    } catch {
+    } catch (error) {
       // Ordinary workflows remain usable under an unknown/global reservation.
       // Start repeats the full admission checks and cannot acquire authority here.
       this.scopesBySession.delete(session.id);
+      const capture = this.captures.get(session.id);
+      if (capture && !this.revokedCaptures.has(capture.captureId)) {
+        try {
+          await this.revokeCapture(capture);
+        } catch {
+          this.failedPreparations.add(session.id);
+        }
+        throw error; // Captured owners must pass before ordinary writer readiness.
+      }
     }
   }
   targetsFor(session: RelaySessionSnapshot): readonly { appId: string; targetId: string }[] {
@@ -300,14 +503,16 @@ export class ProductionLiveController {
             admission: {
               register: () => this.register(session, app, request),
               unregister: (claim) => this.unregister(claim),
-              busy: async () => bindings.runtime.liveOwnerIds().includes(session.id),
+              busy: async () => {
+                await bindings.runtime.inspectLiveQuiescence(session);
+                return false;
+              },
               verify: (candidate) => this.verifyGeneration(candidate),
             },
             resources: {
               quiesce: async (candidate) => {
                 const g = this.generation(candidate);
-                if (bindings.runtime.liveOwnerIds().includes(g.session.id))
-                  throw new Error('LIVE_SESSION_BUSY');
+                await bindings.runtime.inspectLiveQuiescence(g.session);
               },
               restore: (candidate) => this.restoreOriginal(candidate),
               prepare: (candidate) => this.prepareOwner(candidate),
@@ -343,24 +548,34 @@ export class ProductionLiveController {
     await b.settleAuxiliary();
     this.verifyHost();
     this.owners.checkOrdinary(session.id, this.scopes(session));
-    const observation = await b.runtime.inspectLiveAdmission(session);
+    const current = await b.runtime.inspectLiveAdmission(session);
     const idle = await b.runtime.inspectLiveQuiescence(session);
-    const expected = this.owners.preparationGeneration();
-    const directory = join(this.cfg.privateDirectory, `generation-${randomUUID()}`);
+    const capture = this.captures.get(session.id);
+    if (!capture || this.revokedCaptures.has(capture.captureId))
+      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    const expected = capture.generation;
+    const directory = capture.directory;
+    const prepared = this.preparedOwners.get(session.id);
+    const observation = this.originalObservations.get(session.id);
+    if (!prepared || !observation) throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    assertProductionSourceObservation(prepared, current);
+    await new InstalledLivePolicy(this.cfg.installation).verify(
+      prepared.manifestPath,
+      prepared.bootstrapPath,
+      prepared.files,
+    );
     const assignment = this.origins.assign(app.appRoot);
-    let policy: PreparedProductionPolicy | undefined,
-      helper: IsolatedProjectProcess | undefined,
-      devserver: IsolatedProjectProcess | undefined;
-    let ownerReleased = false;
-    let ownerReleaseAttempted = false;
+    const policy = prepared;
+    let helper: IsolatedProjectProcess | undefined, devserver: IsolatedProjectProcess | undefined;
     let stage = 'original-config';
     try {
       let helperReceipt!: IsolatedProjectReceipt, devReceipt!: IsolatedProjectReceipt;
       await b.guard.livePreparation(session, async () => {
-        // Actual source/policy checks run before closing an idle owner or making keys.
+        // Recheck actual original sources before changing its idle thread configuration.
         resolveLiveConfigFiles({
           configuration: observation.configuration,
           appRoot: app.appRoot,
+          capturedProjectSources: capture.captured.directories,
           threadConfig: observation.threadConfig,
           approved: { mcpServers: {}, plugins: {} },
         });
@@ -376,20 +591,6 @@ export class ProductionLiveController {
             this.cfg.caddy.controllerDirectory,
             `/tmp/codex-daemon-${process.getuid!()}`,
           ],
-        });
-        ownerReleaseAttempted = true;
-        stage = 'owning-unload';
-        await b.runtime.releaseLivePreparation(session);
-        ownerReleased = true;
-        stage = 'policy-preparation';
-        policy = await prepareProductionPolicy({
-          configuration: this.cfg,
-          source: this.source,
-          session,
-          observation,
-          app,
-          directory,
-          authenticationDirectory: b.authenticationDirectory,
         });
         const common = {
           sessionId: session.id,
@@ -415,7 +616,7 @@ export class ProductionLiveController {
             LANG: 'C.UTF-8',
             IMPECCABLE_LIVE_PUBLIC_BASE_URL: assignment.origin + '/__gestalt_live',
           },
-          filesystem: policy.baselineState.permissionProfile.file_system,
+          filesystem: capture.projectState.permissionProfile.file_system,
           protectedPaths: [
             this.cfg.privateDirectory,
             b.authenticationDirectory,
@@ -433,9 +634,9 @@ export class ProductionLiveController {
           return path;
         });
         const filesystem: IsolatedProjectSpecification['filesystem'] = {
-          ...policy.baselineState.permissionProfile.file_system,
+          ...capture.projectState.permissionProfile.file_system,
           entries: [
-            ...policy.baselineState.permissionProfile.file_system.entries.map((entry) =>
+            ...capture.projectState.permissionProfile.file_system.entries.map((entry) =>
               entry.access === 'write' && entry.path.type === 'path' && entry.path.path !== '/tmp'
                 ? { ...entry, access: 'read' as const }
                 : entry,
@@ -475,6 +676,7 @@ export class ProductionLiveController {
       const claim: LiveStartClaim = {
         ...request,
         provider: 'codex',
+        admissionGeneration: expected,
         rootThreadId: session.threadId!,
         app: liveAppIdentity(app.appRoot),
         globallyExclusive: !livePolicyAppConfined(policy!.state, app.appRoot),
@@ -493,7 +695,7 @@ export class ProductionLiveController {
         devserver: devserver!,
         devReceipt,
         claim,
-        resumed: false,
+        resumed: true,
         injected: false,
         retired: false,
       });
@@ -511,8 +713,6 @@ export class ProductionLiveController {
               error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
                 ? error.message
                 : 'UNCLASSIFIED',
-            ownerReleased,
-            ownerReleaseAttempted,
             effectiveConfig:
               error instanceof Error && 'liveConfigDiagnostics' in error
                 ? error.liveConfigDiagnostics
@@ -531,25 +731,22 @@ export class ProductionLiveController {
       }
       // Independent resources must all be attempted; failed teardown retains the
       // original writer exclusion and authority key for explicit reconciliation.
+      let cleanupFailed = false;
+      try {
+        await this.revokeCapture(capture);
+      } catch {
+        cleanupFailed = true;
+      }
       const closed = await Promise.allSettled([devserver?.stop(), helper?.stop()]);
-      let cleanupFailed = closed.some((result) => result.status === 'rejected');
+      cleanupFailed ||= closed.some((result) => result.status === 'rejected');
       if (!cleanupFailed) {
         try {
-          // The key may exist even when policy preparation never returned.
-          const keyPath = join(directory, 'policy-key');
-          if (existsSync(keyPath)) unlinkSync(keyPath);
-          if (ownerReleased) {
-            await b.guard.livePreparation(session, async () => {
-              const restored = await b.runtime.restoreLiveOwner(session, new Date().toISOString(), {
-                modelConfig: observation.threadConfig,
-                skillsConfig: observation.skillsConfig,
-              });
-              b.saveSession(restored);
-            });
-          } else if (ownerReleaseAttempted) {
-            // An unsuccessful unload is not positive process-tree close proof.
-            cleanupFailed = true;
-          }
+          await b.guard.livePreparation(session, () =>
+            b.runtime.reconfigureLiveOwner(session, {
+              modelConfig: observation.threadConfig,
+              skillsConfig: observation.skillsConfig,
+            }),
+          );
         } catch {
           cleanupFailed = true;
         }
@@ -600,56 +797,93 @@ export class ProductionLiveController {
     const run = this.owners.assert(fence),
       g = this.generation(run),
       b = this.requireBindings();
-    this.verifyHost();
-    const session = b.sessions.find(run.relayId);
-    if (
-      !session ||
-      session.provider !== 'codex' ||
-      session.threadId !== run.rootThreadId ||
-      !g.resumed
-    )
-      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
-    const observed = await b.runtime.inspectLiveAdmission(session);
-    for (const field of [
-      'threadId',
-      'model',
-      'modelProvider',
-      'cwd',
-      'reasoningEffort',
-      'approvalPolicy',
-      'activePermissionProfile',
-      'runtimeWorkspaceRoots',
-    ])
-      if (!isDeepStrictEqual(observed.threadSelection?.[field], g.policy.selection[field]))
-        throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
-    if (!isDeepStrictEqual(observed.threadConfig, g.policy.modelConfig))
-      throw new Error('LIVE_CONFIG_CHANGED');
-    const mcp = observed.mcp as {
-      data?: { name: string; runtimeStatus?: string; toolsError?: unknown; httpOrigin?: unknown }[];
-      nextCursor?: unknown;
-    };
-    if (
-      !Array.isArray(mcp.data) ||
-      mcp.data.length !== 2 ||
-      mcp.nextCursor ||
-      !isDeepStrictEqual(mcp.data.map((server) => server.name).sort(), [
-        'context-mode',
-        'gestalt-org-plan',
-      ]) ||
-      mcp.data.some(
-        (server) => server.runtimeStatus !== 'connected' || server.toolsError || server.httpOrigin,
+    try {
+      this.verifyHost();
+      const session = b.sessions.find(run.relayId);
+      if (
+        !session ||
+        session.provider !== 'codex' ||
+        session.threadId !== run.rootThreadId ||
+        !g.resumed
       )
-    )
-      throw new Error('LIVE_MCP_UNAVAILABLE');
-    const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
-      g.policy.manifestPath,
-      g.policy.bootstrapPath,
-      g.policy.files,
-    );
-    if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
-    g.helper.verify(g.helperReceipt);
-    g.devserver.verify(g.devReceipt);
-    this.owners.assert(fence);
+        throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+      const observed = await b.runtime.inspectLiveAdmission(session);
+      assertProductionSourceObservation(g.policy, observed);
+      for (const field of [
+        'threadId',
+        'model',
+        'modelProvider',
+        'cwd',
+        'reasoningEffort',
+        'approvalPolicy',
+        'activePermissionProfile',
+        'runtimeWorkspaceRoots',
+      ])
+        if (!isDeepStrictEqual(observed.threadSelection?.[field], g.policy.selection[field]))
+          throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+      if (!isDeepStrictEqual(observed.threadConfig, g.policy.modelConfig))
+        throw new Error('LIVE_CONFIG_CHANGED');
+      const mcp = observed.mcp as {
+        data?: {
+          name: string;
+          runtimeStatus?: string;
+          toolsError?: unknown;
+          httpOrigin?: unknown;
+        }[];
+        nextCursor?: unknown;
+      };
+      if (
+        !Array.isArray(mcp.data) ||
+        mcp.data.length !== 2 ||
+        mcp.nextCursor ||
+        !isDeepStrictEqual(mcp.data.map((server) => server.name).sort(), [
+          'context-mode',
+          'gestalt-org-plan',
+        ]) ||
+        mcp.data.some(
+          (server) =>
+            server.runtimeStatus !== 'connected' || server.toolsError || server.httpOrigin,
+        )
+      )
+        throw new Error('LIVE_MCP_UNAVAILABLE');
+      const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
+        g.policy.manifestPath,
+        g.policy.bootstrapPath,
+        g.policy.files,
+      );
+      if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
+      g.helper.verify(g.helperReceipt);
+      g.devserver.verify(g.devReceipt);
+      this.owners.assert(fence);
+    } catch (error) {
+      // Flags are private Native RPC state: Manager cannot observe their change
+      // itself. Revoke the exact old admission before retaining recovery ownership.
+      let revoked = false;
+      try {
+        await this.revokeCapture(g.policy.capture);
+        revoked = true;
+      } catch {
+        /* keep the durable lock */
+      }
+      try {
+        await this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation });
+      } catch {
+        /* cleanup remains required */
+      }
+      try {
+        const current = this.owners.assert(fence);
+        const recovery = this.owners.mutate(current, {
+          event: 'recover',
+          code: 'LIVE_ADMISSION_CHANGED',
+        });
+        await b.runtime.abortLiveOwner(g.session, { owners: this.owners, fence: recovery });
+        g.resumed = false;
+      } catch {
+        this.failedPreparations.add(run.relayId);
+      }
+      if (!revoked) this.failedPreparations.add(run.relayId);
+      throw error;
+    }
   };
   private async prepareOwner(run: LiveRun): Promise<void> {
     const g = this.generation(run),
@@ -668,13 +902,8 @@ export class ProductionLiveController {
     g.injected = true;
     await g.cli.status();
     await b.guard.liveMaintenance(run, async () => {
-      const session = await b.runtime.restoreLiveOwner(g.session, new Date().toISOString(), {
-        modelConfig: g.policy.modelConfig,
-        skillsConfig: g.observation.skillsConfig,
-      });
-      b.saveSession(session);
       g.resumed = true;
-      await b.runtime.probeLiveContext(session, g.policy.probePath);
+      await b.runtime.probeLiveContext(g.session, g.policy.probePath);
     });
   }
   private async authorize(run: LiveRun): Promise<void> {
@@ -733,9 +962,22 @@ export class ProductionLiveController {
       registrationId: g.registrationId,
     });
   }
+  private async revokeCapture(capture: OwningRuntimeCapture): Promise<void> {
+    if (this.revokedCaptures.has(capture.captureId)) return;
+    await new InstalledLivePolicy(this.cfg.installation).revokeRuntime(
+      capture.manifestPath,
+      capture.captureId,
+    );
+    this.revokedCaptures.add(capture.captureId);
+  }
   private async revoke(run: LiveRun): Promise<void> {
-    this.generation(run);
-    await this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation });
+    const g = this.generation(run);
+    const results = await Promise.allSettled([
+      this.revokeCapture(g.policy.capture),
+      this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation }),
+    ]);
+    if (results.some((result) => result.status === 'rejected'))
+      throw new Error('LIVE_CLEANUP_REQUIRED');
   }
   private async remove(run: LiveRun): Promise<void> {
     const g = this.generation(run);
@@ -799,7 +1041,6 @@ export class ProductionLiveController {
       } catch {
         failed = true;
       }
-      if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
       g.retired = true;
     }
     g.inbox?.close();
@@ -822,9 +1063,32 @@ export class ProductionLiveController {
     if (!g || g.claim !== claim) return;
     if (g.run && !g.retired) throw new Error('LIVE_CLEANUP_REQUIRED');
     if (!g.run) {
-      await g.devserver.stop();
-      await g.helper.stop();
-      if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
+      let failed = false;
+      try {
+        await this.revokeCapture(g.policy.capture);
+      } catch {
+        failed = true;
+      }
+      const stopped = await Promise.allSettled([g.devserver.stop(), g.helper.stop()]);
+      failed ||= stopped.some((result) => result.status === 'rejected');
+      try {
+        const b = this.requireBindings();
+        b.guard.reacquirePreparation(g.session);
+        await b.guard.livePreparation(g.session, () =>
+          b.runtime.reconfigureLiveOwner(g.session, {
+            modelConfig: g.observation.threadConfig,
+            skillsConfig: g.observation.skillsConfig,
+          }),
+        );
+        g.resumed = false;
+      } catch {
+        failed = true;
+      }
+      if (failed) {
+        this.failedPreparations.add(g.session.id);
+        throw new Error('LIVE_CLEANUP_REQUIRED');
+      }
+      g.retired = true;
     }
     this.generations.delete(claim.relayId);
   }
@@ -880,7 +1144,6 @@ export class ProductionLiveController {
                 if (retired.some((result) => result.status === 'rejected'))
                   throw new Error('LIVE_CLEANUP_REQUIRED');
                 if (!g.resumed) {
-                  if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
                   g.retired = true;
                 }
                 // Source/route reconciliation remains required under its durable lock.
@@ -910,16 +1173,52 @@ export class ProductionLiveController {
               const results = await Promise.allSettled([g.devserver.stop(), g.helper.stop()]);
               if (results.some((result) => result.status === 'rejected'))
                 throw new Error('LIVE_CLEANUP_REQUIRED');
-              if (existsSync(g.policy.keyPath)) unlinkSync(g.policy.keyPath);
               g.retired = true;
             }
           } catch {
             failed = true;
           }
         }
-        // Do not relinquish the elected process while any broader worker lacks
-        // positive close evidence. Durable recovery locks survive successful close.
-        if (this.failedPreparations.size || [...this.generations.values()].some((g) => !g.retired))
+        for (const capture of this.captures.values()) {
+          try {
+            await this.revokeCapture(capture);
+          } catch {
+            failed = true;
+          }
+        }
+        const exited = await Promise.allSettled(
+          [...this.capturedProcesses.values()].map(async (native) => {
+            native.close();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                native.waitForExit(),
+                new Promise<never>((_resolve, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')),
+                    10000,
+                  );
+                }),
+              ]);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }),
+        );
+        if (exited.some((result) => result.status === 'rejected')) failed = true;
+        // Every original handle is attempted before retaining a failed cleanup
+        // lock. Election release requires positive closure of all owned resources.
+        if (
+          this.failedPreparations.size ||
+          [...this.generations.values()].some((g) => !g.retired) ||
+          exited.some((result) => result.status === 'rejected')
+        )
+          throw new Error('LIVE_CLEANUP_REQUIRED');
+        if (
+          [...this.captures.values()].some(
+            (capture) => !this.revokedCaptures.has(capture.captureId),
+          )
+        )
           throw new Error('LIVE_CLEANUP_REQUIRED');
         this.origins.close();
         await this.releaseElection();
@@ -940,7 +1239,13 @@ export async function createProductionLiveController(
     initialize: true,
   });
   try {
-    return new ProductionLiveController(elected.ownership, configuration, source, elected.close);
+    return new ProductionLiveController(
+      elected.ownership,
+      configuration,
+      source,
+      elected.close,
+      elected.election,
+    );
   } catch (error) {
     await elected.close();
     throw error;

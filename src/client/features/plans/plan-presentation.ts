@@ -8,7 +8,13 @@ import { orgPlanPosition } from '../../../shared/org-plan-position.js';
 import type { PlanStep, SupervisedPlan } from './contracts.js';
 
 export type PlanPresentation = Readonly<{
-  phase: 'implementing' | 'awaiting review' | 'milestone reported' | 'terminal review' | 'complete';
+  phase:
+    | 'suspended'
+    | 'implementing'
+    | 'awaiting review'
+    | 'milestone reported'
+    | 'terminal review'
+    | 'complete';
   label: string;
   current?: Readonly<{ id: string; position: string; title: string; state: PlanStep['state'] }>;
   reviewedL1s: number;
@@ -38,6 +44,14 @@ export function presentPlan(plan: SupervisedPlan): PlanPresentation {
     return {
       phase: 'milestone reported',
       label: 'Preparing milestone summary',
+      current,
+      reviewedL1s,
+      totalL1s,
+    };
+  if (current?.state === 'SUSPENDED')
+    return {
+      phase: 'suspended',
+      label: `Resume ${current.position} after dependency review`,
       current,
       reviewedL1s,
       totalL1s,

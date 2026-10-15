@@ -194,6 +194,7 @@ export function kimiChildEnvironment(
   overrides: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const inherited = { ...process.env };
+  delete inherited.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_FILE;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL;

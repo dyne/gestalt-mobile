@@ -5,7 +5,10 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
-import type { SupervisedPlan } from '../../plans/domain/supervised-plan.js';
+import {
+  currentExecutableL1Index,
+  type SupervisedPlan,
+} from '../../plans/domain/supervised-plan.js';
 import type { AutopilotSession } from '../domain/autopilot-session.js';
 import type { ExecutorIdentity } from '../domain/supervised-lifecycle.js';
 
@@ -116,16 +119,27 @@ function classifySupervisedActivity(
   activity: AgentActivitySnapshot,
   plan: SupervisedPlan,
 ): AgentActivityDisposition {
-  const selected = plan.steps.findIndex(
-    (step) => step.id === plan.currentStepId || step.state === 'WIP',
-  );
-  const index = selected >= 0 ? selected : plan.steps.findIndex((step) => step.state !== 'DONE');
+  const executable = currentExecutableL1Index(plan);
+  // A checkpoint can authorize a supervisor turn that resumes this barrier,
+  // while still granting no executor dispatch authority.
+  const index =
+    executable >= 0 ? executable : plan.steps.findIndex((step) => step.state === 'SUSPENDED');
   if (index < 0) return classifyAgentActivity(activity);
   const position = index + 1;
   const retained = activity.subagents.filter((child) => {
     const match = /^L([1-9]\d*)$/.exec(child.canonicalPosition ?? '');
     if (!match) return true;
     const historical = Number(match[1]) < position;
+    const suspended = plan.steps[Number(match[1]) - 1]?.state === 'SUSPENDED';
+    if (
+      suspended &&
+      ['idle', 'blocked', 'disconnected'].includes(child.state) &&
+      !child.ownedProcesses?.some(
+        (process) => process.state === 'running' || process.state === 'detached-active',
+      )
+    )
+      return false;
+
     const supervisedProcess = child.ownedProcesses?.some(
       (process) =>
         process.ownership === 'supervisor' &&
@@ -219,6 +233,12 @@ export function decideAutopilot(input: {
       };
     return { kind: 'complete' };
   }
+  if (
+    plan.steps.some((step) => step.state === 'SUSPENDED') &&
+    currentExecutableL1Index(plan) < 0 &&
+    !state.checkpoints?.rootContinuationFromTurnId
+  )
+    return { kind: 'observe' };
   // Quiz, approval, and other held requests are ordinary session work. Only a
   // validated Org attention record may turn an incomplete plan into a human stop.
   if (hasPendingInteraction) return { kind: 'observe' };

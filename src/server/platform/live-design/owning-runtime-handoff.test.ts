@@ -27,6 +27,7 @@ async function fixture() {
   let childStatus = 'idle';
   let background = false;
   let unloadStatus = 'unsubscribed';
+  let resumeId = 'root';
   const process: AppServer = {
     close: vi.fn(() => {
       child.kill('SIGTERM');
@@ -38,16 +39,21 @@ async function fixture() {
         calls.push({ method, params });
         const id = (params as { threadId?: string }).threadId;
         if (method === 'thread/start') return { thread: { id: 'root' } };
+        if (method === 'thread/resume') return { thread: { id: resumeId }, instructionSources: [] };
         if (method === 'thread/read')
-          return { thread: { id, status: { type: id === 'child' ? childStatus : 'idle' } } };
+          return {
+            thread: {
+              id,
+              sessionId: 'native-session',
+              parentThreadId: id === 'child' ? 'root' : null,
+              status: { type: id === 'child' ? childStatus : 'idle' },
+            },
+          };
         if (method === 'thread/backgroundTerminals/list')
           return { data: background ? [{}] : [], nextCursor: null };
         if (method === 'thread/list')
           return {
-            data:
-              (params as { parentThreadId: string }).parentThreadId === 'root'
-                ? [{ id: 'child', parentThreadId: 'root' }]
-                : [],
+            data: [{ id: 'child', parentThreadId: 'root', sessionId: 'native-session' }],
             nextCursor: null,
           };
         if (method === 'thread/unsubscribe') return { status: unloadStatus };
@@ -106,6 +112,9 @@ async function fixture() {
     badUnload: () => {
       unloadStatus = 'unknown';
     },
+    badResume: () => {
+      resumeId = 'another-thread';
+    },
     async cleanup() {
       child.kill('SIGTERM');
       runtime.stopAll();
@@ -115,6 +124,47 @@ async function fixture() {
 }
 
 describe('quiescent owning-runtime handoff', () => {
+  it('reconfigures the same durable thread inside the original live process without another writer', async () => {
+    const f = await fixture();
+    const modelConfig = { mcp_servers: { 'context-mode': { command: 'trusted-proxy' } } };
+    try {
+      const before = observeLiveProcess(f.child.pid!);
+      await f.runtime.reconfigureLiveOwner(f.session, { modelConfig, skillsConfig: [] });
+      expect(observeLiveProcess(f.child.pid!)).toEqual(before);
+      expect(f.launch).toHaveBeenCalledTimes(1);
+      expect(f.process.close).not.toHaveBeenCalled();
+      expect(
+        f.calls.filter((call) => call.method === 'thread/unsubscribe').map((call) => call.params),
+      ).toEqual([{ threadId: 'child' }, { threadId: 'root' }]);
+      expect(f.calls.find((call) => call.method === 'thread/resume')?.params).toMatchObject({
+        threadId: 'root',
+        excludeTurns: true,
+        model: 'selected-model',
+        config: modelConfig,
+      });
+      expect((await f.runtime.inspectLiveAdmission(f.session)).threadConfig).toEqual(modelConfig);
+    } finally {
+      await f.cleanup();
+    }
+  });
+  it.each(['busy', 'unload', 'resume'] as const)(
+    'refuses invalid same-process %s handoff without launching or killing another owner',
+    async (kind) => {
+      const f = await fixture();
+      try {
+        if (kind === 'busy') f.busy();
+        if (kind === 'unload') f.badUnload();
+        if (kind === 'resume') f.badResume();
+        await expect(
+          f.runtime.reconfigureLiveOwner(f.session, { modelConfig: {}, skillsConfig: [] }),
+        ).rejects.toThrow(/^LIVE_/);
+        expect(f.launch).toHaveBeenCalledTimes(1);
+        expect(f.process.close).not.toHaveBeenCalled();
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
   it('unloads descendants before root and awaits the actual owning process close without replacement', async () => {
     const f = await fixture();
     try {
