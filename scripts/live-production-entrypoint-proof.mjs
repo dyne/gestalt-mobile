@@ -1118,6 +1118,38 @@ try {
     report.generationEvidence = readdirSync(generationDirectory)
       .filter((name) => /receipt|manifest|bootstrap|owning-configuration/.test(name))
       .map((name) => ({ name, sha256: hash(readFileSync(join(generationDirectory, name))) }));
+  if (generationDirectory && existsSync(generationDirectory))
+    report.contextProcessDiagnostics = readdirSync(generationDirectory)
+      .filter((name) => /^process-[a-f0-9-]{36}\.json$/.test(name))
+      .slice(0, 16)
+      .map((name) => {
+        try {
+          const path = join(generationDirectory, name),
+            info = lstatSync(path);
+          assert.ok(info.isFile() && !info.isSymbolicLink() && info.size <= 1024 * 1024);
+          const body = JSON.parse(readFileSync(path, 'utf8')).body;
+          // Diagnostic codes only; never copy policy, arguments, environment,
+          // native output or private paths. These records do not grant authority.
+          const code = (value) =>
+            typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value) ? value : undefined;
+          return {
+            status: code(body?.status),
+            termination: code(body?.termination),
+            failure: body?.failure
+              ? {
+                  phase: code(body.failure.phase),
+                  reason: code(body.failure.reason),
+                  metadataRole: code(body.failure.metadataRole),
+                  code: ['ENOENT', 'EACCES', 'EPERM', 'SPAWN_ERROR'].includes(body.failure.code)
+                    ? body.failure.code
+                    : undefined,
+                }
+              : undefined,
+          };
+        } catch {
+          return { unavailable: true };
+        }
+      });
   if (!report.shutdownFailure) {
     try {
       removeOwnedProofTree(root, rootIdentity, {

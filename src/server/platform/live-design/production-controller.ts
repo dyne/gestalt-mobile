@@ -481,6 +481,12 @@ export class ProductionLiveController {
                         'unauthorized',
                         'receipt',
                         'admission',
+                        'context-call-unavailable',
+                        'live-tool-unavailable',
+                        'invalid-native-response',
+                        'native-worker-active',
+                        'tools/list',
+                        'transport',
                       ].filter((marker) => String(tool.toolsError).toLowerCase().includes(marker))
                     : [],
                 httpOrigin: Boolean(tool.httpOrigin),
