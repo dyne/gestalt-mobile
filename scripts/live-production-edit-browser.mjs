@@ -191,6 +191,11 @@ try {
     await mobile.waitForFunction(() => window.__editExchanged === true, null, {
       timeout: 10000,
     });
+    await preview.waitForFunction(
+      () => document.documentURI.startsWith('chrome-error://') && document.readyState !== 'loading',
+      null,
+      { timeout: 5000 },
+    );
     checkpoint('preview-get-after-network-change');
     const recovered = await preview.goto(config.previewOrigin + '/', { waitUntil: 'commit' });
     assert.equal(recovered.status(), 200);

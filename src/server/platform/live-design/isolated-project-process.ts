@@ -125,7 +125,10 @@ function confined(pid: number): boolean {
   const s = status(pid);
   return /^0+$/.test(s.capabilities) && s.noNewPrivileges === '1' && s.seccomp === '2';
 }
-class ProjectPipeSocket extends Duplex {
+/** Internal socket boundary; normal peer EOF drains, authority revocation destroys. */
+export class ProjectPipeSocket extends Duplex {
+  private peerReadEnded = false;
+  private peerClosed = false;
   private idleMs = 0;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private resetIdle(): void {
@@ -141,7 +144,7 @@ class ProjectPipeSocket extends Duplex {
     super();
   }
   override _read(): void {
-    this.send({ op: 'resume', id: this.channel });
+    if (!this.peerClosed) this.send({ op: 'resume', id: this.channel });
   }
   override _write(
     chunk: Buffer,
@@ -149,6 +152,7 @@ class ProjectPipeSocket extends Duplex {
     done: (error?: Error | null) => void,
   ): void {
     try {
+      if (this.peerClosed) throw failure();
       this.resetIdle();
       for (let offset = 0; offset < chunk.length; offset += 65536)
         this.send({
@@ -163,7 +167,7 @@ class ProjectPipeSocket extends Duplex {
   }
   override _final(done: (error?: Error | null) => void): void {
     try {
-      this.send({ op: 'end', id: this.channel });
+      if (!this.peerClosed) this.send({ op: 'end', id: this.channel });
       done();
     } catch {
       done(failure());
@@ -172,7 +176,7 @@ class ProjectPipeSocket extends Duplex {
   override _destroy(error: Error | null, done: (error: Error | null) => void): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     try {
-      this.send({ op: 'close', id: this.channel });
+      if (!this.peerClosed) this.send({ op: 'close', id: this.channel });
     } catch {
       /* A lost relay is already a closed stream. */
     } finally {
@@ -195,6 +199,22 @@ class ProjectPipeSocket extends Duplex {
   deliver(bytes: Buffer): void {
     this.resetIdle();
     if (!this.push(bytes)) this.send({ op: 'pause', id: this.channel });
+  }
+  endFromPeer(): void {
+    this.peerReadEnded = true;
+    this.push(null);
+  }
+  closeFromPeer(): void {
+    this.peerClosed = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (!this.peerReadEnded) {
+      this.destroy(failure('channel-premature-close'));
+      return;
+    }
+    // destroy() here loses unread HTTP/WebSocket bytes under backpressure.
+    // Keep this channel registered until both stream halves finish, so revoke
+    // can still synchronously destroy and discard any buffered bytes.
+    this.end();
   }
 }
 
@@ -572,8 +592,8 @@ export class IsolatedProjectProcess {
         else if (message.type === 'data') {
           if (typeof message.data !== 'string' || message.data.length > 87384) throw failure();
           stream.deliver(Buffer.from(message.data, 'base64'));
-        } else if (message.type === 'end') stream.push(null);
-        else if (message.type === 'closed') stream.destroy();
+        } else if (message.type === 'end') stream.endFromPeer();
+        else if (message.type === 'closed') stream.closeFromPeer();
         else if (message.type === 'channel-error') stream.destroy(failure());
         else throw failure();
       } catch {
