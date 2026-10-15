@@ -72,11 +72,36 @@ const browserAddress = '10.231.19.2';
 const mobileHost = 'mobile.live.test';
 const previewHost = 'preview.live.test';
 function run(bin, args, options = {}) {
+  const started = Date.now();
   try {
     return execFileSync(bin, args, { stdio: 'pipe', timeout: 120000, ...options });
-  } catch {
+  } catch (error) {
     // Child command arguments/output can contain the helper token; never publish them.
-    throw new Error(`Isolated proof operation failed (${bin.split('/').pop()})`);
+    const codes = ['ENOENT', 'EACCES', 'EPERM', 'ETIMEDOUT', 'ENOBUFS'];
+    const npmCodes = [
+      'ERESOLVE',
+      'ETARGET',
+      'E404',
+      'E401',
+      'E403',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'ECONNRESET',
+    ];
+    throw new Error(`Isolated proof operation failed (${bin.split('/').pop()})`, {
+      cause: {
+        code: codes.includes(error?.code) ? error.code : null,
+        status: Number.isSafeInteger(error?.status) ? error.status : null,
+        signal: ['SIGTERM', 'SIGKILL'].includes(error?.signal) ? error.signal : null,
+        elapsedMs: Date.now() - started,
+        npmCodes:
+          bin === 'npm'
+            ? npmCodes.filter((code) =>
+                new RegExp(`\\b${code}\\b`).test(String(error.stderr ?? '')),
+              )
+            : [],
+      },
+    });
   }
 }
 function sudo(args) {
@@ -212,7 +237,20 @@ try {
   );
   await mkdir(join(project, '.impeccable/live'), { recursive: true });
   await writeFile(join(project, '.impeccable/live/config.json'), JSON.stringify(fixture.config));
-  run('npm', ['install', '--no-audit', '--no-fund', '--include=optional'], { cwd: project });
+  // Reuse setup-node's shared npm cache without changing the published fixture.
+  run(
+    'npm',
+    [
+      'install',
+      '--prefer-offline',
+      '--fetch-retries=1',
+      '--fetch-timeout=30000',
+      '--no-audit',
+      '--no-fund',
+      '--include=optional',
+    ],
+    { cwd: project },
+  );
   await cp(join(published, 'tests/framework-fixtures/vite8-react-ts/files'), secondProject, {
     recursive: true,
   });

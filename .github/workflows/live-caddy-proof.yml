@@ -228,6 +228,14 @@ jobs:
           node scripts/live-native-proof-preflight.mjs
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
+      - name: Real helper browser proof in separate network with trusted TLS
+        timeout-minutes: 5
+        env:
+          LIVE_REMOTE_PROOF: '1'
+          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
+        run: |
+          set -Eeuo pipefail
+          node scripts/live-remote-proof.mjs
       - name: Sole production composition admission and owning native tools
         timeout-minutes: 8
         env:
@@ -252,14 +260,6 @@ jobs:
           set -Eeuo pipefail
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-project-isolation-proof.mjs
-      - name: Real helper browser proof in separate network with trusted TLS
-        timeout-minutes: 5
-        env:
-          LIVE_REMOTE_PROOF: '1'
-          LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
-        run: |
-          set -Eeuo pipefail
-          node scripts/live-remote-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
