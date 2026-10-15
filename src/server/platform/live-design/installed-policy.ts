@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
@@ -30,11 +31,45 @@ const admissionReasons = new Set(
     ' ',
   ),
 );
+type AdmissionPrerequisites = {
+  privatePaths: Record<'auth' | 'controller' | 'caddy' | 'daemon', boolean[]>;
+  configFiles: boolean[];
+  signingKey: boolean;
+  runtimeHome: boolean;
+};
+function admissionPrerequisites(manifestPath: string): AdmissionPrerequisites | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    return {
+      privatePaths: Object.fromEntries(
+        ['auth', 'controller', 'caddy', 'daemon'].map((role) => [
+          role,
+          manifest.privatePaths[role].map((path: string) => existsSync(path)),
+        ]),
+      ) as AdmissionPrerequisites['privatePaths'],
+      configFiles: manifest.configFiles.map((file: { path: string }) => existsSync(file.path)),
+      signingKey: existsSync(manifest.keyFile),
+      runtimeHome: existsSync(manifest.runtimeHome),
+    };
+  } catch {
+    return undefined;
+  }
+}
 export class InstalledLiveAdmissionError extends Error {
-  constructor(readonly diagnostic: { phase: string; reason: string }) {
+  constructor(
+    readonly diagnostic: {
+      phase: string;
+      reason: string;
+      prerequisites?: AdmissionPrerequisites;
+    },
+  ) {
     super('LIVE_ADMISSION_UNAVAILABLE');
   }
-  static command(phase: 'manager-command' | 'agents-command', failure: unknown) {
+  static command(
+    phase: 'manager-command' | 'agents-command',
+    failure: unknown,
+    prerequisites?: AdmissionPrerequisites,
+  ) {
     let reason = 'command-failed';
     try {
       const stdout = (failure as { stdout?: unknown })?.stdout;
@@ -50,7 +85,7 @@ export class InstalledLiveAdmissionError extends Error {
     } catch {
       /* Malformed or non-protocol output never enters diagnostics. */
     }
-    return new InstalledLiveAdmissionError({ phase, reason });
+    return new InstalledLiveAdmissionError({ phase, reason, prerequisites });
   }
 }
 export const LIVE_MANAGER_SHA256 =
@@ -269,6 +304,9 @@ export class InstalledLivePolicy {
       throw InstalledLiveAdmissionError.command(
         binary === this.installation.manager.path ? 'manager-command' : 'agents-command',
         error,
+        binary === this.installation.manager.path && args.includes('--manifest')
+          ? admissionPrerequisites(args[args.indexOf('--manifest') + 1]!)
+          : undefined,
       );
     }
   }
