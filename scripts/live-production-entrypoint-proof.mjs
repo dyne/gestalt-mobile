@@ -394,6 +394,23 @@ async function eventFor(body) {
   );
 }
 const provider = createServer(async (req, res) => {
+  let phase = 'request-method';
+  const transport = {
+    method: ['GET', 'POST', 'HEAD', 'OPTIONS'].includes(req.method) ? req.method : 'other',
+    route: [
+      '/v1/models',
+      '/v1/responses',
+      '/v1/responses/compact',
+      '/v1/responses/input_tokens',
+      '/',
+      '/health',
+      '/healthz',
+      '/ready',
+    ].includes(req.url)
+      ? req.url
+      : 'other',
+    websocket: String(req.headers.upgrade ?? '').toLowerCase() === 'websocket',
+  };
   try {
     if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -403,7 +420,9 @@ const provider = createServer(async (req, res) => {
       return;
     }
     assert.equal(req.method, 'POST');
+    phase = 'request-route';
     assert.equal(req.url, '/v1/responses');
+    phase = 'request-size';
     const chunks = [];
     let size = 0;
     for await (const chunk of req) {
@@ -413,15 +432,21 @@ const provider = createServer(async (req, res) => {
     }
     const raw = Buffer.concat(chunks),
       encoding = req.headers['content-encoding'];
+    phase = 'request-encoding';
     const decode = { gzip: gunzipSync, deflate: inflateSync, zstd: zstdDecompressSync }[encoding];
     assert.ok(!encoding || encoding === 'identity' || decode);
     const bytes = decode ? decode(raw, { maxOutputLength: 4 * 1024 * 1024 }) : raw;
+    phase = 'private-canary-absent';
     assert.ok(!bytes.includes(Buffer.from(privateCanary)));
     report.provider.requestCount++;
+    phase = 'bounded-request-count';
     assert.ok(report.provider.requestCount <= 20);
+    phase = 'request-json';
     const body = JSON.parse(bytes),
-      id = `production-${report.provider.requestCount}`,
-      event = await eventFor(body);
+      id = `production-${report.provider.requestCount}`;
+    phase = 'model-event';
+    const event = await eventFor(body);
+    phase = 'response-write';
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     for (const data of [
       { type: 'response.created', response: { id } },
@@ -437,6 +462,8 @@ const provider = createServer(async (req, res) => {
     providerFailure = true;
     report.provider.failureCode =
       error?.code === 'ERR_ASSERTION' ? 'ERR_ASSERTION' : 'CONTROLLED_PROVIDER_FAILED';
+    report.provider.failureStage = phase;
+    report.provider.failureTransport = transport;
     res.writeHead(503);
     res.end();
   }
