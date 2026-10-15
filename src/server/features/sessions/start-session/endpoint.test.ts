@@ -4,16 +4,187 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import Fastify from 'fastify';
-import { expect, it, vi } from 'vitest';
+import fastify from 'fastify';
+import { describe, expect, it, vi } from 'vitest';
 import { registerStartSession } from './endpoint.js';
+
+const skills = {
+  skillProfiles: {
+    readGlobalProfile: async () => undefined,
+    readWorkspaceDefault: async () => undefined,
+  },
+  skillCatalog: () => ({
+    list: async () => ({
+      skills: [{ name: 'Native', path: '/skills/native/SKILL.md', enabled: true }],
+      errors: [],
+    }),
+  }),
+};
+
+describe('POST /api/sessions', () => {
+  it('accepts a new session', async () => {
+    const app = fastify();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
+    });
+    expect(response.statusCode).toBe(202);
+    await app.close();
+  });
+
+  it('rejects settings outside the generated Codex schema values', async () => {
+    const app = fastify();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        workspaceId: 'w',
+        profile: 'default',
+        provider: 'codex',
+        sandbox: 'workspaceWrite',
+        approvalPolicy: 'never',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'INVALID_START_SESSION_REQUEST' });
+    await app.close();
+  });
+
+  it('accepts the managed workspace-git permission profile', async () => {
+    const app = fastify();
+    let receivedSandbox: string | undefined;
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+      activate: async (session) => {
+        receivedSandbox = session.executionPolicy?.sandbox;
+        return session;
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        workspaceId: 'w',
+        profile: 'default',
+        provider: 'codex',
+        sandbox: 'workspace-git',
+        approvalPolicy: 'on-request',
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(receivedSandbox).toBe('workspace-git');
+    await app.close();
+  });
+
+  it('replays a successful start for the same idempotency key', async () => {
+    const app = fastify();
+    const results = new Map<string, string>();
+    let created = 0;
+    registerStartSession(app, {
+      createId: () => `s-${++created}`,
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+      idempotency: {
+        get: (_scope, key) =>
+          results.has(key) ? { statusCode: 202, body: results.get(key)! } : null,
+        put: (_scope, key, _statusCode, body) => results.set(key, body),
+      },
+    });
+    const options = {
+      method: 'POST' as const,
+      url: '/api/sessions',
+      headers: { 'idempotency-key': 'retry-1' },
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
+    };
+    const first = await app.inject(options);
+    const second = await app.inject(options);
+    expect([first.json().id, second.json().id]).toEqual(['s-1', 's-1']);
+    expect(created).toBe(1);
+    await app.close();
+  });
+
+  it('reports an activation failure before returning the problem response', async () => {
+    const app = fastify();
+    const failures: string[] = [];
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+      activate: async () => {
+        throw new Error('CODEX_START_FAILED');
+      },
+      reportFailure: (_operation, error) =>
+        failures.push(error instanceof Error ? error.message : 'unknown'),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex' },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(failures).toEqual(['CODEX_START_FAILED']);
+    await app.close();
+  });
+
+  it('rejects an unknown named skill profile', async () => {
+    const app = fastify();
+    registerStartSession(app, {
+      createId: () => 's',
+      now: () => 't',
+      save: () => {},
+      workspaces: { resolve: async () => ({ id: 'w', name: 'workspace', realPath: '/w' }) },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      ...skills,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workspaceId: 'w', profile: 'default', provider: 'codex', skillProfile: 'missing' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'UNKNOWN_SKILL_PROFILE' });
+    await app.close();
+  });
+});
 
 it.each([
   ['LIVE_PROJECT_METADATA_PRESENT', 503],
   ['LIVE_CLEANUP_REQUIRED', 503],
   ['LIVE_SESSION_BUSY', 409],
 ] as const)('returns a bounded %s problem after failed owning startup', async (code, status) => {
-  const app = Fastify();
+  const app = fastify();
   const save = vi.fn(),
     releaseStartup = vi.fn(async () => {});
   registerStartSession(app, {

@@ -2145,7 +2145,9 @@ export class CodexSessionRuntime {
         : {}),
       rpc: {
         request: async (method, params) => {
-          const effect = !reads.has(method) && !safeStop.has(method);
+          const effect =
+            (!reads.has(method) && !safeStop.has(method)) ||
+            (method === 'account/read' && asRecord(params)?.refreshToken !== false);
           const kind = method === 'turn/start' || method === 'turn/steer' ? 'turn' : 'writer';
           const actor = () => {
             const selection = this.nativeThreadSelections.get(guarded);

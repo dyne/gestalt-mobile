@@ -67,6 +67,72 @@ function fixture() {
   };
 }
 describe('actual owning selections to production permission admission', () => {
+  it('preserves inherited enabled network when Native serializes the child option as null', () => {
+    const f = fixture();
+    f.selection.activePermissionProfile = { id: 'live', extends: 'parent' };
+    f.selection.sandbox = { type: 'workspaceWrite', networkAccess: true };
+    f.observation.configuration = {
+      config: {
+        sandbox_workspace_write: null,
+        permissions: {
+          parent: { ...f.profile, network: { enabled: true } },
+          live: {
+            extends: 'parent',
+            description: null,
+            filesystem: null,
+            network: null,
+            workspace_roots: null,
+          },
+        },
+      },
+    };
+    expect(owningPermissions(f).state.permissionProfile.network).toBe('enabled');
+  });
+  it('decodes Native ConfigToml null defaults without dropping active restrictions', () => {
+    const f = fixture();
+    const expected = owningPermissions(f).state;
+    const original = structuredClone(f.observation.configuration) as {
+      config: Record<string, unknown>;
+    };
+    original.config.sandbox_workspace_write = null;
+    const network: Record<string, unknown> = Object.fromEntries(
+      [
+        'enabled',
+        'proxy_url',
+        'enable_socks5',
+        'socks_url',
+        'enable_socks5_udp',
+        'allow_upstream_proxy',
+        'dangerously_allow_non_loopback_proxy',
+        'dangerously_allow_all_unix_sockets',
+        'mode',
+        'domains',
+        'unix_sockets',
+        'allow_local_binding',
+        'mitm',
+      ].map((name) => [name, null]),
+    );
+    original.config.permissions = {
+      live: {
+        ...f.profile,
+        description: null,
+        workspace_roots: null,
+        filesystem: { ...f.profile.filesystem, glob_scan_max_depth: null },
+        network,
+      },
+    };
+    f.observation.configuration = original;
+    expect(owningPermissions(f).state).toEqual(expected);
+    for (const [key, value] of [
+      ['proxy_url', 'http://unapproved'],
+      ['allow_local_binding', true],
+      ['unknown_option', null],
+    ] as const) {
+      network[key] = value;
+      expect(() => owningPermissions(f)).toThrow('LIVE_OWNING_POLICY_UNVERIFIED');
+      delete network[key];
+    }
+  });
   it('preserves an originally enabled network policy and refuses disagreement with Native', () => {
     const f = fixture();
     Object.assign(f.profile, { network: { enabled: true } });

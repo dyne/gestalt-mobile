@@ -18,15 +18,57 @@ import { liveSourceDigest } from './owning-source-inventory.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 const record = z.record(z.string(), z.unknown());
-const profileSchema = z
-  .object({
-    description: z.string().optional(),
-    extends: z.string().optional(),
-    filesystem: record.optional(),
-    network: z.object({ enabled: z.boolean().optional() }).strict().optional(),
-    workspace_roots: z.record(z.string(), z.boolean()).optional(),
-  })
-  .strict();
+// Native config/read serializes ConfigToml, including absent Option fields as
+// null. Remove only documented inactive fields; active proxy/unknown settings
+// must still fail the restricted supported-profile schema below.
+const nativeProfile = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const profile = { ...value } as Record<string, unknown>;
+  for (const name of ['description', 'extends', 'filesystem', 'network', 'workspace_roots'])
+    if (profile[name] === null) delete profile[name];
+  if (
+    profile.filesystem &&
+    typeof profile.filesystem === 'object' &&
+    !Array.isArray(profile.filesystem)
+  ) {
+    const filesystem = { ...profile.filesystem } as Record<string, unknown>;
+    if (filesystem.glob_scan_max_depth === null) delete filesystem.glob_scan_max_depth;
+    profile.filesystem = filesystem;
+  }
+  if (profile.network && typeof profile.network === 'object' && !Array.isArray(profile.network)) {
+    const network = { ...profile.network } as Record<string, unknown>;
+    for (const name of [
+      'enabled',
+      'proxy_url',
+      'enable_socks5',
+      'socks_url',
+      'enable_socks5_udp',
+      'allow_upstream_proxy',
+      'dangerously_allow_non_loopback_proxy',
+      'dangerously_allow_all_unix_sockets',
+      'mode',
+      'domains',
+      'unix_sockets',
+      'allow_local_binding',
+      'mitm',
+    ])
+      if (network[name] === null) delete network[name];
+    profile.network = network;
+  }
+  return profile;
+};
+const profileSchema = z.preprocess(
+  nativeProfile,
+  z
+    .object({
+      description: z.string().optional(),
+      extends: z.string().optional(),
+      filesystem: record.optional(),
+      network: z.object({ enabled: z.boolean().optional() }).strict().optional(),
+      workspace_roots: z.record(z.string(), z.boolean()).optional(),
+    })
+    .strict(),
+);
 const inside = (root: string, path: string) => {
   const tail = relative(root, path);
   return !tail || (tail !== '..' && !tail.startsWith(`..${sep}`) && !isAbsolute(tail));
@@ -100,9 +142,7 @@ export function owningPermissions(input: {
     const merged = mergeLiveConfig(configuration, observation.threadConfig);
     const profiles = record.parse(merged.permissions);
     const workspace =
-      merged.sandbox_workspace_write === undefined
-        ? {}
-        : record.parse(merged.sandbox_workspace_write);
+      merged.sandbox_workspace_write == null ? {} : record.parse(merged.sandbox_workspace_write);
     const visited = new Set<string>();
     const resolve = (name: string): Record<string, unknown> => {
       if (name === ':read-only') return { filesystem: { ':root': 'read' } };
