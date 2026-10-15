@@ -13,6 +13,8 @@ import { chromium } from '@playwright/test';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
 let browser;
+const networkErrors = [];
+const exchangeStatuses = [];
 const checkpoint = (value) => {
   stage = value;
   process.stdout.write(JSON.stringify({ checkpoint: value }) + '\n');
@@ -46,6 +48,20 @@ try {
     ],
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  context.on('requestfailed', (request) => {
+    const code = request.failure()?.errorText;
+    if (/^net::ERR_[A-Z_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
+      networkErrors.push(code);
+  });
+  context.on('response', (response) => {
+    const url = new URL(response.url());
+    if (
+      url.origin === config.previewOrigin &&
+      ['/__gestalt_live/auth', '/__gestalt_live/exchange', '/'].includes(url.pathname) &&
+      exchangeStatuses.length < 16
+    )
+      exchangeStatuses.push({ path: url.pathname, status: response.status() });
+  });
   await context.addInitScript(() => {
     window.__productionHelperConnected = false;
     const OriginalEventSource = window.EventSource;
@@ -143,7 +159,9 @@ try {
   );
   checkpoint('preview-exchange');
   await preview.waitForURL(config.previewOrigin + '/');
+  checkpoint('opener-confirmation');
   await mobile.waitForFunction(() => window.__editExchanged === true);
+  checkpoint('preview-privacy');
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
   checkpoint('helper-handshake');
@@ -218,6 +236,7 @@ try {
   );
   checkpoint('complete');
 } catch (error) {
+  const callsite = /live-production-edit-browser\.mjs:(\d+):(\d+)/.exec(error?.stack ?? '');
   process.stdout.write(
     JSON.stringify({
       failure: {
@@ -227,6 +246,18 @@ try {
           : error?.name === 'TimeoutError'
             ? 'TIMEOUT'
             : 'BROWSER_OPERATION_FAILED',
+        callsite: callsite ? { line: Number(callsite[1]), column: Number(callsite[2]) } : null,
+        markers: [
+          'Execution context was destroyed',
+          'Target page, context or browser has been closed',
+          'Navigation failed',
+          'interrupted',
+          'Timeout',
+          'TypeError',
+          'JSON',
+        ].filter((marker) => String(error?.message ?? '').includes(marker)),
+        networkErrors,
+        exchangeStatuses,
       },
     }) + '\n',
   );

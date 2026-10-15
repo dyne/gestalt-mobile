@@ -130,6 +130,32 @@ export async function productionEditBrowser(input) {
         input.report.editBrowserFailure = {
           stage: value.failure.stage,
           code: value.failure.code,
+          callsite:
+            Number.isSafeInteger(value.failure.callsite?.line) &&
+            Number.isSafeInteger(value.failure.callsite?.column)
+              ? value.failure.callsite
+              : null,
+          markers: value.failure.markers?.filter((marker) =>
+            [
+              'Execution context was destroyed',
+              'Target page, context or browser has been closed',
+              'Navigation failed',
+              'interrupted',
+              'Timeout',
+              'TypeError',
+              'JSON',
+            ].includes(marker),
+          ),
+          networkErrors: value.failure.networkErrors?.filter((code) =>
+            /^net::ERR_[A-Z_]{1,64}$/.test(code),
+          ),
+          exchangeStatuses: value.failure.exchangeStatuses?.filter(
+            (item) =>
+              ['/__gestalt_live/auth', '/__gestalt_live/exchange', '/'].includes(item.path) &&
+              Number.isSafeInteger(item.status) &&
+              item.status >= 100 &&
+              item.status <= 599,
+          ),
         };
       if (value.command)
         commands = commands.then(async () => {
