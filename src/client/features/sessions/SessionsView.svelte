@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import AppControl from '../../components/AppControl.svelte';
+  import CodexAllowance from './CodexAllowance.svelte';
   import type { WorkspaceOption } from '../catalog/bootstrap-client.js';
   import FilesystemTree from '../filesystem-tree/FilesystemTree.svelte';
   import { findTreeNode, treeNodePolicies } from '../filesystem-tree/tree-state.js';
@@ -38,6 +39,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import DebugIdentifiers from '../self-debug/DebugIdentifiers.svelte';
 
   type Props = {
+    allowanceFetcher?: typeof fetch;
+    onallowanceerror?: () => void;
     sessions: RelaySession[];
     recentSessions: RecentSession[];
     selectedSessionId: string | null;
@@ -98,6 +101,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   };
 
   let {
+    allowanceFetcher,
+    onallowanceerror = () => {},
     sessions,
     recentSessions,
     selectedSessionId,
@@ -226,6 +231,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <section aria-labelledby="sessions-title">
   <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
+  {#if allowanceFetcher}
+    <CodexAllowance fetcher={allowanceFetcher} onerror={onallowanceerror} />
+  {/if}
   {#if openSessions.length}
     <section aria-labelledby="open-sessions-title">
       <h3 id="open-sessions-title">Open sessions</h3>
