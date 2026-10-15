@@ -4,9 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { codexChildEnvironment, launchCodexAppServer } from './codex-process-launcher.js';
+import {
+  codexChildEnvironment,
+  launchCodexAppServer,
+  readLiveProcessEnvironment,
+} from './codex-process-launcher.js';
 import { LIVE_CODEX_SHA256 } from '../live-design/native-contract.js';
 
 const inheritedCapabilities = process.env.GESTALT_MOBILE_ORG_PLAN_CAPABILITIES;
@@ -24,6 +30,37 @@ afterEach(() => {
 });
 
 describe('codexChildEnvironment', () => {
+  it('observes the actual exec environment and refuses an exited birth', async () => {
+    const child = spawn(
+      '/usr/bin/env',
+      [
+        '-i',
+        'HOME=/actual-owning-home',
+        'CODEX_HOME=/actual-owning-home',
+        'TMPDIR=/actual-scratch',
+        process.execPath,
+        '-e',
+        'process.stdout.write("ready");setInterval(()=>{},1000)',
+      ],
+      { env: { HOME: '/manager-wrapper-home' }, stdio: 'pipe' },
+    );
+    const closed = once(child, 'close');
+    try {
+      await once(child.stdout, 'data');
+      expect(readLiveProcessEnvironment(child.pid!)).toEqual({
+        home: '/actual-owning-home',
+        codexHome: '/actual-owning-home',
+        tmpdir: '/actual-scratch',
+      });
+    } finally {
+      child.kill('SIGTERM');
+      await closed;
+    }
+    expect(() => readLiveProcessEnvironment(child.pid!)).toThrow(
+      'LIVE_RUNTIME_ENVIRONMENT_UNVERIFIED',
+    );
+  });
+
   it('refuses an unpinned trusted executable before creating a process', () => {
     expect(() =>
       launchCodexAppServer(

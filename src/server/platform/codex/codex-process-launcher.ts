@@ -103,13 +103,9 @@ export function launchCodexAppServer(
     },
     observeLiveDescendants: observeTree,
     observeLiveEnvironment: () => {
-      if (!trusted || !environment.TMPDIR || !environment.HOME || !environment.CODEX_HOME)
+      if (!trusted || !child.pid || child.exitCode !== null || child.signalCode !== null)
         throw new Error('LIVE_RUNTIME_ENVIRONMENT_UNVERIFIED');
-      return Object.freeze({
-        tmpdir: environment.TMPDIR,
-        home: environment.HOME,
-        codexHome: environment.CODEX_HOME,
-      });
+      return readLiveProcessEnvironment(child.pid);
     },
     observeLiveLaunch: () => {
       if (!child.pid || child.exitCode !== null || child.signalCode !== null)
@@ -135,6 +131,35 @@ export function launchCodexAppServer(
       return () => child.off('exit', listener);
     },
   };
+}
+
+/** The Manager handoff replaces its environment when it execs Native. Observe
+ * the actual owning image, rather than reporting its wrapper's launch input. */
+export function readLiveProcessEnvironment(pid: number): Readonly<{
+  tmpdir: string;
+  home: string;
+  codexHome: string;
+}> {
+  try {
+    if (!Number.isSafeInteger(pid) || pid < 1) throw new Error();
+    const values = new Map<string, string>();
+    for (const item of readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')) {
+      const split = item.indexOf('=');
+      const key = item.slice(0, split);
+      if (!['HOME', 'CODEX_HOME', 'TMPDIR'].includes(key)) continue;
+      if (split < 1 || values.has(key)) throw new Error();
+      const value = item.slice(split + 1);
+      if (!value.startsWith('/')) throw new Error();
+      values.set(key, value);
+    }
+    const home = values.get('HOME'),
+      codexHome = values.get('CODEX_HOME'),
+      tmpdir = values.get('TMPDIR');
+    if (!home || !codexHome || !tmpdir) throw new Error();
+    return Object.freeze({ tmpdir, home, codexHome });
+  } catch {
+    throw new Error('LIVE_RUNTIME_ENVIRONMENT_UNVERIFIED');
+  }
 }
 
 /** Prevents a relay's own ambient status path from reaching discovery-only children. */

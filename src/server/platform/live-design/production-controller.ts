@@ -231,10 +231,6 @@ export class ProductionLiveController {
     if (capture) this.pendingLaunches.delete(capture.captureId);
     const environment: Record<string, string> = { ...this.cfg.nativeEnvironment };
     environment.PATH = `${dirname(this.cfg.installation.node.path)}:${dirname(this.cfg.native.path)}:${environment.PATH}`;
-    if (capture) {
-      environment.HOME = this.cfg.nativeEnvironment.CODEX_HOME;
-      environment.TMPDIR = '/tmp';
-    }
     for (const name of this.cfg.providerCredentialEnvironment) {
       // Forward only explicit host-authorized standard bindings; never discover
       // credentials or read unrelated credential/configuration files.

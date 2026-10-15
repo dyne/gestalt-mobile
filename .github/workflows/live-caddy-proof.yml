@@ -55,7 +55,8 @@ jobs:
           set -Eeuo pipefail
           test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = d5dd7127d67e487f09eea94911ba7999c751500c
           test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 7f5ab679ff547621c55dea55cd0ae16afbd418cd
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: verified-archives
         with:
           path: ${{ runner.temp }}/live-proof-cache
           key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
@@ -156,6 +157,11 @@ jobs:
             echo "LIVE_HOST_AGENTS_ROOT=$GITHUB_WORKSPACE/.host-agents-input"
           } >> "$GITHUB_ENV"
           dirname "$native_binary" >> "$GITHUB_PATH"
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: steps.verified-archives.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/live-proof-cache
+          key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
       - name: Prepare disposable browser trust and network prerequisites
         run: |
           set -Eeuo pipefail
@@ -202,6 +208,7 @@ jobs:
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
+          npm run build:server
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs
@@ -214,7 +221,6 @@ jobs:
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
-          npm run build:server
           node scripts/live-native-proof-preflight.mjs
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
