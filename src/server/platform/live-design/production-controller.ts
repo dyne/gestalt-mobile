@@ -378,6 +378,7 @@ export class ProductionLiveController {
   /** Called after actual native start/resume, before exposing ordinary writer readiness. */
   async observeOwnerStarted(session: RelaySessionSnapshot): Promise<void> {
     if (this.generations.has(session.id) || this.preparedOwners.has(session.id)) return;
+    let mcpDiagnostic: unknown;
     try {
       const bindings = this.requireBindings();
       const app = this.appFor(session);
@@ -447,6 +448,45 @@ export class ProductionLiveController {
           }[];
           nextCursor?: unknown;
         };
+        mcpDiagnostic = {
+          count: Array.isArray(tools.data) ? tools.data.length : null,
+          paginated: Boolean(tools.nextCursor),
+          servers: Array.isArray(tools.data)
+            ? tools.data.slice(0, 4).map((tool) => ({
+                name: ['context-mode', 'gestalt-org-plan'].includes(tool.name)
+                  ? tool.name
+                  : 'unapproved',
+                status: [
+                  'notStarted',
+                  'starting',
+                  'connected',
+                  'authenticationRequired',
+                  'failed',
+                  'cancelled',
+                  'disabled',
+                ].includes(tool.runtimeStatus ?? '')
+                  ? tool.runtimeStatus
+                  : 'unrecognized',
+                toolsError: Boolean(tool.toolsError),
+                errorMarkers:
+                  typeof tool.toolsError === 'string'
+                    ? [
+                        'closed',
+                        'connection',
+                        'initialize',
+                        'timed out',
+                        'timeout',
+                        'unexpected',
+                        'not initialized',
+                        'unauthorized',
+                        'receipt',
+                        'admission',
+                      ].filter((marker) => String(tool.toolsError).toLowerCase().includes(marker))
+                    : [],
+                httpOrigin: Boolean(tool.httpOrigin),
+              }))
+            : [],
+        };
         if (
           !Array.isArray(tools.data) ||
           tools.data.length !== 2 ||
@@ -514,6 +554,7 @@ export class ProductionLiveController {
                   ? error.message
                   : 'LIVE_STARTUP_UNAVAILABLE',
               native,
+              mcp: mcpDiagnostic,
             }) + '\n',
             { mode: 0o600, flag: 'wx' },
           );

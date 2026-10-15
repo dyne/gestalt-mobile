@@ -140,7 +140,7 @@ export async function captureOwningRuntime(input: {
       .sort((a, b) => b.root.length - a.root.length);
     return grants[0]?.access && grants[0].access !== 'deny' ? 'read' : 'deny';
   };
-  const projectState: ManagedProjectSandboxState = {
+  const projectState: ManagedProjectSandboxState = removeRedundantLiveDenials({
     ...baselineState,
     permissionProfile: {
       ...baselineState.permissionProfile,
@@ -165,7 +165,7 @@ export async function captureOwningRuntime(input: {
         ],
       },
     },
-  };
+  });
   const state = removeRedundantLiveDenials(prepareHelperControlLayout(app.appRoot, projectState));
   const manifestPath = join(directory, 'manifest.json');
   const gestalt = cfg.installation.packages.find((item) => item.name === 'gestalt')!;
