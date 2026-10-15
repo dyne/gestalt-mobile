@@ -9,6 +9,7 @@ import { readFile, readlink, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
+import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
@@ -50,7 +51,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   context.on('requestfailed', (request) => {
     const code = request.failure()?.errorText;
-    if (/^net::ERR_[A-Z_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
+    if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
       networkErrors.push(code);
   });
   context.on('response', (response) => {
@@ -247,6 +248,7 @@ try {
             ? 'TIMEOUT'
             : 'BROWSER_OPERATION_FAILED',
         callsite: callsite ? { line: Number(callsite[1]), column: Number(callsite[2]) } : null,
+        diagnostic: safeBrowserFailure(error?.message),
         markers: [
           'Execution context was destroyed',
           'Target page, context or browser has been closed',

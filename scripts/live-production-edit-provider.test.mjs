@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 import {
   createProductionEditProvider,
   liveEventFromRequest,
@@ -29,6 +30,16 @@ function body(event) {
   };
 }
 const tool = (name, args) => ({ name, args });
+test('browser diagnostics remove private grants, cookies and bearer canaries', () => {
+  const bearer = 'bearer-canary-'.repeat(4);
+  const diagnostic = safeBrowserFailure(
+    `page.waitForURL: net::ERR_HTTP2_PROTOCOL_ERROR at https://preview.test/auth#grant=${bearer} cookie=${bearer}\nprivate stack`,
+  );
+  assert.ok(diagnostic.includes('net::ERR_HTTP2_PROTOCOL_ERROR'));
+  assert.ok(!diagnostic.includes(bearer));
+  assert.ok(!diagnostic.includes('preview.test'));
+  assert.ok(!diagnostic.includes('private stack'));
+});
 const final = (_id, text) => JSON.parse(text);
 function simulatePatch(root, call) {
   assert.equal(call.name, 'apply_patch');

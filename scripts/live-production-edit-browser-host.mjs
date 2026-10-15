@@ -9,6 +9,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
   assert.equal(process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF, '1');
@@ -130,6 +131,7 @@ export async function productionEditBrowser(input) {
         input.report.editBrowserFailure = {
           stage: value.failure.stage,
           code: value.failure.code,
+          diagnostic: safeBrowserFailure(value.failure.diagnostic),
           callsite:
             Number.isSafeInteger(value.failure.callsite?.line) &&
             Number.isSafeInteger(value.failure.callsite?.column)
@@ -147,7 +149,7 @@ export async function productionEditBrowser(input) {
             ].includes(marker),
           ),
           networkErrors: value.failure.networkErrors?.filter((code) =>
-            /^net::ERR_[A-Z_]{1,64}$/.test(code),
+            /^net::ERR_[A-Z0-9_]{1,64}$/.test(code),
           ),
           exchangeStatuses: value.failure.exchangeStatuses?.filter(
             (item) =>
