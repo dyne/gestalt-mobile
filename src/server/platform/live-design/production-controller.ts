@@ -501,6 +501,30 @@ export class ProductionLiveController {
                     error.message ===
                     `thread ${session.threadId} is closing; retry thread/resume after the thread is closed`,
                   rolloutMentioned: /\brollout\b/i.test(error.message),
+                  markers: [
+                    'error resuming thread:',
+                    'failed to initialize',
+                    'failed to read',
+                    'failed to load',
+                    'failed to spawn',
+                    'permission denied',
+                    'no such file or directory',
+                    'os error 13',
+                    'os error 2',
+                    'writer',
+                    'lock',
+                    'sqlite',
+                    'history',
+                    'session',
+                    'config',
+                    'permission',
+                    'mcp',
+                    'code-mode',
+                    'sandbox',
+                    'bwrap',
+                    'metadata',
+                    'shutdown',
+                  ].filter((marker) => error.message.toLowerCase().includes(marker)),
                 }
               : undefined;
           writeFileSync(
