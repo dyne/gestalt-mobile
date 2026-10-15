@@ -888,6 +888,8 @@ try {
         : 'UNCLASSIFIED',
   };
   if (error instanceof InstalledLiveAdmissionError) report.failure.admission = error.diagnostic;
+  else if (error?.cause instanceof InstalledLiveAdmissionError)
+    report.failure.admission = error.cause.diagnostic;
   report.waitState = {
     rootCompleted,
     childModelCompletionEmitted: childCompleted,

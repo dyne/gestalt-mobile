@@ -343,8 +343,10 @@ export class InstalledLivePolicy {
         },
       );
       this.verifyInstallation();
-    } catch {
-      throw new Error('LIVE_RUNTIME_BOOTSTRAP_UNAVAILABLE');
+    } catch (error) {
+      throw new Error('LIVE_RUNTIME_BOOTSTRAP_UNAVAILABLE', {
+        cause: InstalledLiveAdmissionError.command('manager-command', error),
+      });
     }
   }
   private async command(
