@@ -18,6 +18,7 @@ import { prepareHelperControlLayout } from './helper-control-layout.js';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
+import { removeRedundantLiveDenials } from './owning-permissions.js';
 
 type Election = Awaited<ReturnType<typeof electLiveController>>['election'];
 export type OwningRuntimeCapture = Readonly<{
@@ -165,7 +166,7 @@ export async function captureOwningRuntime(input: {
       },
     },
   };
-  const state = prepareHelperControlLayout(app.appRoot, projectState);
+  const state = removeRedundantLiveDenials(prepareHelperControlLayout(app.appRoot, projectState));
   const manifestPath = join(directory, 'manifest.json');
   const gestalt = cfg.installation.packages.find((item) => item.name === 'gestalt')!;
   writeFileSync(

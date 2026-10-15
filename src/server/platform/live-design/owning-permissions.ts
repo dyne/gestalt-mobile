@@ -96,6 +96,49 @@ export function normalizedLivePermissions(
     },
   };
 }
+
+/** A denied parent already hides its descendants. Do not ask Native to create
+ * additional mask targets inside that read-only mount. A denial below a more
+ * specific read/write grant remains necessary and is always retained. */
+export function removeRedundantLiveDenials(
+  state: ManagedProjectSandboxState,
+): ManagedProjectSandboxState {
+  const entries = state.permissionProfile.file_system.entries;
+  if (entries.some((entry) => entry.path.type === 'glob_pattern'))
+    throw new Error('LIVE_OWNING_POLICY_UNVERIFIED');
+  const retained = entries.filter((entry) => {
+    if (entry.access !== 'deny' || entry.path.type !== 'path') return true;
+    const path = entry.path.path;
+    const ancestors = entries
+      .flatMap((candidate) => {
+        const root =
+          candidate.path.type === 'path'
+            ? candidate.path.path
+            : candidate.path.type === 'special'
+              ? ({ root: '/', slash_tmp: '/tmp' } as Record<string, string>)[
+                  candidate.path.value.kind
+                ]
+              : undefined;
+        return root && root !== path && inside(root, path)
+          ? [{ root, access: candidate.access }]
+          : [];
+      })
+      .sort((a, b) => b.root.length - a.root.length);
+    return (
+      !ancestors.length ||
+      ancestors
+        .filter((candidate) => candidate.root.length === ancestors[0]!.root.length)
+        .some((candidate) => candidate.access !== 'deny')
+    );
+  });
+  return {
+    ...state,
+    permissionProfile: {
+      ...state.permissionProfile,
+      file_system: { ...state.permissionProfile.file_system, entries: retained },
+    },
+  };
+}
 /** Uncertain or broader writable roots are global, never omitted as scratch. */
 export function livePolicyAppConfined(state: ManagedProjectSandboxState, appRoot: string): boolean {
   return state.permissionProfile.file_system.entries.every(

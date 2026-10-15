@@ -9,7 +9,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CodexSessionRuntime } from '../codex/session-runtime.js';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
-import { livePolicyAppConfined, owningPermissions } from './owning-permissions.js';
+import {
+  livePolicyAppConfined,
+  owningPermissions,
+  removeRedundantLiveDenials,
+} from './owning-permissions.js';
+import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
@@ -67,6 +72,56 @@ function fixture() {
   };
 }
 describe('actual owning selections to production permission admission', () => {
+  it('keeps private/config denials effective without nested mask mounts, preserving reopened outputs', () => {
+    const state: ManagedProjectSandboxState = {
+      sandboxCwd: 'file:///app',
+      useLegacyLandlock: false,
+      permissionProfile: {
+        type: 'managed',
+        network: 'restricted',
+        file_system: {
+          type: 'restricted',
+          entries: [
+            { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+            { path: { type: 'path', path: '/private' }, access: 'deny' },
+            { path: { type: 'path', path: '/private/home/config.toml' }, access: 'deny' },
+            { path: { type: 'path', path: '/app' }, access: 'write' },
+            { path: { type: 'path', path: '/app/.codex' }, access: 'deny' },
+            { path: { type: 'path', path: '/app/.codex/AGENTS.md' }, access: 'deny' },
+            { path: { type: 'path', path: '/app/control' }, access: 'deny' },
+            { path: { type: 'path', path: '/app/control/previews' }, access: 'write' },
+            { path: { type: 'path', path: '/app/control/previews/secret' }, access: 'deny' },
+            { path: { type: 'path', path: '/app/control/previews/secret/key' }, access: 'deny' },
+          ],
+        },
+      },
+    };
+    const result = removeRedundantLiveDenials(state);
+    expect(result.permissionProfile.file_system.entries).toHaveLength(7);
+    const access = (policy: ManagedProjectSandboxState, path: string) =>
+      policy.permissionProfile.file_system.entries
+        .flatMap((entry) =>
+          entry.path.type === 'path' &&
+          (path === entry.path.path || path.startsWith(entry.path.path + '/'))
+            ? [{ length: entry.path.path.length, access: entry.access }]
+            : [],
+        )
+        .sort((a, b) => b.length - a.length)[0]?.access;
+    for (const [path, expected] of [
+      ['/private/home/config.toml', 'deny'],
+      ['/private/new-source', 'deny'],
+      ['/app/.codex/AGENTS.md', 'deny'],
+      ['/app/.codex/future-file', 'deny'],
+      ['/app/control/server.json', 'deny'],
+      ['/app/control/previews/index.html', 'write'],
+      ['/app/control/previews/secret/key', 'deny'],
+    ]) {
+      expect(access(state, path!)).toBe(expected);
+      expect(access(result, path!)).toBe(expected);
+    }
+    expect(state.permissionProfile.file_system.entries).toHaveLength(10);
+    expect(result.permissionProfile.network).toBe('restricted');
+  });
   it('preserves inherited enabled network when Native serializes the child option as null', () => {
     const f = fixture();
     f.selection.activePermissionProfile = { id: 'live', extends: 'parent' };
