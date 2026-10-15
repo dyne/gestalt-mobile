@@ -23,8 +23,6 @@ jobs:
   native-proof:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/live-proof-cache/bun
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +62,7 @@ jobs:
           tool_root="$RUNNER_TEMP/live-proof-tools"
           archive_root="$RUNNER_TEMP/live-proof-cache"
           mkdir -p "$tool_root" "$archive_root"
+          echo "BUN_INSTALL_CACHE_DIR=$archive_root/bun" >> "$GITHUB_ENV"
           install -m0755 .host-manager-input/public/gestalt "$tool_root/gestalt"
           if [[ ! -f "$archive_root/native-artifact.zip" ]]; then
             curl --fail --silent --show-error --location \
