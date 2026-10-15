@@ -1079,8 +1079,8 @@ export class CodexSessionRuntime {
     if (root?.id !== session.threadId || !sessionId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
     const threadIds = new Set<string>([session.threadId]);
     const discover = async () => {
-      // Codex 0.161 ThreadListParams has no parent filter. List supported
-      // subagent sources, then prove the parent chain and session identity.
+      // Enumerate the pinned Native descendant relation, including v2 children
+      // recorded under other sources/providers; still prove every parent chain.
       const candidates = new Map<string, { parent: string | null; session: string }>();
       let cursor: string | undefined;
       const cursors = new Set<string>();
@@ -1089,13 +1089,8 @@ export class CodexSessionRuntime {
         const result = asRecord(
           await request('thread/list', {
             limit: 64,
-            sourceKinds: [
-              'subAgent',
-              'subAgentReview',
-              'subAgentCompact',
-              'subAgentThreadSpawn',
-              'subAgentOther',
-            ],
+            ancestorThreadId: session.threadId,
+            modelProviders: [],
             ...(cursor ? { cursor } : {}),
           }),
         );
@@ -1330,18 +1325,14 @@ export class CodexSessionRuntime {
     let cursor: string | undefined;
     for (let page = 0; ; page++) {
       if (page >= 16) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
-      // Native0.161 has no parent filter. Enumerate supported source kinds and
-      // prove actual same-session parent chains, never adopt a global roster.
+      // The pinned Native relation filter includes descendants regardless of
+      // their recorded source/provider. Source-only lists can omit v2 children.
+      // Independently recheck every actual same-session parent chain below.
       const response = asRecord(
         await request('thread/list', {
           limit: 64,
-          sourceKinds: [
-            'subAgent',
-            'subAgentReview',
-            'subAgentCompact',
-            'subAgentThreadSpawn',
-            'subAgentOther',
-          ],
+          ancestorThreadId: rootThreadId,
+          modelProviders: [],
           ...(cursor ? { cursor } : {}),
         }),
       );

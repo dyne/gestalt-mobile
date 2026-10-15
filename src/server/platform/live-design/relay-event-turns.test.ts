@@ -388,10 +388,16 @@ it('native Stop validates pinned parent lineage and leaves unrelated roots and d
   const interrupted = new Set<string>();
   const inspected: string[] = [];
   f.server.rpc.request = async (method, params) => {
-    const p = params as { threadId?: string; parentThreadId?: string; sourceKinds?: string[] };
+    const p = params as {
+      threadId?: string;
+      ancestorThreadId?: string;
+      modelProviders?: string[];
+      sourceKinds?: string[];
+    };
     if (method === 'thread/list') {
-      expect(p.parentThreadId).toBeUndefined();
-      expect(p.sourceKinds).toContain('subAgentThreadSpawn');
+      expect(p.ancestorThreadId).toBe('root');
+      expect(p.modelProviders).toEqual([]);
+      expect(p.sourceKinds).toBeUndefined();
       return { data: lineage, nextCursor: null };
     }
     if (method === 'thread/read' && p.threadId !== 'root') {

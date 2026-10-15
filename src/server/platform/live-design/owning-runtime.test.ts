@@ -216,6 +216,8 @@ describe('owning runtime admission observations', () => {
           id: 'actual-child',
           parentThreadId: owning.threadId,
           sessionId: 'native-session',
+          source: 'appServer',
+          modelProvider: 'selected-custom-provider',
           model: 'selected-model',
           reasoningEffort: 'medium',
           status: { type: 'idle' },
@@ -232,13 +234,8 @@ describe('owning runtime admission observations', () => {
         {
           method: 'thread/list',
           params: {
-            sourceKinds: [
-              'subAgent',
-              'subAgentReview',
-              'subAgentCompact',
-              'subAgentThreadSpawn',
-              'subAgentOther',
-            ],
+            ancestorThreadId: owning.threadId,
+            modelProviders: [],
             limit: 64,
           },
         },
