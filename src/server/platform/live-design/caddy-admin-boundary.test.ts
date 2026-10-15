@@ -138,10 +138,8 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
       });
       const proof = await boundary.verify();
       expect(proof.uid).toBe(process.getuid!());
-      const nativePath = join(
-        process.env.RUNNER_TEMP!,
-        'live-proof-tools/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex',
-      );
+      const nativePath = process.env.LIVE_HOST_CODEX_BINARY;
+      if (!nativePath) throw new Error('LIVE_NATIVE_BINARY_UNAVAILABLE');
       expect(createHash('sha256').update(readFileSync(nativePath)).digest('hex')).toBe(
         LIVE_CODEX_SHA256,
       );
