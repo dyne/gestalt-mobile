@@ -23,7 +23,7 @@ import {
 import { join, relative, sep } from 'node:path';
 import { Duplex } from 'node:stream';
 import { once } from 'node:events';
-import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
+import { privateDenialFailure, type ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { LIVE_CODEX_SHA256, LIVE_CODEX_BWRAP_SHA256 } from './native-contract.js';
 import { observeLiveProcess, type LiveProcessIdentity } from './process-identity.js';
 import { observeLoopbackListener } from './registered-dev-servers.js';
@@ -342,30 +342,8 @@ export class IsolatedProjectProcess {
     for (const path of [spec.privateDirectory, ...spec.protectedPaths, '/proc']) {
       // Native masks a denied directory as a whole. Its normalized profile
       // intentionally omits redundant child masks inside that read-only mount.
-      const ancestors = spec.filesystem.entries
-        .flatMap((entry) => {
-          const root =
-            entry.path.type === 'path'
-              ? entry.path.path
-              : entry.path.type === 'special'
-                ? ({ root: '/', slash_tmp: '/tmp', tmpdir: '/tmp' } as Record<string, string>)[
-                    entry.path.value.kind
-                  ]
-                : undefined;
-          if (!root && entry.access !== 'deny') throw failure('private-denial-overridden');
-          return root && inside(root, path) ? [{ root, access: entry.access }] : [];
-        })
-        .sort((a, b) => b.root.length - a.root.length);
-      const nearest = ancestors[0];
-      if (
-        !nearest ||
-        nearest.access !== 'deny' ||
-        ancestors.some((entry) => entry.root === nearest.root && entry.access !== 'deny')
-      )
-        throw failure('private-denial-missing');
-      for (const entry of spec.filesystem.entries)
-        if (entry.access !== 'deny' && entry.path.type === 'path' && inside(path, entry.path.path))
-          throw failure('private-denial-overridden');
+      const denial = privateDenialFailure(spec.filesystem, path);
+      if (denial) throw failure(denial);
     }
     if (spec.role === 'helper') {
       this.stdioBridge = projectStdioExecutables.map((path) => {

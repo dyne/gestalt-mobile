@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ManagedCaddyAdminBoundary,
   protectCaddyControllerState,
+  privateDenialFailure,
   type ManagedProjectSandboxState,
 } from './caddy-admin-boundary.js';
 import { CaddyRouteBroker } from './caddy-route-broker.js';
@@ -47,6 +48,43 @@ function effectivePolicy(projectDirectory: string): ManagedProjectSandboxState {
   };
 }
 describe('Caddy private controller boundary', () => {
+  it('accepts covering denials while refusing reopened, conflicting and unresolved grants', () => {
+    const filesystem = effectivePolicy('/app').permissionProfile.file_system;
+    const entries = [
+      ...filesystem.entries,
+      { path: { type: 'path' as const, path: '/private' }, access: 'deny' as const },
+    ];
+    const denied = (extra: typeof filesystem.entries = []) =>
+      privateDenialFailure({ ...filesystem, entries: [...entries, ...extra] }, '/private/caddy');
+    expect(denied()).toBeUndefined();
+    expect(
+      denied([{ path: { type: 'path', path: '/private/caddy/socket' }, access: 'read' }]),
+    ).toBe('private-denial-overridden');
+    expect(denied([{ path: { type: 'path', path: '/private/caddy' }, access: 'write' }])).toBe(
+      'private-denial-missing',
+    );
+    expect(denied([{ path: { type: 'path', path: '/private' }, access: 'read' }])).toBe(
+      'private-denial-missing',
+    );
+    expect(
+      denied([{ path: { type: 'glob_pattern', pattern: '/private/**' }, access: 'read' }]),
+    ).toBe('private-denial-overridden');
+    expect(
+      denied([{ path: { type: 'special', value: { kind: 'unknown' } }, access: 'write' }]),
+    ).toBe('private-denial-overridden');
+    expect(
+      privateDenialFailure(
+        {
+          ...filesystem,
+          entries: [
+            { path: { type: 'special', value: { kind: 'root' } }, access: 'deny' },
+            { path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'write' },
+          ],
+        },
+        '/tmp/caddy',
+      ),
+    ).toBe('private-denial-missing');
+  });
   it('retains inherited permission entries while excluding private controller state', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'live-controller-policy-'));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

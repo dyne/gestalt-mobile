@@ -69,6 +69,43 @@ function assertPrivateExclusion(state: ManagedProjectSandboxState, directory: st
   }
 }
 
+/** Validate effective denial after redundant child masks have been removed. */
+export function privateDenialFailure(
+  filesystem: ManagedProjectSandboxState['permissionProfile']['file_system'],
+  path: string,
+): 'private-denial-overridden' | 'private-denial-missing' | undefined {
+  const inside = (root: string, candidate: string) => {
+    const tail = relative(root, candidate);
+    return !tail || (tail !== '..' && !tail.startsWith(`..${sep}`) && !tail.startsWith(sep));
+  };
+  const entries: { root: string; access: 'read' | 'write' | 'deny' }[] = [];
+  for (const entry of filesystem.entries) {
+    const root =
+      entry.path.type === 'path'
+        ? entry.path.path
+        : entry.path.type === 'special'
+          ? ({ root: '/', slash_tmp: '/tmp', tmpdir: '/tmp' } as Record<string, string>)[
+              entry.path.value.kind
+            ]
+          : undefined;
+    if (!root && entry.access !== 'deny') return 'private-denial-overridden';
+    if (root) entries.push({ root, access: entry.access });
+  }
+  const ancestors = entries
+    .filter((entry) => inside(entry.root, path))
+    .sort((a, b) => b.root.length - a.root.length);
+  const nearest = ancestors[0];
+  if (
+    !nearest ||
+    nearest.access !== 'deny' ||
+    ancestors.some((entry) => entry.root === nearest.root && entry.access !== 'deny')
+  )
+    return 'private-denial-missing';
+  if (entries.some((entry) => entry.access !== 'deny' && inside(path, entry.root)))
+    return 'private-denial-overridden';
+  return undefined;
+}
+
 const projectProbe = `
 import { request } from 'node:http';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -144,22 +181,13 @@ export class ManagedCaddyAdminBoundary {
       state.permissionProfile.type !== 'managed' ||
       state.permissionProfile.file_system.type !== 'restricted' ||
       state.useLegacyLandlock !== false ||
-      !state.permissionProfile.file_system.entries.some(
-        (entry) =>
-          entry.access === 'deny' && entry.path.type === 'path' && entry.path.path === privateRoot,
-      )
+      privateDenialFailure(state.permissionProfile.file_system, privateRoot)
     )
       throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
     const admin = new UnixCaddyAdmin(options.socketPath);
     if ((await admin.request('GET', '/config/apps/http/servers')).status !== 200)
       throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
-    if (
-      options.nativeNoProc &&
-      !state.permissionProfile.file_system.entries.some(
-        (entry) =>
-          entry.access === 'deny' && entry.path.type === 'path' && entry.path.path === '/proc',
-      )
-    )
+    if (options.nativeNoProc && privateDenialFailure(state.permissionProfile.file_system, '/proc'))
       throw new Error('LIVE_CADDY_ADMIN_UNISOLATED');
     // Native restricted networking denies getsockname on Node socket-based stdio.
     // A private regular descriptor cannot act as a control or networking channel.
