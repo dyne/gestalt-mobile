@@ -7,7 +7,7 @@
 // Deterministic provider, actual native model-tool/child paths. No genuine-provider claim.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   existsSync,
   closeSync,
@@ -85,6 +85,7 @@ const admin = socketServer((peer) => {
   socketConnections++;
   peer.end();
 });
+const relaySessionId = randomUUID();
 const rootMarker = 'L11_NATIVE_ROOT_CONFINEMENT';
 const childMarker = 'L11_NATIVE_CHILD_CONFINEMENT';
 const roles = new Map();
@@ -150,7 +151,7 @@ const progress = setInterval(() => {
             exitCode: appServer?.child.exitCode ?? null,
             exitedBySignal:
               appServer?.child.signalCode !== null && appServer?.child.signalCode !== undefined,
-            writerOwned: runtime?.ownsWriter('l11-native-proof') ?? false,
+            writerOwned: runtime?.ownsWriter(relaySessionId) ?? false,
             stderrMarkers: [...nativeMarkers].sort(),
           },
         },
@@ -679,7 +680,7 @@ try {
   report.stage = 'owning-runtime';
   session = await runtime.start(
     RelaySession.create({
-      id: 'l11-native-proof',
+      id: relaySessionId,
       workspaceId: 'fixture',
       workspacePath: app,
       profile: 'default',
