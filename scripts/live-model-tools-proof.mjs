@@ -890,6 +890,39 @@ try {
   if (error instanceof InstalledLiveAdmissionError) report.failure.admission = error.diagnostic;
   else if (error?.cause instanceof InstalledLiveAdmissionError)
     report.failure.admission = error.cause.diagnostic;
+  if (report.failure.code === 'LIVE_RUNTIME_BOOTSTRAP_UNAVAILABLE') {
+    // A bootstrap shell consumes the descriptor producer's stdout. Recheck the
+    // supported read-only contract while election is held, retaining only the
+    // same fixed protocol refusal reasons, never descriptors or raw output.
+    const owners = readdirSync(controller).filter((name) => name.startsWith('owner-'));
+    report.failure.bootstrapDaemonPresent = existsSync(daemon);
+    if (owners.length === 1) {
+      try {
+        execFileSync(
+          managedConfiguration.installation.manager.path,
+          ['live-policy', 'probe', '--manifest', join(controller, owners[0], 'manifest.json')],
+          {
+            cwd: controller,
+            env: {
+              PATH: `${dirname(managedConfiguration.installation.node.path)}:/usr/bin:/bin`,
+              HOME: controller,
+              LANG: 'C.UTF-8',
+            },
+            encoding: 'utf8',
+            timeout: 30000,
+            maxBuffer: 16384,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          },
+        );
+        report.failure.bootstrapContractProbe = { accepted: true };
+      } catch (probeError) {
+        report.failure.bootstrapContractProbe = InstalledLiveAdmissionError.command(
+          'manager-command',
+          probeError,
+        ).diagnostic;
+      }
+    }
+  }
   report.waitState = {
     rootCompleted,
     childModelCompletionEmitted: childCompleted,
