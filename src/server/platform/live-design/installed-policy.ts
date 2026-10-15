@@ -23,6 +23,36 @@ import { LIVE_CODEX_SHA256 } from './native-contract.js';
 export { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 const runFile = promisify(execFile);
+// Fixed refusal vocabulary from the pinned Manager v2 and Agents contracts.
+// Never retain command stdout/stderr or copy an arbitrary reason into evidence.
+const admissionReasons = new Set(
+  `active-launch active-runtime-admission admission-unavailable binary-changed command-changed config-changed configuration-changed host-launch-unavailable incompatible-binary incompatible-manager incompatible-manifest incompatible-native-policy incompatible-profile incomplete-source-inventory interpreter-changed interpreter-unavailable invalid-admission-command invalid-admission-input invalid-arguments invalid-capture-id invalid-commands invalid-config invalid-contract invalid-controller invalid-generation invalid-key invalid-launch-id invalid-lifecycle-scope invalid-manifest invalid-owning-runtime invalid-path invalid-process invalid-receipt invalid-runtime-provenance invalid-signing-key invalid-source-inventory manager-changed metadata-before-runtime-birth metadata-changed metadata-content-present metadata-provenance-unavailable missing-components missing-config missing-election missing-owning-config missing-prerequisite missing-private-paths missing-profile missing-runtime-provenance native-policy-unavailable native-worker-active oversized-admission-input oversized-package package-changed package-identity-mismatch package-launch-changed package-symlink prepared-config-changed private-app-overlap project-config-present project-config-unavailable project-writable-admission project-writable-policy reused-capture-id reused-launch-id revoked-runtime-provenance runtime-changed source-changed stale-admission-receipt stale-controller stale-election stale-policy-receipt stale-process stale-receipt stale-runtime-provenance symlink-path tampered-receipt unadmitted-command unadmitted-launch-surface unadmitted-native-command unauthorized-controller unbound-bootstrap unbound-prepared-config unknown-plugin unowned-runtime-admission unsafe-environment unsafe-live-proxy-environment unsafe-runtime-config unsafe-runtime-home unsupported-admission-version unsupported-host unsupported-host-clock unsupported-host-namespace unsupported-lifecycle-consumer unsupported-system-config untrusted-ancestor untrusted-binary untrusted-bootstrap-storage untrusted-interpreter-directory untrusted-manager untrusted-mode untrusted-owner untrusted-package-directory untrusted-package-file untrusted-path untrusted-stdio-bridge untrusted-storage unverified-owning-runtime workspace-mismatch`.split(
+    ' ',
+  ),
+);
+export class InstalledLiveAdmissionError extends Error {
+  constructor(readonly diagnostic: { phase: string; reason: string }) {
+    super('LIVE_ADMISSION_UNAVAILABLE');
+  }
+  static command(phase: 'manager-command' | 'agents-command', failure: unknown) {
+    let reason = 'command-failed';
+    try {
+      const stdout = (failure as { stdout?: unknown })?.stdout;
+      if (typeof stdout === 'string' && stdout.length <= 16384) {
+        const reply = JSON.parse(stdout);
+        if (
+          [1, 2].includes(reply.schemaVersion) &&
+          reply.available === false &&
+          reply.liveReady === false
+        )
+          reason = admissionReasons.has(reply.reason) ? reply.reason : 'contract-refused';
+      }
+    } catch {
+      /* Malformed or non-protocol output never enters diagnostics. */
+    }
+    return new InstalledLiveAdmissionError({ phase, reason });
+  }
+}
 export const LIVE_MANAGER_SHA256 =
   'ea653b0802fbafae8baac7c194e15baf03d770abb74848bb892e81e739743d82';
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
@@ -234,9 +264,12 @@ export class InstalledLivePolicy {
       if (verifyComplete) this.verifyInstallation();
       else this.verifyHostExecutables();
       return result;
-    } catch {
+    } catch (error) {
       // execFile errors contain argv, output and potentially configuration secrets.
-      throw new Error('LIVE_ADMISSION_UNAVAILABLE');
+      throw InstalledLiveAdmissionError.command(
+        binary === this.installation.manager.path ? 'manager-command' : 'agents-command',
+        error,
+      );
     }
   }
   private inputs(
@@ -401,10 +434,12 @@ export class InstalledLivePolicy {
     configDigest: string;
     admissionDigest: string;
   }> {
+    let phase = 'inputs-before';
     try {
       const before = this.inputs(manifestPath, bootstrapPath, files);
       const manifestDigest = readLiveConfigFile(manifestPath).sha256;
       const bootstrapDigest = readLiveConfigFile(bootstrapPath).sha256;
+      phase = 'manager-verification';
       const manager = await this.command(
         this.installation.manager.path,
         ['live-policy', 'verify', '--manifest', manifestPath],
@@ -412,26 +447,41 @@ export class InstalledLivePolicy {
         before.home,
       );
       const gestalt = this.installation.packages.find((entry) => entry.name === 'gestalt')!;
+      phase = 'agents-verification';
       const agents = await this.command(
         this.installation.node.path,
         [join(gestalt.root, 'scripts/live-admission.mjs'), 'verify', '--bootstrap', bootstrapPath],
         before.directory,
         before.home,
       );
+      phase = 'inputs-after';
       this.inputs(manifestPath, bootstrapPath, files);
       if (
         readLiveConfigFile(manifestPath).sha256 !== manifestDigest ||
         readLiveConfigFile(bootstrapPath).sha256 !== bootstrapDigest
       )
         throw new Error('LIVE_CONFIG_CHANGED');
+      phase = 'result-digests';
       const digest = z.string().regex(/^[a-f0-9]{64}$/);
       return {
         policyDigest: digest.parse(manager.policyDigest),
         configDigest: digest.parse(manager.configDigest),
         admissionDigest: digest.parse(agents.admissionDigest),
       };
-    } catch {
-      throw new Error('LIVE_ADMISSION_UNAVAILABLE');
+    } catch (error) {
+      if (error instanceof InstalledLiveAdmissionError) throw error;
+      throw new InstalledLiveAdmissionError({
+        phase,
+        reason:
+          error instanceof Error &&
+          [
+            'LIVE_INSTALLATION_UNVERIFIED',
+            'LIVE_CONFIG_CHANGED',
+            'LIVE_EFFECTIVE_CONFIG_UNAVAILABLE',
+          ].includes(error.message)
+            ? error.message
+            : 'verification-failed',
+      });
     }
   }
 }

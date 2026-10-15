@@ -54,7 +54,11 @@ import {
   normalizedLivePermissions,
   owningPermissions,
 } from './owning-permissions.js';
-import { InstalledLivePolicy, measureInstalledLiveTree } from './installed-policy.js';
+import {
+  InstalledLiveAdmissionError,
+  InstalledLivePolicy,
+  measureInstalledLiveTree,
+} from './installed-policy.js';
 import {
   IsolatedProjectProcess,
   type IsolatedProjectReceipt,
@@ -667,6 +671,8 @@ export class ProductionLiveController {
             JSON.stringify({
               schemaVersion: 1,
               stage: 'start-lifecycle',
+              admission:
+                error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
               phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
               code:
                 error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)

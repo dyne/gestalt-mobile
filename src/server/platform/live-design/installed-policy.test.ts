@@ -8,7 +8,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { InstalledLivePolicy, measureInstalledLiveTree } from './installed-policy.js';
+import {
+  InstalledLiveAdmissionError,
+  InstalledLivePolicy,
+  measureInstalledLiveTree,
+} from './installed-policy.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -20,6 +24,33 @@ function fixture() {
   return { root, file };
 }
 describe('installed code before host execution', () => {
+  it('retains only fixed protocol refusal reasons without command output or private data', () => {
+    const privateValue = '/private/secret-credential';
+    const failure = (reason: string) => ({
+      stdout: JSON.stringify({
+        schemaVersion: 2,
+        available: false,
+        liveReady: false,
+        reason,
+        diagnostic: privateValue,
+      }),
+      stderr: privateValue,
+      message: privateValue,
+    });
+    const known = InstalledLiveAdmissionError.command('manager-command', failure('source-changed'));
+    expect(known.message).toBe('LIVE_ADMISSION_UNAVAILABLE');
+    expect(known.diagnostic).toEqual({ phase: 'manager-command', reason: 'source-changed' });
+    const unknown = InstalledLiveAdmissionError.command('agents-command', failure(privateValue));
+    expect(unknown.diagnostic).toEqual({ phase: 'agents-command', reason: 'contract-refused' });
+    const malformed = InstalledLiveAdmissionError.command('agents-command', {
+      stdout: privateValue,
+    });
+    expect(malformed.diagnostic.reason).toBe('command-failed');
+    for (const error of [known, unknown, malformed]) {
+      expect(JSON.stringify(error)).not.toContain(privateValue);
+      expect(error.cause).toBeUndefined();
+    }
+  });
   it('binds every installed file name, mode and byte', () => {
     const { root, file } = fixture();
     const original = measureInstalledLiveTree(root);
