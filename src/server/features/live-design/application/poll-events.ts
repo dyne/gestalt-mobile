@@ -80,7 +80,11 @@ export function parseLivePollEvent(value: unknown): LivePollEvent {
     throw new Error('LIVE_POLL_PROTOCOL_INVALID');
   if (event.id !== undefined && (typeof event.id !== 'string' || !/^[a-f0-9]{8}$/.test(event.id)))
     throw new Error('LIVE_POLL_PROTOCOL_INVALID');
-  return event;
+  // The pinned helper retains the request body's authentication token in its
+  // queue and canonical CLI output. It is transport authority, never edit data.
+  const content = { ...event };
+  delete content.token;
+  return content;
 }
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

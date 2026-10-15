@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -162,6 +163,7 @@ async function fixture() {
 it('uses the existing Codex relay/model/effort/policy and waits for completion while ordinary turns remain blocked', async () => {
   const f = await fixture();
   const before = f.session();
+  const bearerCanary = randomBytes(32).toString('hex');
   let release!: () => void;
   f.wait.mockImplementationOnce(
     () =>
@@ -172,7 +174,7 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
   const work = f.guard.liveEvent(f.run, '1234abcd', () =>
     f.turns.apply(
       f.run,
-      { type: 'generate', id: '1234abcd', count: 1 },
+      { type: 'generate', id: '1234abcd', count: 1, token: bearerCanary, action: 'distill' },
       595000,
       'operation-digest',
     ),
@@ -188,6 +190,8 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
   expect(f.launch).toHaveBeenCalledOnce();
   const starts = f.requests.filter((r) => r.method === 'turn/start');
   expect(starts).toHaveLength(1);
+  expect(JSON.stringify(starts[0].params)).not.toContain(bearerCanary);
+  expect(JSON.stringify(starts[0].params)).toContain('distill');
   expect(starts[0].params).toMatchObject({
     threadId: 'root',
     model: 'own-model',

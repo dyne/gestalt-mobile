@@ -14,6 +14,7 @@ import type {
   LiveEventTurns,
   LivePollEvent,
 } from '../../features/live-design/application/poll-events.js';
+import { parseLivePollEvent } from '../../features/live-design/application/poll-events.js';
 import type { SessionRepository } from '../../features/sessions/application/ports.js';
 import {
   RelaySession,
@@ -136,7 +137,7 @@ export class RelayLiveEventTurns implements LiveEventTurns {
       'For accept/carbonize_cleanup, verify required source cleanup before returning done.',
       'Finish with exactly one JSON object: {"status":"done|steer_done|error","file":"optional source path","data":{},"message":"optional bounded explanation"}.',
       'For manual_edit_apply, data must contain status, appliedEntryIds, failed, files, notes.',
-      JSON.stringify(event),
+      JSON.stringify(parseLivePollEvent(event)),
     ].join('\n');
     const started = await this.input.runtime.startTurn(
       session,

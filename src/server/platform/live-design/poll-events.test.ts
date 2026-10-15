@@ -202,6 +202,11 @@ describe('canonical poll bridge', () => {
       );
     expect(() => parseLivePollEvent({ type: 'generate' })).toThrow();
   });
+  it('removes transport authentication without mutating or dropping canonical edit data', () => {
+    const input = { ...events[0], token: 'transport-bearer-canary', _instructions: 'canonical' };
+    expect(parseLivePollEvent(input)).toEqual({ ...events[0], _instructions: 'canonical' });
+    expect(input.token).toBe('transport-bearer-canary');
+  });
   it('serializes ownership across SQLite connections and concurrent calls', async () => {
     const f = fixture();
     let release!: (value: LivePollEvent) => void;

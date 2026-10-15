@@ -1,0 +1,199 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+import assert from 'node:assert/strict';
+import { readFile, readlink, writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+import { chromium } from '@playwright/test';
+
+const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
+let stage = 'start';
+let browser;
+const checkpoint = (value) => {
+  stage = value;
+  process.stdout.write(JSON.stringify({ checkpoint: value }) + '\n');
+};
+const replies = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+async function command(value) {
+  process.stdout.write(JSON.stringify({ command: value }) + '\n');
+  const reply = await replies.next();
+  assert.equal(JSON.parse(reply.value).ok, true);
+}
+try {
+  assert.equal(await readlink('/proc/self/ns/net'), config.browserNetwork);
+  assert.notEqual(config.browserNetwork, config.serverNetwork);
+  const ui = await import(pathToFileURL(config.uiModule).href);
+  browser = await chromium.launch({
+    headless: true,
+    chromiumSandbox: true,
+    env: {
+      ...process.env,
+      HOME: config.browserHome,
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+    },
+    args: [
+      `--host-resolver-rules=MAP *.preview.entrypoint.test ${config.hostAddress}, MAP preview.entrypoint.test ${config.hostAddress}, MAP mobile.entrypoint.test ${config.hostAddress}`,
+      '--no-proxy-server',
+    ],
+  });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // A test-provisioned authorized device/session traverses real production auth.
+  // These temporary credentials travel only in this private config, never model input/evidence.
+  await context.addCookies([
+    {
+      name: 'gestalt_mobile_session',
+      value: config.sessionCookie,
+      domain: 'mobile.entrypoint.test',
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+    },
+  ]);
+  const mobile = await context.newPage();
+  const response = await mobile.goto(config.mobileOrigin + '/');
+  assert.ok(response.status() < 500);
+  assert.equal(await mobile.evaluate(() => isSecureContext), true);
+  await mobile.evaluate(async ({ sessionId, liveId, generation, previewOrigin }) => {
+    const encode = (bytes) =>
+      btoa(String.fromCharCode(...bytes))
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replaceAll('=', '');
+    const random = new Uint8Array(32);
+    crypto.getRandomValues(random);
+    const verifier = encode(random);
+    const codeChallenge = encode(
+      new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
+    );
+    const result = await fetch(`/api/sessions/${sessionId}/live/launch-grants`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ liveId, generation, codeChallenge, codeChallengeMethod: 'S256' }),
+    });
+    if (result.status !== 201) throw Error('EDIT_LAUNCH_GRANT_REFUSED');
+    const grant = await result.json();
+    const button = document.createElement('button');
+    button.id = 'production-proof-launch';
+    button.textContent = 'Open preview';
+    document.body.append(button);
+    button.onclick = () => {
+      const peer = window.open(grant.exchangeUrl, 'production-edit-preview');
+      const receive = (event) => {
+        if (
+          event.source !== peer ||
+          event.origin !== previewOrigin ||
+          event.data?.grantId !== grant.grantId
+        )
+          return;
+        if (event.data.type === 'gestalt-live-proof')
+          peer.postMessage(
+            { type: 'gestalt-live-proof', grantId: grant.grantId, codeVerifier: verifier },
+            previewOrigin,
+          );
+        if (event.data.type === 'gestalt-live-exchanged') {
+          window.__editExchanged = true;
+          window.removeEventListener('message', receive);
+        }
+      };
+      window.addEventListener('message', receive);
+    };
+  }, config);
+  const popup = mobile.waitForEvent('popup');
+  await mobile.locator('#production-proof-launch').click();
+  const preview = await popup;
+  let hmrUpdates = 0;
+  preview.on('websocket', (socket) =>
+    socket.on('framereceived', (message) => {
+      try {
+        if (JSON.parse(String(message.payload)).type === 'update') hmrUpdates++;
+      } catch {
+        /* Ignore non-HMR frames. */
+      }
+    }),
+  );
+  await preview.waitForURL(config.previewOrigin + '/');
+  await mobile.waitForFunction(() => window.__editExchanged === true);
+  assert.equal(await preview.evaluate(() => location.hash), '');
+  assert.equal(await preview.evaluate(() => window.opener), null);
+  await ui.waitForHandshake(preview);
+  assert.equal(
+    await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
+    403,
+  );
+  checkpoint('picker-generate');
+  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+  await ui.setCount(preview, 1);
+  await ui.clickGo(preview);
+  await ui.waitForCycling(preview, 1, { timeout: 90000 });
+  await preview.getByRole('heading', { name: 'Production chosen variant', exact: true }).waitFor();
+  await ui.clickAccept(preview, { expectedVariant: 1 });
+  await ui.waitForBarHidden(preview, { timeout: 30000 });
+  await command('accepted');
+  checkpoint('picker-steer');
+  await ui.submitSteer(preview, 'production steer: update the HMR marker');
+  await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
+    timeout: 30000,
+  });
+  await ui.waitForSteerUnlocked(preview, { timeout: 30000 });
+  assert.ok(hmrUpdates > 0);
+  await command('steered');
+  checkpoint('picker-manual-apply');
+  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+  await ui.clickEditCopy(preview);
+  await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
+  await ui.clickSaveEdit(preview);
+  await ui.assertApplyDockVisible(preview, 1);
+  await ui.clickApplyEdits(preview);
+  await ui.waitForApplyDockHidden(preview, { timeout: 30000 });
+  await command('manual-applied');
+  checkpoint('picker-discard');
+  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+  await ui.setCount(preview, 1);
+  await ui.clickGo(preview);
+  await ui.waitForCycling(preview, 1, { timeout: 60000 });
+  await preview
+    .getByRole('heading', { name: 'Production discarded variant', exact: true })
+    .waitFor();
+  await ui.clickDiscard(preview);
+  await ui.waitForBarHidden(preview, { timeout: 30000 });
+  await command('discarded');
+  assert.equal(
+    await preview.getByRole('heading', { name: 'Production manual approved', exact: true }).count(),
+    1,
+  );
+  await preview.screenshot({ path: config.screenshot });
+  await writeFile(
+    config.resultFile,
+    JSON.stringify(
+      {
+        trustedTls: true,
+        ignoreHttpsErrors: false,
+        separateBrowserNetwork: true,
+        realPickerGenerateAccept: true,
+        realPickerSteer: true,
+        realPickerManualApply: true,
+        realPickerDiscard: true,
+        hmrUpdates,
+        extraPollOwnerDenied: true,
+        productionAuthentication: 'temporary-preprovisioned-authorized-device',
+        genuineProvider: false,
+      },
+      null,
+      2,
+    ),
+  );
+  checkpoint('complete');
+} catch {
+  process.stderr.write(`EDIT_BROWSER_FAILED_${stage.replaceAll('-', '_')}\n`);
+  process.exitCode = 1;
+} finally {
+  await browser?.close();
+  process.stdin.destroy();
+}

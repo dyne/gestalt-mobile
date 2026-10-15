@@ -31,6 +31,11 @@ import { pathToFileURL } from 'node:url';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
+import {
+  createProductionEditProvider,
+  liveEventFromRequest,
+} from './live-production-edit-provider.mjs';
+import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -47,6 +52,7 @@ import { observedBirthExited } from '../dist/server/server/platform/live-design/
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
+const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
 );
@@ -61,7 +67,13 @@ const report = {
   cleanupComplete: false,
   limitations: [
     'Controlled provider, not genuine credential-dependent proof.',
-    'Admission/model-tool probe does not claim a successful generated UI variant or acceptance.',
+    ...(editFlow
+      ? [
+          'Browser uses a temporary pre-provisioned authorized device; WebAuthn enrollment is separately proven.',
+        ]
+      : [
+          'Admission/model-tool probe does not claim a successful generated UI variant or acceptance.',
+        ]),
   ],
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -142,11 +154,15 @@ let mobile, caddy, stream, baselineBirth, generationDirectory;
 const privateCanary = randomBytes(32).toString('hex'),
   privateFile = join(privateRoot, 'canary');
 writeFileSync(privateFile, privateCanary, { mode: 0o600 });
-const mobileOrigin = 'https://mobile.entrypoint.test';
+const mobileTlsPort = editFlow ? await port() : null;
+const mobileHttpPort = editFlow ? await port() : null;
+const mobileOrigin = `https://mobile.entrypoint.test${editFlow ? `:${mobileTlsPort}` : ''}`;
 const rp = { publicOrigin: mobileOrigin, rpId: 'mobile.entrypoint.test', rpName: 'Gestalt Mobile' };
 const browserSession = previewSecrets.token();
 const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browserSession}` };
 const roles = new Map();
+let firstPickerEventId;
+const editResponse = createProductionEditProvider(appRoot, final, report);
 let seed = true,
   owningThread,
   owningNativeSession,
@@ -396,6 +412,7 @@ async function eventFor(body) {
   }
   assert.equal(metadata.session_id, owningNativeSession);
   const role = metadata.thread_id === owningThread ? 'root' : 'child';
+  if (editFlow && role === 'root') firstPickerEventId ??= liveEventFromRequest(body).id;
   if (role === 'child') {
     assert.ok(!childThread || childThread === metadata.thread_id);
     childThread = metadata.thread_id;
@@ -421,6 +438,7 @@ async function eventFor(body) {
       true,
     );
   };
+  if (editFlow && role === 'root' && step >= 7) return editResponse(body, toolCall);
   if (step === 1) {
     const output = body.input.find(
       (x) =>
@@ -554,6 +572,7 @@ async function eventFor(body) {
     assert.ok(spawned);
     report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
+    if (editFlow) return editResponse(body, toolCall);
   }
   return final(
     `${role}-final`,
@@ -626,9 +645,16 @@ const provider = createServer(async (req, res) => {
     const bytes = decode ? decode(raw, { maxOutputLength: 4 * 1024 * 1024 }) : raw;
     phase = 'private-canary-absent';
     assert.ok(!bytes.includes(Buffer.from(privateCanary)));
+    const helperMetadata = join(appRoot, '.impeccable/live/server.json');
+    if (existsSync(helperMetadata)) {
+      const bearer = JSON.parse(readFileSync(helperMetadata, 'utf8')).token;
+      assert.ok(typeof bearer === 'string' && bearer.length >= 16);
+      assert.ok(!bytes.includes(Buffer.from(bearer)));
+      report.checks.helperBearerAbsentFromActualProviderWire = true;
+    }
     report.provider.requestCount++;
     phase = 'bounded-request-count';
-    assert.ok(report.provider.requestCount <= 20);
+    assert.ok(report.provider.requestCount <= (editFlow ? 40 : 20));
     phase = 'request-json';
     const body = JSON.parse(bytes),
       id = `production-${report.provider.requestCount}`;
@@ -726,7 +752,9 @@ const provider = createServer(async (req, res) => {
     res.end();
   }
 });
-const sourceIndex = '<!doctype html><html><head></head><body><h1>Owning app</h1></body></html>\n';
+const sourceIndex = editFlow
+  ? '<!doctype html>\n<html>\n<head></head>\n<body>\n<h1 class="hero-title">Owning app</h1>\n<script type="module" src="/app.js"></script>\n</body>\n</html>\n'
+  : '<!doctype html><html><head></head><body><h1>Owning app</h1></body></html>\n';
 let preview, previewCookie;
 async function remote(path, { method = 'GET', body, streamResponse = false } = {}) {
   return new Promise((done, reject) => {
@@ -879,14 +907,61 @@ try {
     mobile: measureInstalledLiveTree(mobileRoot),
   };
   report.checks.exactInstalledPreparedBytes = true;
+  if (editFlow) {
+    assert.equal(
+      hash(readFileSync(process.env.LIVE_PUBLISHED_RUNTIME)),
+      '65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898',
+    );
+    execFileSync(
+      'tar',
+      ['-xzf', process.env.LIVE_PUBLISHED_RUNTIME, '-C', installation, 'source.tar.gz'],
+      { stdio: 'pipe' },
+    );
+    execFileSync(
+      'tar',
+      ['-xzf', join(installation, 'source.tar.gz'), '-C', installation, 'tests/live-e2e/ui.mjs'],
+      { stdio: 'pipe' },
+    );
+  }
   if (installationOnly) throw new Error('INSTALLATION_ONLY_COMPLETE');
   mkdirSync(join(appRoot, '.impeccable/live'), { recursive: true, mode: 0o700 });
   writeFileSync(
     join(appRoot, 'package.json'),
-    '{"name":"production-owning-fixture","type":"module"}\n',
+    JSON.stringify({
+      name: 'production-owning-fixture',
+      type: 'module',
+      ...(editFlow
+        ? {
+            devDependencies: {
+              vite: JSON.parse(readFileSync(resolve('node_modules/vite/package.json'), 'utf8'))
+                .version,
+            },
+          }
+        : {}),
+    }),
     { mode: 0o600 },
   );
   writeFileSync(join(appRoot, 'index.html'), sourceIndex, { mode: 0o600 });
+  if (editFlow) {
+    execFileSync(
+      'npm',
+      [
+        'install',
+        '--prefer-offline',
+        '--fetch-retries=1',
+        '--fetch-timeout=30000',
+        '--no-audit',
+        '--no-fund',
+        '--include=optional',
+      ],
+      { cwd: appRoot, stdio: 'pipe', timeout: 120000 },
+    );
+    writeFileSync(
+      join(appRoot, 'app.js'),
+      "export const marker = 'original';\ndocument.body.dataset.productionHmr = marker;\nif (import.meta.hot) import.meta.hot.accept(next => { document.body.dataset.productionHmr = next.marker; });\n",
+      { mode: 0o600 },
+    );
+  }
   writeFileSync(join(appRoot, 'AGENTS.md'), 'Preserve private state.\n', { mode: 0o644 });
   writeFileSync(
     join(appRoot, 'AGENTS.override.md'),
@@ -907,7 +982,9 @@ try {
   const devScript = join(installation, 'devserver.mjs');
   writeFileSync(
     devScript,
-    `import {createServer} from 'node:http';import {readFileSync} from 'node:fs';createServer((_q,r)=>r.end(readFileSync(${JSON.stringify(join(appRoot, 'index.html'))}))).listen(${appPort},'127.0.0.1');`,
+    editFlow
+      ? `import {createServer} from ${JSON.stringify(pathToFileURL(join(appRoot, 'node_modules/vite/dist/node/index.js')).href)};const server=await createServer({root:${JSON.stringify(appRoot)},configFile:false,server:{host:'127.0.0.1',port:${appPort},strictPort:true,allowedHosts:true,hmr:{protocol:'wss',clientPort:${previewPort}}}});await server.listen();`
+      : `import {createServer} from 'node:http';import {readFileSync} from 'node:fs';createServer((_q,r)=>r.end(readFileSync(${JSON.stringify(join(appRoot, 'index.html'))}))).listen(${appPort},'127.0.0.1');`,
     { mode: 0o400 },
   );
   await new Promise((done) => provider.listen(0, '127.0.0.1', done));
@@ -937,7 +1014,7 @@ try {
       '-subj',
       '/CN=*.preview.entrypoint.test',
       '-addext',
-      'subjectAltName=DNS:preview.entrypoint.test,DNS:*.preview.entrypoint.test',
+      'subjectAltName=DNS:preview.entrypoint.test,DNS:*.preview.entrypoint.test,DNS:mobile.entrypoint.test',
     ],
     { stdio: 'ignore' },
   );
@@ -960,8 +1037,22 @@ try {
         http: {
           servers: {
             fixture: {
-              listen: ['127.0.0.1:0'],
-              routes: [{ handle: [{ handler: 'static_response', body: 'fixture' }] }],
+              listen: [editFlow ? `:${mobileTlsPort}` : '127.0.0.1:0'],
+              ...(editFlow
+                ? { tls_connection_policies: [{}], automatic_https: { disable: true } }
+                : {}),
+              routes: [
+                {
+                  handle: [
+                    editFlow
+                      ? {
+                          handler: 'reverse_proxy',
+                          upstreams: [{ dial: `127.0.0.1:${mobileHttpPort}` }],
+                        }
+                      : { handler: 'static_response', body: 'fixture' },
+                  ],
+                },
+              ],
             },
           },
         },
@@ -1092,6 +1183,7 @@ try {
     },
   });
   report.checks.soleProductionCompositionConstructed = true;
+  if (editFlow) await mobile.listen({ host: '127.0.0.1', port: mobileHttpPort });
   report.projectMetadata.afterComposition = ownedProjectMetadata();
   if (constructionOnly) throw new Error('CONSTRUCTION_ONLY_COMPLETE');
   report.stage = 'actual-owning-session';
@@ -1262,19 +1354,104 @@ try {
   assert.equal(stream.statusCode, 200);
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
   report.stage = 'production-owning-model-tools';
-  const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
-    method: 'POST',
-    body: {
-      token,
-      type: 'generate',
-      id: 'f00df00d',
-      count: 1,
-      action: 'polish',
-      element: { outerHTML: '<h1>Owning app</h1>' },
-    },
-  });
-  report.modelEventStatus = event.status;
-  assert.equal(event.status, 200);
+  if (editFlow) {
+    stream.destroy();
+    stream = undefined;
+    const requestsBeforeWriterProbes = report.provider.requestCount;
+    for (const [method, suffix, payload] of [
+      ['POST', '/turns', { text: 'An ordinary writer must not run.' }],
+      ['PUT', '/autopilot', { enabled: true }],
+      ['POST', '/plan', {}],
+    ]) {
+      const denied = await mobile.inject({
+        method,
+        url: `/api/sessions/${session.id}${suffix}`,
+        payload,
+        headers,
+      });
+      assert.equal(denied.statusCode, 409);
+    }
+    assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
+    report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
+    let manualSource;
+    const acknowledged = async (kind) =>
+      until(
+        () => {
+          const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), {
+            readOnly: true,
+          });
+          try {
+            return db
+              .prepare('SELECT record FROM live_event_inbox')
+              .all()
+              .some((row) => {
+                const item = JSON.parse(row.record);
+                return item.kind === kind && item.stage === 'acknowledged';
+              });
+          } finally {
+            db.close();
+          }
+        },
+        'EDIT_CANONICAL_ACK_DEADLINE',
+        60000,
+      );
+    await productionEditBrowser({
+      privateRoot,
+      certificate: join(caddyRoot, 'tls.pem'),
+      report,
+      browser: {
+        mobileOrigin,
+        previewOrigin: preview,
+        sessionId: session.id,
+        liveId: started.liveId,
+        generation: started.generation,
+        sessionCookie: browserSession,
+        uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+        resultFile: join(evidence, 'production-edit-browser.json'),
+        screenshot: join(evidence, 'production-picker-edit.png'),
+      },
+      command: async (command) => {
+        const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
+        if (command === 'accepted') {
+          await acknowledged('accept');
+          assert.ok(source().includes('Production chosen variant'));
+          assert.ok(!source().includes('impeccable-variants-start'));
+        } else if (command === 'steered') {
+          await acknowledged('steer');
+          assert.ok(readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"));
+        } else if (command === 'manual-applied') {
+          await acknowledged('manual_edit_apply');
+          manualSource = source();
+          assert.ok(manualSource.includes('Production manual approved'));
+          assert.ok(
+            !/contenteditable|data-impeccable-editable|impeccable-variants-start/.test(
+              manualSource,
+            ),
+          );
+        } else if (command === 'discarded') {
+          await acknowledged('discard');
+          assert.equal(source(), manualSource);
+        } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
+      },
+    });
+    report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
+    report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
+    report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+  } else {
+    const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      body: {
+        token,
+        type: 'generate',
+        id: 'f00df00d',
+        count: 1,
+        action: 'polish',
+        element: { outerHTML: '<h1>Owning app</h1>' },
+      },
+    });
+    report.modelEventStatus = event.status;
+    assert.equal(event.status, 200);
+  }
   await until(
     () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
     'PRODUCTION_MODEL_CHILD_DEADLINE',
@@ -1309,7 +1486,10 @@ try {
         .all()
         .some((row) => {
           const r = JSON.parse(row.record);
-          return r.upstreamId === 'f00df00d' && r.stage === 'acknowledged';
+          return (
+            r.upstreamId === (editFlow ? firstPickerEventId : 'f00df00d') &&
+            r.stage === 'acknowledged'
+          );
         });
     } finally {
       db.close();
@@ -1331,7 +1511,11 @@ try {
   assert.equal(fence.captureId, captureId);
   assert.equal(observedBirthExited(baselineBirth), true);
   report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
-  assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
+  if (editFlow) {
+    const source = readFileSync(join(appRoot, 'index.html'), 'utf8');
+    assert.ok(source.includes('Production manual approved'));
+    assert.ok(!source.includes('__IMPECCABLE_LIVE'));
+  } else assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
   assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
   await assert.rejects(() => remote('/'));
   report.cleanupComplete = true;

@@ -19,6 +19,7 @@ on:
       - scripts/live-native-proof-preflight.mjs
       - scripts/live-project-isolation-proof.mjs
       - scripts/live-production-entrypoint-proof.mjs
+      - scripts/live-production-edit-*.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -236,10 +237,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           node scripts/live-remote-proof.mjs
-      - name: Sole production composition admission and owning native tools
-        timeout-minutes: 8
+      - name: Sole production admission and real picker editing through Native
+        timeout-minutes: 12
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
           LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
           LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
@@ -248,7 +250,7 @@ jobs:
           set -Eeuo pipefail
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
-          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs
+          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-production-entrypoint-proof.mjs
       - name: Actual pinned helper and project process namespaces with native confinement
         timeout-minutes: 3
