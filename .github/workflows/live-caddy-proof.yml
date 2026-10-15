@@ -214,6 +214,8 @@ jobs:
             src/server/platform/live-design/stop-resume.test.ts \
             src/server/platform/live-design/live-autopilot.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Build Mobile server for Native proofs
+        run: npm run build:server
       - name: Actual owning native model tools and permitted child with deterministic provider
         timeout-minutes: 3
         env:
@@ -235,7 +237,6 @@ jobs:
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
-          npm run build:server
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs
@@ -257,7 +258,6 @@ jobs:
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
         run: |
           set -Eeuo pipefail
-          npm run build:server
           node scripts/live-remote-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
