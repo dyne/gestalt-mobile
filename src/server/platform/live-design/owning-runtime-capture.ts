@@ -217,7 +217,7 @@ export async function captureOwningRuntime(input: {
   const captureId = randomUUID();
   const reply = await policy.captureRuntime(manifestPath, captureId);
   if (typeof reply.policyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(reply.policyDigest))
-    throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+    throw new Error('LIVE_RUNTIME_CAPTURE_REPLY_INVALID');
   return Object.freeze({
     captureId,
     sessionId: session.id,

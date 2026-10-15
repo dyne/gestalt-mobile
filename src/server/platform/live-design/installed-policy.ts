@@ -204,7 +204,7 @@ export class InstalledLivePolicy {
       );
       this.verifyInstallation();
     } catch {
-      throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+      throw new Error('LIVE_RUNTIME_BOOTSTRAP_UNAVAILABLE');
     }
   }
   private async command(

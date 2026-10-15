@@ -52,7 +52,7 @@ import { resolvedServerRequestId } from './server-request.js';
 import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { xerjDeadline } from '../retrieval/managed-xerj.js';
 import { decodeCodexModels } from './codex-model-catalog.js';
-import { decodeCodexSkills } from '../skills/codex-skill-catalog.js';
+import { decodeCodexSkills } from '../skills/codex-skill-discovery.js';
 import type { OwningStartupDiscovery } from '../../features/sessions/start-session/use-case.js';
 
 export type AppServer = {
@@ -473,12 +473,9 @@ export class CodexSessionRuntime {
         },
       );
       if (select) {
-        if (
-          !resource.liveCaptureId ||
-          !resource.process.observeLiveLaunch ||
-          !resource.process.observeLiveEnvironment
-        )
-          throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+        if (!resource.liveCaptureId) throw new Error('LIVE_RUNTIME_CAPTURE_TOKEN_MISSING');
+        if (!resource.process.observeLiveLaunch || !resource.process.observeLiveEnvironment)
+          throw new Error('LIVE_RUNTIME_OBSERVER_UNAVAILABLE');
         const birth = resource.process.observeLiveLaunch();
         const environment = resource.process.observeLiveEnvironment();
         resource.process.observeLiveDescendants?.();
