@@ -1935,7 +1935,8 @@ export class CodexSessionRuntime {
     )
       throw new Error('LIVE_RUNTIME_UNAVAILABLE');
     const before = resource.process.observeLiveLaunch();
-    const code = `const fs = require('node:fs'); let denied = false; try { fs.readFileSync(${JSON.stringify(privatePath)}); } catch (e) { denied = ['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code); } console.log('LIVE_ADMISSION_PROBE_V1:'+JSON.stringify({privateReadDenied:denied}));`;
+    // Context executes app-local .js files, which inherit the app's module type.
+    const code = `const fs = await import('node:fs'); let denied = false; try { fs.readFileSync(${JSON.stringify(privatePath)}); } catch (e) { denied = ['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code); } console.log('LIVE_ADMISSION_PROBE_V1:'+JSON.stringify({privateReadDenied:denied}));`;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let result: unknown;
     try {

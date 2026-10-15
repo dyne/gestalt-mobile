@@ -415,7 +415,7 @@ async function eventFor(body) {
     assert.ok(ctx || nested);
     const args = {
       language: 'javascript',
-      code: `const fs=require('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
+      code: `const fs=await import('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
       intent: 'Controlled production context confinement probe',
     };
     return ctx ? call(ctx, `${role}-${step}`, args) : toolCall(nested, args);

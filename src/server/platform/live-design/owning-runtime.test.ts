@@ -5,6 +5,10 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import {
   CodexSessionRuntime,
@@ -37,6 +41,7 @@ function fixture(
   let configuration: () => Promise<unknown> = async () => ({ config: {}, layers: [] });
   let children: () => Promise<unknown> = async () => ({ data: [], nextCursor: null });
   let mcp: (params: unknown) => Promise<unknown> = async () => ({ data: [], nextCursor: null });
+  let mcpTool: (params: unknown) => Promise<unknown> = async () => ({});
   let notify: Parameters<AppServer['rpc']['onNotification']>[0] = () => {};
   const process: AppServer = {
     rpc: {
@@ -71,6 +76,7 @@ function fixture(
           };
         }
         if (method === 'mcpServerStatus/list') return mcp(params);
+        if (method === 'mcpServer/tool/call') return mcpTool(params);
         return {};
       },
       onNotification: (listener) => {
@@ -101,9 +107,55 @@ function fixture(
     setMcp: (read: typeof mcp) => {
       mcp = read;
     },
+    setMcpTool: (call: typeof mcpTool) => {
+      mcpTool = call;
+    },
   };
 }
 describe('owning runtime admission observations', () => {
+  it.each(['module', 'commonjs'])(
+    'executes the denial probe in a %s app and refuses readable private state',
+    async (type) => {
+      const directory = mkdtempSync(join(tmpdir(), 'live-context-module-'));
+      const canary = join(directory, 'canary');
+      writeFileSync(canary, Buffer.alloc(32), { mode: 0o600 });
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ type }));
+      const f = fixture();
+      try {
+        const owning = await f.runtime.start(session(), 'time');
+        f.setMcpTool(async (params) => {
+          const request = params as {
+            threadId: string;
+            server: string;
+            tool: string;
+            arguments: { code: string };
+          };
+          expect(request).toMatchObject({
+            threadId: owning.threadId,
+            server: 'context-mode',
+            tool: 'ctx_execute',
+          });
+          const script = join(directory, 'probe.js');
+          // Match the context wrapper's module-scoped require handling. This
+          // process deliberately has no sandbox, so readable state must refuse.
+          writeFileSync(
+            script,
+            `(function(require){async function run(){${request.arguments.code}}run().catch(()=>{process.exitCode=1});})(typeof require!=='undefined'?require:null);`,
+          );
+          const text = execFileSync(process.execPath, [script], { encoding: 'utf8' });
+          expect(text.trim()).toBe('LIVE_ADMISSION_PROBE_V1:{"privateReadDenied":false}');
+          return { content: [{ type: 'text', text }] };
+        });
+        await expect(f.runtime.probeLiveContext(owning, canary)).rejects.toMatchObject({
+          message: 'LIVE_CONTEXT_PROBE_UNAVAILABLE',
+          stage: 'context-denial-not-proven',
+        });
+      } finally {
+        f.runtime.stopAll();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
   it('does not renew a disposed captured owner through ordinary rollback restoration', async () => {
     const beforeLaunch = vi.fn(async (_session, input) => ({
       ...input,
