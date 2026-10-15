@@ -1117,12 +1117,7 @@ export class CodexSessionRuntime {
       do {
         added = false;
         for (const [id, child] of candidates) {
-          if (
-            child.session === sessionId &&
-            child.parent !== null &&
-            verified.has(child.parent) &&
-            !verified.has(id)
-          ) {
+          if (child.parent !== null && verified.has(child.parent) && !verified.has(id)) {
             // Verify fresh native lineage before granting cancellation authority.
             const native = asRecord(
               asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
@@ -1368,8 +1363,9 @@ export class CodexSessionRuntime {
           !verified.has(candidate.parentThreadId)
         )
           continue;
-        if (candidate.sessionId !== sessionId || verified.size >= 64)
-          throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+        // Stored list summaries use thread id as sessionId in pinned Native;
+        // only the fresh owning-connection thread/read carries live identity.
+        if (verified.size >= 64) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
         const current = asRecord(
           asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
         );

@@ -398,7 +398,10 @@ it('native Stop validates pinned parent lineage and leaves unrelated roots and d
       expect(p.ancestorThreadId).toBe('root');
       expect(p.modelProviders).toEqual([]);
       expect(p.sourceKinds).toBeUndefined();
-      return { data: lineage, nextCursor: null };
+      return {
+        data: lineage.map((thread) => ({ ...thread, sessionId: thread.id })),
+        nextCursor: null,
+      };
     }
     if (method === 'thread/read' && p.threadId !== 'root') {
       inspected.push(p.threadId!);

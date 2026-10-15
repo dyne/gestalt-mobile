@@ -210,12 +210,13 @@ describe('owning runtime admission observations', () => {
   it('enumerates native spawned children through the sole owner without detached readers or resume', async () => {
     const { runtime, launch, calls, setChildren } = fixture();
     const owning = await runtime.start(session(), 'time');
+    let reads = 0;
     setChildren(async () => ({
       data: [
         {
           id: 'actual-child',
           parentThreadId: owning.threadId,
-          sessionId: 'native-session',
+          sessionId: ++reads === 1 ? 'actual-child' : 'native-session',
           source: 'appServer',
           modelProvider: 'selected-custom-provider',
           model: 'selected-model',
