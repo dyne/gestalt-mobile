@@ -961,6 +961,28 @@ try {
   await new Promise((done) => admin.close(done));
   rmSync(socketController, { recursive: true, force: true });
   closeSync(privateFd);
+  if (
+    (!capture || captureRevoked) &&
+    (!appServer || appServer.child.exitCode !== null || appServer.child.signalCode !== null)
+  ) {
+    report.cleanupStage = 'fixture-files';
+    try {
+      // Only after revocation and original-process exit, restore directory
+      // deletion permission on this disposable fixture's sealed installation.
+      const writableDirectories = (path) => {
+        const info = lstatSync(path);
+        if (info.isSymbolicLink() || !info.isDirectory()) return;
+        chmodSync(path, 0o700);
+        for (const name of readdirSync(path)) writableDirectories(join(path, name));
+      };
+      writableDirectories(root);
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      report.passed = false;
+      report.cleanupFailure = 'NATIVE_FIXTURE_CLEANUP_FAILED';
+      process.exitCode = 1;
+    }
+  }
   report.cleanupStage = 'settled';
   clearInterval(progress);
   writeFileSync(
@@ -978,6 +1000,4 @@ try {
       genuine: false,
     }) + '\n',
   );
-  if (!appServer || appServer.child.exitCode !== null || appServer.child.signalCode !== null)
-    rmSync(root, { recursive: true, force: true });
 }
