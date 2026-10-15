@@ -21,6 +21,14 @@ function fixture(content = 'model = "selected-model"\n[features]\nhooks = false\
   return { owningHome, files: [readLiveConfigFile(path)], threadConfig: {} };
 }
 describe('original launch source validation before signing authority', () => {
+  it.each(['mcp_servers = {}\nplugins = {}\n', '[mcp_servers]\n[plugins]\n'])(
+    'accepts explicitly empty TOML launch inventories (%s)',
+    (inventory) => {
+      expect(
+        validateOriginalLaunchSources(fixture(`${inventory}[features]\nhooks = false\n`)),
+      ).toMatchObject({ features: { hooks: false } });
+    },
+  );
   it('parses actual source bytes without confusing comments or strings with executable settings', () => {
     const input = fixture(
       'model = "selected-model"\n# mcp_servers.unapproved.command = "not a setting"\n[features]\nhooks = false\n',

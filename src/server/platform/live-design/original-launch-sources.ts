@@ -6,7 +6,6 @@
 
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'smol-toml';
 import { mergeLiveConfig, readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
 
@@ -15,8 +14,10 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const empty = (value: unknown) =>
   value === undefined ||
   value === null ||
-  isDeepStrictEqual(value, {}) ||
-  isDeepStrictEqual(value, []);
+  (Array.isArray(value) && value.length === 0) ||
+  (object(value) &&
+    [null, Object.prototype].includes(Object.getPrototypeOf(value)) &&
+    Object.keys(value).length === 0);
 
 /** Validate every private original source BEFORE creating signing authority or
  * starting a thread. TOML parsing handles quoted/dotted keys and multiline values;
