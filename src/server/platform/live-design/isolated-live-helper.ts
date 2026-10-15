@@ -198,7 +198,10 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     }
   }
   async inject(remove = false): Promise<unknown> {
-    return this.command(['live-inject', ...(remove ? ['--remove'] : [])]);
+    return this.command([
+      'live-inject',
+      ...(remove ? ['--remove'] : ['--port', String(this.input.port)]),
+    ]);
   }
   async status(): Promise<unknown> {
     const value = await this.command(['live-status']);

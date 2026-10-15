@@ -12,6 +12,33 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
 export const projectStdioExecutables = ['/usr/bin/bash', '/usr/bin/cat'] as const;
+export const projectCommandErrorMarkers = [
+  'permission denied',
+  'operation not permitted',
+  'read-only file system',
+  'no such file',
+  'unknown option',
+  'unexpected argument',
+  'connection refused',
+  'bad file descriptor',
+  'bwrap',
+  'timeout',
+  'port',
+  'config',
+  'inject',
+  'target',
+  'server',
+  'git',
+  'decode',
+  'json',
+  'argument',
+  'directory',
+  'unsupported',
+  'unknown',
+  'invalid',
+  'missing',
+  'failed',
+] as const;
 /** Build real FIFO stdio before entering Native; data stays literal argv. */
 export function projectNativeStdioCommand(native: string, args: readonly string[]) {
   return {
@@ -138,7 +165,7 @@ function runProjectWorker(): void {
           !Number.isInteger(deadline) ||
           Number(deadline) < 1000 ||
           Number(deadline) > 660000 ||
-          !helperArgs(args as string[])
+          !isProjectHelperCommand(args as string[], spec.port)
         )
           throw new Error();
         const id = Number(requestId);
@@ -202,17 +229,9 @@ function runProjectWorker(): void {
                 exitCode: code,
                 stdoutBytes: Buffer.byteLength(output),
                 stderrBytes: Buffer.byteLength(stderr),
-                markers: [
-                  'permission denied',
-                  'operation not permitted',
-                  'read-only file system',
-                  'no such file',
-                  'unknown option',
-                  'unexpected argument',
-                  'connection refused',
-                  'bwrap',
-                  'timeout',
-                ].filter((value) => stderr.toLowerCase().includes(value)),
+                markers: projectCommandErrorMarkers.filter((value) =>
+                  stderr.toLowerCase().includes(value),
+                ),
               },
             });
             return;
@@ -278,12 +297,16 @@ function runProjectWorker(): void {
 
 // Defense in depth at the pinned private worker: no arbitrary executable, target,
 // force flag, shell syntax, environment or management operation is admitted.
-function helperArgs(args: string[]): boolean {
+export function isProjectHelperCommand(args: readonly string[], port: number): boolean {
   const id = (value: string | undefined) =>
     !!value && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
   const [name, ...rest] = args;
   if (name === 'live-status') return !rest.length;
-  if (name === 'live-inject') return !rest.length || (rest.length === 1 && rest[0] === '--remove');
+  if (name === 'live-inject')
+    return (
+      (rest.length === 1 && rest[0] === '--remove') ||
+      (rest.length === 2 && rest[0] === '--port' && rest[1] === String(port))
+    );
   if (name === 'live-resume')
     return !rest.length || (rest.length === 2 && rest[0] === '--id' && id(rest[1]));
   if (name === 'live-complete' || name === 'live-accept')

@@ -10,7 +10,20 @@ import { closeSync, constants, existsSync, mkdtempSync, openSync, rmSync } from 
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ProjectControllerPipes } from './project-controller-pipes.js';
-import { projectNativeStdioCommand } from './project-process-worker.js';
+import { isProjectHelperCommand, projectNativeStdioCommand } from './project-process-worker.js';
+
+it('binds helper injection to its signed port and refuses alternate targets or arbitrary flags', () => {
+  expect(isProjectHelperCommand(['live-inject', '--port', '12345'], 12345)).toBe(true);
+  expect(isProjectHelperCommand(['live-inject', '--remove'], 12345)).toBe(true);
+  for (const args of [
+    ['live-inject'],
+    ['live-inject', '--port', '12346'],
+    ['live-inject', '--port', '12345', '--target', '/other'],
+    ['live-inject', '--force'],
+    ['/usr/bin/bash', '-c', 'arbitrary'],
+  ])
+    expect(isProjectHelperCommand(args, 12345)).toBe(false);
+});
 
 it('gives Native real FIFO stdio and preserves helper argv0 and literal arguments', async () => {
   const root = mkdtempSync('/tmp/live-native-stdio-');

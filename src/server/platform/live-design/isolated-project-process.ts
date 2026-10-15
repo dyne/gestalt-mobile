@@ -31,7 +31,11 @@ import { isolatedProjectSocketFilter } from './project-network-filter.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
 import { observeNativeDeniedPath as masked } from './project-native-mask.js';
 import { ProjectControllerPipes } from './project-controller-pipes.js';
-import { projectStdioExecutables } from './project-process-worker.js';
+import {
+  isProjectHelperCommand,
+  projectCommandErrorMarkers,
+  projectStdioExecutables,
+} from './project-process-worker.js';
 
 type Pin = Readonly<{ path: string; sha256: string }>;
 export type IsolatedProjectSpecification = Readonly<{
@@ -234,6 +238,7 @@ export class IsolatedProjectProcess {
     pipeDescriptorsClosed: false,
     namespaceExited: false,
     commandFailure: 'none',
+    commandName: 'none',
     commandExitCode: null as number | null,
     commandStdoutBytes: 0,
     commandStderrBytes: 0,
@@ -569,17 +574,7 @@ export class IsolatedProjectProcess {
               Number.isSafeInteger(detail?.stderrBytes) && Number(detail!.stderrBytes) <= 131072
                 ? Number(detail!.stderrBytes)
                 : 0;
-            const markers = [
-              'permission denied',
-              'operation not permitted',
-              'read-only file system',
-              'no such file',
-              'unknown option',
-              'unexpected argument',
-              'connection refused',
-              'bwrap',
-              'timeout',
-            ];
+            const markers = projectCommandErrorMarkers;
             this.diagnostic.commandMarkers = markers.filter(
               (marker) => Array.isArray(detail?.markers) && detail.markers.includes(marker),
             );
@@ -794,6 +789,7 @@ export class IsolatedProjectProcess {
     this.verify(receipt);
     if (
       this.spec.role !== 'helper' ||
+      !isProjectHelperCommand(args, this.spec.port) ||
       this.commands.size ||
       !Number.isInteger(deadlineMs) ||
       deadlineMs < 1000 ||
@@ -801,6 +797,16 @@ export class IsolatedProjectProcess {
     )
       throw new Error('LIVE_HELPER_COMMAND_UNAVAILABLE');
     const requestId = ++this.nextCommand;
+    this.diagnostic.commandName = [
+      'live-inject',
+      'live-status',
+      'live-poll',
+      'live-resume',
+      'live-complete',
+      'live-accept',
+    ].includes(args[0] ?? '')
+      ? args[0]!
+      : 'unknown';
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await new Promise<unknown>((resolve, reject) => {
