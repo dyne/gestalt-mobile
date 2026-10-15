@@ -16,6 +16,9 @@ let stage = 'start';
 let browser;
 const networkErrors = [];
 const exchangeStatuses = [];
+const resourcePending = {};
+const resourceStatuses = {};
+const pageErrors = [];
 let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
   stage = value;
@@ -50,12 +53,29 @@ try {
     ],
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  context.on('page', (page) => {
+    page.on('pageerror', (error) => {
+      if (pageErrors.length < 8) pageErrors.push(safeBrowserFailure(error.message));
+    });
+  });
+  context.on('request', (request) => {
+    const type = request.resourceType();
+    resourcePending[type] = (resourcePending[type] ?? 0) + 1;
+  });
+  const finished = (request) => {
+    const type = request.resourceType();
+    resourcePending[type] = Math.max(0, (resourcePending[type] ?? 1) - 1);
+  };
+  context.on('requestfinished', finished);
+  context.on('requestfailed', finished);
   context.on('requestfailed', (request) => {
     const code = request.failure()?.errorText;
     if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
       networkErrors.push(code);
   });
   context.on('response', (response) => {
+    const resource = `${response.request().resourceType()}:${response.status()}`;
+    resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
     if (
       url.origin === config.previewOrigin &&
@@ -161,7 +181,7 @@ try {
   );
   checkpoint('preview-exchange');
   try {
-    await preview.waitForURL(config.previewOrigin + '/');
+    await preview.waitForURL(config.previewOrigin + '/', { waitUntil: 'commit' });
   } catch (error) {
     if (!String(error?.message ?? '').startsWith('page.waitForURL: net::ERR_NETWORK_CHANGED'))
       throw error;
@@ -172,7 +192,7 @@ try {
       timeout: 10000,
     });
     checkpoint('preview-get-after-network-change');
-    const recovered = await preview.goto(config.previewOrigin + '/');
+    const recovered = await preview.goto(config.previewOrigin + '/', { waitUntil: 'commit' });
     assert.equal(recovered.status(), 200);
     initialPreviewGetRetried = true;
   }
@@ -188,6 +208,8 @@ try {
   checkpoint('helper-handshake');
   await ui.waitForHandshake(preview);
   await preview.waitForFunction(() => window.__productionHelperConnected === true);
+  checkpoint('app-module-ready');
+  await preview.waitForFunction(() => document.body?.dataset.productionHmr === 'original');
   checkpoint('helper-connected');
   assert.equal(
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
@@ -283,6 +305,9 @@ try {
         ].filter((marker) => String(error?.message ?? '').includes(marker)),
         networkErrors,
         exchangeStatuses,
+        resourcePending,
+        resourceStatuses,
+        pageErrors,
       },
     }) + '\n',
   );

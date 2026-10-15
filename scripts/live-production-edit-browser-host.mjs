@@ -158,6 +158,18 @@ export async function productionEditBrowser(input) {
               item.status >= 100 &&
               item.status <= 599,
           ),
+          resourcePending: Object.fromEntries(
+            Object.entries(value.failure.resourcePending ?? {}).filter(
+              ([key, count]) => /^[a-z]{1,24}$/.test(key) && Number.isSafeInteger(count),
+            ),
+          ),
+          resourceStatuses: Object.fromEntries(
+            Object.entries(value.failure.resourceStatuses ?? {}).filter(
+              ([key, count]) =>
+                /^[a-z]{1,24}:[1-5][0-9]{2}$/.test(key) && Number.isSafeInteger(count),
+            ),
+          ),
+          pageErrors: value.failure.pageErrors?.slice(0, 8).map(safeBrowserFailure),
         };
       if (value.command)
         commands = commands.then(async () => {
