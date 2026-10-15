@@ -37,6 +37,7 @@ import { RelaySession } from '../dist/server/server/features/sessions/model/rela
 import {
   LIVE_CODEX_SHA256,
   InstalledLivePolicy,
+  InstalledLiveAdmissionError,
   LIVE_MANAGER_SHA256,
   measureInstalledLiveTree,
 } from '../dist/server/server/platform/live-design/installed-policy.js';
@@ -859,6 +860,14 @@ try {
     'EADDRINUSE',
     'ERR_ASSERTION',
     'LIVE_RUNTIME_BINARY_UNVERIFIED',
+    'LIVE_RUNTIME_BOOTSTRAP_UNAVAILABLE',
+    'LIVE_RUNTIME_CAPTURE_REPLY_INVALID',
+    'LIVE_ADMISSION_UNAVAILABLE',
+    'LIVE_CONFIG_CHANGED',
+    'LIVE_EFFECTIVE_CONFIG_UNAVAILABLE',
+    'LIVE_OWNING_POLICY_UNVERIFIED',
+    'LIVE_PRIVATE_STATE_INVALID',
+    'LIVE_UNAPPROVED_LAUNCH_SURFACE',
     'LIVE_PROCESS_IDENTITY_UNAVAILABLE',
     'NATIVE_PROOF_DEADLINE',
     'NATIVE_THREAD_READ_DEADLINE',
@@ -878,6 +887,7 @@ try {
         ? error.message
         : 'UNCLASSIFIED',
   };
+  if (error instanceof InstalledLiveAdmissionError) report.failure.admission = error.diagnostic;
   report.waitState = {
     rootCompleted,
     childModelCompletionEmitted: childCompleted,
