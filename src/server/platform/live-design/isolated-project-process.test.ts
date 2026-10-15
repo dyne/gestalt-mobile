@@ -86,6 +86,25 @@ describe('project isolation admission refuses incomplete authority before proces
     );
     expect(existsSync(join(controller, 'project-process-signing-key'))).toBe(false);
   });
+  it('does not mistake a denied root for private denial beneath a reopened special tmp grant', () => {
+    const spec = specification();
+    expect(
+      () =>
+        new IsolatedProjectProcess({
+          ...spec,
+          filesystem: {
+            type: 'restricted',
+            entries: [
+              ...spec.filesystem.entries,
+              { path: { type: 'path', path: '/' }, access: 'deny' },
+              { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'write' },
+              { path: { type: 'path', path: '/proc' }, access: 'deny' },
+            ],
+          },
+        }),
+    ).toThrow(expect.objectContaining({ stage: 'private-denial-missing' }));
+    expect(existsSync(join(controller, 'project-process-signing-key'))).toBe(false);
+  });
   it('refuses Node injection and provider secrets in the project environment', () => {
     for (const name of ['NODE_OPTIONS', 'OPENAI_API_KEY', 'CODEX_HOME', 'LD_PRELOAD']) {
       const spec = specification();

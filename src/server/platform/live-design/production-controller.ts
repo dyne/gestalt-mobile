@@ -659,6 +659,33 @@ export class ProductionLiveController {
         // The sole durable poll owner is the production composition's existing dispatcher.
         void generation.loop.run(run).catch(() => {});
         return run;
+      } catch (error) {
+        try {
+          const phase = this.owners.read(session.id)?.phase;
+          writeFileSync(
+            join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
+            JSON.stringify({
+              schemaVersion: 1,
+              stage: 'start-lifecycle',
+              phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
+              code:
+                error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
+                  ? error.message
+                  : 'UNCLASSIFIED',
+              processStage:
+                error instanceof Error &&
+                'stage' in error &&
+                typeof error.stage === 'string' &&
+                /^[a-z][a-z0-9-]{0,63}$/.test(error.stage)
+                  ? error.stage
+                  : undefined,
+            }) + '\n',
+            { mode: 0o600, flag: 'wx' },
+          );
+        } catch {
+          /* Bounded diagnostics cannot alter the refusal or its cleanup. */
+        }
+        throw error;
       } finally {
         this.preflight.delete(session.id);
       }
