@@ -104,6 +104,21 @@ function fixture(
   };
 }
 describe('owning runtime admission observations', () => {
+  it('does not renew a disposed captured owner through ordinary rollback restoration', async () => {
+    const beforeLaunch = vi.fn(async (_session, input) => ({
+      ...input,
+      liveCaptureId: 'original-capture',
+    }));
+    const f = fixture(true, { beforeLaunch });
+    const owning = await f.runtime.start(session(), 'time');
+    f.runtime.stop(owning.id);
+    await expect(
+      f.runtime.restoreLiveOwner(owning, 'later', { modelConfig: {}, skillsConfig: undefined }),
+    ).rejects.toThrow('LIVE_RUNTIME_RENEWAL_REQUIRED');
+    expect(beforeLaunch).toHaveBeenCalledTimes(1);
+    expect(f.launch).toHaveBeenCalledTimes(1);
+    expect(f.runtime.liveOwnerIds()).toEqual([]);
+  });
   it('awaits private capture before launching the original process and refuses a failed capture', async () => {
     const beforeLaunch = vi.fn(async (_session, input) => ({
       ...input,

@@ -625,6 +625,15 @@ export class ProductionLiveController {
       }
       this.preflight.add(session.id);
       let lifecycleStage = 'register';
+      const operation = async <T>(stage: string, work: () => Promise<T>): Promise<T> => {
+        lifecycleStage = stage;
+        try {
+          return await work();
+        } catch (error) {
+          this.recordStartFailure(session.id, 'start-operation', stage, error);
+          throw error;
+        }
+      };
       try {
         const run = await startLive(
           {
@@ -632,39 +641,29 @@ export class ProductionLiveController {
             controls: this.controls!,
             revalidateApp: revalidateLiveApp,
             admission: {
-              register: () => this.register(session, app, request),
+              register: () => operation('register', () => this.register(session, app, request)),
               unregister: (claim) => this.unregister(claim),
-              busy: async () => {
-                lifecycleStage = 'owning-quiescence';
-                await bindings.runtime.inspectLiveQuiescence(session);
-                return false;
-              },
-              verify: (candidate) => {
-                lifecycleStage = 'generation-verification';
-                return this.verifyGeneration(candidate);
-              },
+              busy: () =>
+                operation('owning-quiescence', async () => {
+                  await bindings.runtime.inspectLiveQuiescence(session);
+                  return false;
+                }),
+              verify: (candidate) =>
+                operation('generation-verification', () => this.verifyGeneration(candidate)),
             },
             resources: {
-              quiesce: async (candidate) => {
-                lifecycleStage = 'resource-quiescence';
-                const g = this.generation(candidate);
-                await bindings.runtime.inspectLiveQuiescence(g.session);
-              },
+              quiesce: (candidate) =>
+                operation('resource-quiescence', async () => {
+                  const g = this.generation(candidate);
+                  await bindings.runtime.inspectLiveQuiescence(g.session);
+                }),
               restore: (candidate) => this.restoreOriginal(candidate),
-              prepare: (candidate) => {
-                lifecycleStage = 'helper-and-context-preparation';
-                return this.prepareOwner(candidate);
-              },
+              prepare: (candidate) =>
+                operation('helper-and-context-preparation', () => this.prepareOwner(candidate)),
               cleanup: (candidate) => this.cleanup(candidate),
-              authorize: (candidate) => {
-                lifecycleStage = 'authorization';
-                return this.authorize(candidate);
-              },
+              authorize: (candidate) => operation('authorization', () => this.authorize(candidate)),
               revoke: (candidate) => this.revoke(candidate),
-              expose: (candidate) => {
-                lifecycleStage = 'preview-exposure';
-                return this.expose(candidate);
-              },
+              expose: (candidate) => operation('preview-exposure', () => this.expose(candidate)),
               remove: (candidate) => this.remove(candidate),
             },
           },
@@ -680,39 +679,60 @@ export class ProductionLiveController {
         void generation.loop.run(run).catch(() => {});
         return run;
       } catch (error) {
+        this.recordStartFailure(session.id, 'start-lifecycle', lifecycleStage, error);
+        let recoveryRequired = false;
         try {
-          const phase = this.owners.read(session.id)?.phase;
-          writeFileSync(
-            join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
-            JSON.stringify({
-              schemaVersion: 1,
-              stage: 'start-lifecycle',
-              lifecycleStage,
-              admission:
-                error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
-              phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
-              code:
-                error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
-                  ? error.message
-                  : 'UNCLASSIFIED',
-              processStage:
-                error instanceof Error &&
-                'stage' in error &&
-                typeof error.stage === 'string' &&
-                /^[a-z][a-z0-9-]{0,63}$/.test(error.stage)
-                  ? error.stage
-                  : undefined,
-            }) + '\n',
-            { mode: 0o600, flag: 'wx' },
-          );
+          recoveryRequired = this.owners.read(session.id)?.state === 'recoveryRequired';
         } catch {
-          /* Bounded diagnostics cannot alter the refusal or its cleanup. */
+          recoveryRequired = true;
+        }
+        if (recoveryRequired) {
+          this.failedPreparations.add(session.id);
+          throw new Error('LIVE_CLEANUP_REQUIRED');
         }
         throw error;
       } finally {
         this.preflight.delete(session.id);
       }
     });
+  }
+  private recordStartFailure(
+    sessionId: string,
+    stage: 'start-operation' | 'start-lifecycle',
+    lifecycleStage: string,
+    error: unknown,
+  ): void {
+    try {
+      const phase = this.owners.read(sessionId)?.phase;
+      writeFileSync(
+        join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          stage,
+          lifecycleStage,
+          admission: error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
+          phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
+          code:
+            error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
+              ? error.message
+              : 'UNCLASSIFIED',
+          native:
+            error instanceof CodexJsonRpcError
+              ? { code: error.code, kind: error.kind, markers: error.liveDiagnosticMarkers }
+              : undefined,
+          processStage:
+            error instanceof Error &&
+            'stage' in error &&
+            typeof error.stage === 'string' &&
+            /^[a-z][a-z0-9-]{0,63}$/.test(error.stage)
+              ? error.stage
+              : undefined,
+        }) + '\n',
+        { mode: 0o600, flag: 'wx' },
+      );
+    } catch {
+      /* Diagnostics never change admission, the original error, or cleanup. */
+    }
   }
   private async register(
     session: RelaySessionSnapshot,

@@ -301,6 +301,7 @@ export class CodexSessionRuntime {
       skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
     }
   >();
+  private readonly capturedLiveSessions = new Set<string>();
   liveOwnerIds(): readonly string[] {
     return [...this.sessions.keys()];
   }
@@ -1853,6 +1854,10 @@ export class CodexSessionRuntime {
     this.liveDispatch?.writer(session);
     if (!session.threadId || this.sessions.has(session.id))
       throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    // A disposed original birth cannot be restored by ordinary startup. That
+    // would silently recapture/replace it, and can reenter its controller's
+    // serialized Start while rollback is awaiting this method.
+    if (this.capturedLiveSessions.has(session.id)) throw new Error('LIVE_RUNTIME_RENEWAL_REQUIRED');
     this.liveConfigurations.set(session.id, structuredClone(configuration));
     const result = await this.restoreWithOutcome(session, now, true);
     if (result.replacementCreated || result.session.threadId !== session.threadId)
@@ -1907,6 +1912,8 @@ export class CodexSessionRuntime {
   /** Fixed existing-owner admission probe. Never exposes a generic raw MCP call port. */
   async probeLiveContext(session: RelaySessionSnapshot, privatePath: string): Promise<void> {
     this.liveDispatch?.writer(session);
+    const unavailable = (stage: string) =>
+      Object.assign(new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE'), { stage });
     // ENOENT inside the sandbox is evidence only for a real, protected host file.
     const canary = lstatSync(privatePath);
     if (
@@ -1943,7 +1950,7 @@ export class CodexSessionRuntime {
           },
         }),
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE')), 30000);
+          timer = setTimeout(() => reject(unavailable('context-tool-deadline')), 30000);
         }),
       ]);
     } finally {
@@ -1964,20 +1971,20 @@ export class CodexSessionRuntime {
     )
       throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
     const reply = asRecord(result);
-    if (reply?.isError || !Array.isArray(reply?.content))
-      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    if (reply?.isError) throw unavailable('context-tool-error');
+    if (!Array.isArray(reply?.content)) throw unavailable('context-result-invalid');
     const text = reply.content
       .filter((item: unknown) => asRecord(item)?.type === 'text')
       .map((item: unknown) => asRecord(item)?.text)
       .join('\n');
-    if (text.length > 65536) throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    if (text.length > 65536) throw unavailable('context-result-oversized');
     const matches = [...text.matchAll(/LIVE_ADMISSION_PROBE_V1:(\{[^\n]*\})/g)];
-    if (matches.length !== 1) throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    if (matches.length !== 1) throw unavailable('context-result-marker');
     try {
       const proof = JSON.parse(matches[0]![1]!);
       if (proof.privateReadDenied !== true || Object.keys(proof).length !== 1) throw new Error();
     } catch {
-      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+      throw unavailable('context-denial-not-proven');
     }
     this.liveDispatch?.writer(session);
   }
@@ -2331,6 +2338,7 @@ export class CodexSessionRuntime {
         },
       );
       resource.liveCaptureId = admittedInput.liveCaptureId;
+      if (resource.liveCaptureId) this.capturedLiveSessions.add(session.id);
       resource.readinessDeadline = deadline;
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
