@@ -41,6 +41,9 @@ type AdmissionPrerequisites = {
   receipts: boolean[];
   originalProcess: boolean[];
   sourcePins: Record<string, boolean[]>;
+  sandboxPaths: Record<string, { role: string; present: boolean }[]>;
+  commandExecutables: boolean[];
+  stdioBridges: boolean[];
 };
 function admissionPrerequisites(manifestPath: string): AdmissionPrerequisites | undefined {
   try {
@@ -86,6 +89,36 @@ function admissionPrerequisites(manifestPath: string): AdmissionPrerequisites | 
             .filter((source: { kind: string }) => source.kind === kind)
             .map((source: { path: string }) => existsSync(source.path)),
         ]),
+      ),
+      sandboxPaths: Object.fromEntries(
+        ['read', 'write'].map((access) => [
+          access,
+          manifest.sandboxState.permissionProfile.file_system.entries
+            .filter(
+              (entry: { access: string; path: { type: string } }) =>
+                entry.access === access && entry.path.type === 'path',
+            )
+            .map((entry: { path: { path: string } }) => {
+              const path = entry.path.path;
+              return {
+                role:
+                  path === manifest.appRoot
+                    ? 'app'
+                    : path === '/tmp'
+                      ? 'tmp'
+                      : (['previews', 'artifacts', 'annotations'].find(
+                          (name) => path === join(manifest.appRoot, '.impeccable/live', name),
+                        ) ?? 'other'),
+                present: existsSync(path),
+              };
+            }),
+        ]),
+      ),
+      commandExecutables: Object.values(manifest.commands).map((command) =>
+        existsSync((command as { executable: string }).executable),
+      ),
+      stdioBridges: ['/usr/bin/bash', '/usr/bin/cat', '/usr/bin/env'].map((path) =>
+        existsSync(path),
       ),
     };
   } catch {
