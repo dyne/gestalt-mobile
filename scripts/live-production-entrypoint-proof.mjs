@@ -8,7 +8,7 @@
 // controlled and credential-free; this never substitutes for genuine proof.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   cpSync,
@@ -31,6 +31,7 @@ import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
+import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
 import {
@@ -69,6 +70,8 @@ const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-
 const rootIdentity = lstatSync(root);
 const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
 const constructionOnly = process.env.LIVE_PRODUCTION_CONSTRUCTION_ONLY === '1';
+const contextDiagnostic = process.env.LIVE_PRODUCTION_CONTEXT_DIAGNOSTIC === '1';
+if (contextDiagnostic) report.proofKind = 'context-diagnostic-no-production-success-claim';
 assert.ok(!(installationOnly && constructionOnly));
 if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
 if (installationOnly) report.proofKind = 'installation-only-no-native-launch';
@@ -81,7 +84,7 @@ const home = join(privateRoot, 'home'),
   controller = join(privateRoot, 'controller'),
   caddyRoot = join(privateRoot, 'caddy');
 for (const path of [home, owningHome, controller, caddyRoot]) mkdirSync(path, { mode: 0o700 });
-let mobile, caddy, stream, baselineBirth, generationDirectory;
+let mobile, caddy, stream, baselineBirth, generationDirectory, restoreContextObservation;
 const privateCanary = randomBytes(32).toString('hex'),
   privateFile = join(privateRoot, 'canary');
 writeFileSync(privateFile, privateCanary, { mode: 0o600 });
@@ -781,6 +784,131 @@ try {
     ancestorsBeforeComposition: ancestorMetadata(),
   };
   report.stage = 'sole-production-composition';
+  if (contextDiagnostic) {
+    const original = CodexSessionRuntime.prototype.inspectLiveAdmission;
+    restoreContextObservation = () => {
+      CodexSessionRuntime.prototype.inspectLiveAdmission = original;
+    };
+    CodexSessionRuntime.prototype.inspectLiveAdmission = async function observeContextDiagnostic(
+      ...args
+    ) {
+      const observed = await original.apply(this, args);
+      const servers = observed.mcp?.data;
+      if (
+        !report.contextInitializationDiagnostic &&
+        Array.isArray(servers) &&
+        servers.find((server) => server.name === 'gestalt-org-plan')?.runtimeStatus === 'connected'
+      ) {
+        restoreContextObservation();
+        const directory = readdirSync(controller)
+          .filter((name) => name.startsWith('owner-'))
+          .map((name) => join(controller, name))
+          .find((path) => existsSync(join(path, 'admission-receipt.json')));
+        assert.ok(directory);
+        const admission = await import(
+          pathToFileURL(join(installation, 'gestalt/live-admission.mjs')).href
+        );
+        const authority = admission.executionAuthority(join(directory, 'bootstrap.json'));
+        const launchId = randomUUID(),
+          started = Date.now();
+        const child = spawn(
+          authority.manager.path,
+          [
+            'live-policy',
+            'run',
+            '--manifest',
+            authority.input.manifestPath,
+            '--command',
+            'context-mode-call',
+            '--launch-id',
+            launchId,
+          ],
+          {
+            cwd: directory,
+            env: admission.managerEnvironment(authority.input.node, authority.manifest.runtimeHome),
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
+        let stdout = '',
+          stderr = '',
+          exceeded = false;
+        const append = (kind, bytes) => {
+          if (stdout.length + stderr.length + bytes.length > 65536) {
+            exceeded = true;
+            child.kill('SIGTERM');
+          } else if (kind === 'stdout') stdout += bytes.toString('utf8');
+          else stderr += bytes.toString('utf8');
+        };
+        child.stdout.on('data', (bytes) => append('stdout', bytes));
+        child.stderr.on('data', (bytes) => append('stderr', bytes));
+        const timeout = setTimeout(() => child.kill('SIGTERM'), 125000);
+        const hardTimeout = setTimeout(() => child.kill('SIGKILL'), 130000);
+        const closed = new Promise((done, reject) => {
+          child.once('error', reject);
+          child.once('close', (code, signal) => done({ code, signal }));
+        });
+        child.stdin.on('error', () => {});
+        child.stdin.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'l11-context-diagnostic',
+            method: 'initialize',
+            params: {
+              protocolVersion: '2025-03-26',
+              capabilities: {},
+              clientInfo: { name: 'l11-fixed-initialize-probe', version: '1' },
+            },
+          }),
+        );
+        let outcome;
+        try {
+          outcome = await closed;
+        } finally {
+          clearTimeout(timeout);
+          clearTimeout(hardTimeout);
+        }
+        let response;
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          response = {
+            jsonRpc: parsed.jsonrpc === '2.0',
+            result: Boolean(parsed.result),
+            error: Boolean(parsed.error),
+          };
+        } catch {
+          response = { parseable: false };
+        }
+        report.contextInitializationDiagnostic = {
+          outcome,
+          durationMs: Date.now() - started,
+          exceeded,
+          response,
+          nativeExitVerified: admission.nativeExitVerified(authority, launchId),
+          inputsCurrent: admission.executionInputsCurrent(authority),
+          stderrMarkers: [
+            'live-context-unavailable',
+            'bwrap:',
+            'permission denied',
+            'read-only file system',
+            'no such file',
+            "can't mkdir",
+            "can't bind",
+            'operation not permitted',
+            'module_not_found',
+            'syntaxerror',
+            'typeerror',
+            'launch-failed',
+          ].filter((marker) => stderr.toLowerCase().includes(marker)),
+        };
+        if (!report.contextInitializationDiagnostic.nativeExitVerified)
+          report.shutdownFailure = 'CONTEXT_DIAGNOSTIC_EXIT_UNVERIFIED';
+        // Returned Native observations were not replaced or marked ready.
+        // This explicitly diagnostic run cannot proceed to any model work.
+        throw new Error('CONTEXT_DIAGNOSTIC_ONLY');
+      }
+      return observed;
+    };
+  }
   mobile = await composeRelayApp({
     root: appRoot,
     dataDir: join(privateRoot, 'relay'),
@@ -1074,6 +1202,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  restoreContextObservation?.();
   stream?.destroy();
   if (mobile) {
     try {
