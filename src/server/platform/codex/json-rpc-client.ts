@@ -16,6 +16,8 @@ type CodexJsonRpcErrorKind =
 
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
+  /** Fixed internal operation label only; never parameters or response contents. */
+  liveRpcMethod?: string;
   constructor(
     readonly code: number | undefined,
     message: string,

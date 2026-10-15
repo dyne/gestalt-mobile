@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import type { SessionRepository } from '../../features/sessions/application/ports.js';
+import { CodexJsonRpcError } from '../codex/json-rpc-client.js';
 import type { LiveControls } from '../../features/live-design/application/controls.js';
 import type {
   LiveRun,
@@ -490,11 +491,43 @@ export class ProductionLiveController {
       const capture = this.captures.get(session.id);
       if (capture && !this.revokedCaptures.has(capture.captureId)) {
         try {
+          const native =
+            error instanceof CodexJsonRpcError
+              ? {
+                  method: error.liveRpcMethod ?? 'unknown',
+                  code: error.code,
+                  kind: error.kind,
+                  closing:
+                    error.message ===
+                    `thread ${session.threadId} is closing; retry thread/resume after the thread is closed`,
+                  rolloutMentioned: /\brollout\b/i.test(error.message),
+                }
+              : undefined;
+          writeFileSync(
+            join(this.cfg.privateDirectory, `preparation-failure-${randomUUID()}.json`),
+            JSON.stringify({
+              stage: 'original-startup-admission',
+              error: native
+                ? 'LIVE_NATIVE_STARTUP_UNAVAILABLE'
+                : error instanceof Error && /^LIVE_[A-Z0-9_]+$/.test(error.message)
+                  ? error.message
+                  : 'LIVE_STARTUP_UNAVAILABLE',
+              native,
+            }) + '\n',
+            { mode: 0o600, flag: 'wx' },
+          );
+        } catch {
+          /* Bounded diagnostics cannot waive failure or block revocation. */
+        }
+        try {
           await this.revokeCapture(capture);
         } catch {
           this.failedPreparations.add(session.id);
         }
-        throw error; // Captured owners must pass before ordinary writer readiness.
+        // Captured owners must pass before ordinary writer readiness.
+        throw error instanceof CodexJsonRpcError
+          ? new Error('LIVE_NATIVE_STARTUP_UNAVAILABLE', { cause: error })
+          : error;
       }
     }
   }

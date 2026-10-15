@@ -2156,7 +2156,30 @@ export class CodexSessionRuntime {
               : session;
           };
           if (effect) policy.writer(actor(), kind);
-          const result = await process.rpc.request(method, params);
+          let result: unknown;
+          try {
+            result = await process.rpc.request(method, params);
+          } catch (error) {
+            if (
+              error instanceof CodexJsonRpcError &&
+              [
+                'initialize',
+                'config/read',
+                'account/read',
+                'model/list',
+                'skills/list',
+                'thread/start',
+                'thread/read',
+                'thread/list',
+                'mcpServerStatus/list',
+                'thread/backgroundTerminals/list',
+                'thread/unsubscribe',
+                'thread/resume',
+              ].includes(method)
+            )
+              error.liveRpcMethod = method;
+            throw error;
+          }
           if (effect) policy.writer(actor(), kind);
           return result;
         },
