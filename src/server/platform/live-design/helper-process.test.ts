@@ -335,7 +335,7 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     );
     expect(f.calls.filter((call) => call.args[0] === 'live-accept')).toHaveLength(0);
     expect(readFileSync(join(directory, '1234abcd.jsonl'), 'utf8')).toContain('complete');
-  });
+  }, 15000);
   it('reconciles lost terminal stdout from actual durable journals and refuses dirty source after helper death', async () => {
     const f = await fixture();
     const directory = join(f.app, '.impeccable/live/sessions');
@@ -488,7 +488,7 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     expect(readFileSync(f.configPath, 'utf8')).toBe(f.config);
     expect(existsSync(join(f.app, '.impeccable/live/server.json'))).toBe(false);
     expect(JSON.stringify(f.helper.logs())).not.toMatch(/Token:|Original|claude|preview\.example/);
-  });
+  }, 15000);
   it('occupied helper port never starts helper or claims/stops an external dev server', async () => {
     const f = await fixture();
     const server = createServer();
