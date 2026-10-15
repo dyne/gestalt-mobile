@@ -458,38 +458,40 @@ async function eventFor(body) {
       true,
     );
   if (role === 'root' && step === 3) {
-    check(
-      'native-context-search-advertised',
-      available.some((tool) => tool.type === 'tool_search' && tool.execution === 'client'),
+    check('native-context-catalog-advertised', code?.description?.includes('ALL_TOOLS'));
+    return call(
+      code,
+      `${role}-${step}`,
+      `const matches=ALL_TOOLS.filter(tool=>/ctx_execute$/.test(tool.name));if(matches.length!==1||typeof tools[matches[0].name]!=='function')throw Error('NATIVE_CONTEXT_CATALOG_UNAVAILABLE');text('production-context-tool-discovered');`,
+      true,
     );
-    return {
-      type: 'response.output_item.done',
-      item: {
-        type: 'tool_search_call',
-        call_id: `${role}-${step}`,
-        execution: 'client',
-        arguments: { query: 'context-mode ctx_execute execute JavaScript code', limit: 1 },
-      },
-    };
   }
   if (role === 'root' && step === 4) {
-    const ctx = available.find((tool) => /ctx_execute$/.test(tool.name));
-    const nested = code?.description?.match(
-      /declare const tools: \{ ([A-Za-z0-9_]*ctx_execute)\(/,
-    )?.[1];
-    check('native-context-search-result', ctx || nested);
+    const discovery = body.input.find(
+      (item) => item.call_id === 'root-3' && item.type === 'custom_tool_call_output',
+    );
+    check(
+      'native-context-catalog-result',
+      discovery && JSON.stringify(discovery.output).includes('production-context-tool-discovered'),
+    );
     const args = {
       language: 'javascript',
       code: `const fs=await import('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
       intent: 'Controlled production context confinement probe',
     };
-    return ctx ? call(ctx, `${role}-${step}`, args) : toolCall(nested, args);
+    return call(
+      code,
+      `${role}-${step}`,
+      `const matches=ALL_TOOLS.filter(tool=>/ctx_execute$/.test(tool.name));if(matches.length!==1||typeof tools[matches[0].name]!=='function')throw Error('NATIVE_CONTEXT_CATALOG_UNAVAILABLE');text(await tools[matches[0].name](${JSON.stringify(args)}));`,
+      true,
+    );
   }
   if (role === 'root' && step === 5) {
     check(
       'native-context-artifact',
-      readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8') ===
-        'confined-context',
+      existsSync(join(appRoot, '.impeccable/live/artifacts/context.txt')) &&
+        readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8') ===
+          'confined-context',
     );
     const spawnTool = available.find((tool) => tool.name === 'spawn_agent');
     check('native-spawn-advertised', spawnTool);
