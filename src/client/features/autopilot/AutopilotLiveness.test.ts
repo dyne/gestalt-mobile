@@ -93,6 +93,16 @@ describe('AutopilotLiveness', () => {
     expect(screen.getByRole('status', { name: 'Autopilot disconnected' })).toBeTruthy();
   });
 
+  it('identifies account exhaustion as a pause without active motion', () => {
+    render(AutopilotLiveness, {
+      autopilot: { ...snapshot('safetyPaused'), reason: 'usageLimitExceeded' },
+    });
+    const status = screen.getByRole('status', {
+      name: 'Autopilot paused: Codex usage limit reached',
+    });
+    expect(status.classList.contains('active')).toBe(false);
+  });
+
   it('does not animate an enabled but degraded controller', () => {
     render(AutopilotLiveness, {
       autopilot: {

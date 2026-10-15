@@ -5,6 +5,7 @@
  */
 
 import { parseOrgPlanAttention } from './org-plan-attention.js';
+import { describeProviderFailure, parseProviderFailure } from './provider-failure.js';
 import type { AttentionAuditRecord } from './chat-snapshot.js';
 
 /** Only the bounded attention contract belongs in historical dialogue metadata. */
@@ -48,6 +49,11 @@ export function autopilotAuditLabel(type: string, payload: unknown): string | nu
 
   const state = property(payload, 'state');
   const reason = property(payload, 'reason');
+  const failure = parseProviderFailure(property(payload, 'providerFailure'));
+  if (state === 'safetyPaused' && failure)
+    return `Autopilot paused: ${describeProviderFailure(failure)}`;
+  if (state === 'safetyPaused' && reason === 'usageLimitExceeded')
+    return 'Autopilot paused: Codex usage limit reached';
   if (state === 'completed') return 'Completed the supervised plan';
   // Recovery health updates belong to the status and notification pipeline.
   // They may repeat on every reconciliation and are not dialogue milestones.

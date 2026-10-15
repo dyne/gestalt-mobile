@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import type { AutopilotSnapshot, OrgPlanAttention } from './contracts.js';
+  import { describeProviderFailure } from '../../../shared/contracts/provider-failure.js';
   import {
     isReconciliationRecovery,
     reconciliationRecoveryMessage,
@@ -39,23 +40,41 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     actionRateExceeded:
       'The coordinator stopped because it reached the automatic-action safety limit.',
   };
+  let providerFailure = $derived(
+    autopilot?.state === 'safetyPaused' ? autopilot.providerFailure : undefined,
+  );
   let message = $derived(
-    autopilot?.reason && !attention ? (reasons[autopilot.reason] ?? null) : null,
+    providerFailure
+      ? describeProviderFailure(providerFailure)
+      : autopilot?.reason && !attention
+        ? (reasons[autopilot.reason] ?? null)
+        : null,
   );
   let recovering = $derived(isReconciliationRecovery(autopilot));
   let recovery = $derived(
-    autopilot?.reason === 'startUnavailable'
-      ? 'There is no pending agent attention request to answer. Restore or reopen this session, then retry Autopilot.'
-      : autopilot?.reason === 'actionRateExceeded'
-        ? 'There is no pending agent attention request to answer. Wait for the ten-minute safety window to clear, or continue manually.'
-        : 'There is no pending agent attention request to answer. Retry the supported Autopilot coordinator after addressing the cause, or disable it.',
+    providerFailure
+      ? 'Address this failure, then retry Autopilot when ready.'
+      : autopilot?.reason === 'startUnavailable'
+        ? 'There is no pending agent attention request to answer. Restore or reopen this session, then retry Autopilot.'
+        : autopilot?.reason === 'actionRateExceeded'
+          ? 'There is no pending agent attention request to answer. Wait for the ten-minute safety window to clear, or continue manually.'
+          : 'There is no pending agent attention request to answer. Retry the supported Autopilot coordinator after addressing the cause, or disable it.',
   );
 </script>
 
-{#if !attention && (recovering || (autopilot?.state === 'attentionRequired' && message))}
-  <section class="safety-stop" class:recovering role="alert" aria-labelledby={`${controlId}-title`}>
+{#if !attention && (providerFailure || recovering || (autopilot?.state === 'attentionRequired' && message))}
+  <section
+    class="safety-stop"
+    class:recovering={recovering || Boolean(providerFailure)}
+    role="alert"
+    aria-labelledby={`${controlId}-title`}
+  >
     <h3 id={`${controlId}-title`}>
-      {recovering ? 'Autopilot recovery warning' : 'Autopilot safety stop'}
+      {providerFailure
+        ? 'Codex execution paused'
+        : recovering
+          ? 'Autopilot recovery warning'
+          : 'Autopilot safety stop'}
     </h3>
     {#if recovering}
       <p>{reconciliationRecoveryMessage}</p>

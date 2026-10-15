@@ -26,6 +26,30 @@ const safety = (
 });
 
 describe('AutopilotSafetyStop', () => {
+  it('keeps structured provider failure visible until supervision resumes', async () => {
+    const { rerender } = render(AutopilotSafetyStop, {
+      autopilot: {
+        ...safety('reconcileFailed'),
+        state: 'safetyPaused',
+        reason: 'providerError',
+        providerFailure: { code: 'httpConnectionFailed', httpStatusCode: 503 },
+      },
+      attention: null,
+    });
+    const alert = screen.getByRole('alert', { name: 'Codex execution paused' });
+    expect(alert.textContent).toContain('httpConnectionFailed (HTTP 503)');
+    expect(alert.textContent).toContain('provider HTTP connection failed');
+    await rerender({
+      autopilot: {
+        ...safety('reconcileFailed'),
+        state: 'monitoring',
+        enabled: true,
+        reason: undefined,
+      },
+      attention: null,
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
   it('warns during enabled reconciliation recovery and clears when monitoring recovers', async () => {
     const onrecover = vi.fn();
     const ondisable = vi.fn();

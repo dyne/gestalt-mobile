@@ -27,6 +27,7 @@ import { ProviderModelCatalog } from './platform/catalog/provider-model-catalog.
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
 import { normalizeCodexNotification } from './platform/codex/normalizer.js';
+import { decodeCodexFailure } from './platform/codex/codex-failure.js';
 import { KimiSessionRuntime } from './platform/kimi/kimi-session-runtime.js';
 import { KimiWebServerManager } from './platform/kimi/kimi-web-server-manager.js';
 import { KimiModelCatalog } from './platform/kimi/kimi-model-catalog.js';
@@ -1083,6 +1084,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
             currentSession?.activeTurnId,
             resolvedOrigin,
           );
+          // Pause before activity/completion can schedule another automatic turn.
+          // Unknown threads must not stop an unrelated session on the shared server.
+          const providerFailure = decodeCodexFailure(notification);
+          if (resolvedOrigin.kind !== 'unknown' && providerFailure)
+            autopilot.providerFailed(sessionId, providerFailure);
           const rootCommandId =
             resolvedOrigin.kind === 'root' ? completedCommandId(notification) : null;
           if (rootCommandId) autopilot.rootProcessCompleted(sessionId, rootCommandId);
@@ -1111,7 +1117,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 occurredAt,
               ).snapshot;
               sessions.save(completedSession);
-              autopilot.turnCompleted(sessionId, turnId);
+              if (!providerFailure) autopilot.turnCompleted(sessionId, turnId);
             }
             planMeasurementRefresh?.refreshNow(sessionId);
           }

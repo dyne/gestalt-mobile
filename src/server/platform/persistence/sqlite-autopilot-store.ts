@@ -18,6 +18,7 @@ import {
 } from '../../features/autopilot/domain/autopilot-session.js';
 import { AutopilotStateError } from '../../features/autopilot/domain/persisted-state-error.js';
 import { parsePersistedSupervisedLifecycle } from '../../features/autopilot/domain/supervised-lifecycle.js';
+import { parseProviderFailure } from '../../../shared/contracts/provider-failure.js';
 import {
   MAX_AUTOPILOT_RECORD_BYTES,
   parsePlanFingerprint,
@@ -53,6 +54,8 @@ export class SqliteAutopilotStore implements AutopilotStore {
         'attentionRequired',
         'noPlanProgress',
         'reconcileFailed',
+        'usageLimitExceeded',
+        'providerError',
         'startUnavailable',
         'actionRateExceeded',
         'planRemoved',
@@ -90,12 +93,14 @@ export class SqliteAutopilotStore implements AutopilotStore {
       state.blocking,
       state.supervision,
       state.checkpoints,
+      state.providerFailure,
     ].some((value) => value !== undefined)
       ? JSON.stringify({
           executor: state.executor,
           blocking: state.blocking,
           supervision: state.supervision,
           checkpoints: state.checkpoints,
+          providerFailure: state.providerFailure,
         })
       : null;
     // Use the reader's exact contract before any write (including transaction/outbox writes).
@@ -313,12 +318,20 @@ export class SqliteAutopilotStore implements AutopilotStore {
 
 function parseLifecycle(
   value: unknown,
-): Pick<AutopilotSession, 'executor' | 'blocking' | 'supervision' | 'checkpoints'> | null {
+): Pick<
+  AutopilotSession,
+  'executor' | 'blocking' | 'supervision' | 'checkpoints' | 'providerFailure'
+> | null {
   if (value === null || value === undefined) return {};
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_AUTOPILOT_RECORD_BYTES)
     return null;
   try {
-    return parsePersistedSupervisedLifecycle(JSON.parse(value)) ?? null;
+    const parsed = JSON.parse(value);
+    const lifecycle = parsePersistedSupervisedLifecycle(parsed);
+    if (!lifecycle) return null;
+    const providerFailure = parseProviderFailure(parsed.providerFailure);
+    if (parsed.providerFailure !== undefined && !providerFailure) return null;
+    return { ...lifecycle, ...(providerFailure ? { providerFailure } : {}) };
   } catch {
     return null;
   }

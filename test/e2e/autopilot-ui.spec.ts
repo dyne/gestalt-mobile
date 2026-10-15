@@ -71,6 +71,9 @@ function autopilot(
     state,
     enabled: state === 'monitoring' || state === 'backoff',
     reason,
+    ...(state === 'safetyPaused' && reason === 'providerError'
+      ? { providerFailure: { code: 'httpConnectionFailed', httpStatusCode: 503 } }
+      : {}),
     retry: {
       position:
         state === 'backoff'
@@ -879,6 +882,36 @@ test('typed missing-plan conflicts remain safe and actionable after the real tog
     'raw server detail',
   );
   await expect(page.locator('body')).not.toContainText('/secret');
+});
+
+test('Codex usage exhaustion explains the pause and leaves automatic execution off', async ({
+  page,
+}) => {
+  await install(page, 'safetyPaused', 'usageLimitExceeded', false);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.locator('.toast')).toContainText('Codex usage limit reached');
+  await expect(page.locator('.toast')).toContainText('then resume Autopilot');
+  await expect(page.getByRole('button', { name: /^Autopilot:/ })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await expect(page.getByRole('alert', { name: 'Autopilot safety stop' })).toHaveCount(0);
+});
+
+test('terminal provider diagnostics remain visible after reload', async ({ page }) => {
+  await install(page, 'safetyPaused', 'providerError', false);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Codex execution paused' })).toContainText(
+    'httpConnectionFailed (HTTP 503)',
+  );
+  await expect(page.locator('.toast')).toContainText('provider HTTP connection failed');
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Codex execution paused' })).toContainText(
+    'httpConnectionFailed (HTTP 503)',
+  );
 });
 
 test('monitoring reconciliation failure announces a warning and persistent recovery actions', async ({

@@ -4,10 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import {
+  parseProviderFailure,
+  type ProviderFailure,
+} from '../../../shared/contracts/provider-failure.js';
+
 export type AutopilotState =
   'disabled' | 'monitoring' | 'backoff' | 'attentionRequired' | 'completed' | 'safetyPaused';
 
 export type AutopilotSnapshot = Readonly<{
+  providerFailure?: ProviderFailure;
   state: AutopilotState;
   enabled: boolean;
   health?: Readonly<{
@@ -116,6 +122,8 @@ export function isAutopilotSnapshot(value: unknown): value is AutopilotSnapshot 
     Number.isInteger((snapshot.retry as Record<string, unknown>).limit) &&
     text(snapshot.updatedAt, 64) &&
     (snapshot.reason === undefined || text(snapshot.reason, 80)) &&
+    (snapshot.providerFailure === undefined ||
+      Boolean(parseProviderFailure(snapshot.providerFailure))) &&
     (snapshot.nextEvaluationAt === undefined || text(snapshot.nextEvaluationAt, 64)) &&
     (snapshot.health === undefined || validHealth(snapshot.health))
   );

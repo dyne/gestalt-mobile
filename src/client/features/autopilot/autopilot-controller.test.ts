@@ -49,6 +49,31 @@ const deferred = <T>() => {
 };
 
 describe('AutopilotController', () => {
+  it('announces usage exhaustion through the shared notification pipeline and clears on resume', () => {
+    let published = capture();
+    const controller = new AutopilotController(
+      {
+        getSession: async () => ({}),
+        setAutopilot: async () => ({ autopilot: snapshot() }),
+        resolveAttention: async () => ({}),
+      },
+      (state) => (published = capture(state)),
+    );
+    controller.bootstrap([
+      {
+        id: 'a',
+        autopilot: {
+          ...snapshot('safetyPaused'),
+          enabled: false,
+          reason: 'usageLimitExceeded',
+        },
+        currentSequence: 1,
+      },
+    ]);
+    expect(published.errors.get('a')).toContain('Codex usage limit reached');
+    controller.observe('a', { sequence: 2, type: 'autopilot.updated', payload: snapshot() });
+    expect(published.errors.has('a')).toBe(false);
+  });
   it('announces reconciliation blockers from bootstrap and live replay, clearing on recovery', () => {
     let published = capture();
     const controller = new AutopilotController(
