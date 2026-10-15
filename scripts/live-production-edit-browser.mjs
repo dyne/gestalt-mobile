@@ -16,6 +16,7 @@ let stage = 'start';
 let browser;
 const networkErrors = [];
 const exchangeStatuses = [];
+let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
   stage = value;
   process.stdout.write(JSON.stringify({ checkpoint: value }) + '\n');
@@ -159,12 +160,31 @@ try {
     }),
   );
   checkpoint('preview-exchange');
-  await preview.waitForURL(config.previewOrigin + '/');
+  try {
+    await preview.waitForURL(config.previewOrigin + '/');
+  } catch (error) {
+    if (!String(error?.message ?? '').startsWith('page.waitForURL: net::ERR_NETWORK_CHANGED'))
+      throw error;
+    // The isolated Chromium network notifier can settle after the successful
+    // one-use exchange. Repeat only its initial GET, using the same cookie and
+    // generation; never repeat the exchange, mint a grant or replay an edit.
+    await mobile.waitForFunction(() => window.__editExchanged === true, null, {
+      timeout: 10000,
+    });
+    checkpoint('preview-get-after-network-change');
+    const recovered = await preview.goto(config.previewOrigin + '/');
+    assert.equal(recovered.status(), 200);
+    initialPreviewGetRetried = true;
+  }
   checkpoint('opener-confirmation');
   await mobile.waitForFunction(() => window.__editExchanged === true);
   checkpoint('preview-privacy');
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
+  assert.deepEqual(
+    exchangeStatuses.filter((item) => item.path === '/__gestalt_live/exchange'),
+    [{ path: '/__gestalt_live/exchange', status: 201 }],
+  );
   checkpoint('helper-handshake');
   await ui.waitForHandshake(preview);
   await preview.waitForFunction(() => window.__productionHelperConnected === true);
@@ -228,6 +248,9 @@ try {
         realPickerDiscard: true,
         hmrUpdates,
         extraPollOwnerDenied: true,
+        initialPreviewGetRetried,
+        exchangePosts: exchangeStatuses.filter((item) => item.path === '/__gestalt_live/exchange')
+          .length,
         productionAuthentication: 'temporary-preprovisioned-authorized-device',
         genuineProvider: false,
       },
