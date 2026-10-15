@@ -1125,6 +1125,13 @@ export class ProductionLiveController {
   private async expose(run: LiveRun): Promise<void> {
     const g = this.generation(run);
     const assignment = this.origins.assign(g.app.appRoot);
+    const instance = {
+      relayId: run.relayId,
+      appId: run.appId,
+      liveId: run.liveId,
+      generation: run.generation,
+      previewOrigin: run.previewOrigin,
+    };
     g.registrationId = this.targets.register({
       appRoot: g.app.appRoot,
       appPort: g.app.devserver.port,
@@ -1133,13 +1140,13 @@ export class ProductionLiveController {
     });
     g.gateway = await createPreviewGateway({
       deps: this.preview!,
-      instance: run,
+      instance,
       assignment,
       targets: this.targets,
       registrationId: g.registrationId,
       connections: this.connections!,
       upstreams: isolatedPreviewUpstreams({
-        instance: run,
+        instance,
         appRoot: g.app.appRoot,
         helper: { process: g.helper, receipt: g.helperReceipt },
         devserver: { process: g.devserver, receipt: g.devReceipt },
