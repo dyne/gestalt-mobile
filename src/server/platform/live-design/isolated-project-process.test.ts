@@ -49,6 +49,37 @@ function specification(): IsolatedProjectSpecification {
   };
 }
 describe('project isolation admission refuses incomplete authority before process birth', () => {
+  it('accepts a covering private denial without recreating redundant child masks', () => {
+    const spec = specification();
+    const privateChild = join(controller, 'authentication');
+    const entries: IsolatedProjectSpecification['filesystem']['entries'] = [
+      ...spec.filesystem.entries,
+      { path: { type: 'path', path: controller }, access: 'deny' },
+      { path: { type: 'path', path: '/proc' }, access: 'deny' },
+    ];
+    const stage = (additional: typeof entries) => {
+      try {
+        new IsolatedProjectProcess({
+          ...spec,
+          protectedPaths: [privateChild],
+          filesystem: { type: 'restricted', entries: [...entries, ...additional] },
+        });
+        throw new Error('Expected unavailable test pin to refuse process birth');
+      } catch (error) {
+        return (error as Error & { stage?: string }).stage;
+      }
+    };
+    // Reaching pin validation proves only the preceding policy validation;
+    // this deliberately never creates a key or launches an executable.
+    expect(stage([])).toBe('pin-native-read');
+    expect(stage([{ path: { type: 'path', path: privateChild }, access: 'read' }])).toBe(
+      'private-denial-overridden',
+    );
+    expect(
+      stage([{ path: { type: 'path', path: join(privateChild, 'keys') }, access: 'write' }]),
+    ).toBe('filesystem-write-scope');
+    expect(existsSync(join(controller, 'project-process-signing-key'))).toBe(false);
+  });
   it('requires native private-state and proc denials before preparing any key or process', () => {
     expect(() => new IsolatedProjectProcess(specification())).toThrow(
       'LIVE_PROJECT_PROCESS_UNAVAILABLE',

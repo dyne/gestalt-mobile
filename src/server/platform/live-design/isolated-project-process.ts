@@ -328,10 +328,25 @@ export class IsolatedProjectProcess {
       throw failure('filesystem-write-scope');
     }
     for (const path of [spec.privateDirectory, ...spec.protectedPaths, '/proc']) {
+      // Native masks a denied directory as a whole. Its normalized profile
+      // intentionally omits redundant child masks inside that read-only mount.
+      const ancestors = spec.filesystem.entries
+        .filter((entry) => entry.path.type === 'path' && inside(entry.path.path, path))
+        .sort((a, b) =>
+          a.path.type === 'path' && b.path.type === 'path'
+            ? b.path.path.length - a.path.path.length
+            : 0,
+        );
+      const nearest = ancestors[0];
       if (
-        !spec.filesystem.entries.some(
+        !nearest ||
+        nearest.access !== 'deny' ||
+        ancestors.some(
           (entry) =>
-            entry.access === 'deny' && entry.path.type === 'path' && entry.path.path === path,
+            entry.path.type === 'path' &&
+            nearest.path.type === 'path' &&
+            entry.path.path === nearest.path.path &&
+            entry.access !== 'deny',
         )
       )
         throw failure('private-denial-missing');

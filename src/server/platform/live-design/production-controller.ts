@@ -834,6 +834,13 @@ export class ProductionLiveController {
           JSON.stringify({
             schemaVersion: 1,
             stage,
+            processStage:
+              error instanceof Error &&
+              'stage' in error &&
+              typeof error.stage === 'string' &&
+              /^[a-z][a-z0-9-]{0,63}$/.test(error.stage)
+                ? error.stage
+                : undefined,
             code:
               error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
                 ? error.message

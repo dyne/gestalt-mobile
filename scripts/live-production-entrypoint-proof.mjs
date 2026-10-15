@@ -412,6 +412,17 @@ const provider = createServer(async (req, res) => {
     websocket: String(req.headers.upgrade ?? '').toLowerCase() === 'websocket',
   };
   try {
+    // Native doctor probes inference reachability without making a model turn.
+    // A real Responses endpoint does not accept HEAD as an inference request.
+    if (req.method === 'HEAD' && req.url === '/v1/responses') {
+      assert.equal(req.headers['transfer-encoding'], undefined);
+      assert.ok(
+        req.headers['content-length'] === undefined || req.headers['content-length'] === '0',
+      );
+      res.writeHead(405, { allow: 'POST' });
+      res.end();
+      return;
+    }
     if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
