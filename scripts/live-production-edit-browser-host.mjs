@@ -119,8 +119,10 @@ export async function productionEditBrowser(input) {
         commandFailure = true;
         return;
       }
-      if (typeof value.checkpoint === 'string' && /^[a-z-]{1,64}$/.test(value.checkpoint))
+      if (typeof value.checkpoint === 'string' && /^[a-z-]{1,64}$/.test(value.checkpoint)) {
         input.report.editBrowserStage = value.checkpoint;
+        input.checkpoint?.(value.checkpoint);
+      }
       if (
         /^[a-z-]{1,64}$/.test(value.failure?.stage ?? '') &&
         /^[A-Z][A-Z_]{1,63}$/.test(value.failure?.code ?? '')

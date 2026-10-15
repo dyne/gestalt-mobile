@@ -46,6 +46,23 @@ try {
     ],
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript(() => {
+    window.__productionHelperConnected = false;
+    const OriginalEventSource = window.EventSource;
+    window.EventSource = class extends OriginalEventSource {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener('message', (event) => {
+          try {
+            if (JSON.parse(event.data).type === 'connected')
+              window.__productionHelperConnected = true;
+          } catch {
+            // Ignore non-JSON heartbeat frames.
+          }
+        });
+      }
+    };
+  });
   // A test-provisioned authorized device/session traverses real production auth.
   // These temporary credentials travel only in this private config, never model input/evidence.
   await context.addCookies([
@@ -131,6 +148,8 @@ try {
   assert.equal(await preview.evaluate(() => window.opener), null);
   checkpoint('helper-handshake');
   await ui.waitForHandshake(preview);
+  await preview.waitForFunction(() => window.__productionHelperConnected === true);
+  checkpoint('helper-connected');
   assert.equal(
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
     403,

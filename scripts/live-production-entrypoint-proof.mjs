@@ -1358,8 +1358,6 @@ try {
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
   report.stage = 'production-owning-model-tools';
   if (editFlow) {
-    stream.destroy();
-    stream = undefined;
     const requestsBeforeWriterProbes = report.provider.requestCount;
     for (const [method, suffix, payload] of [
       ['POST', '/turns', { text: 'An ordinary writer must not run.' }],
@@ -1409,6 +1407,13 @@ try {
       privateRoot,
       certificate: join(caddyRoot, 'tls.pem'),
       report,
+      checkpoint: (stage) => {
+        if (stage === 'helper-connected') {
+          stream?.destroy();
+          stream = undefined;
+          report.checks.previewProbeHandedToActualBrowserConnection = true;
+        }
+      },
       browser: {
         mobileOrigin,
         previewOrigin: preview,
