@@ -1075,6 +1075,7 @@ try {
   const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
     method: 'POST',
     body: {
+      token,
       type: 'generate',
       id: 'f00df00d',
       count: 1,
@@ -1082,6 +1083,7 @@ try {
       element: { outerHTML: '<h1>Owning app</h1>' },
     },
   });
+  report.modelEventStatus = event.status;
   assert.equal(event.status, 200);
   await until(
     () => roles.get('root') >= 6 && roles.get('child') >= 4 && childCompletion(),
