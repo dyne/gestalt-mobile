@@ -186,6 +186,22 @@ jobs:
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
         run: |
           set -Eeuo pipefail
+          # Native enforcement fixtures must not create ordinary Codex sources
+          # in an ancestor of the later captured-original application.
+          caddy_home=$(mktemp -d "$RUNNER_TEMP/caddy-native-home.XXXXXXXX")
+          export HOME="$caddy_home"
+          node --input-type=module <<'NODE'
+          import {lstatSync,mkdirSync,writeFileSync} from 'node:fs';
+          import {dirname,join} from 'node:path';
+          const entries=[];
+          for(let path=process.env.RUNNER_TEMP,depth=0;;path=dirname(path),depth++){
+            try {const stat=lstatSync(join(path,'.codex'));entries.push({depth,present:true,directory:stat.isDirectory()});}
+            catch(error){if(error.code!=='ENOENT')throw error;entries.push({depth,present:false});}
+            if(path==='/')break;
+          }
+          mkdirSync('test-results/live-caddy-proof',{recursive:true});
+          writeFileSync('test-results/live-caddy-proof/before-native-gates-metadata.json',JSON.stringify(entries)+'\n');
+          NODE
           "$LIVE_TEST_CADDY" version
           "$LIVE_HOST_MANAGER_BINARY" version
           npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
