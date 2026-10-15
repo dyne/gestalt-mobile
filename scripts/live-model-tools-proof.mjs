@@ -550,6 +550,9 @@ try {
     LANG: 'C.UTF-8',
   };
   execFileSync('git', ['init', '--quiet', app], { stdio: 'ignore' });
+  // The shared capture prepares the real writable model-output leaves beneath
+  // this control parent; no helper records or provenance metadata are created.
+  mkdirSync(join(app, '.impeccable/live'), { recursive: true, mode: 0o700 });
   report.stage = 'managed-native-inputs';
   await prepareManagedInputs(env);
   election = await electLiveController({
