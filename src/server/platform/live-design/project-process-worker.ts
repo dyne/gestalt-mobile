@@ -65,6 +65,68 @@ type Specification = {
   permissionProfile: unknown;
   port: number;
 };
+type WorkerOutput = {
+  readonly writableLength: number;
+  write(data: string): boolean;
+  on(event: 'drain', listener: () => void): unknown;
+  off(event: 'drain', listener: () => void): unknown;
+};
+type FlowChannel = { pause(): unknown; resume(): unknown };
+
+/** Bounded private framing: a slow controller pauses producers, not its owning worker. */
+export class ProjectWorkerOutput {
+  private readonly output: WorkerOutput;
+  private readonly channels: ReadonlyMap<number, FlowChannel>;
+  private readonly overflow: () => void;
+  private blocked = false;
+  private closed = false;
+  private readonly held = new Set<number>();
+  private readonly drained = () => {
+    if (this.closed) return;
+    this.blocked = false;
+    for (const [id, socket] of this.channels) if (!this.held.has(id)) socket.resume();
+  };
+  constructor(
+    output: WorkerOutput,
+    channels: ReadonlyMap<number, FlowChannel>,
+    overflow: () => void,
+  ) {
+    this.output = output;
+    this.channels = channels;
+    this.overflow = overflow;
+    output.on('drain', this.drained);
+  }
+  send(message: unknown): void {
+    if (this.closed) return;
+    if (this.output.writableLength > 1024 * 1024) {
+      this.overflow();
+      return;
+    }
+    if (!this.output.write(JSON.stringify(message) + '\n')) {
+      this.blocked = true;
+      for (const socket of this.channels.values()) socket.pause();
+    }
+  }
+  opened(id: number): void {
+    if (this.blocked || this.held.has(id)) this.channels.get(id)?.pause();
+  }
+  pause(id: number): void {
+    this.held.add(id);
+    this.channels.get(id)?.pause();
+  }
+  resume(id: number): void {
+    this.held.delete(id);
+    if (!this.closed && !this.blocked) this.channels.get(id)?.resume();
+  }
+  removed(id: number): void {
+    this.held.delete(id);
+  }
+  close(): void {
+    this.closed = true;
+    this.output.off('drain', this.drained);
+  }
+}
+
 function runProjectWorker(): void {
   let spec: Specification | undefined;
   let target: ChildProcess | undefined;
@@ -73,18 +135,14 @@ function runProjectWorker(): void {
   let commandCancelled = false;
   let stopping = false;
   const channels = new Map<number, Socket>();
+  const output = new ProjectWorkerOutput(process.stdout, channels, () => stop());
   const send = (message: unknown) => {
-    if (!stopping) {
-      if (process.stdout.writableLength > 1024 * 1024) {
-        stop();
-        return;
-      }
-      process.stdout.write(JSON.stringify(message) + '\n');
-    }
+    if (!stopping) output.send(message);
   };
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    output.close();
     for (const socket of channels.values()) socket.destroy();
     channels.clear();
     target?.kill('SIGTERM');
@@ -273,8 +331,10 @@ function runProjectWorker(): void {
         socket.once('end', () => send({ type: 'end', id }));
         socket.once('close', () => {
           channels.delete(Number(id));
+          output.removed(Number(id));
           send({ type: 'closed', id });
         });
+        output.opened(Number(id));
         return;
       }
       const socket = channels.get(Number(id));
@@ -285,8 +345,8 @@ function runProjectWorker(): void {
         socket.write(Buffer.from(message.data, 'base64'));
       } else if (message.op === 'end') socket.end();
       else if (message.op === 'close') socket.destroy();
-      else if (message.op === 'pause') socket.pause();
-      else if (message.op === 'resume') socket.resume();
+      else if (message.op === 'pause') output.pause(Number(id));
+      else if (message.op === 'resume') output.resume(Number(id));
       else throw new Error();
     } catch {
       send({ type: 'failed', reason: 'controller-protocol' });
