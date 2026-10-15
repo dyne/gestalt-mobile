@@ -435,9 +435,50 @@ async function eventFor(body) {
   }
   if (role === 'root' && step === 5) {
     const spawned = body.input.find(
-      (x) => x.call_id === 'root-4' && x.type === 'function_call_output',
+      (x) =>
+        x.call_id === 'root-4' &&
+        ['function_call_output', 'custom_tool_call_output'].includes(x.type),
     );
+    const kinds = [
+      'function_call_output',
+      'custom_tool_call_output',
+      'function_call',
+      'custom_tool_call',
+      'message',
+      'additional_tools',
+      'item_reference',
+      'compaction',
+    ];
+    const spawnText =
+      typeof spawned?.output === 'string'
+        ? spawned.output
+        : (Array.isArray(spawned?.output) ? spawned.output : [])
+            .map((item) => (typeof item.text === 'string' ? item.text : ''))
+            .join('');
+    const spawnLower = spawnText.slice(0, 65536).toLowerCase();
+    report.provider.spawnResponse = {
+      kind: spawned?.type ?? 'missing',
+      expectedCallIdPresent: body.input.some((x) => x.call_id === 'root-4'),
+      inputKinds: Object.fromEntries(
+        kinds.map((kind) => [kind, body.input.filter((x) => x.type === kind).length]),
+      ),
+      markers: [
+        'error',
+        'thread limit',
+        'depth',
+        'max_threads',
+        'fork',
+        'not allowed',
+        'denied',
+        'unsupported',
+        'unknown',
+        'agent_id',
+        'task_name',
+      ].filter((marker) => spawnLower.includes(marker)),
+    };
+    report.provider.stage = 'native-spawn-response-present';
     assert.ok(spawned);
+    report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
   }
   return final(
