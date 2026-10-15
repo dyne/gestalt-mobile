@@ -183,13 +183,28 @@ export class JsonRpcClient {
     input: Readable,
     private readonly output: Writable,
   ) {
-    createInterface({ input, crlfDelay: Infinity }).on('line', (line) => this.receive(line));
+    const closed = () => this.fail(new Error('CODEX_RPC_TRANSPORT_CLOSED'));
+    createInterface({ input, crlfDelay: Infinity })
+      .on('line', (line) => this.receive(line))
+      .once('close', closed);
+    input.once('error', () => this.fail(new Error('CODEX_RPC_INPUT_FAILED')));
+    output.once('error', () => this.fail(new Error('CODEX_RPC_OUTPUT_FAILED')));
+    output.once('close', closed);
   }
   request(method: string, params: unknown): Promise<unknown> {
     if (this.failure) return Promise.reject(this.failure);
     const id = ++this.sequence;
-    this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    const line = `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      try {
+        this.output.write(line, (error) => {
+          if (error) this.fail(new Error('CODEX_RPC_OUTPUT_FAILED'));
+        });
+      } catch {
+        this.fail(new Error('CODEX_RPC_OUTPUT_FAILED'));
+      }
+    });
   }
   fail(error: unknown): void {
     if (this.failure) return;

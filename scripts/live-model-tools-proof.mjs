@@ -11,11 +11,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   existsSync,
   closeSync,
+  chmodSync,
+  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -24,17 +27,26 @@ import {
 import { createServer } from 'node:http';
 import { createConnection, createServer as socketServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
 import { electLiveController } from '../dist/server/server/platform/live-design/elected-controller.js';
 import { liveAppIdentity } from '../dist/server/server/platform/live-design/sqlite-live-ownership.js';
 import { launchCodexAppServer } from '../dist/server/server/platform/codex/codex-process-launcher.js';
 import { RelaySession } from '../dist/server/server/features/sessions/model/relay-session.js';
-import { LIVE_CODEX_SHA256 } from '../dist/server/server/platform/live-design/installed-policy.js';
+import {
+  LIVE_CODEX_SHA256,
+  InstalledLivePolicy,
+  LIVE_MANAGER_SHA256,
+  measureInstalledLiveTree,
+} from '../dist/server/server/platform/live-design/installed-policy.js';
 import {
   LIVE_CODEX_SOURCE,
   LIVE_CODEX_BWRAP_SHA256,
 } from '../dist/server/server/platform/live-design/native-contract.js';
+import { captureOwningRuntime } from '../dist/server/server/platform/live-design/owning-runtime-capture.js';
+import { resolveLiveSourceInventory } from '../dist/server/server/platform/live-design/owning-source-inventory.js';
+import { readLiveConfigFile } from '../dist/server/server/platform/live-design/effective-config.js';
 
 assert.equal(process.env.LIVE_NATIVE_MODEL_PROOF, '1', 'Disposable supported-host opt-in required');
 const binary = realpathSync(process.env.LIVE_HOST_CODEX_BINARY);
@@ -95,6 +107,8 @@ const report = {
         'src/server/platform/codex/session-runtime.ts',
         'src/server/platform/live-design/installed-policy.ts',
         'src/server/platform/live-design/native-contract.ts',
+        'src/server/platform/live-design/owning-runtime-capture.ts',
+        'src/server/platform/live-design/owning-source-inventory.ts',
       ].map((path) => [path, digest(readFileSync(path))]),
     ),
   },
@@ -113,6 +127,10 @@ let appServer,
   rootCompleted = false,
   childCompleted = false,
   providerFailure = false;
+let capture,
+  policy,
+  managedConfiguration,
+  captureRevoked = false;
 const proofStarted = Date.now();
 const nativeMarkers = new Set();
 const progress = setInterval(() => {
@@ -180,6 +198,84 @@ function availableTools(tools, namespace) {
   return (tools ?? []).flatMap((tool) =>
     tool.type === 'namespace' ? availableTools(tool.tools, tool.name) : [{ ...tool, namespace }],
   );
+}
+async function prepareManagedInputs(env) {
+  const installation = join(root, 'installed');
+  const nodeRoot = join(installation, 'node-bin');
+  mkdirSync(nodeRoot, { recursive: true, mode: 0o700 });
+  const pin = (path) => ({ path: realpathSync(path), sha256: digest(readFileSync(path)) });
+  const nodePath = join(nodeRoot, 'node');
+  writeFileSync(nodePath, readFileSync(process.execPath), { mode: 0o500, flag: 'wx' });
+  const node = pin(nodePath),
+    manager = pin(process.env.LIVE_HOST_MANAGER_BINARY);
+  assert.equal(manager.sha256, LIVE_MANAGER_SHA256);
+  const agentsRoot = realpathSync(process.env.LIVE_HOST_AGENTS_ROOT);
+  const agentsTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+    cwd: agentsRoot,
+    encoding: 'utf8',
+  }).trim();
+  assert.equal(agentsTree, '663799058b4c0146a74906061d0b334ae7c0d62c');
+  const packages = ['context-mode', 'gestalt'].map((name) => {
+    const target = join(installation, name);
+    cpSync(join(agentsRoot, 'plugins', name), target, {
+      recursive: true,
+      filter: (path) =>
+        !path
+          .split('/')
+          .some(
+            (part) =>
+              part === 'node_modules' ||
+              part === 'build' ||
+              part.startsWith('.context-mode-prepare'),
+          ) && !path.endsWith('.bundle.mjs'),
+    });
+    return { name, root: target };
+  });
+  const { prepareLiveRuntime } = await import(
+    pathToFileURL(join(installation, 'gestalt/scripts/prepare-live-runtime.mjs')).href
+  );
+  const prepared = await prepareLiveRuntime(
+    join(installation, 'context-mode'),
+    join(installation, 'context-runtime'),
+  );
+  const protect = (path) => {
+    const stat = lstatSync(path);
+    assert.equal(stat.isSymbolicLink(), false);
+    if (stat.isDirectory()) {
+      for (const name of readdirSync(path)) protect(join(path, name));
+      chmodSync(path, 0o500);
+    } else {
+      assert.ok(stat.isFile());
+      chmodSync(path, stat.mode & 0o111 ? 0o500 : 0o400);
+    }
+  };
+  for (const entry of packages) {
+    protect(entry.root);
+    entry.sha256 = measureInstalledLiveTree(entry.root);
+  }
+  protect(prepared.root);
+  const installationInputs = {
+    manager,
+    node,
+    packages,
+    runtime: { root: prepared.root, sha256: measureInstalledLiveTree(prepared.root) },
+  };
+  policy = new InstalledLivePolicy(installationInputs);
+  policy.validateInstallation();
+  managedConfiguration = {
+    installation: installationInputs,
+    native: pin(binary),
+    nativeEnvironment: { ...env, HOME: nativeHome },
+    providerCredentialEnvironment: [],
+    privateDirectory: controller,
+    components: {
+      manager: '4ea4e0c92b156b6979eff04dbd9cdc9862674ea5',
+      mobile: report.provenance.mobileTree,
+      agents: agentsTree,
+    },
+    caddy: { controllerDirectory: socketController },
+  };
+  report.checks.actualAcceptedManagedInputs = true;
 }
 function functionCall(tool, callId, args) {
   const item = {
@@ -444,7 +540,7 @@ try {
   });
   const providerPort = provider.address().port;
   report.stage = 'native-configuration';
-  const config = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled native proof"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(app)} = "write"\n${JSON.stringify(controller)} = "deny"\n${JSON.stringify(socketController)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n`;
+  const config = `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled native proof"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(app)} = "write"\n${JSON.stringify(controller)} = "deny"\n${JSON.stringify(socketController)} = "deny"\n${JSON.stringify(daemon)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n[projects.${JSON.stringify(app)}]\ntrust_level = "trusted"\n`;
   writeFileSync(join(nativeHome, 'config.toml'), config, { mode: 0o600 });
   const env = {
     PATH: `${dirname(process.execPath)}:${dirname(binary)}:/usr/bin:/bin`,
@@ -453,8 +549,45 @@ try {
     TMPDIR: '/tmp',
     LANG: 'C.UTF-8',
   };
+  execFileSync('git', ['init', '--quiet', app], { stdio: 'ignore' });
+  report.stage = 'managed-native-inputs';
+  await prepareManagedInputs(env);
+  election = await electLiveController({
+    privateDirectory: controller,
+    controllerId: 'native-proof-controller',
+    initialize: true,
+  });
+  const owningApp = {
+    appRoot: app,
+    owningPolicy: {
+      profileId: 'workspace-git',
+      configFiles: [readLiveConfigFile(join(nativeHome, 'config.toml'))],
+      instructionFiles: [],
+      sandboxState: {
+        permissionProfile: {
+          type: 'managed',
+          network: 'restricted',
+          file_system: {
+            type: 'restricted',
+            entries: [
+              { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+              { path: { type: 'special', value: { kind: 'slash_tmp' } }, access: 'write' },
+              { path: { type: 'path', path: '/tmp' }, access: 'write' },
+              { path: { type: 'path', path: app }, access: 'write' },
+              ...[controller, socketController, daemon, '/proc'].map((path) => ({
+                path: { type: 'path', path },
+                access: 'deny',
+              })),
+            ],
+          },
+        },
+        sandboxCwd: pathToFileURL(app).href,
+        useLegacyLandlock: false,
+      },
+    },
+  };
   let launches = 0;
-  runtime = new CodexSessionRuntime(
+  const runtimeArguments = [
     (input) => {
       launches++;
       assert.equal(launches, 1);
@@ -463,8 +596,16 @@ try {
         sha256: LIVE_CODEX_SHA256,
         environment: env,
         managedLaunch: {
-          command: process.env.LIVE_HOST_MANAGER_BINARY,
-          args: ['cli', '--', 'app-server', '--stdio'],
+          command: managedConfiguration.installation.manager.path,
+          args: [
+            'cli',
+            '--',
+            '--live-policy-owning-runtime',
+            '--manifest',
+            capture.manifestPath,
+            '--capture-id',
+            capture.captureId,
+          ],
         },
       });
       appServer.child.stderr.on('data', (bytes) => {
@@ -515,7 +656,22 @@ try {
         else providerFailure = true;
       }
     },
-  );
+  ];
+  runtimeArguments[16] = async (owning, input, threadConfig) => {
+    assert.equal(capture, undefined, 'Only one original capture is permitted');
+    report.stage = 'original-runtime-capture';
+    capture = await captureOwningRuntime({
+      configuration: managedConfiguration,
+      app: owningApp,
+      session: owning,
+      election: election.election,
+      generation: 1,
+      authenticationDirectory: controller,
+      threadConfig,
+    });
+    return { ...input, liveCaptureId: capture.captureId };
+  };
+  runtime = new CodexSessionRuntime(...runtimeArguments);
   report.stage = 'owning-runtime';
   session = await runtime.start(
     RelaySession.create({
@@ -534,6 +690,62 @@ try {
     new Date().toISOString(),
   );
   const admitted = await runtime.inspectLiveAdmission(session);
+  report.stage = 'original-runtime-source-seal';
+  const workerConfig = readLiveConfigFile(join(capture.runtimeHome, 'config.toml'));
+  const sources = resolveLiveSourceInventory({
+    captured: capture.captured,
+    configuration: admitted.configuration,
+    threadConfig: admitted.threadConfig,
+    selection: {
+      ...admitted.threadSelection,
+      threadConfig: admitted.threadConfig,
+      skillsConfig: admitted.skillsConfig ?? null,
+    },
+    runtime: admitted.launch,
+    policyDigest: capture.policyDigest,
+    workerConfig,
+    approved: { mcpServers: {}, plugins: {} },
+  });
+  const sourcesPath = join(capture.directory, 'owning-sources.json');
+  writeFileSync(sourcesPath, JSON.stringify(sources) + '\n', { mode: 0o600, flag: 'wx' });
+  await policy.sealRuntime(
+    capture.manifestPath,
+    capture.captureId,
+    admitted.launch.pid,
+    sourcesPath,
+  );
+  const manifest = JSON.parse(readFileSync(capture.manifestPath, 'utf8'));
+  manifest.runtimeProvenance = {
+    captureId: capture.captureId,
+    effectiveConfigDigest: sources.effectiveConfigDigest,
+    sessionFlagsDigest: sources.sessionFlagsDigest,
+  };
+  writeFileSync(capture.manifestPath + '.next', JSON.stringify(manifest) + '\n', {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  renameSync(capture.manifestPath + '.next', capture.manifestPath);
+  const managerCommand = (action) =>
+    JSON.parse(
+      execFileSync(
+        managedConfiguration.installation.manager.path,
+        ['live-policy', action, '--manifest', capture.manifestPath],
+        {
+          cwd: capture.directory,
+          env: {
+            PATH: `${dirname(managedConfiguration.installation.node.path)}:/usr/bin:/bin`,
+            HOME: capture.runtimeHome,
+            LANG: 'C.UTF-8',
+          },
+          encoding: 'utf8',
+          timeout: 30000,
+          maxBuffer: 16384,
+        },
+      ),
+    );
+  assert.equal(managerCommand('prepare').available, true);
+  assert.equal(managerCommand('verify').available, true);
+  report.checks.originalOwningBirthAndSourcesSealed = true;
   owningSessionId = admitted.thread.thread.sessionId;
   assert.equal(admitted.launch.executableDigest, LIVE_CODEX_SHA256);
   assert.equal(admitted.launch.cwd, app);
@@ -611,11 +823,6 @@ try {
     session.activeTurnId,
     new Date().toISOString(),
   ).snapshot;
-  election = await electLiveController({
-    privateDirectory: controller,
-    controllerId: 'native-proof-controller',
-    initialize: true,
-  });
   let handoff = election.ownership.claim({
     relayId: session.id,
     appId: 'native-proof-app',
@@ -630,6 +837,8 @@ try {
     previewOrigin: 'https://native-proof.test',
   }).run;
   handoff = election.ownership.mutate(handoff, { event: 'phase', phase: 'quiesce:intent' });
+  await policy.revokeRuntime(capture.manifestPath, capture.captureId);
+  captureRevoked = true;
   await runtime.releaseLiveOwner(session, { owners: election.ownership, fence: handoff });
   await until(() => childProcess.exitCode !== null || childProcess.signalCode !== null, 10000);
   assert.equal(launches, 1);
@@ -677,6 +886,16 @@ try {
   };
   process.exitCode = 1;
 } finally {
+  report.cleanupStage = 'capture-revoke';
+  if (capture && !captureRevoked) {
+    try {
+      await policy.revokeRuntime(capture.manifestPath, capture.captureId);
+      captureRevoked = true;
+    } catch {
+      report.passed = false;
+      report.cleanupFailure = 'NATIVE_CAPTURE_REVOCATION_UNVERIFIED';
+    }
+  }
   report.cleanupStage = 'runtime-stop';
   runtime?.stopAll();
   report.cleanupStage = 'election-close';

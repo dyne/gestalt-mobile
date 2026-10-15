@@ -224,6 +224,7 @@ jobs:
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
+          export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node scripts/live-native-proof-preflight.mjs
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
