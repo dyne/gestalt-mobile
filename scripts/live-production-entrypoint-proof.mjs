@@ -1041,6 +1041,7 @@ try {
   assert.equal(reused.liveId, started.liveId);
   assert.equal(reused.generation, started.generation);
   report.checks.sameSessionReuseNoReplacement = true;
+  report.stage = 'authenticated-preview-exchange';
   const verifier = previewSecrets.token();
   const grant = await api('POST', `/api/sessions/${session.id}/live/launch-grants`, {
     liveId: started.liveId,
@@ -1052,7 +1053,8 @@ try {
     method: 'POST',
     body: { grantId: grant.grantId, grant: grant.grant, codeVerifier: verifier },
   });
-  assert.equal(exchanged.status, 200);
+  report.previewExchangeStatus = exchanged.status;
+  assert.equal(exchanged.status, 201);
   previewCookie = exchanged.headers['set-cookie'].map((cookie) => cookie.split(';')[0]).join('; ');
   assert.equal((await remote('/')).status, 200);
   const token = JSON.parse(
