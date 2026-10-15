@@ -11,11 +11,23 @@ import {
   CODEX_THREAD_NOT_FOUND,
   CODEX_THREAD_WRITER_BUSY,
   CodexJsonRpcError,
+  CodexLiveContextProbeError,
   isMissingCodexThreadRollout,
   JsonRpcClient,
 } from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
+  it('never retains raw context tool failure contents in diagnostics', () => {
+    const error = new CodexLiveContextProbeError(
+      'Error executing node: spawn EACCES /private-owner-path token=private-value',
+    );
+    expect(error.message).toBe('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    expect(error.stage).toBe('context-tool-error');
+    expect(error.markers).toEqual(['eacces', 'spawn', 'node']);
+    expect(JSON.stringify(error)).not.toContain('private-owner-path');
+    expect(JSON.stringify(error)).not.toContain('private-value');
+    expect(new CodexLiveContextProbeError('x'.repeat(65536) + 'EACCES').markers).toEqual([]);
+  });
   it('retains only fixed failure categories beyond the bounded redacted message', () => {
     const error = new CodexJsonRpcError(
       -32603,

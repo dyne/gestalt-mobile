@@ -46,6 +46,7 @@ import {
 } from '../../features/sessions/application/writer-acquisition.js';
 import {
   CodexJsonRpcError,
+  CodexLiveContextProbeError,
   isCodexThreadWriterBusy,
   isMissingCodexThreadRollout,
 } from './json-rpc-client.js';
@@ -1971,12 +1972,12 @@ export class CodexSessionRuntime {
     )
       throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
     const reply = asRecord(result);
-    if (reply?.isError) throw unavailable('context-tool-error');
     if (!Array.isArray(reply?.content)) throw unavailable('context-result-invalid');
     const text = reply.content
       .filter((item: unknown) => asRecord(item)?.type === 'text')
       .map((item: unknown) => asRecord(item)?.text)
       .join('\n');
+    if (reply?.isError) throw new CodexLiveContextProbeError(text);
     if (text.length > 65536) throw unavailable('context-result-oversized');
     const matches = [...text.matchAll(/LIVE_ADMISSION_PROBE_V1:(\{[^\n]*\})/g)];
     if (matches.length !== 1) throw unavailable('context-result-marker');

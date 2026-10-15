@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
 import type { SessionRepository } from '../../features/sessions/application/ports.js';
-import { CodexJsonRpcError } from '../codex/json-rpc-client.js';
+import { CodexJsonRpcError, CodexLiveContextProbeError } from '../codex/json-rpc-client.js';
 import type { LiveControls } from '../../features/live-design/application/controls.js';
 import type {
   LiveRun,
@@ -723,6 +723,8 @@ export class ProductionLiveController {
             error instanceof CodexJsonRpcError
               ? { code: error.code, kind: error.kind, markers: error.liveDiagnosticMarkers }
               : undefined,
+          context:
+            error instanceof CodexLiveContextProbeError ? { markers: error.markers } : undefined,
           processStage:
             error instanceof Error &&
             'stage' in error &&

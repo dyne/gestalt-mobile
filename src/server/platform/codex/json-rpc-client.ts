@@ -97,6 +97,40 @@ export class CodexJsonRpcError extends Error {
   }
 }
 
+/** Tool-result errors carry arbitrary content; retain fixed diagnostic tokens only. */
+export class CodexLiveContextProbeError extends Error {
+  readonly stage = 'context-tool-error';
+  readonly markers: readonly string[];
+  constructor(text: string) {
+    super('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const lower = text.slice(0, 65536).toLowerCase();
+    this.markers = [
+      ...liveDiagnosticMarkers,
+      'eacces',
+      'eperm',
+      'enoent',
+      'enotdir',
+      'erofs',
+      'enospc',
+      'spawn',
+      'bun',
+      'node',
+      'require',
+      'module',
+      'execution',
+      'timeout',
+      'timed out',
+      'cancelled',
+      'context-call-unavailable',
+      'invalid-native-response',
+      'temporary',
+      'syntaxerror',
+      'referenceerror',
+      'typeerror',
+    ].filter((marker) => lower.includes(marker));
+  }
+}
+
 /**
  * Codex 0.146 reports a rollout removed by an upgrade as -32600.  Keep the
  * message match deliberately narrow: other invalid-request responses must not
