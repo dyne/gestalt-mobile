@@ -71,6 +71,7 @@ export type AppDependencies = {
   sessionDefaults?: SessionDefaultsStore;
   selfDebug?: SelfDebugDependencies;
   health: HealthReader;
+  codexAllowance?: import('./features/catalog/get-codex-allowance/endpoint.js').CodexAllowanceReader;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
   staticDir?: string;
   pwaIcon?: PwaIcon;
@@ -271,7 +272,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     });
   registerGetHealth(app, deps.health);
   registerAuthRoutes(app, deps);
-  registerCatalogRoutes(app, { bootstrap: deps.bootstrap, sessionDefaults: deps.sessionDefaults });
+  registerCatalogRoutes(app, {
+    bootstrap: deps.bootstrap,
+    sessionDefaults: deps.sessionDefaults,
+    codexAllowance: deps.codexAllowance,
+  });
   registerSessionRoutes(app, deps);
   if (deps.selfDebug) registerSelfDebug(app, deps.selfDebug);
   if (deps.autopilot)

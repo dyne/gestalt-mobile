@@ -1956,6 +1956,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           </section>
         {:else}
           <SessionsView
+            allowanceFetcher={authorizedFetch}
+            onallowanceerror={() =>
+              toastQueue.enqueue({
+                kind: 'warning',
+                message: 'Could not refresh Codex allowance. Retrying automatically.',
+              })}
             {sessions}
             {recentSessions}
             selectedSessionId={sessionId}

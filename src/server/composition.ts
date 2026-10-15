@@ -23,6 +23,7 @@ import { FilesystemWorkspaceFiles } from './platform/filesystem/filesystem-works
 import { protocolCompatibility } from './platform/codex/protocol-compatibility.js';
 import { launchCodexAppServer } from './platform/codex/codex-process-launcher.js';
 import { CodexModelCatalog } from './platform/codex/codex-model-catalog.js';
+import { CodexAllowanceReader } from './platform/codex/codex-allowance.js';
 import { ProviderModelCatalog } from './platform/catalog/provider-model-catalog.js';
 import { createRecentThreadLister } from './platform/codex/recent-thread-lister.js';
 import { CodexSessionRuntime, type AppServer } from './platform/codex/session-runtime.js';
@@ -1765,6 +1766,16 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       pwaIcon: options.pwaIcon,
       recentThreads: recentThreadsForRelay,
       sessionDefaults,
+      codexAllowance:
+        options.installedCodexVersion === null
+          ? {
+              read: async () => ({
+                weeklyRemainingPercent: null,
+                weeklyResetsAt: null,
+                resetsAvailable: null,
+              }),
+            }
+          : new CodexAllowanceReader(root, options.launchAppServer ?? launchCodexAppServer),
       bootstrap: {
         xerj: () => xerjIndexer.status(),
         sessionDefaults,

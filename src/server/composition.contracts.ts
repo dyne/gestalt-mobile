@@ -4955,6 +4955,8 @@ describe('production composition', () => {
         ['DELETE', '/api/auth/devices/:deviceId', '/api/auth/devices/device-1', 'protected'],
         ['GET', '/api/bootstrap', '/api/bootstrap', 'protected'],
         ['HEAD', '/api/bootstrap', '/api/bootstrap', 'protected'],
+        ['GET', '/api/codex/allowance', '/api/codex/allowance', 'protected'],
+        ['HEAD', '/api/codex/allowance', '/api/codex/allowance', 'protected'],
         ['GET', '/api/xerj', '/api/xerj', 'protected'],
         ['HEAD', '/api/xerj', '/api/xerj', 'protected'],
         ['GET', '/api/session-defaults', '/api/session-defaults', 'protected'],
