@@ -239,7 +239,16 @@ describe('quiescent owning-runtime handoff', () => {
 describe('discovery on the captured original before readiness', () => {
   async function discoveryFixture(
     change?:
-      'config' | 'account' | 'birth' | 'environment' | 'invalid-models' | 'failure' | 'pending',
+      | 'config'
+      | 'account'
+      | 'birth'
+      | 'environment'
+      | 'invalid-models'
+      | 'failure'
+      | 'pending'
+      | 'name-failure'
+      | 'name-invalid'
+      | 'name-pending',
   ) {
     // A real physical lifetime with simulated protocol responses; no Native/provider claim.
     const child = spawn(
@@ -253,6 +262,11 @@ describe('discovery on the captured original before readiness', () => {
     const closed = new Promise<void>((done) => child.once('close', () => done()));
     await once(child.stdout, 'data');
     const calls: string[] = [];
+    const details: { method: string; params: unknown }[] = [];
+    let naming!: () => void;
+    const atName = new Promise<void>((done) => {
+      naming = done;
+    });
     let configs = 0,
       accounts = 0,
       observations = 0;
@@ -279,8 +293,9 @@ describe('discovery on the captured original before readiness', () => {
       },
       observeLiveDescendants: () => {},
       rpc: {
-        request: async (method) => {
+        request: async (method, params) => {
           calls.push(method);
+          details.push({ method, params });
           if (method === 'config/read')
             return {
               config: {
@@ -319,6 +334,12 @@ describe('discovery on the captured original before readiness', () => {
               ],
             };
           if (method === 'thread/start') return { thread: { id: 'original-thread' } };
+          if (method === 'thread/name/set') {
+            naming();
+            if (change === 'name-failure') throw new Error('NATIVE_PERSISTENCE_FAILED');
+            if (change === 'name-invalid') return { unexpected: true };
+            if (change === 'name-pending') return pending;
+          }
           return {};
         },
         onNotification: () => () => {},
@@ -403,12 +424,14 @@ describe('discovery on the captured original before readiness', () => {
       session,
       select,
       calls,
+      details,
       launch,
       auxiliarySkills,
       source,
       child,
       closed,
       atModel,
+      atName,
       atSeal,
       finishSeal,
       finishModel,
@@ -444,7 +467,16 @@ describe('discovery on the captured original before readiness', () => {
         'config/read',
         'account/read',
         'thread/start',
+        'thread/name/set',
       ]);
+      expect(f.details.find((call) => call.method === 'thread/start')?.params).toMatchObject({
+        historyMode: 'paginated',
+        model: 'selected',
+      });
+      expect(f.details.find((call) => call.method === 'thread/name/set')?.params).toEqual({
+        threadId: 'original-thread',
+        name: `Gestalt Mobile ${f.session.id}`,
+      });
       expect(f.calls).not.toContain('turn/start');
       expect(f.source.observeLiveLaunch!().pid).toBe(f.child.pid);
       f.finishSeal();
@@ -454,6 +486,37 @@ describe('discovery on the captured original before readiness', () => {
         modelSettings: { reasoningEffort: 'high' },
         executionPolicy: { sandbox: 'workspace-git', approvalPolicy: 'never' },
       });
+    } finally {
+      await f.close();
+    }
+  });
+  it.each(['name-failure', 'name-invalid'] as const)(
+    'requires Native persistence acknowledgement before admission: %s',
+    async (change) => {
+      const f = await discoveryFixture(change);
+      try {
+        await expect(f.runtime.startWithDiscovery(f.session, 'time', f.select)).rejects.toThrow();
+        await f.closed;
+        expect(f.calls).toContain('thread/name/set');
+        expect(f.calls).not.toContain('turn/start');
+        expect(f.runtime.liveOwnerIds()).toEqual([]);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  it('cancels pending Native persistence without publishing readiness or running a model turn', async () => {
+    const f = await discoveryFixture('name-pending');
+    const controller = new AbortController();
+    try {
+      const started = f.runtime.startWithDiscovery(f.session, 'time', f.select, controller.signal);
+      const rejected = expect(started).rejects.toThrow();
+      await f.atName;
+      controller.abort();
+      await rejected;
+      await f.closed;
+      expect(f.calls).not.toContain('turn/start');
+      expect(f.runtime.liveOwnerIds()).toEqual([]);
     } finally {
       await f.close();
     }

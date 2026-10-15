@@ -545,8 +545,22 @@ export class CodexSessionRuntime {
         session,
         resource.skillsConfig,
         resource.modelConfig,
+        !!select,
       );
       resource.threadId = startedThreadId;
+      if (select) {
+        // Native deliberately defers a new rollout until a turn or an explicit
+        // name. Naming a paginated thread persists it through Native's own
+        // metadata API, allowing the admission handoff before any model turn.
+        const named = asRecord(
+          await query('thread/name/set', {
+            threadId: startedThreadId,
+            name: `Gestalt Mobile ${session.id}`,
+          }),
+        );
+        if (!named || Object.keys(named).length !== 0)
+          throw new Error('LIVE_THREAD_PERSISTENCE_UNVERIFIED');
+      }
       await this.verifyRetrieval(resource, session, true);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
@@ -2069,11 +2083,12 @@ export class CodexSessionRuntime {
     session: RelaySessionSnapshot,
     skillsConfig?: readonly { path: string; enabled: boolean }[],
     modelConfig: Record<string, unknown> = {},
+    persistBeforeTurn = false,
   ): Promise<string> {
-    const response = await process.rpc.request(
-      'thread/start',
-      this.threadStartParams(session, skillsConfig, modelConfig),
-    );
+    const response = await process.rpc.request('thread/start', {
+      ...this.threadStartParams(session, skillsConfig, modelConfig),
+      ...(persistBeforeTurn ? { historyMode: 'paginated' } : {}),
+    });
     const id = decodeThreadStart(response);
     this.observeNativeThreadSelection(process, response);
     return id;
@@ -2169,6 +2184,7 @@ export class CodexSessionRuntime {
                 'model/list',
                 'skills/list',
                 'thread/start',
+                'thread/name/set',
                 'thread/read',
                 'thread/list',
                 'mcpServerStatus/list',
