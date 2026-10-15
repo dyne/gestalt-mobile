@@ -9,6 +9,7 @@ import { readFile, readlink, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
@@ -19,10 +20,15 @@ const exchangeStatuses = [];
 const resourcePending = {};
 const resourceStatuses = {};
 const pageErrors = [];
+const helperResponses = [];
+let helperBridge;
+const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
   stage = value;
-  process.stdout.write(JSON.stringify({ checkpoint: value }) + '\n');
+  process.stdout.write(
+    JSON.stringify({ checkpoint: value, elapsedMs: Date.now() - browserStarted }) + '\n',
+  );
 };
 const replies = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
 async function command(value) {
@@ -73,10 +79,31 @@ try {
     if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
       networkErrors.push(code);
   });
-  context.on('response', (response) => {
+  context.on('response', async (response) => {
     const resource = `${response.request().resourceType()}:${response.status()}`;
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
+    if (url.pathname.startsWith('/__gestalt_live/') && helperResponses.length < 24) {
+      const allowed = ['live.js', 'events', 'status', 'lease', 'agent-target-claim'];
+      const tail = url.pathname.slice('/__gestalt_live/'.length);
+      let headers = {};
+      try {
+        headers = await response.request().allHeaders();
+      } catch {
+        // A closed request can make diagnostics unavailable; never log raw headers/errors.
+      }
+      const requestToken = url.searchParams.get('token');
+      helperResponses.push({
+        route: allowed.includes(tail) ? tail : 'other',
+        status: response.status(),
+        gatewayHtml: (response.headers()['content-type'] ?? '').startsWith('text/html'),
+        helperTokenMatches:
+          requestToken === null
+            ? null
+            : createHash('sha256').update(requestToken).digest('hex') === config.helperTokenSha256,
+        cookiePresent: String(headers.cookie ?? '').includes('__Host-gestalt_live_p'),
+      });
+    }
     if (
       url.origin === config.previewOrigin &&
       ['/__gestalt_live/auth', '/__gestalt_live/exchange', '/'].includes(url.pathname) &&
@@ -90,6 +117,9 @@ try {
     window.EventSource = class extends OriginalEventSource {
       constructor(...args) {
         super(...args);
+        const target = new URL(String(args[0]), location.href);
+        if (target.origin !== location.origin || target.pathname !== '/__gestalt_live/events')
+          return;
         this.addEventListener('message', (event) => {
           try {
             if (JSON.parse(event.data).type === 'connected')
@@ -212,6 +242,21 @@ try {
   );
   checkpoint('helper-handshake');
   await ui.waitForHandshake(preview);
+  helperBridge = await preview.evaluate(async (expectedHash) => {
+    const token = window.__IMPECCABLE_TOKEN__;
+    const rawBase = window.__IMPECCABLE_PUBLIC_BASE_URL__;
+    const base = typeof rawBase === 'string' ? new URL(rawBase) : null;
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(token)));
+    const actualHash = [...new Uint8Array(bytes)]
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+    return {
+      tokenPresent: typeof token === 'string' && token.length > 0,
+      tokenMatches: actualHash === expectedHash,
+      sameOrigin: base?.origin === location.origin,
+      correctPrefix: base?.pathname === '/__gestalt_live',
+    };
+  }, config.helperTokenSha256);
   await preview.waitForFunction(() => window.__productionHelperConnected === true);
   checkpoint('app-module-ready');
   await preview.waitForFunction(() => document.body?.dataset.productionHmr === 'original');
@@ -313,6 +358,8 @@ try {
         resourcePending,
         resourceStatuses,
         pageErrors,
+        helperBridge,
+        helperResponses,
       },
     }) + '\n',
   );

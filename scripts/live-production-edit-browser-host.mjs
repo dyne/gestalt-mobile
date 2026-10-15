@@ -122,6 +122,15 @@ export async function productionEditBrowser(input) {
       }
       if (typeof value.checkpoint === 'string' && /^[a-z-]{1,64}$/.test(value.checkpoint)) {
         input.report.editBrowserStage = value.checkpoint;
+        if (
+          Number.isSafeInteger(value.elapsedMs) &&
+          value.elapsedMs >= 0 &&
+          value.elapsedMs < 300000
+        )
+          (input.report.editBrowserStages ??= []).push({
+            stage: value.checkpoint,
+            elapsedMs: value.elapsedMs,
+          });
         input.checkpoint?.(value.checkpoint);
       }
       if (
@@ -170,6 +179,25 @@ export async function productionEditBrowser(input) {
             ),
           ),
           pageErrors: value.failure.pageErrors?.slice(0, 8).map(safeBrowserFailure),
+          helperBridge: Object.fromEntries(
+            Object.entries(value.failure.helperBridge ?? {}).filter(
+              ([key, item]) =>
+                ['tokenPresent', 'tokenMatches', 'sameOrigin', 'correctPrefix'].includes(key) &&
+                typeof item === 'boolean',
+            ),
+          ),
+          helperResponses: value.failure.helperResponses?.slice(0, 24).map((item) => ({
+            route: ['live.js', 'events', 'status', 'lease', 'agent-target-claim'].includes(
+              item.route,
+            )
+              ? item.route
+              : 'other',
+            status: Number.isSafeInteger(item.status) ? item.status : null,
+            gatewayHtml: item.gatewayHtml === true,
+            helperTokenMatches:
+              typeof item.helperTokenMatches === 'boolean' ? item.helperTokenMatches : null,
+            cookiePresent: item.cookiePresent === true,
+          })),
         };
       if (value.command)
         commands = commands.then(async () => {

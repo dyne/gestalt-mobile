@@ -154,6 +154,15 @@ const checkpoint = setInterval(() => {
 }, 5000);
 checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
+let probeTimer;
+let probeActive = false;
+let probeRefresh = Promise.resolve();
+function stopPreviewProbe() {
+  probeActive = false;
+  clearInterval(probeTimer);
+  stream?.destroy();
+  stream = undefined;
+}
 const privateCanary = randomBytes(32).toString('hex'),
   privateFile = join(privateRoot, 'canary');
 writeFileSync(privateFile, privateCanary, { mode: 0o600 });
@@ -759,8 +768,12 @@ const sourceIndex = editFlow
   ? '<!doctype html>\n<html>\n<head></head>\n<body>\n<h1 class="hero-title">Owning app</h1>\n<script type="module" src="/app.js"></script>\n</body>\n</html>\n'
   : '<!doctype html><html><head></head><body><h1>Owning app</h1></body></html>\n';
 let preview, previewCookie;
-async function remote(path, { method = 'GET', body, streamResponse = false } = {}) {
+async function remote(
+  path,
+  { method = 'GET', body, streamResponse = false, headersTimeoutMs = 0 } = {},
+) {
   return new Promise((done, reject) => {
+    let headersTimer;
     const req = httpsRequest(
       new URL(path, preview),
       {
@@ -778,6 +791,7 @@ async function remote(path, { method = 'GET', body, streamResponse = false } = {
         },
       },
       (res) => {
+        clearTimeout(headersTimer);
         if (streamResponse) {
           res.on('data', () => {});
           done(res);
@@ -794,7 +808,15 @@ async function remote(path, { method = 'GET', body, streamResponse = false } = {
         );
       },
     );
-    req.once('error', reject);
+    req.once('error', (error) => {
+      clearTimeout(headersTimer);
+      reject(error);
+    });
+    if (headersTimeoutMs > 0)
+      headersTimer = setTimeout(
+        () => req.destroy(new Error('PREVIEW_HEADERS_TIMEOUT')),
+        headersTimeoutMs,
+      );
     req.setTimeout(30000, () => req.destroy(new Error('REMOTE_DEADLINE')));
     req.end(body ? JSON.stringify(body) : undefined);
   });
@@ -1355,6 +1377,46 @@ try {
   });
   report.previewStreamStatus = stream.statusCode;
   assert.equal(stream.statusCode, 200);
+  const previewProbeOpenedAt = Date.now();
+  if (editFlow) {
+    probeActive = true;
+    const deadline = Date.now() + 120000;
+    let refreshing = false;
+    probeTimer = setInterval(() => {
+      if (!probeActive || refreshing) return;
+      if (Date.now() >= deadline) {
+        report.previewProbeFailure = 'PREVIEW_PROBE_HANDOFF_TIMEOUT';
+        stopPreviewProbe();
+        return;
+      }
+      refreshing = true;
+      probeRefresh = (async () => {
+        // Behave like an EventSource client across the unchanged 60s physical
+        // stream lifetime. Reuse the existing cookie/lease/generation only.
+        const next = await remote(
+          `/__gestalt_live/events?token=${encodeURIComponent(token)}&clientId=probe-${randomBytes(8).toString('hex')}`,
+          { streamResponse: true, headersTimeoutMs: 10000 },
+        );
+        if (!probeActive) {
+          next.destroy();
+          return;
+        }
+        if (next.statusCode !== 200) {
+          next.destroy();
+          throw new Error('PREVIEW_PROBE_RECONNECT_DENIED');
+        }
+        const previous = stream;
+        stream = next;
+        previous?.destroy();
+        report.previewProbeReconnects = (report.previewProbeReconnects ?? 0) + 1;
+      })()
+        .catch(() => {
+          report.previewProbeFailure = 'PREVIEW_PROBE_RECONNECT_DENIED';
+          stopPreviewProbe();
+        })
+        .finally(() => (refreshing = false));
+    }, 20000);
+  }
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
   report.stage = 'production-owning-model-tools';
   if (editFlow) {
@@ -1403,14 +1465,14 @@ try {
         'EDIT_CANONICAL_ACK_DEADLINE',
         60000,
       );
+    report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     await productionEditBrowser({
       privateRoot,
       certificate: join(caddyRoot, 'tls.pem'),
       report,
       checkpoint: (stage) => {
         if (stage === 'helper-connected') {
-          stream?.destroy();
-          stream = undefined;
+          stopPreviewProbe();
           report.checks.previewProbeHandedToActualBrowserConnection = true;
         }
       },
@@ -1420,6 +1482,7 @@ try {
         sessionId: session.id,
         liveId: started.liveId,
         generation: started.generation,
+        helperTokenSha256: hash(token),
         sessionCookie: browserSession,
         uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
         resultFile: join(evidence, 'production-edit-browser.json'),
@@ -1449,6 +1512,7 @@ try {
         } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
       },
     });
+    assert.equal(report.previewProbeFailure, undefined);
     report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
     report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
     report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
@@ -1587,7 +1651,8 @@ try {
   }
 } finally {
   report.cleanupStage = 'mobile';
-  stream?.destroy();
+  stopPreviewProbe();
+  await probeRefresh;
   if (mobile) {
     try {
       await mobile.close();
