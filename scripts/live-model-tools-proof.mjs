@@ -752,9 +752,14 @@ try {
   assert.equal(managerCommand('verify').available, true);
   report.checks.originalOwningBirthAndSourcesSealed = true;
   owningSessionId = admitted.thread.thread.sessionId;
+  report.stage = 'original-image-identity';
   assert.equal(admitted.launch.executableDigest, LIVE_CODEX_SHA256);
-  assert.equal(admitted.launch.cwd, app);
+  // The supported Manager handoff execs from its private capture directory;
+  // the owning thread's actual workspace selection remains the app below.
+  assert.equal(admitted.launch.cwd, capture.directory);
+  report.stage = 'original-thread-identity';
   assert.equal(admitted.thread.thread.id, session.threadId);
+  report.stage = 'original-thread-selection';
   assert.equal(admitted.threadSelection?.activePermissionProfile?.id, 'workspace-git');
   assert.equal(admitted.threadSelection?.model, session.model);
   assert.equal(admitted.threadSelection?.cwd, app);
