@@ -31,6 +31,7 @@ export async function productionEditBrowser(input) {
   let browser;
   let networkCreated = false;
   try {
+    input.report.editBrowserStage = 'network-setup';
     sudo(['ip', 'netns', 'add', namespace]);
     networkCreated = true;
     sudo(['ip', 'link', 'add', hostInterface, 'type', 'veth', 'peer', 'name', peerInterface]);
@@ -103,7 +104,10 @@ export async function productionEditBrowser(input) {
       { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: home } },
     );
     // Raw browser errors may contain cookie/grant URLs. Only fixed checkpoints are retained.
-    browser.stderr.on('data', () => {});
+    browser.stderr.on('data', (chunk) => {
+      const fixed = ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ERR_ACCESS_DENIED'];
+      input.report.editBrowserStartupCodes = fixed.filter((code) => String(chunk).includes(code));
+    });
     let commandFailure = false;
     let commands = Promise.resolve();
     const lines = createInterface({ input: browser.stdout });
@@ -117,6 +121,14 @@ export async function productionEditBrowser(input) {
       }
       if (typeof value.checkpoint === 'string' && /^[a-z-]{1,64}$/.test(value.checkpoint))
         input.report.editBrowserStage = value.checkpoint;
+      if (
+        /^[a-z-]{1,64}$/.test(value.failure?.stage ?? '') &&
+        /^[A-Z][A-Z_]{1,63}$/.test(value.failure?.code ?? '')
+      )
+        input.report.editBrowserFailure = {
+          stage: value.failure.stage,
+          code: value.failure.code,
+        };
       if (value.command)
         commands = commands.then(async () => {
           try {
@@ -136,6 +148,8 @@ export async function productionEditBrowser(input) {
       }),
     ]).finally(() => clearTimeout(timer));
     await commands;
+    input.report.editBrowserExit = exit;
+    input.report.editBrowserCommandFailure = commandFailure;
     assert.equal(commandFailure, false);
     assert.equal(exit, 0);
     const result = JSON.parse(readFileSync(input.browser.resultFile, 'utf8'));
@@ -157,7 +171,8 @@ export async function productionEditBrowser(input) {
         }
         await new Promise((done) => setTimeout(done, 500));
       }
-      assert.equal(namespacePids().length, 0);
+      input.report.editBrowserRemainingProcesses = namespacePids().length;
+      assert.equal(input.report.editBrowserRemainingProcesses, 0);
     }
     if (browser && browser.exitCode === null && browser.signalCode === null) {
       browser.kill('SIGTERM');

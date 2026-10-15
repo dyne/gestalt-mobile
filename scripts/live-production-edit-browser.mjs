@@ -24,9 +24,12 @@ async function command(value) {
   assert.equal(JSON.parse(reply.value).ok, true);
 }
 try {
+  checkpoint('namespace');
   assert.equal(await readlink('/proc/self/ns/net'), config.browserNetwork);
   assert.notEqual(config.browserNetwork, config.serverNetwork);
+  checkpoint('ui-import');
   const ui = await import(pathToFileURL(config.uiModule).href);
+  checkpoint('browser-launch');
   browser = await chromium.launch({
     headless: true,
     chromiumSandbox: true,
@@ -57,9 +60,11 @@ try {
     },
   ]);
   const mobile = await context.newPage();
+  checkpoint('mobile-navigation');
   const response = await mobile.goto(config.mobileOrigin + '/');
   assert.ok(response.status() < 500);
   assert.equal(await mobile.evaluate(() => isSecureContext), true);
+  checkpoint('launch-grant');
   await mobile.evaluate(async ({ sessionId, liveId, generation, previewOrigin }) => {
     const encode = (bytes) =>
       btoa(String.fromCharCode(...bytes))
@@ -106,6 +111,7 @@ try {
     };
   }, config);
   const popup = mobile.waitForEvent('popup');
+  checkpoint('preview-popup');
   await mobile.locator('#production-proof-launch').click();
   const preview = await popup;
   let hmrUpdates = 0;
@@ -118,10 +124,12 @@ try {
       }
     }),
   );
+  checkpoint('preview-exchange');
   await preview.waitForURL(config.previewOrigin + '/');
   await mobile.waitForFunction(() => window.__editExchanged === true);
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
+  checkpoint('helper-handshake');
   await ui.waitForHandshake(preview);
   assert.equal(
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
@@ -190,7 +198,19 @@ try {
     ),
   );
   checkpoint('complete');
-} catch {
+} catch (error) {
+  process.stdout.write(
+    JSON.stringify({
+      failure: {
+        stage,
+        code: ['ERR_ASSERTION', 'ENOENT', 'EACCES', 'ERR_MODULE_NOT_FOUND'].includes(error?.code)
+          ? error.code
+          : error?.name === 'TimeoutError'
+            ? 'TIMEOUT'
+            : 'BROWSER_OPERATION_FAILED',
+      },
+    }) + '\n',
+  );
   process.stderr.write(`EDIT_BROWSER_FAILED_${stage.replaceAll('-', '_')}\n`);
   process.exitCode = 1;
 } finally {

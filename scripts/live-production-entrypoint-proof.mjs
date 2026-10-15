@@ -122,6 +122,9 @@ const checkpoint = setInterval(() => {
                 typeof value.phase === 'string' && /^[a-z:-]{1,96}$/.test(value.phase)
                   ? value.phase
                   : 'unknown',
+              failureCode: /^[A-Z][A-Z0-9_]{0,63}$/.test(value.failureCode ?? '')
+                ? value.failureCode
+                : null,
             };
           });
       } finally {
@@ -1586,8 +1589,11 @@ try {
       mobile = undefined;
       if (report.projectMetadata)
         report.projectMetadata.afterOwnerShutdown = ownedProjectMetadata();
-    } catch {
+    } catch (error) {
       report.shutdownFailure = 'LIVE_CLEANUP_REQUIRED';
+      report.shutdownCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.message ?? '')
+        ? error.message
+        : 'UNCLASSIFIED';
       process.exitCode = 1;
     }
   }
