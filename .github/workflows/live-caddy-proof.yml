@@ -4,6 +4,9 @@
 
 name: Isolated Live Caddy proof (no deployment)
 on:
+  push:
+    branches:
+      - test/live-production-l11
   pull_request:
     paths:
       - src/server/platform/live-design/**
