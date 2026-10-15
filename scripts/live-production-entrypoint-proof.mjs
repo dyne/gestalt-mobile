@@ -324,6 +324,56 @@ function childCompletion() {
   walk(join(owningHome, 'sessions'));
   return found;
 }
+function nativeActivity() {
+  const responseKinds = [
+    'function_call',
+    'function_call_output',
+    'custom_tool_call',
+    'custom_tool_call_output',
+    'message',
+  ];
+  const eventKinds = [
+    'collab_agent_spawn_begin',
+    'collab_agent_spawn_end',
+    'error',
+    'warning',
+    'task_complete',
+    'turn_complete',
+  ];
+  const facts = {
+    files: 0,
+    rootFiles: 0,
+    responseKinds: Object.fromEntries(responseKinds.map((kind) => [kind, 0])),
+    eventKinds: Object.fromEntries(eventKinds.map((kind) => [kind, 0])),
+  };
+  const walk = (path, depth = 0) => {
+    if (depth > 5 || !existsSync(path) || facts.files >= 16) return;
+    for (const name of readdirSync(path)) {
+      const file = join(path, name),
+        info = lstatSync(file);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) walk(file, depth + 1);
+      else if (name.endsWith('.jsonl') && info.size < 4 * 1024 * 1024 && facts.files < 16) {
+        facts.files++;
+        if (owningThread && name.includes(owningThread)) facts.rootFiles++;
+        for (const line of readFileSync(file, 'utf8').split('\n').filter(Boolean)) {
+          let value;
+          try {
+            value = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (value.type === 'response_item' && responseKinds.includes(value.payload?.type))
+            facts.responseKinds[value.payload.type]++;
+          if (value.type === 'event_msg' && eventKinds.includes(value.payload?.type))
+            facts.eventKinds[value.payload.type]++;
+        }
+      }
+    }
+  };
+  walk(join(owningHome, 'sessions'));
+  return facts;
+}
 async function eventFor(body) {
   const check = (stage, condition) => {
     report.provider.stage = stage;
@@ -477,6 +527,9 @@ async function eventFor(body) {
       ].filter((marker) => spawnLower.includes(marker)),
     };
     report.provider.stage = 'native-spawn-response-present';
+    // Leave time for an actually spawned child's independent request to arrive
+    // before preserving this wire failure; this never satisfies the assertion.
+    if (!spawned) await new Promise((done) => setTimeout(done, 10000));
     assert.ok(spawned);
     report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
@@ -554,7 +607,77 @@ const provider = createServer(async (req, res) => {
     const body = JSON.parse(bytes),
       id = `production-${report.provider.requestCount}`;
     phase = 'model-event';
+    const messages = (body.input ?? []).filter((value) => value.type === 'message').slice(-2);
+    report.provider.lastMessageMarkers = messages.map((value) => {
+      const text = (value.content ?? [])
+        .filter((part) => typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('\n')
+        .slice(0, 65536)
+        .toLowerCase();
+      return {
+        role: ['user', 'assistant', 'developer', 'system'].includes(value.role)
+          ? value.role
+          : 'other',
+        markers: [
+          'unsupported',
+          'unknown',
+          'invalid',
+          'not allowed',
+          'function',
+          'namespace',
+          'code mode',
+          'code_mode',
+          'not found',
+          'error',
+          'failed',
+          'unavailable',
+          'tool',
+          'spawn_agent',
+          'ctx_execute',
+        ].filter((marker) => text.includes(marker)),
+      };
+    });
+    const rawMetadata = body.client_metadata?.['x-codex-turn-metadata'];
+    let toolMetadata = body.client_metadata?.tool_namespaces_info;
+    try {
+      if (!toolMetadata && typeof rawMetadata === 'string' && rawMetadata.length < 262144)
+        toolMetadata = JSON.parse(rawMetadata).tool_namespaces_info;
+    } catch {
+      /* Fixed absence only; never retain malformed metadata. */
+    }
+    report.provider.exposure = {
+      present: !!toolMetadata && typeof toolMetadata === 'object',
+      tools: Object.values(toolMetadata && typeof toolMetadata === 'object' ? toolMetadata : {})
+        .flatMap((namespace) => Object.values(namespace?.functions ?? {}))
+        .filter((tool) => tool?.name === 'spawn_agent' || tool?.name === 'ctx_execute')
+        .map((tool) => ({
+          target: tool.name === 'spawn_agent' ? 'spawn' : 'context',
+          direct: tool.direct === true,
+          codeMode: typeof tool.code_mode_name === 'string',
+          deferred: tool.deferred === true,
+        })),
+    };
     const event = await eventFor(body);
+    const item = event.item;
+    const target = item?.name?.endsWith('ctx_execute')
+      ? 'context'
+      : ['spawn_agent', 'exec', 'apply_patch'].includes(item?.name)
+        ? item.name
+        : 'other';
+    const namespace = ['functions', 'collaboration'].includes(item?.namespace)
+      ? item.namespace
+      : item?.namespace === undefined
+        ? 'absent'
+        : 'other';
+    (report.provider.emitted ??= []).push({
+      target,
+      namespace,
+      kind: ['function_call', 'custom_tool_call', 'message'].includes(item?.type)
+        ? item.type
+        : 'other',
+      argumentsString: typeof item?.arguments === 'string',
+    });
     phase = 'response-write';
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     for (const data of [
@@ -1198,6 +1321,11 @@ try {
     report.passed = true;
     report.stage = installationOnly ? 'installation-only-complete' : 'construction-only-complete';
   } else {
+    try {
+      report.nativeActivity = nativeActivity();
+    } catch {
+      report.nativeActivity = { unavailable: true };
+    }
     generationDirectory ??= readdirSync(controller)
       .filter((name) => name.startsWith('owner-'))
       .map((name) => join(controller, name))[0];
