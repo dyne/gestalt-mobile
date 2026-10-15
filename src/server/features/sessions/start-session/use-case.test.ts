@@ -402,3 +402,119 @@ describe('startSession', () => {
     expect(result.model).toBe('gpt-5.4');
   });
 });
+
+describe('owning-process startup selection', () => {
+  function dependencies(models: readonly string[]) {
+    const saved: unknown[] = [],
+      reserved: unknown[] = [],
+      released: unknown[] = [];
+    const deps: Parameters<typeof startSession>[1] = {
+      ...skills,
+      createId: () => 'owning',
+      now: () => 'time',
+      save: (session) => {
+        saved.push(session);
+      },
+      reserve: (session) => {
+        reserved.push(session);
+      },
+      releaseStartup: async (session) => {
+        released.push(session);
+      },
+      workspaces: {
+        resolve: async () => ({ id: 'workspace', name: 'workspace', realPath: '/owning/app' }),
+      },
+      profiles: { require: async () => ({ name: 'default', state: 'ok', status: 'ready' }) },
+      models: {
+        list: async () => {
+          throw new Error('AUXILIARY_CATALOG_MUST_NOT_RUN');
+        },
+      },
+      skillCatalog: () => ({
+        list: async () => {
+          throw new Error('AUXILIARY_SKILLS_MUST_NOT_RUN');
+        },
+      }),
+      owningStartup: {
+        supports: () => true,
+        start: async (session, select) => {
+          expect(reserved).toEqual([session]);
+          const selected = await select({ models, skills: await skills.skillCatalog().list() });
+          return { ...selected, threadId: 'original-thread', state: 'ready' };
+        },
+      },
+      activate: async () => {
+        throw new Error('SECOND_ACTIVATION_MUST_NOT_RUN');
+      },
+    };
+    return { deps, saved, reserved, released };
+  }
+  it('retains full requested settings through reservation and actual selection without auxiliary discovery', async () => {
+    const f = dependencies(['selected']);
+    const settings = {
+      reasoningEffort: 'high',
+      executorModel: 'executor',
+      executorReasoningEffort: 'xhigh',
+    } as const;
+    const result = await startSession(
+      {
+        workspaceId: 'workspace',
+        profile: 'default',
+        provider: 'codex',
+        model: 'selected',
+        sandbox: 'workspace-git',
+        approvalPolicy: 'never',
+        ...settings,
+      },
+      f.deps,
+    );
+    expect(f.reserved[0]).toMatchObject({
+      model: 'selected',
+      modelSettings: settings,
+      executionPolicy: { sandbox: 'workspace-git', approvalPolicy: 'never' },
+    });
+    expect(result).toMatchObject({
+      threadId: 'original-thread',
+      model: 'selected',
+      modelSettings: settings,
+    });
+    expect(f.saved).toHaveLength(2);
+    expect(f.released).toEqual([]);
+  });
+  it('resolves an omitted model only against the actual owning catalog', async () => {
+    const f = dependencies(['provider-specific-model']);
+    const result = await startSession(
+      { workspaceId: 'workspace', profile: 'default', provider: 'codex' },
+      f.deps,
+    );
+    expect(result.model).toBe('provider-specific-model');
+  });
+  it.each([
+    { requested: 'unavailable', models: ['selected'] },
+    { requested: undefined, models: [] },
+  ])(
+    'rejects unavailable selection and releases before any durable save (%j)',
+    async ({ requested, models }) => {
+      const f = dependencies(models);
+      await expect(
+        startSession(
+          { workspaceId: 'workspace', profile: 'default', provider: 'codex', model: requested },
+          f.deps,
+        ),
+      ).rejects.toThrow('CODEX_MODEL_UNAVAILABLE');
+      expect(f.saved).toEqual([]);
+      expect(f.released).toEqual(f.reserved);
+    },
+  );
+  it('does not start an already cancelled selection and releases its reservation', async () => {
+    const f = dependencies(['selected']);
+    const signal = AbortSignal.abort(new Error('CANCELLED'));
+    await expect(
+      startSession({ workspaceId: 'workspace', profile: 'default', provider: 'codex' }, f.deps, {
+        signal,
+      }),
+    ).rejects.toThrow('CANCELLED');
+    expect(f.saved).toEqual([]);
+    expect(f.released).toEqual(f.reserved);
+  });
+});

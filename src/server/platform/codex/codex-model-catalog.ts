@@ -20,6 +20,18 @@ const resultSchema = z.union([
   z.object({ data: z.object({ models: z.array(modelSchema) }) }),
 ]);
 
+export function decodeCodexModels(value: unknown): string[] {
+  const result = resultSchema.safeParse(value);
+  if (!result.success) throw new Error('CODEX_MODEL_DISCOVERY_INVALID');
+  const models =
+    'models' in result.data
+      ? result.data.models
+      : Array.isArray(result.data.data)
+        ? result.data.data
+        : result.data.data.models;
+  return [...new Set(models.map((model) => model.id))].sort((a, b) => a.localeCompare(b));
+}
+
 /** Short-lived adapter for the Codex app-server model catalog. */
 export class CodexModelCatalog {
   public constructor(
@@ -37,19 +49,7 @@ export class CodexModelCatalog {
           capabilities: null,
         }),
       );
-      const result = resultSchema.safeParse(
-        await this.withTimeout(server.rpc.request('model/list', {})),
-      );
-      if (!result.success) return [];
-      const models =
-        'models' in result.data
-          ? result.data.models
-          : Array.isArray(result.data.data)
-            ? result.data.data
-            : result.data.data.models;
-      return [...new Set(models.map((model) => model.id))].sort((left, right) =>
-        left.localeCompare(right),
-      );
+      return decodeCodexModels(await this.withTimeout(server.rpc.request('model/list', {})));
     } catch {
       return [];
     } finally {

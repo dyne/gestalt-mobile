@@ -51,6 +51,9 @@ import {
 import { resolvedServerRequestId } from './server-request.js';
 import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import { decodeCodexModels } from './codex-model-catalog.js';
+import { decodeCodexSkills } from '../skills/codex-skill-catalog.js';
+import type { OwningStartupDiscovery } from '../../features/sessions/start-session/use-case.js';
 
 export type AppServer = {
   rpc: {
@@ -286,6 +289,8 @@ export class CodexSessionRuntime {
     void _legacyRequestTimeoutMs;
   }
   private readonly sessions = new Map<string, SessionResource>();
+  private readonly startupAttempts = new Map<string, AbortController>();
+  private readonly startingResources = new Map<string, SessionResource>();
   private readonly liveConfigurations = new Map<
     string,
     {
@@ -402,16 +407,140 @@ export class CodexSessionRuntime {
       ? this.owningAdmission.run(session, () => this.startOwned(session, now))
       : this.startOwned(session, now);
   }
+  /** One captured original supplies its own catalogs before thread selection.
+   * The admission hold encloses discovery, selection, thread creation and seal. */
+  async startWithDiscovery(
+    session: RelaySessionSnapshot,
+    now: string,
+    select: (discovery: OwningStartupDiscovery) => Promise<RelaySessionSnapshot>,
+    signal?: AbortSignal,
+  ): Promise<RelaySessionSnapshot> {
+    if (
+      !this.owningAdmission ||
+      this.startupAttempts.has(session.id) ||
+      this.sessions.has(session.id)
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    const controller = new AbortController();
+    const abort = () => controller.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    this.startupAttempts.set(session.id, controller);
+    try {
+      return await this.owningAdmission.run(session, () =>
+        this.startOwned(session, now, select, controller.signal),
+      );
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.startupAttempts.delete(session.id);
+      this.startingResources.delete(session.id);
+    }
+  }
   private async startOwned(
     session: RelaySessionSnapshot,
     now: string,
+    select?: (discovery: OwningStartupDiscovery) => Promise<RelaySessionSnapshot>,
+    signal?: AbortSignal,
   ): Promise<RelaySessionSnapshot> {
-    const resource = await this.createResource(session);
+    signal?.throwIfAborted();
+    const resource = await this.createResource(session, !!select, signal);
+    if (select) this.startingResources.set(session.id, resource);
+    const abort = () => resource.dispose();
+    signal?.addEventListener('abort', abort, { once: true });
+    const query = async (method: string, params: unknown) => {
+      signal?.throwIfAborted();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let cancelled: (() => void) | undefined;
+      try {
+        const interrupted = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('CODEX_STARTUP_DISCOVERY_TIMEOUT')), 5000);
+          cancelled = () => reject(new Error('CODEX_STARTUP_CANCELLED'));
+          signal?.addEventListener('abort', cancelled, { once: true });
+        });
+        signal?.throwIfAborted();
+        return await Promise.race([resource.process.rpc.request(method, params), interrupted]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (cancelled) signal?.removeEventListener('abort', cancelled);
+      }
+    };
     try {
-      await resource.process.rpc.request('initialize', {
-        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-        capabilities: { experimentalApi: true },
-      });
+      await (select ? query : resource.process.rpc.request.bind(resource.process.rpc))(
+        'initialize',
+        {
+          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+          capabilities: { experimentalApi: true },
+        },
+      );
+      if (select) {
+        if (
+          !resource.liveCaptureId ||
+          !resource.process.observeLiveLaunch ||
+          !resource.process.observeLiveEnvironment
+        )
+          throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+        const birth = resource.process.observeLiveLaunch();
+        const environment = resource.process.observeLiveEnvironment();
+        resource.process.observeLiveDescendants?.();
+        const configuration = await query('config/read', {
+          includeLayers: true,
+          cwd: session.workspacePath,
+        });
+        const account = await query('account/read', { refreshToken: false });
+        const identity = asRecord(account);
+        if (
+          !identity ||
+          !Object.hasOwn(identity, 'account') ||
+          typeof identity.requiresOpenaiAuth !== 'boolean'
+        )
+          throw new Error('LIVE_ACCOUNT_UNVERIFIED');
+        const models = decodeCodexModels(await query('model/list', {}));
+        const skills = decodeCodexSkills(
+          await query('skills/list', { cwds: [session.workspacePath], forceReload: true }),
+          session.workspacePath,
+        );
+        const selected = await select({ models, skills });
+        signal?.throwIfAborted();
+        if (
+          [
+            'id',
+            'provider',
+            'profile',
+            'workspaceId',
+            'workspacePath',
+            'modelSettings',
+            'executionPolicy',
+          ].some(
+            (key) =>
+              !isDeepStrictEqual(
+                selected[key as keyof RelaySessionSnapshot],
+                session[key as keyof RelaySessionSnapshot],
+              ),
+          ) ||
+          (session.model && session.model !== selected.model) ||
+          !selected.model ||
+          !models.includes(selected.model) ||
+          selected.threadId !== null ||
+          selected.activeTurnId !== null ||
+          selected.state !== 'starting'
+        )
+          throw new Error('LIVE_STARTUP_SELECTION_CHANGED');
+        if (
+          !isDeepStrictEqual(
+            configuration,
+            await query('config/read', { includeLayers: true, cwd: session.workspacePath }),
+          ) ||
+          !isDeepStrictEqual(account, await query('account/read', { refreshToken: false })) ||
+          !isDeepStrictEqual(birth, resource.process.observeLiveLaunch()) ||
+          !isDeepStrictEqual(environment, resource.process.observeLiveEnvironment())
+        )
+          throw new Error('LIVE_STARTUP_SOURCE_CHANGED');
+        session = selected;
+        resource.skillsConfig = selected.effectiveSkillSelection?.skills.map(
+          ({ path, enabled }) => ({ path, enabled }),
+        );
+      }
+      signal?.throwIfAborted();
       await this.prepareRetrieval(resource, session);
       this.beforeThreadStart?.(session, resource.modelConfig);
       const startedThreadId = await this.startThread(
@@ -431,14 +560,19 @@ export class CodexSessionRuntime {
         resource,
       );
       await this.onOwnerStarted?.(started);
+      signal?.throwIfAborted();
       return started;
     } catch (error) {
       resource.dispose();
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
     }
   }
 
   stop(sessionId: string): void {
+    this.startupAttempts.get(sessionId)?.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    this.startingResources.get(sessionId)?.dispose();
     const resource = this.sessions.get(sessionId);
     resource?.beginExplicitShutdown();
     resource?.dispose();
@@ -651,6 +785,9 @@ export class CodexSessionRuntime {
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
+    for (const attempt of this.startupAttempts.values())
+      attempt.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    for (const resource of this.startingResources.values()) resource.dispose();
     // Exit delivery can already be queued when shutdown begins. Declare the
     // shared intent for every owner before closing any process.
     const resources = [...this.sessions.values()];
@@ -1987,6 +2124,8 @@ export class CodexSessionRuntime {
       'mcpServerStatus/list',
       'account/rateLimits/read',
       'model/list',
+      'account/read',
+      'skills/list',
       'thread/backgroundTerminals/list',
     ]);
     const safeStop = new Set([
@@ -2039,7 +2178,11 @@ export class CodexSessionRuntime {
     return guarded;
   }
 
-  private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+  private async createResource(
+    session: RelaySessionSnapshot,
+    owningDiscovery = false,
+    signal?: AbortSignal,
+  ): Promise<SessionResource> {
     this.liveDispatch?.writer(session);
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
@@ -2053,7 +2196,9 @@ export class CodexSessionRuntime {
       const fixed = this.liveConfigurations.get(session.id);
       const skillsConfig = fixed
         ? structuredClone(fixed.skillsConfig)
-        : await this.resolveSkills?.(session);
+        : owningDiscovery
+          ? undefined
+          : await this.resolveSkills?.(session);
       const modelConfig = fixed
         ? structuredClone(fixed.modelConfig)
         : ((await this.resolveModelConfig?.(session)) ?? {});
@@ -2079,9 +2224,11 @@ export class CodexSessionRuntime {
             }
           : {}),
       };
+      signal?.throwIfAborted();
       const admittedInput = this.beforeOwnerLaunch
         ? await this.beforeOwnerLaunch(session, launchInput, structuredClone(modelConfig))
         : launchInput;
+      signal?.throwIfAborted();
       const process = this.launchGuarded(session, admittedInput);
       const resource = new SessionResource(
         session.id,

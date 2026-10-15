@@ -413,6 +413,11 @@ Missing provenance, present system config, or pre-existing project metadata
 cannot be adopted. Ordinary configurations without admission remain unavailable
 for Live.
 
+The accepted private original handoff uses a fixed Native environment. Captured
+launches refuse nonempty `providerCredentialEnvironment` declarations rather than
+drop those bindings. A provider requiring environment credentials needs a supported
+host contract before it can use this capture path.
+
 Manager v2 capture signs metadata absence and all instruction candidates before
 original birth. Sealing binds actual Native configuration layers, session flags,
 loaded instructions, precedence-shadowed candidates, directory identities and
@@ -421,6 +426,12 @@ The existing idle thread is cold-resumed inside the same original app-server;
 Start never destroys that original process to prepare a replacement. Private
 RPC state is re-resolved before every Live model admission. A change revokes the
 old admission and retains recovery ownership.
+
+New captured sessions initialize that one original app-server and read its actual
+model and skill catalogs before selecting a thread. Provider/account metadata,
+configuration, process identity and environment must remain unchanged across
+discovery. The reservation remains held through thread creation and sealing;
+discovery never starts a model turn or borrows another home's catalog.
 
 The prepared context-mode and Org descriptors have empty environments. The exact
 typed `suspension-v1` consumer declaration is bound to the Mobile component,

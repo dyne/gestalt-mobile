@@ -59,6 +59,10 @@ export async function captureOwningRuntime(input: {
   const { configuration: cfg, app, session } = input;
   if (!app.owningPolicy || session.provider !== 'codex' || session.workspacePath !== app.appRoot)
     throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
+  // The accepted Manager original handoff has a fixed environment. Never start
+  // a captured owner after silently dropping requested provider credentials.
+  if (cfg.providerCredentialEnvironment.length)
+    throw new Error('LIVE_CREDENTIAL_ENVIRONMENT_UNSUPPORTED');
   const policy = new InstalledLivePolicy(cfg.installation);
   policy.validateInstallation();
   assertLiveNativeInstallation(cfg.native.path);

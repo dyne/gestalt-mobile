@@ -60,6 +60,36 @@ const resultSchema = z.object({
   ),
 });
 
+export function decodeCodexSkills(result: unknown, workspace: string): SkillCatalogResult {
+  const parsed = resultSchema.safeParse(result);
+  if (!parsed.success)
+    throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill catalog response.');
+  const entry = parsed.data.data.find((candidate) => candidate.cwd === resolve(workspace));
+  if (!entry)
+    throw new SkillProfileError(
+      'INVALID_SKILL_DISCOVERY',
+      'Codex did not return the requested workspace catalog.',
+    );
+  const skills = entry.skills.map((skill) => {
+    const stable = availableSkillSchema.safeParse(skill);
+    if (!stable.success)
+      throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
+    return stable.data.name === 'gestalt:xerj' ? { ...stable.data, enabled: false } : stable.data;
+  });
+  return {
+    skills,
+    errors: entry.errors.map((error) => ({
+      message:
+        typeof error === 'object' &&
+        error !== null &&
+        'message' in error &&
+        typeof error.message === 'string'
+          ? error.message
+          : 'Codex skill discovery error.',
+    })),
+  };
+}
+
 /** Short-lived Codex app-server adapter: initialize, discover, and always terminate. */
 export class CodexSkillCatalog implements SkillCatalog {
   public constructor(
@@ -85,26 +115,8 @@ export class CodexSkillCatalog implements SkillCatalog {
         server.rpc.request('skills/list', { cwds: [canonicalWorkspace], forceReload: true }),
         deadline,
       );
-      const parsed = resultSchema.safeParse(result);
-      if (!parsed.success)
-        throw new SkillProfileError(
-          'INVALID_SKILL_DISCOVERY',
-          'Invalid Codex skill catalog response.',
-        );
-      const entry = parsed.data.data.find((candidate) => candidate.cwd === canonicalWorkspace);
-      if (!entry)
-        throw new SkillProfileError(
-          'INVALID_SKILL_DISCOVERY',
-          'Codex did not return the requested workspace catalog.',
-        );
-      const skills = entry.skills.map((skill) => {
-        const stable = availableSkillSchema.safeParse(skill);
-        if (!stable.success)
-          throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Invalid Codex skill metadata.');
-        return stable.data.name === 'gestalt:xerj'
-          ? { ...stable.data, enabled: false }
-          : stable.data;
-      });
+      const decoded = decodeCodexSkills(result, canonicalWorkspace);
+      const skills = decoded.skills;
       if (
         this.retrieval &&
         skills.some((skill) => ['gestalt:xerj', 'gestalt:serena'].includes(skill.name))
@@ -147,18 +159,7 @@ export class CodexSkillCatalog implements SkillCatalog {
           }
         }
       }
-      return {
-        skills,
-        errors: entry.errors.map((error) => ({
-          message:
-            typeof error === 'object' &&
-            error !== null &&
-            'message' in error &&
-            typeof error.message === 'string'
-              ? error.message
-              : 'Codex skill discovery error.',
-        })),
-      };
+      return { ...decoded, skills };
     } catch (error) {
       if (error instanceof SkillProfileError) throw error;
       throw new SkillProfileError('INVALID_SKILL_DISCOVERY', 'Codex skill discovery failed.');

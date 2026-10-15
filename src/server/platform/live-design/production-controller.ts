@@ -170,6 +170,54 @@ export class ProductionLiveController {
     const owner = this.construction.getStore();
     return !!owner?.active && !this.captures.has(owner.sessionId);
   };
+  supportsOwningStartup = (session: RelaySessionSnapshot): boolean => {
+    const app = this.cfg.apps.find((item) => item.appRoot === session.workspacePath);
+    const selected = session.executionPolicy?.sandbox;
+    return (
+      !!app?.owningPolicy &&
+      session.provider === 'codex' &&
+      (!selected || (selected === 'workspace-git' && app.owningPolicy.profileId === selected))
+    );
+  };
+  /** Release only after revocation and the exact owned child lifetime have settled. */
+  async releaseFailedStartup(session: RelaySessionSnapshot): Promise<void> {
+    if (!this.supportsOwningStartup(session)) return;
+    const b = this.requireBindings();
+    const capture = this.captures.get(session.id);
+    try {
+      if (capture) {
+        await this.revokeCapture(capture);
+        const child = this.capturedProcesses.get(capture.captureId);
+        if (child) {
+          child.close();
+          if (!child.waitForExit) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              child.waitForExit(),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('LIVE_PROCESS_TREE_UNVERIFIED')), 10000);
+              }),
+            ]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+      }
+      await b.settleAuxiliary();
+      if (this.failedPreparations.has(session.id)) throw new Error('LIVE_CLEANUP_REQUIRED');
+      b.guard.settle(session.id, {
+        roots: 0,
+        descendants: 0,
+        commands: 0,
+        approvals: 0,
+        unknown: false,
+      });
+    } catch (error) {
+      this.failedPreparations.add(session.id);
+      throw error;
+    }
+  }
   withOwningAdmission = async <T>(
     session: RelaySessionSnapshot,
     work: () => Promise<T>,

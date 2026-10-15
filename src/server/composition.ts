@@ -2174,6 +2174,20 @@ async function composeRelayAppOwned(
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
         reserve: (session) => liveDispatch?.writer(session),
+        ...(productionLive && runtime
+          ? {
+              owningStartup: {
+                supports: productionLive.supportsOwningStartup,
+                start: (
+                  session: RelaySessionSnapshot,
+                  select: Parameters<CodexSessionRuntime['startWithDiscovery']>[2],
+                  signal?: AbortSignal,
+                ) => runtime.startWithDiscovery(session, new Date().toISOString(), select, signal),
+              },
+              releaseStartup: (session: RelaySessionSnapshot) =>
+                productionLive.releaseFailedStartup(session),
+            }
+          : {}),
         activate:
           runtime || kimiRuntime
             ? async (session) => {

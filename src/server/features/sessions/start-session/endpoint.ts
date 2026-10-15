@@ -36,8 +36,14 @@ export function registerStartSession(
         retryable: false,
       });
     let started;
+    const cancellation = new AbortController();
+    const abort = () => {
+      if (!reply.raw.writableEnded) cancellation.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    };
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', abort);
     try {
-      started = await startSession(body, deps);
+      started = await startSession(body, deps, { signal: cancellation.signal });
     } catch (error) {
       deps.reportFailure?.('start-session', error);
       if (
@@ -68,6 +74,9 @@ export function registerStartSession(
             ),
           );
       throw error;
+    } finally {
+      request.raw.off('aborted', abort);
+      reply.raw.off('close', abort);
     }
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));
     return reply.code(202).send(started);
