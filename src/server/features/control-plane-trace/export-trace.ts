@@ -47,6 +47,8 @@ const diagnosticFields = new Set([
   'reason',
   'code',
   'rpcCode',
+  'providerFailure',
+  'httpStatusCode',
   'enabled',
   'requestedEnabled',
   'desiredState',

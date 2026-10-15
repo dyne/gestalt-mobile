@@ -1000,6 +1000,146 @@ describe('production composition', () => {
       );
       await app.close();
     });
+    it.each(
+      [
+        'usageLimitExceeded',
+        'contextWindowExceeded',
+        'unauthorized',
+        'responseStreamDisconnected',
+        'futureProviderError',
+      ].flatMap((code) =>
+        ['error', 'turn/completed', 'child-error'].map((method) => ({ code, method })),
+      ),
+    )('production pauses durably on Codex $code via $method', async ({ method, code }) => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      let coordinator:
+        import('./features/autopilot/application/service.js').AutopilotCoordinator | undefined;
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(fixture.handles.some((handle) => handle.calls.includes('turn/start'))).toBe(true),
+      );
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const handle = fixture.handles.find((candidate) => candidate.calls.includes('turn/start'))!;
+      const failure = {
+        code,
+        ...(code === 'responseStreamDisconnected' ? { httpStatusCode: 503 } : {}),
+      };
+      const error = {
+        codexErrorInfo:
+          code === 'responseStreamDisconnected' ? { [code]: { httpStatusCode: 503 } } : code,
+        message: 'private provider detail',
+      };
+      handle.notify!({
+        method: 'error',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          error,
+          willRetry: true,
+        },
+      });
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot.enabled,
+      ).toBe(true);
+      handle.notify!({
+        method: 'error',
+        params: {
+          threadId: 'unrelated-thread',
+          turnId: 'unrelated-turn',
+          error,
+          willRetry: false,
+        },
+      });
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot.enabled,
+      ).toBe(true);
+      if (method === 'child-error') {
+        handle.notify!({
+          method: 'item/started',
+          params: {
+            threadId: session.threadId,
+            item: {
+              id: 'spawn',
+              type: 'collabAgentToolCall',
+              tool: 'spawnAgent',
+              receiverThreadIds: ['child'],
+              senderThreadId: session.threadId,
+            },
+          },
+        });
+      }
+      const params =
+        method !== 'turn/completed'
+          ? {
+              threadId: method === 'child-error' ? 'child' : session.threadId,
+              turnId: method === 'child-error' ? 'child-turn' : session.activeTurnId,
+              error,
+              willRetry: false,
+            }
+          : {
+              threadId: session.threadId,
+              turn: { id: session.activeTurnId, status: 'failed', error },
+            };
+      // Provider diagnostics remain available even when automatic supervision was disabled.
+      if (code === 'unauthorized') coordinator!.disable(fixture.sessionId);
+      handle.notify!({ method: method === 'child-error' ? 'error' : method, params });
+      handle.notify!({ method: method === 'child-error' ? 'error' : method, params });
+      handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: session.threadId,
+          turn: { id: session.activeTurnId, status: 'failed', error },
+        },
+      });
+      coordinator!.evaluate(fixture.sessionId);
+      coordinator!.dispose(fixture.sessionId);
+      coordinator!.restore(fixture.sessionId);
+      const result = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      expect(result.activeTurnId).toBeNull();
+      expect(result.autopilot).toMatchObject({
+        enabled: false,
+        state: 'safetyPaused',
+        reason: code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
+        providerFailure: failure,
+        health: { nextExpectedAction: expect.stringContaining(code) },
+      });
+      expect(
+        fixture.handles
+          .flatMap((candidate) => candidate.calls)
+          .filter((call) => call === 'turn/start'),
+      ).toHaveLength(1);
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        const rows = database
+          .prepare(
+            "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'autopilot.updated'",
+          )
+          .all(fixture.sessionId);
+        expect(JSON.stringify(rows)).not.toContain('private provider detail');
+        expect(
+          rows.filter(
+            (row) => JSON.parse(row.payload_json as string).providerFailure?.code === code,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        database.close();
+      }
+      coordinator!.enable(fixture.sessionId);
+      expect(coordinator!.snapshot(fixture.sessionId).providerFailure).toBeUndefined();
+    });
     it('production same-DB restart rearms future backoff and claims overdue once', async () => {
       const timers: Array<{ callback: () => void; delayMs: number }> = [];
       let coordinator:

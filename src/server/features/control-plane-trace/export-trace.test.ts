@@ -24,6 +24,18 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('retains provider error identifiers and HTTP status without provider prose', () => {
+    expect(
+      redactDiagnosticPayload({
+        providerFailure: {
+          code: 'httpConnectionFailed',
+          httpStatusCode: 503,
+          message: 'private request detail',
+          additionalDetails: 'private diagnostics',
+        },
+      }),
+    ).toEqual({ providerFailure: { code: 'httpConnectionFailed', httpStatusCode: 503 } });
+  });
   it('keeps the failed boundary when interleaved status polling exceeds the export budget', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-trace-flood-'));
     directories.push(directory);

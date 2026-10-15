@@ -20,7 +20,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       : livenessState === 'attentionRequired'
         ? 'Autopilot needs attention'
         : livenessState === 'safetyPaused'
-          ? 'Autopilot safety paused'
+          ? autopilot?.reason === 'usageLimitExceeded'
+            ? 'Autopilot paused: Codex usage limit reached'
+            : 'Autopilot safety paused'
           : active
             ? 'Autopilot continuation active'
             : 'Autopilot continuation inactive',

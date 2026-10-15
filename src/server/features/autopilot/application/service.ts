@@ -5,6 +5,7 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import type { ProviderFailure } from '../../../../shared/contracts/provider-failure.js';
 import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
 import { AutopilotStateError } from '../domain/persisted-state-error.js';
 import {
@@ -471,6 +472,7 @@ export class AutopilotCoordinator {
       consecutiveNoProgress: 0,
       nextEvaluationAt: null,
       stopReason: null,
+      providerFailure: undefined,
       executor: !replacing && prior.state === 'attentionRequired' ? prior.executor : undefined,
       blocking: undefined,
       supervision: recoverSafetyPause(
@@ -791,6 +793,37 @@ export class AutopilotCoordinator {
       this.persist(cancelled ? { ...next, lastControlId: null } : next, cancelled);
     }
     return this.snapshot(sessionId);
+  }
+  /** Terminal provider failures are retained even when automatic supervision is off. */
+  providerFailed(sessionId: string, failure: ProviderFailure): boolean {
+    const now = this.deps.now();
+    const state = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    if (
+      state.state === 'safetyPaused' &&
+      state.providerFailure?.code === failure.code &&
+      state.providerFailure.httpStatusCode === failure.httpStatusCode
+    )
+      return false;
+    const cancelled = this.cancelScheduledControl(state, now);
+    this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
+    this.persist(
+      {
+        // Timer cancellation also persists cancelled executor commands.
+        ...(this.deps.store.find(sessionId) ?? state),
+        state: 'safetyPaused',
+        requestedEnabled: false,
+        generation: state.generation + 1,
+        nextEvaluationAt: null,
+        ...(cancelled ? { lastControlId: null } : {}),
+        stopReason: failure.code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
+        providerFailure: failure,
+        supervision: undefined,
+        updatedAt: now,
+      },
+      cancelled,
+    );
+    return true;
   }
   /** Returns whether an incomplete supervised plan may be treated as terminal by the relay. */
   turnCompleted(sessionId: string, turnId?: string): boolean {

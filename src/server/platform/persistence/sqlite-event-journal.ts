@@ -34,6 +34,10 @@ const renderableAutopilotAuditWhere = `
     type <> 'autopilot.updated'
     OR json_extract(payload_json, '$.state') = 'completed'
     OR (
+      json_extract(payload_json, '$.state') = 'safetyPaused'
+      AND json_extract(payload_json, '$.reason') IN ('usageLimitExceeded', 'providerError')
+    )
+    OR (
       json_extract(payload_json, '$.state') = 'attentionRequired'
       AND json_extract(payload_json, '$.reason') IN ('noPlanProgress', 'reconcileFailed', 'actionRateExceeded')
     )

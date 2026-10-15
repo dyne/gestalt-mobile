@@ -5,6 +5,7 @@
  */
 
 import { createIdempotencyKey } from '../sessions/idempotency-key.js';
+import { describeProviderFailure } from '../../../shared/contracts/provider-failure.js';
 import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 import {
   checkpointHandoffRecoveryMessage,
@@ -307,10 +308,17 @@ export class AutopilotController {
   #applySnapshot(id: string, candidate: unknown): void {
     if (!isAutopilotSnapshot(candidate)) return;
     this.#snapshots.set(id, candidate);
-    if (candidate.health?.phase === 'checkpointRecovery')
+    if (candidate.state === 'safetyPaused' && candidate.providerFailure)
+      this.#recoveryErrors.set(id, describeProviderFailure(candidate.providerFailure));
+    else if (candidate.health?.phase === 'checkpointRecovery')
       this.#recoveryErrors.set(id, checkpointHandoffRecoveryMessage);
     else if (isReconciliationRecovery(candidate))
       this.#recoveryErrors.set(id, reconciliationRecoveryMessage);
+    else if (candidate.state === 'safetyPaused' && candidate.reason === 'usageLimitExceeded')
+      this.#recoveryErrors.set(
+        id,
+        'Codex usage limit reached. Restore available usage or wait for the limit to reset, then resume Autopilot.',
+      );
     else this.#recoveryErrors.delete(id);
   }
   #applyAttention(id: string, candidate: unknown): void {
