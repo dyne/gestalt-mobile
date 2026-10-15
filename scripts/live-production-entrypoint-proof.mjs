@@ -268,10 +268,20 @@ function childCompletion() {
   return found;
 }
 async function eventFor(body) {
-  assert.equal(body.model, 'gpt-6-sol');
-  assert.equal(body.reasoning?.effort, 'medium');
+  const check = (stage, condition) => {
+    report.provider.stage = stage;
+    assert.ok(condition);
+  };
+  report.provider.requestShape = {
+    selectedModel: body.model === 'gpt-6-sol',
+    selectedThinking: body.reasoning?.effort === 'medium',
+    threadMetadata: typeof body.client_metadata?.thread_id === 'string',
+    sessionMetadata: typeof body.client_metadata?.session_id === 'string',
+  };
+  check('selected-model-preserved', body.model === 'gpt-6-sol');
+  check('selected-thinking-preserved', body.reasoning?.effort === 'medium');
   const metadata = body.client_metadata;
-  assert.equal(typeof metadata?.thread_id, 'string');
+  check('native-request-thread-identity', typeof metadata?.thread_id === 'string');
   if (seed) {
     owningThread = metadata.thread_id;
     owningNativeSession = metadata.session_id;
@@ -815,6 +825,9 @@ try {
     report.projectMetadata.duringSessionCreate = stopMetadataSampling();
   }
   report.projectMetadata.afterSessionCreate = ownedProjectMetadata();
+  assert.equal(session.state, 'ready');
+  assert.equal(typeof session.threadId, 'string');
+  report.checks.actualOwningStartupAdmitted = true;
   await api('POST', `/api/sessions/${session.id}/turns`, {
     text: 'Seed owning thread persistence.',
   });
