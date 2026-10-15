@@ -406,7 +406,7 @@ async function eventFor(body) {
   const available = toolsIn([
     ...(body.tools ?? []),
     ...(body.input ?? [])
-      .filter((x) => x.type === 'additional_tools')
+      .filter((x) => ['additional_tools', 'tool_search_output'].includes(x.type))
       .flatMap((x) => x.tools ?? []),
   ]);
   const code = available.find((tool) => tool.name === 'exec' && tool.type === 'custom');
@@ -458,11 +458,26 @@ async function eventFor(body) {
       true,
     );
   if (role === 'root' && step === 3) {
+    check(
+      'native-context-search-advertised',
+      available.some((tool) => tool.type === 'tool_search' && tool.execution === 'client'),
+    );
+    return {
+      type: 'response.output_item.done',
+      item: {
+        type: 'tool_search_call',
+        call_id: `${role}-${step}`,
+        execution: 'client',
+        arguments: { query: 'context-mode ctx_execute execute JavaScript code', limit: 1 },
+      },
+    };
+  }
+  if (role === 'root' && step === 4) {
     const ctx = available.find((tool) => /ctx_execute$/.test(tool.name));
     const nested = code?.description?.match(
       /declare const tools: \{ ([A-Za-z0-9_]*ctx_execute)\(/,
     )?.[1];
-    assert.ok(ctx || nested);
+    check('native-context-search-result', ctx || nested);
     const args = {
       language: 'javascript',
       code: `const fs=await import('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
@@ -470,12 +485,16 @@ async function eventFor(body) {
     };
     return ctx ? call(ctx, `${role}-${step}`, args) : toolCall(nested, args);
   }
-  if (role === 'root' && step === 4) {
-    assert.ok(JSON.stringify(body.input).includes('production-context-denied'));
+  if (role === 'root' && step === 5) {
+    check(
+      'native-context-artifact',
+      readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8') ===
+        'confined-context',
+    );
     const spawnTool = available.find((tool) => tool.name === 'spawn_agent');
-    assert.ok(spawnTool);
+    check('native-spawn-advertised', spawnTool);
     const properties = spawnTool.parameters?.properties ?? {};
-    assert.ok(properties.fork_turns || properties.fork_context);
+    check('native-spawn-fork-schema', properties.fork_turns || properties.fork_context);
     return call(spawnTool, `${role}-${step}`, {
       message: 'Run the controlled inherited-confinement probe and finish.',
       agent_type: 'default',
@@ -483,10 +502,10 @@ async function eventFor(body) {
       ...(properties.fork_turns ? { fork_turns: 'none' } : { fork_context: false }),
     });
   }
-  if (role === 'root' && step === 5) {
+  if (role === 'root' && step === 6) {
     const spawned = body.input.find(
       (x) =>
-        x.call_id === 'root-4' &&
+        x.call_id === 'root-5' &&
         ['function_call_output', 'custom_tool_call_output'].includes(x.type),
     );
     const kinds = [
@@ -508,7 +527,7 @@ async function eventFor(body) {
     const spawnLower = spawnText.slice(0, 65536).toLowerCase();
     report.provider.spawnResponse = {
       kind: spawned?.type ?? 'missing',
-      expectedCallIdPresent: body.input.some((x) => x.call_id === 'root-4'),
+      expectedCallIdPresent: body.input.some((x) => x.call_id === 'root-5'),
       inputKinds: Object.fromEntries(
         kinds.map((kind) => [kind, body.input.filter((x) => x.type === kind).length]),
       ),
@@ -545,6 +564,11 @@ async function eventFor(body) {
   );
 }
 const provider = createServer(async (req, res) => {
+  if (providerFailure) {
+    res.writeHead(503);
+    res.end();
+    return;
+  }
   let phase = 'request-method';
   const transport = {
     method: ['GET', 'POST', 'HEAD', 'OPTIONS'].includes(req.method) ? req.method : 'other',
@@ -1250,7 +1274,7 @@ try {
   report.modelEventStatus = event.status;
   assert.equal(event.status, 200);
   await until(
-    () => roles.get('root') >= 6 && roles.get('child') >= 4 && childCompletion(),
+    () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
     'PRODUCTION_MODEL_CHILD_DEADLINE',
     60000,
   );
