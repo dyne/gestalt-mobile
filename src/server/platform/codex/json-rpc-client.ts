@@ -14,10 +14,77 @@ export const CODEX_THREAD_WRITER_BUSY = 'CODEX_THREAD_WRITER_BUSY';
 type CodexJsonRpcErrorKind =
   typeof CODEX_THREAD_NOT_FOUND | typeof CODEX_THREAD_WRITER_BUSY | typeof CODEX_JSON_RPC_ERROR;
 
+// Fixed vocabulary only; classify before message truncation without retaining raw details.
+const liveDiagnosticMarkers = [
+  'error resuming thread:',
+  'failed to initialize',
+  'failed to read',
+  'failed to load',
+  'failed to load rules',
+  'failed to load model context',
+  'failed to load thread-spawn descendants',
+  'failed to spawn',
+  'permission denied',
+  'no such file or directory',
+  'os error 13',
+  'os error 2',
+  'writer',
+  'lock',
+  'sqlite',
+  'history',
+  'session',
+  'config',
+  'permission',
+  'mcp',
+  'code-mode',
+  'sandbox',
+  'bwrap',
+  'metadata',
+  'shutdown',
+  'initialize',
+  'invalid',
+  'unknown',
+  'unsupported',
+  'not found',
+  'expected',
+  'parse',
+  'deserialize',
+  'toml',
+  'json',
+  'profile',
+  'executable',
+  'permission_profile',
+  'codex_bwrap',
+  'bwrap_path',
+  'linux_sandbox',
+  'model context',
+
+  'executor-local config',
+  'agents.md',
+  'operation not permitted',
+  'read-only file system',
+  'file exists',
+  'not a directory',
+  "can't bind mount",
+  "can't mkdir",
+  "can't open",
+  "can't mount",
+  "can't create",
+  'mount namespace',
+  'user namespace',
+  'uid map',
+  'symbolic link',
+  'symlink',
+  'proc/self/fd',
+  'failed to enqueue',
+  'thread listener',
+] as const;
+
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
   /** Fixed internal operation label only; never parameters or response contents. */
   liveRpcMethod?: string;
+  readonly liveDiagnosticMarkers: readonly string[];
   constructor(
     readonly code: number | undefined,
     message: string,
@@ -25,6 +92,8 @@ export class CodexJsonRpcError extends Error {
   ) {
     super(boundMessage(message));
     this.name = 'CodexJsonRpcError';
+    const lower = message.toLowerCase();
+    this.liveDiagnosticMarkers = liveDiagnosticMarkers.filter((marker) => lower.includes(marker));
   }
 }
 

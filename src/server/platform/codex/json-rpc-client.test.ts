@@ -16,6 +16,19 @@ import {
 } from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
+  it('retains only fixed failure categories beyond the bounded redacted message', () => {
+    const error = new CodexJsonRpcError(
+      -32603,
+      `token=private-value ${'x'.repeat(300)} executor-local config: bwrap: Can't bind mount /private-owner-path: Operation not permitted`,
+    );
+    expect(error.message.length).toBeLessThanOrEqual(256);
+    expect(error.message).not.toContain('private-value');
+    expect(error.liveDiagnosticMarkers).toContain('executor-local config');
+    expect(error.liveDiagnosticMarkers).toContain("can't bind mount");
+    expect(error.liveDiagnosticMarkers).toContain('operation not permitted');
+    expect(JSON.stringify(error.liveDiagnosticMarkers)).not.toContain('private-owner-path');
+    expect(JSON.stringify(error)).not.toContain('private-value');
+  });
   it('classifies only the confirmed active-writer protocol response', () => {
     expect(new CodexJsonRpcError(-32600, 'Thread thread-1 already has an active writer').kind).toBe(
       CODEX_THREAD_WRITER_BUSY,
