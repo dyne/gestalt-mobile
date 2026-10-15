@@ -17,6 +17,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   readdirSync,
   realpathSync,
   writeFileSync,
@@ -81,6 +82,62 @@ const home = join(privateRoot, 'home'),
   controller = join(privateRoot, 'controller'),
   caddyRoot = join(privateRoot, 'caddy');
 for (const path of [home, owningHome, controller, caddyRoot]) mkdirSync(path, { mode: 0o700 });
+const proofStarted = Date.now();
+const checkpoint = setInterval(() => {
+  try {
+    let ownerLifecycle = [];
+    const path = join(controller, 'live.sqlite');
+    if (existsSync(path)) {
+      const db = new DatabaseSync(path, { readOnly: true });
+      try {
+        ownerLifecycle = db
+          .prepare('SELECT record FROM live_runs LIMIT 4')
+          .all()
+          .map((row) => {
+            const value = JSON.parse(row.record);
+            return {
+              state: [
+                'starting',
+                'active',
+                'stopping',
+                'error',
+                'recoveryRequired',
+                'idle',
+              ].includes(value.state)
+                ? value.state
+                : 'unknown',
+              phase:
+                typeof value.phase === 'string' && /^[a-z:-]{1,96}$/.test(value.phase)
+                  ? value.phase
+                  : 'unknown',
+            };
+          });
+      } finally {
+        db.close();
+      }
+    }
+    const target = join(evidence, 'production-entrypoint-progress.json');
+    writeFileSync(
+      target + '.tmp',
+      JSON.stringify(
+        {
+          ...report,
+          passed: false,
+          inProgress: true,
+          elapsedMs: Date.now() - proofStarted,
+          ownerLifecycle,
+        },
+        null,
+        2,
+      ) + '\n',
+      { mode: 0o600 },
+    );
+    renameSync(target + '.tmp', target);
+  } catch {
+    /* Read-only progress evidence cannot affect readiness or cleanup. */
+  }
+}, 5000);
+checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
 const privateCanary = randomBytes(32).toString('hex'),
   privateFile = join(privateRoot, 'canary');
@@ -1125,6 +1182,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  report.cleanupStage = 'mobile';
   stream?.destroy();
   if (mobile) {
     try {
@@ -1138,6 +1196,7 @@ try {
     }
   }
   if (caddy) {
+    report.cleanupStage = 'caddy';
     try {
       if (caddy.exitCode === null && caddy.signalCode === null) {
         await new Promise((done, reject) => {
@@ -1156,6 +1215,7 @@ try {
     }
   }
   if (provider.listening) {
+    report.cleanupStage = 'provider';
     try {
       await new Promise((done, reject) =>
         provider.close((error) => (error ? reject(error) : done())),
@@ -1226,6 +1286,8 @@ try {
     report.passed = false;
     report.cleanupComplete = false;
   }
+  report.cleanupStage = 'settled';
+  clearInterval(checkpoint);
   writeFileSync(
     join(evidence, 'production-entrypoint-proof.json'),
     JSON.stringify(report, null, 2) + '\n',
