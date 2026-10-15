@@ -36,10 +36,24 @@ type AdmissionPrerequisites = {
   configFiles: boolean[];
   signingKey: boolean;
   runtimeHome: boolean;
+  electionLock: boolean;
+  electionDescriptor: boolean;
+  receipts: boolean[];
+  originalProcess: boolean[];
+  sourcePins: Record<string, boolean[]>;
 };
 function admissionPrerequisites(manifestPath: string): AdmissionPrerequisites | undefined {
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const root = dirname(manifestPath);
+    const id = manifest.runtimeProvenance.captureId;
+    if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) return undefined;
+    const sealedPath = join(root, `runtime-${id}.json`);
+    const sealed = existsSync(sealedPath)
+      ? JSON.parse(readFileSync(sealedPath, 'utf8')).body
+      : undefined;
+    const pid = sealed?.runtime?.process?.pid;
+    const inventory = JSON.parse(readFileSync(join(root, 'owning-sources.json'), 'utf8'));
     return {
       privatePaths: Object.fromEntries(
         ['auth', 'controller', 'caddy', 'daemon'].map((role) => [
@@ -50,6 +64,29 @@ function admissionPrerequisites(manifestPath: string): AdmissionPrerequisites | 
       configFiles: manifest.configFiles.map((file: { path: string }) => existsSync(file.path)),
       signingKey: existsSync(manifest.keyFile),
       runtimeHome: existsSync(manifest.runtimeHome),
+      electionLock: existsSync(manifest.election.lockFile),
+      electionDescriptor: existsSync(`/proc/${manifest.election.holder.pid}/fd/3`),
+      receipts: [
+        join(root, 'policy-receipt.json'),
+        join(root, `birth-${id}.json`),
+        sealedPath,
+        join(root, `image-${id}.json`),
+        join(
+          dirname(manifest.election.lockFile),
+          `runtime-admission-${hash(manifest.appRoot)}.json`,
+        ),
+      ].map((path) => existsSync(path)),
+      originalProcess: ['exe', 'environ', 'cmdline', 'ns/mnt', 'ns/user', 'ns/pid'].map(
+        (field) => Number.isSafeInteger(pid) && existsSync(`/proc/${pid}/${field}`),
+      ),
+      sourcePins: Object.fromEntries(
+        ['file', 'directory', 'instruction', 'instruction-candidate'].map((kind) => [
+          kind,
+          inventory.sources
+            .filter((source: { kind: string }) => source.kind === kind)
+            .map((source: { path: string }) => existsSync(source.path)),
+        ]),
+      ),
     };
   } catch {
     return undefined;

@@ -623,6 +623,7 @@ export class ProductionLiveController {
         return this.owners.assert(existing);
       }
       this.preflight.add(session.id);
+      let lifecycleStage = 'register';
       try {
         const run = await startLive(
           {
@@ -633,22 +634,36 @@ export class ProductionLiveController {
               register: () => this.register(session, app, request),
               unregister: (claim) => this.unregister(claim),
               busy: async () => {
+                lifecycleStage = 'owning-quiescence';
                 await bindings.runtime.inspectLiveQuiescence(session);
                 return false;
               },
-              verify: (candidate) => this.verifyGeneration(candidate),
+              verify: (candidate) => {
+                lifecycleStage = 'generation-verification';
+                return this.verifyGeneration(candidate);
+              },
             },
             resources: {
               quiesce: async (candidate) => {
+                lifecycleStage = 'resource-quiescence';
                 const g = this.generation(candidate);
                 await bindings.runtime.inspectLiveQuiescence(g.session);
               },
               restore: (candidate) => this.restoreOriginal(candidate),
-              prepare: (candidate) => this.prepareOwner(candidate),
+              prepare: (candidate) => {
+                lifecycleStage = 'helper-and-context-preparation';
+                return this.prepareOwner(candidate);
+              },
               cleanup: (candidate) => this.cleanup(candidate),
-              authorize: (candidate) => this.authorize(candidate),
+              authorize: (candidate) => {
+                lifecycleStage = 'authorization';
+                return this.authorize(candidate);
+              },
               revoke: (candidate) => this.revoke(candidate),
-              expose: (candidate) => this.expose(candidate),
+              expose: (candidate) => {
+                lifecycleStage = 'preview-exposure';
+                return this.expose(candidate);
+              },
               remove: (candidate) => this.remove(candidate),
             },
           },
@@ -671,6 +686,7 @@ export class ProductionLiveController {
             JSON.stringify({
               schemaVersion: 1,
               stage: 'start-lifecycle',
+              lifecycleStage,
               admission:
                 error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
               phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
