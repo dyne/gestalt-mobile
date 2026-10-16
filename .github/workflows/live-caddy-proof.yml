@@ -253,7 +253,8 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs
-          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-production-entrypoint-proof.mjs
+          mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
       - name: Actual pinned helper and project process namespaces with native confinement
         timeout-minutes: 3
         env:

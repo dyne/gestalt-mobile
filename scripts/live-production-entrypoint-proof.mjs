@@ -28,6 +28,7 @@ import { createServer as portServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
@@ -77,6 +78,17 @@ const report = {
         ]),
   ],
 };
+const browserEventLoop = monitorEventLoopDelay({ resolution: 20 });
+function finishBrowserProfile() {
+  if (!report.browserCpuWindowStartUs || report.browserCpuWindowEndUs) return;
+  report.browserCpuWindowEndUs = Number(process.hrtime.bigint() / 1000n);
+  browserEventLoop.disable();
+  report.browserEventLoop = {
+    maxDelayMs: Math.round(browserEventLoop.max / 1e6),
+    p99DelayMs: Math.round(browserEventLoop.percentile(99) / 1e6),
+    samples: browserEventLoop.count,
+  };
+}
 // Fixture-only observation: retain the production verifier, inputs and outcome.
 // Record timing/codes only, never receipts, process environments or credentials.
 const projectProcesses = new Map();
@@ -1531,6 +1543,8 @@ try {
         60000,
       );
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
+    report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);
+    browserEventLoop.enable();
     await productionEditBrowser({
       privateRoot,
       certificate: join(caddyRoot, 'tls.pem'),
@@ -1577,6 +1591,7 @@ try {
         } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
       },
     });
+    finishBrowserProfile();
     assert.equal(report.previewProbeFailure, undefined);
     report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
     report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
@@ -1668,6 +1683,7 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
+  finishBrowserProfile();
   if (
     (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') ||
     (constructionOnly && error?.message === 'CONSTRUCTION_ONLY_COMPLETE')
