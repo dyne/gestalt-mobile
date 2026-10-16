@@ -125,10 +125,23 @@ export async function createPreviewGateway(options: {
               response.destroy();
               return;
             }
-            reply.raw.writeHead(
-              response.statusCode ?? 502,
-              stripPreviewResponseHeaders(response.headers),
-            );
+            const headers = stripPreviewResponseHeaders(response.headers);
+            const immediateReconnect =
+              route.helper &&
+              req.method === 'GET' &&
+              route.path.split('?')[0] === '/events' &&
+              response.statusCode === 200 &&
+              /^text\/event-stream(?:\s*;|$)/i.test(
+                String(response.headers['content-type'] ?? ''),
+              ) &&
+              !response.headers['content-encoding'];
+            if (immediateReconnect) delete headers['content-length'];
+            reply.raw.writeHead(response.statusCode ?? 502, headers);
+            // Physical streams still expire at60s. Reconnect the real browser
+            // immediately so its fresh admission does not also consume the
+            // helper's8s disconnect grace with EventSource's default retry delay.
+            // This SSE control field emits no event or readiness acknowledgement.
+            if (immediateReconnect) reply.raw.write('retry: 0\n\n');
             relayPreviewHttpBody(authorized, response, reply.raw);
           },
         );
