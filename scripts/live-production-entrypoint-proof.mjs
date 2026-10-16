@@ -1380,6 +1380,7 @@ try {
     installedCodexVersion: 'codex-cli 0.161.0',
     startAppServers: true,
     xerj: 'off',
+    ...(editFlow ? { staticDir: resolve('dist/client') } : {}),
     profiles: {
       list: async () => [],
       require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
@@ -1438,7 +1439,31 @@ try {
     operationId: 'production-admission',
   };
   report.stage = 'production-start-admission';
-  const started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  let started;
+  if (editFlow) {
+    await productionEditBrowser({
+      privateRoot,
+      certificate: join(caddyRoot, 'tls.pem'),
+      report,
+      browser: {
+        startThroughControls: true,
+        mobileOrigin,
+        sessionId: session.id,
+        sessionCookie: browserSession,
+        uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+        resultFile: join(evidence, 'production-controls-start-browser.json'),
+        screenshot: join(evidence, 'production-controls-start.png'),
+      },
+      command: async () => {
+        throw new Error('START_BROWSER_COMMAND_UNAVAILABLE');
+      },
+    });
+    report.mobileControlsStart = report.editBrowser;
+    started = report.mobileControlsStart.startedRun;
+    operation.operationId = report.mobileControlsStart.operationId;
+    assert.equal(report.mobileControlsStart.startThroughMobileControls, true);
+    report.checks.actualMobileUiStartWithProductionAuthentication = true;
+  } else started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
   assert.equal(started.state, 'active');
   preview = started.previewOrigin;
   generationDirectory = readdirSync(controller)
@@ -1728,6 +1753,8 @@ try {
       report.background.noModelOrSourceEffect;
     report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
     report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+    assert.equal(report.editBrowser.openThroughMobileControls, true);
+    report.checks.actualMobileUiOpenAuthenticatedRemoteOverlay = true;
   } else if (!recoveryOnly) {
     const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
       method: 'POST',

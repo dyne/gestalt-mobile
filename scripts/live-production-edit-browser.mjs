@@ -335,55 +335,65 @@ try {
   }
   assert.ok(response.status() < 500);
   assert.equal(await mobile.evaluate(() => isSecureContext), true);
-  checkpoint('launch-grant');
-  await mobile.evaluate(async ({ sessionId, liveId, generation, previewOrigin }) => {
-    const encode = (bytes) =>
-      btoa(String.fromCharCode(...bytes))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    const random = new Uint8Array(32);
-    crypto.getRandomValues(random);
-    const verifier = encode(random);
-    const codeChallenge = encode(
-      new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
+  checkpoint('mobile-controls');
+  await mobile.getByRole('button', { name: 'Chat', exact: true }).click();
+  await mobile.getByRole('button', { name: 'Live controls', exact: true }).click();
+  if (config.startThroughControls) {
+    checkpoint('mobile-start');
+    const startResponse = mobile.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/sessions/${config.sessionId}/live/start` &&
+        response.request().method() === 'POST',
+      { timeout: 120000 },
     );
-    const result = await fetch(`/api/sessions/${sessionId}/live/launch-grants`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ liveId, generation, codeChallenge, codeChallengeMethod: 'S256' }),
-    });
-    if (result.status !== 201) throw Error('EDIT_LAUNCH_GRANT_REFUSED');
-    const grant = await result.json();
-    const button = document.createElement('button');
-    button.id = 'production-proof-launch';
-    button.textContent = 'Open preview';
-    document.body.append(button);
-    button.onclick = () => {
-      const peer = window.open(grant.exchangeUrl, 'production-edit-preview');
-      const receive = (event) => {
-        if (
-          event.source !== peer ||
-          event.origin !== previewOrigin ||
-          event.data?.grantId !== grant.grantId
-        )
-          return;
-        if (event.data.type === 'gestalt-live-proof')
-          peer.postMessage(
-            { type: 'gestalt-live-proof', grantId: grant.grantId, codeVerifier: verifier },
-            previewOrigin,
-          );
-        if (event.data.type === 'gestalt-live-exchanged') {
-          window.__editExchanged = true;
-          window.removeEventListener('message', receive);
-        }
-      };
-      window.addEventListener('message', receive);
-    };
-  }, config);
+    await mobile.getByRole('button', { name: 'Start Live', exact: true }).click();
+    const result = await startResponse;
+    assert.equal(result.status(), 200);
+    const started = await result.json();
+    assert.equal(started.state, 'active');
+    assert.match(started.liveId, /^[A-Za-z0-9_-]{1,128}$/);
+    assert.ok(Number.isSafeInteger(started.generation) && started.generation > 0);
+    const origin = new URL(started.previewOrigin);
+    assert.equal(origin.protocol, 'https:');
+    assert.equal(origin.hostname, 'preview.entrypoint.test');
+    const operationId = result.request().postDataJSON().operationId;
+    assert.match(operationId, /^[A-Za-z0-9_-]{1,128}$/);
+    await mobile.getByRole('button', { name: 'Open preview', exact: true }).waitFor();
+    await mobile.screenshot({ path: config.screenshot });
+    await writeFile(
+      config.resultFile,
+      JSON.stringify(
+        {
+          trustedTls: true,
+          ignoreHttpsErrors: false,
+          separateBrowserNetwork: true,
+          separateBrowserMountNamespace: true,
+          startThroughMobileControls: true,
+          startedRun: {
+            liveId: started.liveId,
+            generation: started.generation,
+            state: started.state,
+            previewOrigin: origin.origin,
+          },
+          operationId,
+          productionAuthentication: 'temporary-preprovisioned-authorized-device',
+          genuineProvider: false,
+        },
+        null,
+        2,
+      ),
+    );
+    throw new Error('CONTROLS_START_COMPLETE');
+  }
+  const exchangeResponse = context.waitForEvent('response', {
+    predicate: (response) =>
+      new URL(response.url()).origin === config.previewOrigin &&
+      new URL(response.url()).pathname === '/__gestalt_live/exchange',
+    timeout: 60000,
+  });
   const popup = mobile.waitForEvent('popup');
   checkpoint('preview-popup');
-  await mobile.locator('#production-proof-launch').click();
+  await mobile.getByRole('button', { name: 'Open preview', exact: true }).click();
   const preview = await popup;
   await preview.setViewportSize({ width: 1440, height: 900 });
   let hmrUpdates = 0;
@@ -397,6 +407,7 @@ try {
     }),
   );
   checkpoint('preview-exchange');
+  assert.equal((await exchangeResponse).status(), 201);
   try {
     await preview.waitForURL(config.previewOrigin + '/', { waitUntil: 'commit' });
   } catch (error) {
@@ -405,9 +416,6 @@ try {
     // The isolated Chromium network notifier can settle after the successful
     // one-use exchange. Repeat only its initial GET, using the same cookie and
     // generation; never repeat the exchange, mint a grant or replay an edit.
-    await mobile.waitForFunction(() => window.__editExchanged === true, null, {
-      timeout: 10000,
-    });
     await preview.waitForFunction(
       () => document.documentURI.startsWith('chrome-error://') && document.readyState !== 'loading',
       null,
@@ -419,7 +427,6 @@ try {
     initialPreviewGetRetried = true;
   }
   checkpoint('opener-confirmation');
-  await mobile.waitForFunction(() => window.__editExchanged === true);
   checkpoint('preview-privacy');
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
@@ -518,6 +525,7 @@ try {
         ignoreHttpsErrors: false,
         separateBrowserNetwork: true,
         separateBrowserMountNamespace: true,
+        openThroughMobileControls: true,
         realPickerGenerateAccept: true,
         realPickerSteer: true,
         realPickerManualApply: true,
@@ -538,7 +546,9 @@ try {
   );
   checkpoint('complete');
 } catch (error) {
-  if (config.preflight && error?.message === 'BROWSER_PREFLIGHT_COMPLETE') {
+  if (config.startThroughControls && error?.message === 'CONTROLS_START_COMPLETE') {
+    checkpoint('controls-start-complete');
+  } else if (config.preflight && error?.message === 'BROWSER_PREFLIGHT_COMPLETE') {
     checkpoint('preflight-complete');
   } else {
     const callsite = /live-production-edit-browser\.mjs:(\d+):(\d+)/.exec(error?.stack ?? '');

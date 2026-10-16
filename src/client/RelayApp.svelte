@@ -24,6 +24,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   } = $props();
 
   import AppHeader from './components/AppHeader.svelte';
+  import LiveControl from './features/live-design/LiveControl.svelte';
   import { waitForUpgrade } from './features/maintenance/upgrade.js';
   import DebugDialog from './features/self-debug/DebugDialog.svelte';
   import { visibleHeaderActions } from './features/sessions/header-actions.js';
@@ -1744,7 +1745,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             }
           : undefined}
         copyToCliAvailable={!!selectedSession?.resumeCommand}
-      />{/if}
+      >
+        {#snippet liveControls()}
+          {#if tab === 'chat' && sessionId}
+            {#key sessionId}
+              <LiveControl
+                client={relay}
+                relayId={sessionId}
+                provider={selectedSession?.provider}
+                notify={(message) => toastQueue.enqueue({ kind: 'error', message })}
+              />
+            {/key}
+          {/if}
+        {/snippet}
+      </AppHeader>{/if}
     {#if detachedSessionId}
       <header class="detached-chat-header">
         <div class="detached-chat-context">

@@ -222,8 +222,8 @@ jobs:
             src/server/platform/live-design/stop-resume.test.ts \
             src/server/platform/live-design/live-autopilot.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
-      - name: Build Mobile server for Native proofs
-        run: npm run build:server
+      - name: Build Mobile server and current client for Native and controls proofs
+        run: npm run build
       - name: Actual owning native model tools and permitted child with deterministic provider
         timeout-minutes: 3
         env:

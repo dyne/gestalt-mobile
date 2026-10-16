@@ -18,7 +18,10 @@ export async function productionEditBrowser(input) {
   const peerInterface = `leb${process.pid}`;
   const hostAddress = '10.231.20.1';
   const browserAddress = '10.231.20.2';
-  const home = join(input.privateRoot, 'edit-browser');
+  const home = join(
+    input.privateRoot,
+    input.browser.startThroughControls ? 'controls-start-browser' : 'edit-browser',
+  );
   mkdirSync(join(home, '.pki/nssdb'), { recursive: true, mode: 0o700 });
   mkdirSync(join(home, 'tmp'), { mode: 0o700 });
   const run = (bin, args) => {

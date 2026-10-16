@@ -14,6 +14,7 @@ import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
 import type { DebugConfirmation, SelfDebugSession } from '../../../shared/contracts/self-debug.js';
 import type { AgentActivitySnapshot } from '../agent-activity/contracts.js';
 import type { AutopilotSnapshot } from '../autopilot/contracts.js';
+import type { LiveGrant, LiveRun, LiveTarget } from '../live-design/contracts.js';
 
 export type WorkspacePlanEntry = Readonly<{
   planName: string;
@@ -296,6 +297,18 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
+    liveTargets: (id: string) =>
+      get<{ targets: LiveTarget[] }>(`/api/sessions/${encodeURIComponent(id)}/live/targets`),
+    liveStatus: (id: string) => get<LiveRun>(`/api/sessions/${encodeURIComponent(id)}/live`),
+    liveStart: (id: string, input: LiveTarget & { operationId: string }) =>
+      request<LiveRun>(`/api/sessions/${encodeURIComponent(id)}/live/start`, input),
+    liveLaunch: (id: string, input: LiveRun & { codeChallenge: string }) =>
+      request<LiveGrant>(`/api/sessions/${encodeURIComponent(id)}/live/launch-grants`, {
+        liveId: input.liveId,
+        generation: input.generation,
+        codeChallenge: input.codeChallenge,
+        codeChallengeMethod: 'S256',
+      }),
     debugConfirmation: (id: string) =>
       get<DebugConfirmation>(`/api/sessions/${encodeURIComponent(id)}/debug`),
     startSelfDebug: (id: string, confirmationId: string) =>

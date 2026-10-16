@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { ComponentVersion } from '../../shared/contracts/component-version.js';
   import type { HeaderAction } from '../features/sessions/header-actions.js';
   import { themes, type ThemeId } from '../features/theme/theme-registry.js';
+  import type { Snippet } from 'svelte';
 
   let {
     theme,
@@ -31,6 +32,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondetach,
     oncopytocli,
     copyToCliAvailable = true,
+    liveControls,
   }: {
     theme: ThemeId;
     sessionPath?: string | null;
@@ -52,6 +54,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     ondetach?: () => void;
     oncopytocli?: () => void;
     copyToCliAvailable?: boolean;
+    liveControls?: Snippet;
   } = $props();
 
   let menuTrigger = $state<HTMLButtonElement | null>(null);
@@ -121,6 +124,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     </p>
   {/if}
   <div class="header-actions">
+    {@render liveControls?.()}
     {#if weeklyQuotaRemaining !== null}
       <span class="weekly-quota" aria-label="Weekly quota remaining"
         >{weeklyQuotaRemaining}% left</span
