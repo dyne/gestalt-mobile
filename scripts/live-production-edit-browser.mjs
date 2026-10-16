@@ -21,6 +21,10 @@ let browserProcess;
 let browserExit;
 const chromeStartupMarkers = new Set();
 let chromeStartupComplete = false;
+const chromeComponents = [];
+const chromeChecks = [];
+let baselineSandboxedLaunch;
+let launcherKernel;
 const networkErrors = [];
 const exchangeStatuses = [];
 const resourcePending = {};
@@ -56,6 +60,46 @@ try {
   checkpoint('ui-import');
   const ui = config.preflight ? undefined : await import(pathToFileURL(config.uiModule).href);
   checkpoint('browser-launch');
+  if (config.preflight) {
+    const status = await readFile('/proc/self/status', 'utf8');
+    launcherKernel = Object.fromEntries(
+      [
+        'Uid',
+        'Gid',
+        'CapInh',
+        'CapPrm',
+        'CapEff',
+        'CapBnd',
+        'CapAmb',
+        'NoNewPrivs',
+        'Seccomp',
+      ].flatMap((name) => {
+        const value = new RegExp(`^${name}:\\s+([0-9a-f \\t]+)$`, 'm').exec(status)?.[1];
+        return value ? [[name, value.trim().replace(/\s+/g, ' ')]] : [];
+      }),
+    );
+    let baseline;
+    try {
+      baseline = await chromium.launch({
+        headless: true,
+        chromiumSandbox: true,
+        timeout: 10000,
+        env: {
+          ...process.env,
+          HOME: config.browserHome,
+          HTTP_PROXY: '',
+          HTTPS_PROXY: '',
+          ALL_PROXY: '',
+        },
+      });
+      await (await baseline.newPage()).goto('about:blank');
+      baselineSandboxedLaunch = true;
+    } catch {
+      baselineSandboxedLaunch = false;
+    } finally {
+      await baseline?.close();
+    }
+  }
   // Playwright's normal launch forces page focus/visibility. Attach without
   // overrides to a fresh owned Chrome profile so backgrounding is real.
   const profile = join(config.browserHome, 'chromium-profile');
@@ -91,6 +135,14 @@ try {
   browserProcess.stderr.on('data', (chunk) => {
     if (chromeStartupComplete) return;
     const text = String(chunk);
+    for (const match of text.matchAll(/(?:FATAL|ERROR):([a-zA-Z0-9_./-]+\.(?:cc|h)):(\d+)/g)) {
+      if (chromeComponents.length < 16)
+        chromeComponents.push({ source: match[1], line: Number(match[2]) });
+    }
+    for (const match of text.matchAll(/Check failed: ([^\n]{1,180})/g)) {
+      const condition = /^[a-zA-Z0-9_().!<>=&| :+-]+$/.test(match[1]) ? match[1] : 'NON_CODE_CHECK';
+      if (chromeChecks.length < 8) chromeChecks.push(condition);
+    }
     for (const [marker, code] of [
       ['No usable sandbox', 'SANDBOX_UNAVAILABLE'],
       ['Failed to move to new namespace', 'NAMESPACE'],
@@ -511,6 +563,10 @@ try {
             exitCode: browserProcess?.exitCode,
             signal: browserProcess?.signalCode,
             markers: [...chromeStartupMarkers],
+            components: chromeComponents,
+            checks: chromeChecks,
+            baselineSandboxedLaunch,
+            launcherKernel,
           },
           networkErrors,
           exchangeStatuses,

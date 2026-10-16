@@ -147,6 +147,42 @@ export async function productionEditBrowser(input) {
               ? value.failure.callsite
               : null,
           chromeStartup: {
+            components: value.failure.chromeStartup?.components
+              ?.filter(
+                (item) =>
+                  /^[a-zA-Z0-9_./-]+\.(cc|h)$/.test(item.source) && Number.isSafeInteger(item.line),
+              )
+              .slice(0, 16),
+            checks: value.failure.chromeStartup?.checks
+              ?.filter(
+                (item) =>
+                  typeof item === 'string' &&
+                  item.length <= 180 &&
+                  /^[a-zA-Z0-9_().!<>=&| :+-]+$/.test(item),
+              )
+              .slice(0, 8),
+            baselineSandboxedLaunch:
+              typeof value.failure.chromeStartup?.baselineSandboxedLaunch === 'boolean'
+                ? value.failure.chromeStartup.baselineSandboxedLaunch
+                : undefined,
+            launcherKernel: Object.fromEntries(
+              Object.entries(value.failure.chromeStartup?.launcherKernel ?? {}).filter(
+                ([name, value]) =>
+                  [
+                    'Uid',
+                    'Gid',
+                    'CapInh',
+                    'CapPrm',
+                    'CapEff',
+                    'CapBnd',
+                    'CapAmb',
+                    'NoNewPrivs',
+                    'Seccomp',
+                  ].includes(name) &&
+                  typeof value === 'string' &&
+                  /^[0-9a-f ]{1,128}$/.test(value),
+              ),
+            ),
             exitCode: Number.isInteger(value.failure.chromeStartup?.exitCode)
               ? value.failure.chromeStartup.exitCode
               : null,
