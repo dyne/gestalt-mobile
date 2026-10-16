@@ -54,11 +54,11 @@ export function isolatedPreviewUpstreams(input: {
       bindings();
       const resource = role === 'app' ? devserver : helper;
       const other = role === 'app' ? helper : devserver;
-      await other.process.verifyForConnection(other.receipt);
+      const assertOtherCurrent = await other.process.verifyForConnection(other.receipt);
       // open independently verifies the selected resource, exactly once.
       const stream = await resource.process.open(resource.receipt);
       try {
-        other.process.assertConnectionLifetime(other.receipt);
+        assertOtherCurrent();
         return stream;
       } catch (error) {
         stream.destroy();

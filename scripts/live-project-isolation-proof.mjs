@@ -254,7 +254,9 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.checks.knownBrowserTokenCannotCompeteForPoll = true;
   report.checks.fixedPipeHttpRelay = true;
   report.stage = 'tampered-launch-input';
+  const assertSameCallCurrent = await devserver.verifyForConnection(devReceipt);
   writeFileSync(source, code + '\n// tampered launch input\n');
+  assert.throws(() => assertSameCallCurrent());
   assert.throws(() => devserver.verify(devReceipt));
   await assert.rejects(() => devserver.verifyForConnection(devReceipt));
   writeFileSync(source, code, { mode: 0o600 });

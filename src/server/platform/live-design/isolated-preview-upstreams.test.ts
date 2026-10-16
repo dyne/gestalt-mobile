@@ -14,7 +14,7 @@ function fixture() {
   const resource = (role: 'helper' | 'devserver', namespace: string) => ({
     process: {
       verify: vi.fn(),
-      verifyForConnection: vi.fn(async () => {}),
+      verifyForConnection: vi.fn(async () => () => {}),
       assertConnectionLifetime: vi.fn(),
       open: vi.fn(async () => new PassThrough()),
     } as unknown as IsolatedProjectProcess,
@@ -86,7 +86,10 @@ describe('generation-bound isolated preview connections', () => {
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
     });
-    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(() => barrier);
+    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(async () => {
+      await barrier;
+      return () => input.helper.process.assertConnectionLifetime(input.helper.receipt);
+    });
     const selected = new PassThrough();
     vi.mocked(input.devserver.process.open).mockResolvedValue(selected);
     const pending = upstreams.open('app');

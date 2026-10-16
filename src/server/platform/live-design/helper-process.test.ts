@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import {
   existsSync,
@@ -19,12 +19,13 @@ import { createServer } from 'node:net';
 import { get } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseLivePollEvent } from '../../features/live-design/application/poll-events.js';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { ManagedHelperLauncher, OwnedLiveHelper, type HelperLauncher } from './helper-process.js';
+import { projectHelperSearchPath } from './isolated-project-process.js';
 
 const binary = process.env.LIVE_TEST_IMPECCABLE;
 const roots: string[] = [];
@@ -473,6 +474,23 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
   });
   it('starts foreground loopback helper, injects public URL, preserves config, uses chat only, and stops owned resources', async () => {
     const f = await fixture();
+    // Ordinary-process contract fixture: the literal self command resolves the
+    // admitted artifact without ambient PATH; hosted Native proves masked /proc.
+    const artifactDirectory = join(f.root, 'pinned-helper');
+    mkdirSync(artifactDirectory, { mode: 0o700 });
+    const self = join(artifactDirectory, 'impeccable');
+    writeFileSync(self, readFileSync(binary!), { mode: 0o500 });
+    const selfPath = projectHelperSearchPath(self, f.app);
+    const version = execFileSync('impeccable', ['--version'], {
+      cwd: f.app,
+      env: { PATH: selfPath, HOME: f.root, LANG: 'C.UTF-8' },
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    expect(version.trim()).toBe('4.0.0');
+    expect(() => projectHelperSearchPath(self, dirname(self))).toThrow(
+      'LIVE_PROJECT_PROCESS_UNAVAILABLE',
+    );
     await f.helper.start();
     const record = JSON.parse(readFileSync(join(f.stateDirectory, 'helper.json'), 'utf8'));
     expect(record.phase).toBe('ready');

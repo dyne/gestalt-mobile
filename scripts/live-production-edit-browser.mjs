@@ -267,9 +267,9 @@ try {
   );
   checkpoint('picker-generate');
   await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 1);
+  await ui.setCount(preview, 2);
   await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 1, { timeout: 90000 });
+  await ui.waitForCycling(preview, 2, { timeout: 90000 });
   await preview.getByRole('heading', { name: 'Production chosen variant', exact: true }).waitFor();
   await ui.clickAccept(preview, { expectedVariant: 1 });
   await ui.waitForBarHidden(preview, { timeout: 30000 });
@@ -293,9 +293,9 @@ try {
   await command('manual-applied');
   checkpoint('picker-discard');
   await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 1);
+  await ui.setCount(preview, 2);
   await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 1, { timeout: 60000 });
+  await ui.waitForCycling(preview, 2, { timeout: 60000 });
   await preview
     .getByRole('heading', { name: 'Production discarded variant', exact: true })
     .waitFor();

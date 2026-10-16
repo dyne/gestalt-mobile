@@ -93,7 +93,7 @@ test('controlled Native patch plan interoperates with the actual pinned helper w
         '--id',
         id,
         '--count',
-        '1',
+        '2',
         '--classes',
         'hero-title',
         '--tag',
@@ -102,7 +102,7 @@ test('controlled Native patch plan interoperates with the actual pinned helper w
         text,
         '--defer-source-write',
       ]);
-      const request = body({ type: 'generate', id, count: 1, scaffold });
+      const request = body({ type: 'generate', id, count: 2, scaffold });
       const patch = provider(request, tool);
       assert.ok(!patch.args.includes('unrelated-bootstrap-canary'));
       simulatePatch(root, patch);

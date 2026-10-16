@@ -72,14 +72,14 @@ export function createProductionEditProvider(appRoot, final, report) {
         const scaffold = event.scaffold;
         assert.equal(scaffold?.sourceWritten, false);
         assert.equal(scaffold.file, 'index.html');
-        assert.equal(event.count, 1);
+        assert.equal(event.count, 2);
         const label =
           generations === 1 ? 'Production chosen variant' : 'Production discarded variant';
         const marker = '<!-- Variants: insert below this line -->';
         assert.ok(scaffold.wrapperBlock.includes(marker));
         const block = scaffold.wrapperBlock.replace(
           marker,
-          `${marker}\n  <div data-impeccable-variant="1"><h1 class="hero-title">${label}</h1></div>`,
+          `${marker}\n  <div data-impeccable-variant="1"><h1 class="hero-title">${label}</h1></div>\n  <div data-impeccable-variant="2"><h1 class="hero-title">${label} alternate</h1></div>`,
         );
         const lines = before.split('\n');
         after = [

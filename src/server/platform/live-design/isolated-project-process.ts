@@ -7,6 +7,7 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
+  type Stats,
   constants,
   closeSync,
   existsSync,
@@ -22,7 +23,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { Duplex } from 'node:stream';
 import { once } from 'node:events';
 import { privateDenialFailure, type ManagedProjectSandboxState } from './caddy-admin-boundary.js';
@@ -112,6 +113,22 @@ function verifyPin(pin: Pin, label: string): void {
 function inside(parent: string, path: string): boolean {
   const suffix = relative(parent, path);
   return !suffix || (suffix !== '..' && !suffix.startsWith(`..${sep}`) && !suffix.startsWith(sep));
+}
+/** Exact pinned self-discovery when Native intentionally masks /proc/self/exe. */
+export function projectHelperSearchPath(executable: string, appRoot: string): string {
+  const directory = dirname(executable);
+  const info = lstatSync(directory);
+  if (
+    basename(executable) !== 'impeccable' ||
+    directory.includes(':') ||
+    inside(appRoot, directory) ||
+    realpathSync(directory) !== directory ||
+    realpathSync(executable) !== executable ||
+    !info.isDirectory() ||
+    info.mode & 0o022
+  )
+    throw failure('helper-self-path');
+  return `${directory}:/usr/bin:/bin`;
 }
 function descendant(pid: number, owner: number): boolean {
   for (let count = 0; count < 64 && pid > 1; count++) {
@@ -282,16 +299,20 @@ export class IsolatedProjectProcess {
   constructor(specification: IsolatedProjectSpecification) {
     this.spec = structuredClone(specification);
     if (this.spec.role === 'helper') {
+      if (this.spec.environment.PATH !== '/usr/bin:/bin') throw failure('fixed-environment');
       const fixed = {
+        PATH: projectHelperSearchPath(this.spec.executable.path, this.spec.appRoot),
         IMPECCABLE_LIVE_COPY_AGENT: 'chat',
         IMPECCABLE_LIVE_DEBUG_EVENTS: '0',
         IMPECCABLE_SELF: this.spec.executable.path,
       };
       if (
-        Object.entries(fixed).some(
-          ([name, value]) =>
-            this.spec.environment[name] !== undefined && this.spec.environment[name] !== value,
-        )
+        Object.entries(fixed)
+          .filter(([name]) => name !== 'PATH')
+          .some(
+            ([name, value]) =>
+              this.spec.environment[name] !== undefined && this.spec.environment[name] !== value,
+          )
       )
         throw failure('unapproved-environment');
       this.spec = { ...this.spec, environment: { ...this.spec.environment, ...fixed } };
@@ -352,7 +373,10 @@ export class IsolatedProjectProcess {
       )
         throw failure('unapproved-environment');
     if (
-      spec.environment.PATH !== '/usr/bin:/bin' ||
+      spec.environment.PATH !==
+        (spec.role === 'helper'
+          ? projectHelperSearchPath(spec.executable.path, spec.appRoot)
+          : '/usr/bin:/bin') ||
       !spec.environment.HOME ||
       spec.environment.TMPDIR !== '/tmp'
     )
@@ -834,13 +858,13 @@ export class IsolatedProjectProcess {
       throw failure();
   }
   /** A fresh full verification per connection, cancellable on generation revocation. */
-  async verifyForConnection(receipt: IsolatedProjectReceipt): Promise<void> {
+  async verifyForConnection(receipt: IsolatedProjectReceipt): Promise<() => void> {
     this.assertReceipt(receipt);
     const signal = AbortSignal.any([
       this.connectionVerification.signal,
       AbortSignal.timeout(15000),
     ]);
-    const observedPins = [];
+    const observedPins: { pin: Pin; before: Stats }[] = [];
     for (const pin of [
       this.spec.native,
       this.spec.bwrap,
@@ -871,20 +895,25 @@ export class IsolatedProjectProcess {
       observedPins.push({ pin, before });
     }
     const current = await this.observeTargetAsync(signal);
-    for (const { pin, before } of observedPins) {
-      const after = lstatSync(pin.path);
-      if (
-        realpathSync(pin.path) !== pin.path ||
-        ['dev', 'ino', 'mode', 'size', 'mtimeMs', 'ctimeMs'].some(
-          (key) => before[key as keyof typeof before] !== after[key as keyof typeof after],
-        )
-      )
-        throw failure('connection-pin-changed');
-    }
-    this.assertReceipt(receipt);
-    signal.throwIfAborted();
     this.assertTarget(receipt, current);
-    this.assertConnectionLifetime(receipt);
+    // Keep the same-call digest observations until BOTH resource checks finish.
+    // This fence cannot grant a connection or replace a fresh full verification.
+    const assertCurrent = () => {
+      for (const { pin, before } of observedPins) {
+        const after = lstatSync(pin.path);
+        if (
+          realpathSync(pin.path) !== pin.path ||
+          ['dev', 'ino', 'mode', 'size', 'mtimeMs', 'ctimeMs'].some(
+            (key) => before[key as keyof typeof before] !== after[key as keyof typeof after],
+          )
+        )
+          throw failure('connection-pin-changed');
+      }
+      signal.throwIfAborted();
+      this.assertConnectionLifetime(receipt);
+    };
+    assertCurrent();
+    return assertCurrent;
   }
   /** Post-await fence only; open always performs full independent verification. */
   assertConnectionLifetime(receipt: IsolatedProjectReceipt): void {
@@ -896,12 +925,13 @@ export class IsolatedProjectProcess {
   async open(receipt: IsolatedProjectReceipt): Promise<Duplex> {
     if (this.channels.size + this.pendingConnections >= 32) throw failure();
     this.pendingConnections++;
+    let assertCurrent!: () => void;
     try {
-      await this.verifyForConnection(receipt);
+      assertCurrent = await this.verifyForConnection(receipt);
     } finally {
       this.pendingConnections--;
     }
-    this.assertReceipt(receipt);
+    assertCurrent();
     if (this.channels.size >= 32) throw failure();
     const id = ++this.nextChannel;
     const stream = new ProjectPipeSocket(
