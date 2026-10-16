@@ -66,6 +66,7 @@ export async function productionEditBrowser(input) {
       input.certificate,
     ]);
     const serverNetwork = readlinkSync('/proc/self/ns/net');
+    const serverMount = readlinkSync('/proc/self/ns/mnt');
     const browserNetwork = sudo(['ip', 'netns', 'exec', namespace, 'readlink', '/proc/self/ns/net'])
       .toString()
       .trim();
@@ -78,6 +79,7 @@ export async function productionEditBrowser(input) {
         browserHome: home,
         hostAddress,
         serverNetwork,
+        serverMount,
         browserNetwork,
       }),
       { mode: 0o600 },
@@ -90,17 +92,17 @@ export async function productionEditBrowser(input) {
         'netns',
         'exec',
         namespace,
-        'setpriv',
-        `--reuid=${process.getuid()}`,
-        `--regid=${process.getgid()}`,
-        '--init-groups',
-        'env',
-        `HOME=${home}`,
-        `TMPDIR=${home}/tmp`,
-        `PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(process.env.HOME, '.cache/ms-playwright')}`,
+        'unshare',
+        '--mount',
+        '--propagation',
+        'private',
+        '--',
         process.execPath,
-        resolve('scripts/live-production-edit-browser.mjs'),
+        resolve('scripts/live-production-browser-namespace.mjs'),
+        String(process.getuid()),
+        String(process.getgid()),
         configPath,
+        process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(process.env.HOME, '.cache/ms-playwright'),
       ],
       { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: home } },
     );

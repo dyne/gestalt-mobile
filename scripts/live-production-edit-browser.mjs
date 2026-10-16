@@ -57,6 +57,7 @@ try {
   checkpoint('namespace');
   assert.equal(await readlink('/proc/self/ns/net'), config.browserNetwork);
   assert.notEqual(config.browserNetwork, config.serverNetwork);
+  assert.notEqual(await readlink('/proc/self/ns/mnt'), config.serverMount);
   checkpoint('ui-import');
   const ui = config.preflight ? undefined : await import(pathToFileURL(config.uiModule).href);
   checkpoint('browser-launch');
@@ -195,6 +196,7 @@ try {
         browserStartup: true,
         actualHiddenTab: true,
         separateBrowserNetwork: true,
+        separateBrowserMountNamespace: true,
         noNativeOrProvider: true,
       }),
     );
@@ -515,6 +517,7 @@ try {
         trustedTls: true,
         ignoreHttpsErrors: false,
         separateBrowserNetwork: true,
+        separateBrowserMountNamespace: true,
         realPickerGenerateAccept: true,
         realPickerSteer: true,
         realPickerManualApply: true,
