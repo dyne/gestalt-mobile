@@ -1660,8 +1660,7 @@ try {
   assert.equal(current.modelSettings.reasoningEffort, 'medium');
   report.checks.sameOwningThreadModelThinkingAndDurableInbox = true;
   report.stage = 'revoke-and-production-shutdown';
-  stream.destroy();
-  stream = undefined;
+  stopPreviewProbe();
   await mobile.close();
   mobile = undefined;
   assert.equal(existsSync(join(controller, 'live-policy.key')), true);
