@@ -918,7 +918,10 @@ export class ProductionLiveController {
           },
         },
         run,
-      );
+      ).catch((error: unknown) => {
+        this.recordStartFailure(run.relayId, 'resume-lifecycle', 'resume', error);
+        throw error;
+      });
       const g = this.generation(resumed);
       if (g.replacementRestored) {
         try {
@@ -987,8 +990,6 @@ export class ProductionLiveController {
   private async reconcileInbox(run: LiveRun): Promise<void> {
     const g = this.cleanupGeneration(run);
     if (!g.cli || !g.inbox) throw new Error('LIVE_INBOX_RECONCILIATION_REQUIRED');
-    const digest = await g.cli.reconcile(run);
-    this.owners.assert(run);
     // Empty helper status cannot settle an ambiguous dispatched source edit.
     // Keep its intent/history locked for explicit supported reconciliation.
     const records = g.inbox.records(g.plannedGeneration);
@@ -997,6 +998,13 @@ export class ProductionLiveController {
     const prior = records.find((record) => record.reconciliation)?.reconciliation;
     if (prior && records.some((record) => !record.reconciliation))
       throw new Error('LIVE_INBOX_RECONCILIATION_REQUIRED');
+    const digest = await g.cli.reconcile(
+      run,
+      records
+        .filter((record) => record.stage === 'acknowledged' && record.kind === 'steer')
+        .flatMap((record) => (record.upstreamId ? [record.upstreamId] : [])),
+    );
+    this.owners.assert(run);
     g.inbox.reconcile(run, {
       disposition: 'completed',
       proofDigest: prior?.proofDigest ?? digest,
@@ -1143,7 +1151,7 @@ export class ProductionLiveController {
   }
   private recordStartFailure(
     sessionId: string,
-    stage: 'start-operation' | 'start-lifecycle',
+    stage: 'start-operation' | 'start-lifecycle' | 'resume-lifecycle',
     lifecycleStage: string,
     error: unknown,
   ): void {
@@ -1159,7 +1167,7 @@ export class ProductionLiveController {
           helper: generation?.helper.diagnostics(),
           devserver: generation?.devserver.diagnostics(),
           admission: error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
-          phase: typeof phase === 'string' && /^[a-z:-]{1,96}$/.test(phase) ? phase : undefined,
+          phase: typeof phase === 'string' && /^[a-zA-Z:-]{1,96}$/.test(phase) ? phase : undefined,
           code:
             error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
               ? error.message
@@ -1875,8 +1883,15 @@ export class ProductionLiveController {
                 continue;
               }
               if (run.generation !== g.plannedGeneration) {
-                // Recovery has already revoked the old generation. Never reuse
-                // its CLI authority, but still retire these exact owned lifetimes.
+                // Recovery denies admission before its asynchronous revocation
+                // completes. Join that drain and attempt signed revocation before
+                // terminating the original owner. Never reuse old CLI authority.
+                await g.loop?.waitForRecoveryDrain(run);
+                try {
+                  await this.revokeCapture(g.policy.capture);
+                } catch {
+                  failed = true;
+                }
                 try {
                   await this.connections?.revoke({
                     liveId: run.liveId,

@@ -191,6 +191,20 @@ export async function productionRecoveryProof(input) {
         }),
       ),
     );
+    report.recoveryResumeReplies = attempts.map((reply) => {
+      const body = reply.json();
+      return {
+        status: reply.statusCode,
+        code: /^LIVE_[A-Z_]{1,80}$/.test(body.code ?? '') ? body.code : undefined,
+        state: ['active', 'recoveryRequired', 'stopping', 'starting', 'idle', 'error'].includes(
+          body.state,
+        )
+          ? body.state
+          : undefined,
+        generation: Number.isSafeInteger(body.generation) ? body.generation : undefined,
+      };
+    });
+    report.recoveryStateAfterResume = await state();
     assert.equal(attempts.filter((reply) => reply.statusCode === 200).length, 1);
     assert.equal(attempts.filter((reply) => reply.statusCode === 409).length, 1);
     const survivor = attempts.find((reply) => reply.statusCode === 200).json();

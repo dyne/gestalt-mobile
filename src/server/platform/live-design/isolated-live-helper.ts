@@ -225,7 +225,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       this.save(record);
     }
   }
-  async reconcile(run: LiveRun): Promise<string> {
+  async reconcile(run: LiveRun, acknowledgedSteers: readonly string[] = []): Promise<string> {
     await this.settle(run);
     this.assertCleanup(run);
     const record = this.record(true);
@@ -235,23 +235,111 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
         record.cancelled.checkpointDigest !== helperCheckpointDigest(this.run.app.canonicalAppRoot))
     )
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
-    const status = (await this.input.process.helperCommand(
-      this.receipt,
-      ['live-status'],
-      20000,
-    )) as {
-      activeSessions?: unknown[];
+    const invoke = async (args: readonly string[]) => {
+      this.assertCleanup(run);
+      const result = await this.input.process.helperCommand(this.receipt, args, 20000);
+      this.assertCleanup(run);
+      return result;
+    };
+    let status = (await this.input.process.helperCommand(this.receipt, ['live-status'], 20000)) as {
+      activeSessions?: { id?: unknown; phase?: unknown }[];
       liveServer?: { pendingEvents?: unknown[] };
     };
     this.assertCleanup(run);
-    const resume = (await this.input.process.helperCommand(
-      this.receipt,
-      ['live-resume'],
-      20000,
-    )) as {
+    let resume = (await this.input.process.helperCommand(this.receipt, ['live-resume'], 20000)) as {
       active?: boolean;
     };
     this.assertCleanup(run);
+    // Canonical steer_done acknowledges source work but deliberately leaves its
+    // durable session active. Only the controller's already-acknowledged steer
+    // IDs can close that metadata, after actual pending/source checks. No model,
+    // poll, accept, discard, force or replay is authorized here.
+    if (Array.isArray(status?.activeSessions) && status.activeSessions.length) {
+      const active = status.activeSessions;
+      const ids = new Set<string>();
+      if (
+        active.length > 64 ||
+        active.some((item) => {
+          if (
+            !item ||
+            typeof item.id !== 'string' ||
+            !/^[a-f0-9]{8}$/.test(item.id) ||
+            item.phase !== 'steer_done' ||
+            !acknowledgedSteers.includes(item.id) ||
+            ids.has(item.id)
+          )
+            return true;
+          ids.add(item.id);
+          return false;
+        }) ||
+        !Array.isArray(status.liveServer?.pendingEvents) ||
+        status.liveServer.pendingEvents.length
+      )
+        throw Object.assign(new Error('LIVE_HELPER_RECOVERY_REQUIRED'), {
+          stage: 'helper-active-journal-unverified',
+        });
+      for (const sessionId of ids) {
+        const observed = (await invoke(['live-resume', '--id', sessionId])) as {
+          active?: boolean;
+          pendingEvent?: unknown;
+          snapshot?: {
+            id?: unknown;
+            phase?: unknown;
+            pendingEvent?: unknown;
+            sourceFile?: unknown;
+          };
+        };
+        const snapshot = observed?.snapshot;
+        if (
+          observed?.active !== true ||
+          observed.pendingEvent !== null ||
+          snapshot?.id !== sessionId ||
+          snapshot.phase !== 'steer_done' ||
+          snapshot.pendingEvent !== null ||
+          typeof snapshot.sourceFile !== 'string' ||
+          !snapshot.sourceFile ||
+          snapshot.sourceFile.length > 4096
+        )
+          throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+        const path = isAbsolute(snapshot.sourceFile)
+          ? snapshot.sourceFile
+          : join(this.run.app.canonicalAppRoot, snapshot.sourceFile);
+        const tail = relative(this.run.app.canonicalAppRoot, path);
+        const sourceDigest = () => {
+          if (!tail || tail === '..' || tail.startsWith(`..${sep}`) || isAbsolute(tail))
+            throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+          const stat = lstatSync(path);
+          if (
+            !stat.isFile() ||
+            stat.isSymbolicLink() ||
+            stat.nlink !== 1 ||
+            stat.size > 8 * 1024 * 1024 ||
+            realpathSync(path) !== path
+          )
+            throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+          return createHash('sha256').update(readFileSync(path)).digest('hex');
+        };
+        const before = sourceDigest();
+        const args = ['live-complete', '--id', sessionId];
+        record.pending = {
+          name: 'live-complete',
+          digest: createHash('sha256').update(JSON.stringify(args)).digest('hex'),
+          ambiguous: true,
+        };
+        delete record.cancelled; // Its unchanged checkpoint was proved above.
+        this.save(record); // Lost completion remains locked, never blindly replayed.
+        const completed = (await invoke(args)) as { ok?: boolean };
+        const confirmed = (await invoke(['live-resume', '--id', sessionId])) as {
+          active?: boolean;
+        };
+        if (completed?.ok !== true || confirmed?.active !== false || sourceDigest() !== before)
+          throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+        record.pending = null;
+        this.save(record);
+      }
+      status = (await invoke(['live-status'])) as typeof status;
+      resume = (await invoke(['live-resume'])) as typeof resume;
+    }
     // A pending accept/apply or unknown response requires explicit reconciliation.
     // Never replay or discard source work just to make Resume succeed.
     if (

@@ -40,6 +40,23 @@ describe('installed code before host execution', () => {
     const known = InstalledLiveAdmissionError.command('manager-command', failure('source-changed'));
     expect(known.message).toBe('LIVE_ADMISSION_UNAVAILABLE');
     expect(known.diagnostic).toEqual({ phase: 'manager-command', reason: 'source-changed' });
+    for (const reason of [
+      'invalid-renewal-lineage',
+      'renewal-intent-changed',
+      'renewal-not-revoked',
+      'renewal-observation-required',
+      'renewal-owner-alive',
+      'renewal-policy-broadened',
+      'renewal-policy-incompatible',
+      'renewal-required',
+      'renewal-source-changed',
+      'renewal-storage-reused',
+      'renewal-undrained',
+    ]) {
+      const error = InstalledLiveAdmissionError.command('manager-command', failure(reason));
+      expect(error.diagnostic).toEqual({ phase: 'manager-command', reason });
+      expect(JSON.stringify(error)).not.toContain(privateValue);
+    }
     const unknown = InstalledLiveAdmissionError.command('agents-command', failure(privateValue));
     expect(unknown.diagnostic).toEqual({ phase: 'agents-command', reason: 'contract-refused' });
     const malformed = InstalledLiveAdmissionError.command('agents-command', {

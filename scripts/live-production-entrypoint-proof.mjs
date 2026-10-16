@@ -192,7 +192,7 @@ const checkpoint = setInterval(() => {
                 ? value.state
                 : 'unknown',
               phase:
-                typeof value.phase === 'string' && /^[a-z:-]{1,96}$/.test(value.phase)
+                typeof value.phase === 'string' && /^[a-zA-Z:-]{1,96}$/.test(value.phase)
                   ? value.phase
                   : 'unknown',
               failureCode: /^[A-Z][A-Z0-9_]{0,63}$/.test(value.failureCode ?? '')
