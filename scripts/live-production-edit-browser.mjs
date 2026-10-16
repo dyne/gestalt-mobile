@@ -23,6 +23,11 @@ const pageErrors = [];
 const helperResponses = [];
 const editRequests = [];
 const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
+// Real Native admission precedes every model effect. The measured generate took
+// 56s; steer was still durably dispatched at the old30s fixture deadline.
+// These observation waits do not change the helper lease or any product deadline.
+const modelEffectTimeout = 90000;
+const terminalEffectTimeout = 60000;
 let helperBridge;
 const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
@@ -305,17 +310,17 @@ try {
   await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
   await ui.setCount(preview, 2);
   await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: 90000 });
+  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
   await preview.getByRole('heading', { name: 'Production chosen variant', exact: true }).waitFor();
   await ui.clickAccept(preview, { expectedVariant: 1 });
-  await ui.waitForBarHidden(preview, { timeout: 30000 });
+  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
   await command('accepted');
   checkpoint('picker-steer');
   await ui.submitSteer(preview, 'production steer: update the HMR marker');
   await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
-    timeout: 30000,
+    timeout: modelEffectTimeout,
   });
-  await ui.waitForSteerUnlocked(preview, { timeout: 30000 });
+  await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
   assert.ok(hmrUpdates > 0);
   await command('steered');
   checkpoint('picker-manual-apply');
@@ -325,18 +330,18 @@ try {
   await ui.clickSaveEdit(preview);
   await ui.assertApplyDockVisible(preview, 1);
   await ui.clickApplyEdits(preview);
-  await ui.waitForApplyDockHidden(preview, { timeout: 30000 });
+  await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
   await command('manual-applied');
   checkpoint('picker-discard');
   await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
   await ui.setCount(preview, 2);
   await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: 60000 });
+  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
   await preview
     .getByRole('heading', { name: 'Production discarded variant', exact: true })
     .waitFor();
   await ui.clickDiscard(preview);
-  await ui.waitForBarHidden(preview, { timeout: 30000 });
+  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
   await command('discarded');
   assert.equal(
     await preview.getByRole('heading', { name: 'Production manual approved', exact: true }).count(),

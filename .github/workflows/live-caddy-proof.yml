@@ -240,7 +240,7 @@ jobs:
           set -Eeuo pipefail
           node scripts/live-remote-proof.mjs
       - name: Sole production admission and real picker editing through Native
-        timeout-minutes: 12
+        timeout-minutes: 18
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'

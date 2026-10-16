@@ -125,7 +125,7 @@ export async function productionEditBrowser(input) {
         if (
           Number.isSafeInteger(value.elapsedMs) &&
           value.elapsedMs >= 0 &&
-          value.elapsedMs < 300000
+          value.elapsedMs < 480000
         )
           (input.report.editBrowserStages ??= []).push({
             stage: value.checkpoint,
@@ -227,7 +227,7 @@ export async function productionEditBrowser(input) {
     const exit = await Promise.race([
       new Promise((done) => browser.once('close', (code) => done(code))),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('EDIT_BROWSER_DEADLINE')), 240000);
+        timer = setTimeout(() => reject(new Error('EDIT_BROWSER_DEADLINE')), 480000);
       }),
     ]).finally(() => clearTimeout(timer));
     await commands;
