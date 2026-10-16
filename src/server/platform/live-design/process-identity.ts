@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, readlinkSync, realpathSync, readdirSync } from 'node:fs';
+import { createReadStream, readFileSync, readlinkSync, realpathSync, readdirSync } from 'node:fs';
 
 export type LiveProcessIdentity = Readonly<{
   pid: number;
@@ -17,6 +17,72 @@ export type LiveProcessIdentity = Readonly<{
   cwd: string;
   namespaces: Readonly<Record<'mnt' | 'user' | 'pid' | 'net', string>>;
 }>;
+
+/** Full content verification without large synchronous reads on the controller. */
+export async function liveFileDigest(path: string, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted();
+  const digest = createHash('sha256');
+  for await (const bytes of createReadStream(path, { signal, highWaterMark: 65536 }))
+    digest.update(bytes);
+  signal.throwIfAborted();
+  return digest.digest('hex');
+}
+
+function liveProcessMetadata(pid: number) {
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) throw new Error();
+  const root = `/proc/${pid}`;
+  const text = readFileSync(`${root}/stat`, 'utf8');
+  const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
+  const birth = fields[19];
+  const uid = Number(readFileSync(`${root}/status`, 'utf8').match(/^Uid:\s+(\d+)/m)?.[1]);
+  if (!birth || !/^\d+$/.test(birth) || fields[0] === 'Z' || !Number.isSafeInteger(uid))
+    throw new Error();
+  return {
+    pid,
+    birth,
+    uid,
+    bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+    executable: realpathSync(`${root}/exe`),
+    cwd: realpathSync(`${root}/cwd`),
+    namespaces: {
+      mnt: readlinkSync(`${root}/ns/mnt`),
+      user: readlinkSync(`${root}/ns/user`),
+      pid: readlinkSync(`${root}/ns/pid`),
+      net: readlinkSync(`${root}/ns/net`),
+    },
+  };
+}
+
+/** Lifetime fence after full digest verification, never a substitute for it. */
+export function assertObservedProcessMetadata(identity: LiveProcessIdentity): void {
+  const expected = { ...identity, executableDigest: undefined };
+  if (JSON.stringify(liveProcessMetadata(identity.pid)) !== JSON.stringify(expected))
+    throw new Error('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+}
+
+/** Same full executable/birth identity; fence metadata again across asynchronous IO. */
+export async function observeLiveProcessAsync(
+  pid: number,
+  signal: AbortSignal,
+): Promise<LiveProcessIdentity> {
+  try {
+    const before = liveProcessMetadata(pid);
+    const executableDigest = await liveFileDigest(`/proc/${pid}/exe`, signal);
+    if (JSON.stringify(before) !== JSON.stringify(liveProcessMetadata(pid))) throw new Error();
+    return Object.freeze({
+      pid: before.pid,
+      birth: before.birth,
+      uid: before.uid,
+      bootId: before.bootId,
+      executable: before.executable,
+      executableDigest,
+      cwd: before.cwd,
+      namespaces: Object.freeze(before.namespaces),
+    });
+  } catch {
+    throw new Error('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+  }
+}
 
 /** Observation alone never grants ownership. Callers retain the actual ChildProcess handle. */
 export function observeLiveProcess(pid: number): LiveProcessIdentity {

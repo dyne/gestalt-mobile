@@ -14,7 +14,9 @@ function fixture() {
   const resource = (role: 'helper' | 'devserver', namespace: string) => ({
     process: {
       verify: vi.fn(),
-      open: vi.fn(() => new PassThrough()),
+      verifyForConnection: vi.fn(async () => {}),
+      assertConnectionLifetime: vi.fn(),
+      open: vi.fn(async () => new PassThrough()),
     } as unknown as IsolatedProjectProcess,
     receipt: {
       role,
@@ -38,15 +40,17 @@ function fixture() {
   };
 }
 describe('generation-bound isolated preview connections', () => {
-  it('checks both owned receipts on each connection and selects only its fixed resource', () => {
+  it('checks both owned receipts on each connection and selects only its fixed resource', async () => {
     const input = fixture();
     const upstreams = isolatedPreviewUpstreams(input);
     input.instance.generation = 99;
     Object.assign(input.helper.receipt, { sessionId: 'tampered-caller' });
-    upstreams.open('helper').destroy();
-    upstreams.open('app').destroy();
-    expect(input.helper.process.verify).toHaveBeenCalledTimes(3);
-    expect(input.devserver.process.verify).toHaveBeenCalledTimes(3);
+    (await upstreams.open('helper')).destroy();
+    (await upstreams.open('app')).destroy();
+    expect(input.helper.process.verify).toHaveBeenCalledTimes(1);
+    expect(input.devserver.process.verify).toHaveBeenCalledTimes(1);
+    expect(input.helper.process.verifyForConnection).toHaveBeenCalledTimes(1);
+    expect(input.devserver.process.verifyForConnection).toHaveBeenCalledTimes(1);
     expect(input.helper.process.open).toHaveBeenCalledTimes(1);
     expect(input.devserver.process.open).toHaveBeenCalledTimes(1);
   });
@@ -66,13 +70,31 @@ describe('generation-bound isolated preview connections', () => {
       expect(input.devserver.process.open).not.toHaveBeenCalled();
     },
   );
-  it('refuses app traffic when helper receipt lifetime is revoked, with no TCP fallback', () => {
+  it('refuses app traffic when helper receipt lifetime is revoked, with no TCP fallback', async () => {
     const input = fixture();
     const upstreams = isolatedPreviewUpstreams(input);
-    vi.mocked(input.helper.process.verify).mockImplementation(() => {
+    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(async () => {
       throw new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE');
     });
-    expect(() => upstreams.open('app')).toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
+    await expect(upstreams.open('app')).rejects.toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
     expect(input.devserver.process.open).not.toHaveBeenCalled();
+  });
+  it('destroys the selected stream if the other resource is revoked during asynchronous verification', async () => {
+    const input = fixture();
+    const upstreams = isolatedPreviewUpstreams(input);
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(() => barrier);
+    const selected = new PassThrough();
+    vi.mocked(input.devserver.process.open).mockResolvedValue(selected);
+    const pending = upstreams.open('app');
+    vi.mocked(input.helper.process.assertConnectionLifetime).mockImplementation(() => {
+      throw new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE');
+    });
+    release();
+    await expect(pending).rejects.toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
+    expect(selected.destroyed).toBe(true);
   });
 });

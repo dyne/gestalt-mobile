@@ -14,10 +14,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -25,7 +27,13 @@ import { Duplex } from 'node:stream';
 import { once } from 'node:events';
 import { privateDenialFailure, type ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { LIVE_CODEX_SHA256, LIVE_CODEX_BWRAP_SHA256 } from './native-contract.js';
-import { observeLiveProcess, type LiveProcessIdentity } from './process-identity.js';
+import {
+  assertObservedProcessMetadata,
+  liveFileDigest,
+  observeLiveProcess,
+  observeLiveProcessAsync,
+  type LiveProcessIdentity,
+} from './process-identity.js';
 import { observeLoopbackListener } from './registered-dev-servers.js';
 import { isolatedProjectSocketFilter } from './project-network-filter.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
@@ -231,6 +239,8 @@ export class IsolatedProjectProcess {
   private network?: string;
   private receipt?: IsolatedProjectReceipt;
   private revoked = false;
+  private readonly connectionVerification = new AbortController();
+  private pendingConnections = 0;
   private pipes?: ProjectControllerPipes;
   private descriptors: number[] = [];
   private channels = new Map<number, ProjectPipeSocket>();
@@ -405,6 +415,7 @@ export class IsolatedProjectProcess {
   }
   private revokeChannels(): void {
     this.revoked = true;
+    this.connectionVerification.abort();
     this.receipt = undefined;
     for (const command of this.commands.values()) {
       command.reject(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'));
@@ -675,22 +686,77 @@ export class IsolatedProjectProcess {
     }
   }
 
+  private targetCandidates(): number[] {
+    if (!this.owner || !this.child?.pid || this.revoked || !this.network) throw failure();
+    const names = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
+    if (names.length > 8192) throw failure();
+    const executableSizes = new Set([
+      statSync(this.spec.node.path).size,
+      statSync(this.spec.executable.path).size,
+    ]);
+    return names.map(Number).filter((pid) => {
+      try {
+        // An unrelated namespace cannot supply either admitted role. Filter it
+        // before hashing executables; admitted candidates still get full identity.
+        return (
+          descendant(pid, this.child!.pid!) &&
+          readlinkSync(`/proc/${pid}/ns/net`) === this.network &&
+          // Same-size candidates, including copies, still receive full hashes.
+          executableSizes.has(statSync(`/proc/${pid}/exe`).size)
+        );
+      } catch {
+        return false;
+      }
+    });
+  }
   private observeTarget(): { relay: LiveProcessIdentity; target: LiveProcessIdentity } | undefined {
     if (!this.owner || !this.child?.pid || this.revoked) throw failure();
     if (JSON.stringify(observeLiveProcess(this.child.pid)) !== JSON.stringify(this.owner))
       throw failure();
-    const host = observeLiveProcess(process.pid);
-    if (!this.network || this.network === host.namespaces.net) throw failure();
+    const identities: LiveProcessIdentity[] = [];
+    for (const pid of this.targetCandidates()) {
+      try {
+        identities.push(observeLiveProcess(pid));
+      } catch {
+        /* An exiting candidate cannot qualify. */
+      }
+    }
+    return this.targetFromIdentities(observeLiveProcess(process.pid), identities);
+  }
+  private async observeTargetAsync(signal: AbortSignal) {
+    if (!this.owner || !this.child?.pid || this.revoked) throw failure();
+    const owner = this.owner;
+    if (
+      JSON.stringify(await observeLiveProcessAsync(this.child.pid, signal)) !==
+      JSON.stringify(owner)
+    )
+      throw failure();
+    const host = await observeLiveProcessAsync(process.pid, signal);
+    const identities: LiveProcessIdentity[] = [];
+    for (const pid of this.targetCandidates()) {
+      signal.throwIfAborted();
+      try {
+        identities.push(await observeLiveProcessAsync(pid, signal));
+      } catch {
+        signal.throwIfAborted(); /* An exiting candidate cannot qualify. */
+      }
+    }
+    if (JSON.stringify(await observeLiveProcessAsync(owner.pid, signal)) !== JSON.stringify(owner))
+      throw failure();
+    signal.throwIfAborted();
+    return this.targetFromIdentities(host, identities);
+  }
+  private targetFromIdentities(
+    host: LiveProcessIdentity,
+    identities: readonly LiveProcessIdentity[],
+  ) {
+    if (!this.network || this.network === host.namespaces.net || this.revoked) throw failure();
     let relay: LiveProcessIdentity | undefined;
     let target: LiveProcessIdentity | undefined;
     let targets = 0;
-    const pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
-    if (pids.length > 8192) throw failure();
-    for (const name of pids) {
-      const pid = Number(name);
+    for (const identity of identities) {
+      const pid = identity.pid;
       try {
-        if (!descendant(pid, this.child.pid)) continue;
-        const identity = observeLiveProcess(pid);
         if (identity.namespaces.net !== this.network) continue;
         const command = readFileSync(`/proc/${pid}/cmdline`);
         if (
@@ -711,7 +777,7 @@ export class IsolatedProjectProcess {
           }
         }
       } catch {
-        /* Unrelated process may exit during bounded observation. */
+        /* An exiting candidate cannot qualify. */
       }
     }
     if (!relay || !target) return undefined;
@@ -735,7 +801,7 @@ export class IsolatedProjectProcess {
     this.diagnostic.nativeMasksObserved = true;
     return { relay, target };
   }
-  verify(receipt: IsolatedProjectReceipt): void {
+  private assertReceipt(receipt: IsolatedProjectReceipt): void {
     if (this.revoked || !this.receipt || JSON.stringify(receipt) !== JSON.stringify(this.receipt))
       throw failure();
     const { signature, ...unsigned } = receipt;
@@ -743,7 +809,6 @@ export class IsolatedProjectProcess {
     const supplied = Buffer.from(signature, 'hex');
     if (supplied.length !== expected.length || !timingSafeEqual(expected, supplied))
       throw failure();
-    this.verifyInputs();
     if (
       !timingSafeEqual(
         readFileSync(join(this.spec.privateDirectory, 'project-process-signing-key')),
@@ -751,7 +816,16 @@ export class IsolatedProjectProcess {
       )
     )
       throw failure();
-    const current = this.observeTarget();
+  }
+  verify(receipt: IsolatedProjectReceipt): void {
+    this.assertReceipt(receipt);
+    this.verifyInputs();
+    this.assertTarget(receipt, this.observeTarget());
+  }
+  private assertTarget(
+    receipt: IsolatedProjectReceipt,
+    current: { relay: LiveProcessIdentity; target: LiveProcessIdentity } | undefined,
+  ): void {
     if (
       !current ||
       JSON.stringify(current.relay) !== JSON.stringify(receipt.relay) ||
@@ -759,9 +833,75 @@ export class IsolatedProjectProcess {
     )
       throw failure();
   }
+  /** A fresh full verification per connection, cancellable on generation revocation. */
+  async verifyForConnection(receipt: IsolatedProjectReceipt): Promise<void> {
+    this.assertReceipt(receipt);
+    const signal = AbortSignal.any([
+      this.connectionVerification.signal,
+      AbortSignal.timeout(15000),
+    ]);
+    const observedPins = [];
+    for (const pin of [
+      this.spec.native,
+      this.spec.bwrap,
+      this.spec.node,
+      this.spec.worker,
+      this.spec.executable,
+      ...this.spec.launchInputs,
+      ...(this.stdioBridge ?? []),
+    ]) {
+      const before = lstatSync(pin.path);
+      if (
+        !before.isFile() ||
+        before.isSymbolicLink() ||
+        before.mode & 0o022 ||
+        realpathSync(pin.path) !== pin.path
+      )
+        throw failure('connection-pin-metadata');
+      if ((await liveFileDigest(pin.path, signal)) !== pin.sha256)
+        throw failure('connection-pin-digest');
+      const after = lstatSync(pin.path);
+      if (
+        realpathSync(pin.path) !== pin.path ||
+        ['dev', 'ino', 'mode', 'size', 'mtimeMs', 'ctimeMs'].some(
+          (key) => before[key as keyof typeof before] !== after[key as keyof typeof after],
+        )
+      )
+        throw failure('connection-pin-changed');
+      observedPins.push({ pin, before });
+    }
+    const current = await this.observeTargetAsync(signal);
+    for (const { pin, before } of observedPins) {
+      const after = lstatSync(pin.path);
+      if (
+        realpathSync(pin.path) !== pin.path ||
+        ['dev', 'ino', 'mode', 'size', 'mtimeMs', 'ctimeMs'].some(
+          (key) => before[key as keyof typeof before] !== after[key as keyof typeof after],
+        )
+      )
+        throw failure('connection-pin-changed');
+    }
+    this.assertReceipt(receipt);
+    signal.throwIfAborted();
+    this.assertTarget(receipt, current);
+    this.assertConnectionLifetime(receipt);
+  }
+  /** Post-await fence only; open always performs full independent verification. */
+  assertConnectionLifetime(receipt: IsolatedProjectReceipt): void {
+    this.assertReceipt(receipt);
+    for (const identity of [receipt.owner, receipt.relay, receipt.target])
+      assertObservedProcessMetadata(identity);
+  }
   /** Fixed target only. The preview/helper controller may use this Duplex as createConnection. */
-  open(receipt: IsolatedProjectReceipt): Duplex {
-    this.verify(receipt);
+  async open(receipt: IsolatedProjectReceipt): Promise<Duplex> {
+    if (this.channels.size + this.pendingConnections >= 32) throw failure();
+    this.pendingConnections++;
+    try {
+      await this.verifyForConnection(receipt);
+    } finally {
+      this.pendingConnections--;
+    }
+    this.assertReceipt(receipt);
     if (this.channels.size >= 32) throw failure();
     const id = ++this.nextChannel;
     const stream = new ProjectPipeSocket(

@@ -17,7 +17,7 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
-async function fixture(isolatedTransport = false) {
+async function fixture(isolatedTransport = false, beforeOpen = async () => {}) {
   const auth = await previewAuthFixture(cleanup);
   const requests: { path: string; body: string; headers: Record<string, unknown> }[] = [];
   const upstream = createServer(async (req, res) => {
@@ -76,8 +76,9 @@ async function fixture(isolatedTransport = false) {
     ...(isolatedTransport
       ? {
           upstreams: {
-            open(role: 'app' | 'helper') {
+            async open(role: 'app' | 'helper') {
               opened.push(role);
+              await beforeOpen();
               return createConnection({
                 host: '127.0.0.1',
                 port: role === 'app' ? address.port : helperPort,
@@ -170,6 +171,45 @@ test('routes HTTP and HMR through the supplied fixed transport only after previe
   expect(f.opened).toEqual(['app', 'helper', 'app']);
   await f.connections.revoke({ liveId: 'live' });
 });
+
+test.each(['http', 'hmr'] as const)(
+  'revocation fences %s while isolated connection verification is pending',
+  async (transport) => {
+    let release!: () => void;
+    let started!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const f = await fixture(true, async () => {
+      started();
+      await barrier;
+    });
+    const peer =
+      transport === 'hmr'
+        ? new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/`, 'vite-hmr', { headers: f.headers })
+        : undefined;
+    peer?.on('error', () => {});
+    const completed = peer
+      ? new Promise<void>((resolve) => peer.once('close', () => resolve()))
+      : f.send('/').then(
+          () => {
+            throw new Error('Revoked HTTP must not succeed');
+          },
+          () => {},
+        );
+    await entered;
+    await f.connections.revoke({ liveId: 'live' });
+    release();
+    await completed;
+    // Let the pending transport complete so the post-await fence runs too.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(f.requests).toHaveLength(0);
+    expect(f.connections.size).toBe(0);
+  },
+);
 
 test('binds registered app/helper targets, relays JSON bodies and strips credentials and unsafe responses', async () => {
   const f = await fixture();

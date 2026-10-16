@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseLivePollEvent } from '../../features/live-design/application/poll-events.js';
 import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { ManagedHelperLauncher, OwnedLiveHelper, type HelperLauncher } from './helper-process.js';
 
@@ -404,6 +405,14 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     };
     expect(generated.type).toBe('generate');
     expect(generated.scaffoldAttempted).toBe(true);
+    // Actual pinned CLI output retains the HTTP body credential. Keep it out
+    // of the canonical event before durable dispatch and model serialization.
+    expect(generated).toHaveProperty('token', metadata.token);
+    const canonical = parseLivePollEvent(generated);
+    expect(canonical).toMatchObject({ type: 'generate', id: '1234abcd', action: 'distill' });
+    expect(canonical).not.toHaveProperty('token');
+    expect(JSON.stringify(canonical)).not.toContain(metadata.token);
+    expect(generated).toHaveProperty('token', metadata.token);
     const status = (await f.helper.status()) as {
       liveServer: { pendingEvents: { id: string; leased: boolean }[] };
     };

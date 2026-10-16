@@ -8,7 +8,7 @@ import cookie from '@fastify/cookie';
 import fastify from 'fastify';
 import { Agent, request as upstreamRequest } from 'node:http';
 import type { IncomingMessage } from 'node:http';
-import type { Readable } from 'node:stream';
+import type { Duplex, Readable } from 'node:stream';
 import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import type {
@@ -80,6 +80,7 @@ export async function createPreviewGateway(options: {
     proxy.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
     proxy.all('/*', async (req, reply) => {
       let upstream: ReturnType<typeof upstreamRequest> | undefined;
+      let connection: Duplex | undefined;
       let permit: PreviewConnectionPermit | undefined;
       try {
         const authorized = authorization.open(
@@ -96,9 +97,19 @@ export async function createPreviewGateway(options: {
         const current = targets.read(registrationId, assignment.canonicalAppRoot);
         const route = helperRoute(req.raw.url ?? '/');
         const port = route.helper ? current.helperPort : current.appPort;
+        reply.raw.once('close', () => {
+          authorized.release();
+          upstream?.destroy();
+        });
+        connection = await options.upstreams?.open(route.helper ? 'helper' : 'app');
+        targets.read(registrationId, assignment.canonicalAppRoot);
+        if (closing || !authorized.active() || reply.raw.destroyed) {
+          connection?.destroy();
+          authorized.release();
+          return;
+        }
         const agent = options.upstreams ? new Agent({ keepAlive: false }) : undefined;
-        if (agent)
-          agent.createConnection = () => options.upstreams!.open(route.helper ? 'helper' : 'app');
+        if (agent) agent.createConnection = () => connection!;
         reply.hijack();
         upstream = upstreamRequest(
           {
@@ -133,6 +144,7 @@ export async function createPreviewGateway(options: {
         });
         ((req.body as Readable | undefined) ?? req.raw).pipe(upstream);
       } catch (error) {
+        connection?.destroy();
         permit?.release();
         const status = error instanceof LiveAuthError ? error.status : 503;
         reply
@@ -152,8 +164,9 @@ export async function createPreviewGateway(options: {
     });
   });
   const sockets = new WebSocketServer({ noServer: true });
-  app.server.on('upgrade', (req, socket, head) => {
+  app.server.on('upgrade', async (req, socket, head) => {
     let upstream: WebSocket | undefined;
+    let connection: Duplex | undefined;
     let permit: PreviewConnectionPermit | undefined;
     const owned = new OwnedPreviewWebSockets(() => {
       upstream?.terminate();
@@ -182,11 +195,21 @@ export async function createPreviewGateway(options: {
         host: `127.0.0.1:${current.appPort}`,
       };
       delete headers['sec-websocket-protocol'];
+      socket.once('close', () => {
+        authorized.release();
+        upstream?.terminate();
+      });
+      connection = await options.upstreams?.open('app');
+      targets.read(registrationId, assignment.canonicalAppRoot);
+      if (closing || !authorized.active() || socket.destroyed) {
+        connection?.destroy();
+        authorized.release();
+        socket.destroy();
+        return;
+      }
       upstream = new WebSocket(`ws://127.0.0.1:${current.appPort}${req.url}`, protocols, {
         headers,
-        ...(options.upstreams
-          ? { createConnection: () => options.upstreams!.open('app') as Socket }
-          : {}),
+        ...(options.upstreams ? { createConnection: () => connection as Socket } : {}),
       });
       owned.bind(upstream);
       upstream.once('open', () => {
@@ -213,6 +236,7 @@ export async function createPreviewGateway(options: {
         upstream?.terminate();
       });
     } catch (error) {
+      connection?.destroy();
       permit?.release();
       const status = error instanceof LiveAuthError ? error.status : 503;
       socket.end(

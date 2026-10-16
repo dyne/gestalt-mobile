@@ -120,10 +120,10 @@ const report = {
 const processes = [];
 async function http(process, receipt, path, upstreams) {
   const agent = new Agent({ keepAlive: false });
-  agent.createConnection = () =>
-    upstreams
-      ? upstreams.open(receipt.role === 'helper' ? 'helper' : 'app')
-      : process.open(receipt);
+  const connection = await (upstreams
+    ? upstreams.open(receipt.role === 'helper' ? 'helper' : 'app')
+    : process.open(receipt));
+  agent.createConnection = () => connection;
   try {
     return await new Promise((resolve, reject) => {
       const req = request(
@@ -256,18 +256,19 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.stage = 'tampered-launch-input';
   writeFileSync(source, code + '\n// tampered launch input\n');
   assert.throws(() => devserver.verify(devReceipt));
+  await assert.rejects(() => devserver.verifyForConnection(devReceipt));
   writeFileSync(source, code, { mode: 0o600 });
   report.checks.changedLaunchInputRefused = true;
   report.stage = 'revoke-devserver-first';
   await new Promise((done) => setTimeout(done, 9000));
   await devserver.stop();
-  assert.throws(() => devserver.open(devReceipt));
-  assert.throws(() => upstreams.open('helper'));
+  await assert.rejects(() => devserver.open(devReceipt));
+  await assert.rejects(() => upstreams.open('helper'));
   assert.equal((await http(helper, helperReceipt, '/health')).status, 200);
   report.checks.staleReceiptRevokedHelperSurvives = true;
   report.stage = 'stop-helper';
   await helper.stop();
-  assert.throws(() => helper.open(helperReceipt));
+  await assert.rejects(() => helper.open(helperReceipt));
   report.checks.ownedNamespacesAndDescendantsExited = true;
   report.passed = true;
   report.stage = 'complete';

@@ -10,7 +10,7 @@ import type { IsolatedProjectProcess, IsolatedProjectReceipt } from './isolated-
 
 export interface PreviewUpstreams {
   /** Fixed admitted resource only. A URL, port, command or PID is never supplied by a request. */
-  open(role: 'app' | 'helper'): Duplex;
+  open(role: 'app' | 'helper'): Duplex | Promise<Duplex>;
 }
 
 /** One owning generation's actual process handles and protected receipts. No process adoption. */
@@ -28,7 +28,7 @@ export function isolatedPreviewUpstreams(input: {
     process: input.devserver.process,
     receipt: structuredClone(input.devserver.receipt),
   };
-  const verify = () => {
+  const bindings = () => {
     if (
       helper.process === devserver.process ||
       helper.receipt.role !== 'helper' ||
@@ -43,17 +43,27 @@ export function isolatedPreviewUpstreams(input: {
       helper.receipt.target.namespaces.net === devserver.receipt.target.namespaces.net
     )
       throw new Error('LIVE_PREVIEW_PROCESS_UNAVAILABLE');
-    helper.process.verify(helper.receipt);
-    devserver.process.verify(devserver.receipt);
   };
-  verify();
+  bindings();
+  helper.process.verify(helper.receipt);
+  devserver.process.verify(devserver.receipt);
   return {
-    open(role) {
+    async open(role) {
       // Revalidate BOTH resources before every HTTP/SSE/HMR connection; a changed
       // helper must revoke the app's browser authority too. Never fall back to TCP.
-      verify();
+      bindings();
       const resource = role === 'app' ? devserver : helper;
-      return resource.process.open(resource.receipt);
+      const other = role === 'app' ? helper : devserver;
+      await other.process.verifyForConnection(other.receipt);
+      // open independently verifies the selected resource, exactly once.
+      const stream = await resource.process.open(resource.receipt);
+      try {
+        other.process.assertConnectionLifetime(other.receipt);
+        return stream;
+      } catch (error) {
+        stream.destroy();
+        throw error;
+      }
     },
   };
 }

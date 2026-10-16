@@ -107,6 +107,25 @@ IsolatedProjectProcess.prototype.verify = function (receipt) {
     }));
   }
 };
+const originalConnectionVerify = IsolatedProjectProcess.prototype.verifyForConnection;
+IsolatedProjectProcess.prototype.verifyForConnection = async function (receipt) {
+  const started = performance.now();
+  try {
+    return await originalConnectionVerify.call(this, receipt);
+  } finally {
+    const metrics = projectProcesses.get(this);
+    if (metrics) {
+      const elapsed = Math.round(performance.now() - started);
+      metrics.connectionCount = (metrics.connectionCount ?? 0) + 1;
+      metrics.connectionTotalMs = (metrics.connectionTotalMs ?? 0) + elapsed;
+      metrics.connectionMaxMs = Math.max(metrics.connectionMaxMs ?? 0, elapsed);
+      report.projectVerification = [...projectProcesses].map(([owned, value]) => ({
+        ...value,
+        diagnostics: owned.diagnostics(),
+      }));
+    }
+  }
+};
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
