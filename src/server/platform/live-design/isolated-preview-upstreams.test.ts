@@ -11,21 +11,24 @@ import type { IsolatedProjectProcess, IsolatedProjectReceipt } from './isolated-
 
 // Contract fixture only. Supported-host evidence separately proves real receipt/process confinement.
 function fixture() {
-  const resource = (role: 'helper' | 'devserver', namespace: string) => ({
-    process: {
-      verify: vi.fn(),
-      verifyForConnection: vi.fn(async () => () => {}),
-      assertConnectionLifetime: vi.fn(),
-      open: vi.fn(async () => new PassThrough()),
-    } as unknown as IsolatedProjectProcess,
-    receipt: {
-      role,
-      sessionId: 'owner',
-      generation: 3,
-      network: 'private-loopback-only',
-      target: { cwd: '/app', namespaces: { net: namespace } },
-    } as IsolatedProjectReceipt,
-  });
+  const resource = (role: 'helper' | 'devserver', namespace: string) => {
+    const prepared = { assertCurrent: vi.fn(), open: vi.fn(() => new PassThrough()) };
+    return {
+      prepared,
+      process: {
+        verify: vi.fn(),
+        prepareConnection: vi.fn(async () => prepared),
+      } as unknown as IsolatedProjectProcess,
+      receipt: {
+        role,
+        sessionId: 'owner',
+        generation: 3,
+        network: 'private-loopback-only',
+        target: { cwd: '/app', namespaces: { net: namespace } },
+      } as IsolatedProjectReceipt,
+    };
+  };
+
   return {
     instance: {
       relayId: 'owner',
@@ -49,10 +52,10 @@ describe('generation-bound isolated preview connections', () => {
     (await upstreams.open('app')).destroy();
     expect(input.helper.process.verify).toHaveBeenCalledTimes(1);
     expect(input.devserver.process.verify).toHaveBeenCalledTimes(1);
-    expect(input.helper.process.verifyForConnection).toHaveBeenCalledTimes(1);
-    expect(input.devserver.process.verifyForConnection).toHaveBeenCalledTimes(1);
-    expect(input.helper.process.open).toHaveBeenCalledTimes(1);
-    expect(input.devserver.process.open).toHaveBeenCalledTimes(1);
+    expect(input.helper.process.prepareConnection).toHaveBeenCalledTimes(2);
+    expect(input.devserver.process.prepareConnection).toHaveBeenCalledTimes(2);
+    expect(input.helper.prepared.open).toHaveBeenCalledTimes(1);
+    expect(input.devserver.prepared.open).toHaveBeenCalledTimes(1);
   });
   it.each(['session', 'generation', 'app', 'namespace', 'role', 'handle'] as const)(
     'refuses mismatched %s before any connection',
@@ -66,38 +69,61 @@ describe('generation-bound isolated preview connections', () => {
       if (kind === 'role') Object.assign(input.helper.receipt, { role: 'devserver' });
       if (kind === 'handle') input.devserver.process = input.helper.process;
       expect(() => isolatedPreviewUpstreams(input)).toThrow('LIVE_PREVIEW_PROCESS_UNAVAILABLE');
-      expect(input.helper.process.open).not.toHaveBeenCalled();
-      expect(input.devserver.process.open).not.toHaveBeenCalled();
+      expect(input.helper.prepared.open).not.toHaveBeenCalled();
+      expect(input.devserver.prepared.open).not.toHaveBeenCalled();
     },
   );
   it('refuses app traffic when helper receipt lifetime is revoked, with no TCP fallback', async () => {
     const input = fixture();
     const upstreams = isolatedPreviewUpstreams(input);
-    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(async () => {
+    vi.mocked(input.helper.process.prepareConnection).mockImplementation(async () => {
       throw new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE');
     });
     await expect(upstreams.open('app')).rejects.toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
-    expect(input.devserver.process.open).not.toHaveBeenCalled();
+    expect(input.devserver.prepared.open).not.toHaveBeenCalled();
   });
-  it('destroys the selected stream if the other resource is revoked during asynchronous verification', async () => {
+  it('waits for both independent preparations before connecting and fences revocation across the await', async () => {
     const input = fixture();
     const upstreams = isolatedPreviewUpstreams(input);
     let release!: () => void;
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
     });
-    vi.mocked(input.helper.process.verifyForConnection).mockImplementation(async () => {
+    vi.mocked(input.helper.process.prepareConnection).mockImplementation(async () => {
       await barrier;
-      return () => input.helper.process.assertConnectionLifetime(input.helper.receipt);
+      return input.helper.prepared;
     });
-    const selected = new PassThrough();
-    vi.mocked(input.devserver.process.open).mockResolvedValue(selected);
     const pending = upstreams.open('app');
-    vi.mocked(input.helper.process.assertConnectionLifetime).mockImplementation(() => {
+    await Promise.resolve();
+    expect(input.helper.process.prepareConnection).toHaveBeenCalledOnce();
+    expect(input.devserver.process.prepareConnection).toHaveBeenCalledOnce();
+    expect(input.helper.prepared.open).not.toHaveBeenCalled();
+    expect(input.devserver.prepared.open).not.toHaveBeenCalled();
+    input.helper.prepared.assertCurrent.mockImplementation(() => {
       throw new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE');
     });
     release();
     await expect(pending).rejects.toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
-    expect(selected.destroyed).toBe(true);
+    expect(input.devserver.prepared.open).not.toHaveBeenCalled();
+  });
+  it('cancels sibling verification when either real preparation fails', async () => {
+    const input = fixture();
+    const upstreams = isolatedPreviewUpstreams(input);
+    let signal: AbortSignal | undefined;
+    vi.mocked(input.devserver.process.prepareConnection).mockImplementation(
+      async (_receipt, cancellation) => {
+        signal = cancellation;
+        await new Promise<void>((resolve) =>
+          cancellation!.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        throw new Error('CANCELLED');
+      },
+    );
+    vi.mocked(input.helper.process.prepareConnection).mockRejectedValue(
+      new Error('LIVE_PROJECT_PROCESS_UNAVAILABLE'),
+    );
+    await expect(upstreams.open('app')).rejects.toThrow('LIVE_PROJECT_PROCESS_UNAVAILABLE');
+    expect(signal?.aborted).toBe(true);
+    expect(input.devserver.prepared.open).not.toHaveBeenCalled();
   });
 });

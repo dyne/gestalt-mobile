@@ -53,6 +53,12 @@ function liveProcessMetadata(pid: number) {
   };
 }
 
+/** Fixed controller comparison fields only; never process adoption authority. */
+export function observeControllerIsolation(): Pick<LiveProcessIdentity, 'uid' | 'namespaces'> {
+  const { uid, namespaces } = liveProcessMetadata(process.pid);
+  return { uid, namespaces };
+}
+
 /** Lifetime fence after full digest verification, never a substitute for it. */
 export function assertObservedProcessMetadata(identity: LiveProcessIdentity): void {
   const expected = { ...identity, executableDigest: undefined };

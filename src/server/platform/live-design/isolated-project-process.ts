@@ -31,6 +31,7 @@ import { LIVE_CODEX_SHA256, LIVE_CODEX_BWRAP_SHA256 } from './native-contract.js
 import {
   assertObservedProcessMetadata,
   liveFileDigest,
+  observeControllerIsolation,
   observeLiveProcess,
   observeLiveProcessAsync,
   type LiveProcessIdentity,
@@ -745,7 +746,7 @@ export class IsolatedProjectProcess {
         /* An exiting candidate cannot qualify. */
       }
     }
-    return this.targetFromIdentities(observeLiveProcess(process.pid), identities);
+    return this.targetFromIdentities(observeControllerIsolation(), identities);
   }
   private async observeTargetAsync(signal: AbortSignal) {
     if (!this.owner || !this.child?.pid || this.revoked) throw failure();
@@ -755,7 +756,7 @@ export class IsolatedProjectProcess {
       JSON.stringify(owner)
     )
       throw failure();
-    const host = await observeLiveProcessAsync(process.pid, signal);
+    const host = observeControllerIsolation();
     const identities: LiveProcessIdentity[] = [];
     for (const pid of this.targetCandidates()) {
       signal.throwIfAborted();
@@ -771,7 +772,7 @@ export class IsolatedProjectProcess {
     return this.targetFromIdentities(host, identities);
   }
   private targetFromIdentities(
-    host: LiveProcessIdentity,
+    host: Pick<LiveProcessIdentity, 'uid' | 'namespaces'>,
     identities: readonly LiveProcessIdentity[],
   ) {
     if (!this.network || this.network === host.namespaces.net || this.revoked) throw failure();
@@ -858,14 +859,18 @@ export class IsolatedProjectProcess {
       throw failure();
   }
   /** A fresh full verification per connection, cancellable on generation revocation. */
-  async verifyForConnection(receipt: IsolatedProjectReceipt): Promise<() => void> {
+  async verifyForConnection(
+    receipt: IsolatedProjectReceipt,
+    cancellation?: AbortSignal,
+  ): Promise<() => void> {
     this.assertReceipt(receipt);
     const signal = AbortSignal.any([
       this.connectionVerification.signal,
       AbortSignal.timeout(15000),
+      ...(cancellation ? [cancellation] : []),
     ]);
     const observedPins: { pin: Pin; before: Stats }[] = [];
-    for (const pin of [
+    const pins = [
       this.spec.native,
       this.spec.bwrap,
       this.spec.node,
@@ -873,7 +878,11 @@ export class IsolatedProjectProcess {
       this.spec.executable,
       ...this.spec.launchInputs,
       ...(this.stdioBridge ?? []),
-    ]) {
+    ];
+    // Identical declarations refer to one freshly observed file in THIS check.
+    for (const pin of new Map(
+      pins.map((pin) => [JSON.stringify([pin.path, pin.sha256]), pin]),
+    ).values()) {
       const before = lstatSync(pin.path);
       if (
         !before.isFile() ||
@@ -921,29 +930,55 @@ export class IsolatedProjectProcess {
     for (const identity of [receipt.owner, receipt.relay, receipt.target])
       assertObservedProcessMetadata(identity);
   }
-  /** Fixed target only. The preview/helper controller may use this Duplex as createConnection. */
-  async open(receipt: IsolatedProjectReceipt): Promise<Duplex> {
+  /** Full preparation only: no physical connection before all resources admit.
+   * The returned operation is bound to this real verifier, revocation and one use;
+   * no caller-provided callback or unsigned ticket can authorize this process.
+   */
+  async prepareConnection(
+    receipt: IsolatedProjectReceipt,
+    cancellation?: AbortSignal,
+  ): Promise<{
+    assertCurrent(): void;
+    open(): Duplex;
+  }> {
     if (this.channels.size + this.pendingConnections >= 32) throw failure();
     this.pendingConnections++;
     let assertCurrent!: () => void;
     try {
-      assertCurrent = await this.verifyForConnection(receipt);
+      assertCurrent = await this.verifyForConnection(receipt, cancellation);
     } finally {
       this.pendingConnections--;
     }
-    assertCurrent();
-    if (this.channels.size >= 32) throw failure();
-    const id = ++this.nextChannel;
-    const stream = new ProjectPipeSocket(
-      (message) => {
-        if (!this.revoked) this.send(message);
+    let consumed = false;
+    return Object.freeze({
+      assertCurrent,
+      open: () => {
+        if (consumed) throw failure('connection-preparation-consumed');
+        consumed = true;
+        assertCurrent();
+        if (this.channels.size >= 32) throw failure();
+        const id = ++this.nextChannel;
+        const stream = new ProjectPipeSocket(
+          (message) => {
+            if (!this.revoked) this.send(message);
+          },
+          id,
+          () => this.channels.delete(id),
+        );
+        this.channels.set(id, stream);
+        try {
+          this.send({ op: 'open', id });
+        } catch (error) {
+          stream.destroy();
+          throw error;
+        }
+        return stream;
       },
-      id,
-      () => this.channels.delete(id),
-    );
-    this.channels.set(id, stream);
-    this.send({ op: 'open', id });
-    return stream;
+    });
+  }
+  /** Fixed target only. Every direct open also obtains a fresh full preparation. */
+  async open(receipt: IsolatedProjectReceipt): Promise<Duplex> {
+    return (await this.prepareConnection(receipt)).open();
   }
   /** Private canonical helper CLI only, in the SAME owned loopback namespace.
    * The pinned worker independently rejects command/argument substitution and

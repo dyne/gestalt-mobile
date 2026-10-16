@@ -52,16 +52,17 @@ export function isolatedPreviewUpstreams(input: {
       // Revalidate BOTH resources before every HTTP/SSE/HMR connection; a changed
       // helper must revoke the app's browser authority too. Never fall back to TCP.
       bindings();
-      const resource = role === 'app' ? devserver : helper;
-      const other = role === 'app' ? helper : devserver;
-      const assertOtherCurrent = await other.process.verifyForConnection(other.receipt);
-      // open independently verifies the selected resource, exactly once.
-      const stream = await resource.process.open(resource.receipt);
+      const cancellation = new AbortController();
       try {
-        assertOtherCurrent();
-        return stream;
+        const [helperReady, appReady] = await Promise.all([
+          helper.process.prepareConnection(helper.receipt, cancellation.signal),
+          devserver.process.prepareConnection(devserver.receipt, cancellation.signal),
+        ]);
+        helperReady.assertCurrent();
+        appReady.assertCurrent();
+        return (role === 'app' ? appReady : helperReady).open();
       } catch (error) {
-        stream.destroy();
+        cancellation.abort();
         throw error;
       }
     },

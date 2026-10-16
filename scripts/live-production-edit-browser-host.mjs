@@ -187,6 +187,9 @@ export async function productionEditBrowser(input) {
             ),
           ),
           helperResponses: value.failure.helperResponses?.slice(0, 24).map((item) => ({
+            elapsedMs:
+              Number.isSafeInteger(item.elapsedMs) && item.elapsedMs >= 0 ? item.elapsedMs : null,
+            method: ['GET', 'POST'].includes(item.method) ? item.method : 'other',
             route: ['live.js', 'events', 'status', 'lease', 'agent-target-claim'].includes(
               item.route,
             )

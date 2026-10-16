@@ -408,12 +408,12 @@ describe.runIf(binary)('checksum-pinned real helper lifecycle', () => {
     expect(generated.scaffoldAttempted).toBe(true);
     // Actual pinned CLI output retains the HTTP body credential. Keep it out
     // of the canonical event before durable dispatch and model serialization.
-    expect(generated).toHaveProperty('token', metadata.token);
+    expect((generated as { token?: unknown }).token === metadata.token).toBe(true);
     const canonical = parseLivePollEvent(generated);
+    expect(Object.hasOwn(canonical, 'token')).toBe(false);
+    expect(JSON.stringify(canonical).includes(metadata.token)).toBe(false);
     expect(canonical).toMatchObject({ type: 'generate', id: '1234abcd', action: 'distill' });
-    expect(canonical).not.toHaveProperty('token');
-    expect(JSON.stringify(canonical)).not.toContain(metadata.token);
-    expect(generated).toHaveProperty('token', metadata.token);
+    expect((generated as { token?: unknown }).token === metadata.token).toBe(true);
     const status = (await f.helper.status()) as {
       liveServer: { pendingEvents: { id: string; leased: boolean }[] };
     };

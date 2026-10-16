@@ -253,6 +253,12 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.checks.nativeFilesystemAndHostUnixDenials = true;
   report.checks.knownBrowserTokenCannotCompeteForPoll = true;
   report.checks.fixedPipeHttpRelay = true;
+  const prepared = await devserver.prepareConnection(devReceipt);
+  const single = prepared.open();
+  single.on('error', () => {});
+  single.destroy();
+  assert.throws(() => prepared.open());
+  report.checks.preparedConnectionSingleUse = true;
   report.stage = 'tampered-launch-input';
   const assertSameCallCurrent = await devserver.verifyForConnection(devReceipt);
   writeFileSync(source, code + '\n// tampered launch input\n');

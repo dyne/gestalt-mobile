@@ -108,10 +108,10 @@ IsolatedProjectProcess.prototype.verify = function (receipt) {
   }
 };
 const originalConnectionVerify = IsolatedProjectProcess.prototype.verifyForConnection;
-IsolatedProjectProcess.prototype.verifyForConnection = async function (receipt) {
+IsolatedProjectProcess.prototype.verifyForConnection = async function (receipt, cancellation) {
   const started = performance.now();
   try {
-    return await originalConnectionVerify.call(this, receipt);
+    return await originalConnectionVerify.call(this, receipt, cancellation);
   } finally {
     const metrics = projectProcesses.get(this);
     if (metrics) {

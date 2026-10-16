@@ -94,6 +94,10 @@ try {
       }
       const requestToken = url.searchParams.get('token');
       helperResponses.push({
+        elapsedMs: Date.now() - browserStarted,
+        method: ['GET', 'POST'].includes(response.request().method())
+          ? response.request().method()
+          : 'other',
         route: allowed.includes(tail) ? tail : 'other',
         status: response.status(),
         gatewayHtml: (response.headers()['content-type'] ?? '').startsWith('text/html'),
