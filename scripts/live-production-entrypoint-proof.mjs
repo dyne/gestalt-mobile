@@ -1699,6 +1699,23 @@ try {
     generationDirectory ??= readdirSync(controller)
       .filter((name) => name.startsWith('owner-'))
       .map((name) => join(controller, name))[0];
+    if (generationDirectory && existsSync(join(generationDirectory, 'inbox.sqlite'))) {
+      const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), { readOnly: true });
+      try {
+        report.editInboxAtFailure = {
+          events: db
+            .prepare('SELECT record FROM live_event_inbox')
+            .all()
+            .map((row) => {
+              const item = JSON.parse(row.record);
+              return { kind: item.kind, stage: item.stage, history: item.history };
+            }),
+          intents: db.prepare('SELECT phase, code FROM live_poll_intents').all(),
+        };
+      } finally {
+        db.close();
+      }
+    }
     report.preparationDiagnostics = readdirSync(controller)
       .filter((name) => /^preparation-failure-[a-f0-9-]+\.json$/.test(name))
       .map((name) => JSON.parse(readFileSync(join(controller, name), 'utf8')));

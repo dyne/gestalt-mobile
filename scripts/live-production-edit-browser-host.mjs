@@ -186,6 +186,16 @@ export async function productionEditBrowser(input) {
                 typeof item === 'boolean',
             ),
           ),
+          editRequests: value.failure.editRequests
+            ?.slice(-16)
+            .filter(
+              (item) =>
+                ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'].includes(
+                  item.kind,
+                ) &&
+                Number.isSafeInteger(item.elapsedMs) &&
+                item.elapsedMs >= 0,
+            ),
           helperResponses: value.failure.helperResponses?.slice(0, 24).map((item) => ({
             elapsedMs:
               Number.isSafeInteger(item.elapsedMs) && item.elapsedMs >= 0 ? item.elapsedMs : null,

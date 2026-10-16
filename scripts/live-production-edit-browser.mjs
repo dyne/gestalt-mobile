@@ -21,6 +21,8 @@ const resourcePending = {};
 const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
+const editRequests = [];
+const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
 let helperBridge;
 const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
@@ -65,6 +67,20 @@ try {
     });
   });
   context.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      new URL(request.url()).pathname === '/__gestalt_live/events'
+    ) {
+      try {
+        const kind = request.postDataJSON()?.type;
+        if (editKinds.includes(kind)) {
+          if (editRequests.length === 16) editRequests.shift();
+          editRequests.push({ kind, elapsedMs: Date.now() - browserStarted });
+        }
+      } catch {
+        // Request content is never logged, including malformed bodies and transport tokens.
+      }
+    }
     const type = request.resourceType();
     resourcePending[type] = (resourcePending[type] ?? 0) + 1;
   });
@@ -83,7 +99,7 @@ try {
     const resource = `${response.request().resourceType()}:${response.status()}`;
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
-    if (url.pathname.startsWith('/__gestalt_live/') && helperResponses.length < 24) {
+    if (url.pathname.startsWith('/__gestalt_live/')) {
       const allowed = ['live.js', 'events', 'status', 'lease', 'agent-target-claim'];
       const tail = url.pathname.slice('/__gestalt_live/'.length);
       let headers = {};
@@ -93,6 +109,7 @@ try {
         // A closed request can make diagnostics unavailable; never log raw headers/errors.
       }
       const requestToken = url.searchParams.get('token');
+      if (helperResponses.length === 24) helperResponses.shift();
       helperResponses.push({
         elapsedMs: Date.now() - browserStarted,
         method: ['GET', 'POST'].includes(response.request().method())
@@ -379,6 +396,7 @@ try {
         pageErrors,
         helperBridge,
         helperResponses,
+        editRequests,
       },
     }) + '\n',
   );
