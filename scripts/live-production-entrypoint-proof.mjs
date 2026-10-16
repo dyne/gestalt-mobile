@@ -50,6 +50,7 @@ import {
 import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
 import { observedBirthExited } from '../dist/server/server/platform/live-design/process-identity.js';
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
+import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
@@ -75,6 +76,36 @@ const report = {
           'Admission/model-tool probe does not claim a successful generated UI variant or acceptance.',
         ]),
   ],
+};
+// Fixture-only observation: retain the production verifier, inputs and outcome.
+// Record timing/codes only, never receipts, process environments or credentials.
+const projectProcesses = new Map();
+const originalProjectVerify = IsolatedProjectProcess.prototype.verify;
+IsolatedProjectProcess.prototype.verify = function (receipt) {
+  const started = performance.now();
+  const metrics = projectProcesses.get(this) ?? {
+    role: ['helper', 'devserver'].includes(receipt?.role) ? receipt.role : 'unknown',
+    count: 0,
+    totalMs: 0,
+    maxMs: 0,
+    failures: 0,
+  };
+  projectProcesses.set(this, metrics);
+  try {
+    return originalProjectVerify.call(this, receipt);
+  } catch (error) {
+    metrics.failures++;
+    throw error;
+  } finally {
+    const elapsed = Math.round(performance.now() - started);
+    metrics.count++;
+    metrics.totalMs += elapsed;
+    metrics.maxMs = Math.max(metrics.maxMs, elapsed);
+    report.projectVerification = [...projectProcesses].map(([owned, value]) => ({
+      ...value,
+      diagnostics: owned.diagnostics(),
+    }));
+  }
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
@@ -1402,6 +1433,7 @@ try {
           return;
         }
         if (next.statusCode !== 200) {
+          report.previewProbeDeniedStatus = next.statusCode;
           next.destroy();
           throw new Error('PREVIEW_PROBE_RECONNECT_DENIED');
         }
@@ -1410,7 +1442,12 @@ try {
         previous?.destroy();
         report.previewProbeReconnects = (report.previewProbeReconnects ?? 0) + 1;
       })()
-        .catch(() => {
+        .catch((error) => {
+          report.previewProbeErrorCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code ?? '')
+            ? error.code
+            : /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.message ?? '')
+              ? error.message
+              : 'UNCLASSIFIED';
           report.previewProbeFailure = 'PREVIEW_PROBE_RECONNECT_DENIED';
           stopPreviewProbe();
         })
