@@ -94,6 +94,7 @@ import { captureOwningRuntime, type OwningRuntimeCapture } from './owning-runtim
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
 import { observeOwningNative } from './owning-observation.js';
+import { currentOwningSession, recoveredSession } from './recovered-session.js';
 import {
   captureLiveInjection,
   verifyLiveInjectionRemoved,
@@ -123,6 +124,7 @@ type Generation = {
   injected: boolean;
   injectionArtifacts?: LiveInjectionArtifacts;
   retired: boolean;
+  replacementRestored?: boolean;
 };
 export type ProductionLiveBindings = {
   runtime: CodexSessionRuntime;
@@ -914,7 +916,24 @@ export class ProductionLiveController {
         run,
       );
       const g = this.generation(resumed);
-      this.requireBindings().saveSession(g.session);
+      if (g.replacementRestored) {
+        try {
+          const b = this.requireBindings();
+          b.saveSession(
+            recoveredSession(
+              currentOwningSession(g.session, b.sessions.find(resumed.relayId)),
+              g.session,
+            ),
+          );
+        } catch (error) {
+          const failed = this.owners.mutate(resumed, {
+            event: 'recover',
+            code: 'LIVE_RELAY_RECOVERY_UNVERIFIED',
+          });
+          await this.revoke(failed);
+          throw error;
+        }
+      }
       g.inbox = this.openInbox(resumed);
       g.loop = this.pollFactory!(g.cli!, g.inbox);
       void g.loop.run(resumed).catch(() => {});
@@ -1022,13 +1041,13 @@ export class ProductionLiveController {
       throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
     const b = this.requireBindings();
     const mode = b.runtime.liveOwnerIds().includes(run.relayId) ? 'survivor' : 'replacement';
-    let owningSession = previous.session;
+    let owningSession = currentOwningSession(previous.session, b.sessions.find(run.relayId));
     let capture: OwningRuntimeCapture | undefined;
     try {
       capture = await captureOwningRuntime({
         configuration: this.cfg,
         app: previous.app,
-        session: previous.session,
+        session: owningSession,
         election: this.election,
         generation: run.generation,
         authenticationDirectory: b.authenticationDirectory,
@@ -1046,7 +1065,7 @@ export class ProductionLiveController {
             threadConfig: previous.observation.threadConfig,
           });
           owningSession = await b.runtime.restoreRenewedLiveOwner(
-            previous.session,
+            owningSession,
             new Date().toISOString(),
             {
               modelConfig: previous.observation.threadConfig,
@@ -1108,6 +1127,7 @@ export class ProductionLiveController {
         run,
       );
       this.generations.get(run.relayId)!.run = run;
+      this.generations.get(run.relayId)!.replacementRestored = mode === 'replacement';
       return { targetIdentity: claim.targetIdentity };
     } catch (error) {
       if (capture) await this.revokeCapture(capture);

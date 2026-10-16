@@ -181,6 +181,11 @@ jobs:
           if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: Actual browser namespace and visibility preflight before Native
+        timeout-minutes: 2
+        env:
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
+        run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'

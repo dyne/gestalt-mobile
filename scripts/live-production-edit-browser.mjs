@@ -19,6 +19,8 @@ let stage = 'start';
 let browser;
 let browserProcess;
 let browserExit;
+const chromeStartupMarkers = new Set();
+let chromeStartupComplete = false;
 const networkErrors = [];
 const exchangeStatuses = [];
 const resourcePending = {};
@@ -52,7 +54,7 @@ try {
   assert.equal(await readlink('/proc/self/ns/net'), config.browserNetwork);
   assert.notEqual(config.browserNetwork, config.serverNetwork);
   checkpoint('ui-import');
-  const ui = await import(pathToFileURL(config.uiModule).href);
+  const ui = config.preflight ? undefined : await import(pathToFileURL(config.uiModule).href);
   checkpoint('browser-launch');
   // Playwright's normal launch forces page focus/visibility. Attach without
   // overrides to a fresh owned Chrome profile so backgrounding is real.
@@ -74,7 +76,7 @@ try {
       'about:blank',
     ],
     {
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: {
         ...process.env,
         HOME: config.browserHome,
@@ -86,6 +88,23 @@ try {
   );
   browserExit = new Promise((resolve) => browserProcess.once('close', resolve));
   browserProcess.on('error', () => {});
+  browserProcess.stderr.on('data', (chunk) => {
+    if (chromeStartupComplete) return;
+    const text = String(chunk);
+    for (const [marker, code] of [
+      ['No usable sandbox', 'SANDBOX_UNAVAILABLE'],
+      ['Failed to move to new namespace', 'NAMESPACE'],
+      ['SUID sandbox helper binary', 'SUID_SANDBOX'],
+      ['Running as root without', 'ROOT_SANDBOX'],
+      ['chrome_crashpad_handler', 'CRASHPAD'],
+      ['--database is required', 'CRASHPAD_DATABASE_REQUIRED'],
+      ['error while loading shared libraries', 'SHARED_LIBRARY'],
+      ['Permission denied', 'EACCES'],
+      ['Operation not permitted', 'EPERM'],
+      ['Missing X server', 'DISPLAY'],
+    ])
+      if (text.includes(marker)) chromeStartupMarkers.add(code);
+  });
   let debugPort;
   const launchDeadline = Date.now() + 30000;
   while (Date.now() < launchDeadline) {
@@ -109,6 +128,26 @@ try {
   });
   const context = browser.contexts()[0];
   assert.ok(context);
+  chromeStartupComplete = true;
+  if (config.preflight) {
+    const first = context.pages()[0] ?? (await context.newPage());
+    const foreground = await context.newPage();
+    await foreground.bringToFront();
+    await first.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
+      polling: 100,
+      timeout: 5000,
+    });
+    await writeFile(
+      config.resultFile,
+      JSON.stringify({
+        browserStartup: true,
+        actualHiddenTab: true,
+        separateBrowserNetwork: true,
+        noNativeOrProvider: true,
+      }),
+    );
+    throw new Error('BROWSER_PREFLIGHT_COMPLETE');
+  }
   context.on('page', (page) => {
     page.on('pageerror', (error) => {
       if (pageErrors.length < 8) pageErrors.push(safeBrowserFailure(error.message));
@@ -404,7 +443,10 @@ try {
   await command('background-begin');
   const foreground = await context.newPage();
   await foreground.bringToFront();
-  await preview.waitForFunction(() => document.visibilityState === 'hidden');
+  await preview.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
+    polling: 100,
+    timeout: 5000,
+  });
   const hiddenAt = Date.now();
   await new Promise((done) => setTimeout(done, 9200));
   assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
@@ -441,40 +483,49 @@ try {
   );
   checkpoint('complete');
 } catch (error) {
-  const callsite = /live-production-edit-browser\.mjs:(\d+):(\d+)/.exec(error?.stack ?? '');
-  process.stdout.write(
-    JSON.stringify({
-      failure: {
-        stage,
-        code: ['ERR_ASSERTION', 'ENOENT', 'EACCES', 'ERR_MODULE_NOT_FOUND'].includes(error?.code)
-          ? error.code
-          : error?.name === 'TimeoutError'
-            ? 'TIMEOUT'
-            : 'BROWSER_OPERATION_FAILED',
-        callsite: callsite ? { line: Number(callsite[1]), column: Number(callsite[2]) } : null,
-        diagnostic: safeBrowserFailure(error?.message),
-        markers: [
-          'Execution context was destroyed',
-          'Target page, context or browser has been closed',
-          'Navigation failed',
-          'interrupted',
-          'Timeout',
-          'TypeError',
-          'JSON',
-        ].filter((marker) => String(error?.message ?? '').includes(marker)),
-        networkErrors,
-        exchangeStatuses,
-        resourcePending,
-        resourceStatuses,
-        pageErrors,
-        helperBridge,
-        helperResponses,
-        editRequests,
-      },
-    }) + '\n',
-  );
-  process.stderr.write(`EDIT_BROWSER_FAILED_${stage.replaceAll('-', '_')}\n`);
-  process.exitCode = 1;
+  if (config.preflight && error?.message === 'BROWSER_PREFLIGHT_COMPLETE') {
+    checkpoint('preflight-complete');
+  } else {
+    const callsite = /live-production-edit-browser\.mjs:(\d+):(\d+)/.exec(error?.stack ?? '');
+    process.stdout.write(
+      JSON.stringify({
+        failure: {
+          stage,
+          code: ['ERR_ASSERTION', 'ENOENT', 'EACCES', 'ERR_MODULE_NOT_FOUND'].includes(error?.code)
+            ? error.code
+            : error?.name === 'TimeoutError'
+              ? 'TIMEOUT'
+              : 'BROWSER_OPERATION_FAILED',
+          callsite: callsite ? { line: Number(callsite[1]), column: Number(callsite[2]) } : null,
+          diagnostic: safeBrowserFailure(error?.message),
+          markers: [
+            'Execution context was destroyed',
+            'Target page, context or browser has been closed',
+            'Navigation failed',
+            'interrupted',
+            'Timeout',
+            'TypeError',
+            'JSON',
+          ].filter((marker) => String(error?.message ?? '').includes(marker)),
+          chromeStartup: {
+            exitCode: browserProcess?.exitCode,
+            signal: browserProcess?.signalCode,
+            markers: [...chromeStartupMarkers],
+          },
+          networkErrors,
+          exchangeStatuses,
+          resourcePending,
+          resourceStatuses,
+          pageErrors,
+          helperBridge,
+          helperResponses,
+          editRequests,
+        },
+      }) + '\n',
+    );
+    process.stderr.write(`EDIT_BROWSER_FAILED_${stage.replaceAll('-', '_')}\n`);
+    process.exitCode = 1;
+  }
 } finally {
   await browser?.close();
   if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {

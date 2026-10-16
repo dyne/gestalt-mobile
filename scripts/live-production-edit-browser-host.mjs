@@ -146,6 +146,28 @@ export async function productionEditBrowser(input) {
             Number.isSafeInteger(value.failure.callsite?.column)
               ? value.failure.callsite
               : null,
+          chromeStartup: {
+            exitCode: Number.isInteger(value.failure.chromeStartup?.exitCode)
+              ? value.failure.chromeStartup.exitCode
+              : null,
+            signal: /^SIG[A-Z0-9]{1,12}$/.test(value.failure.chromeStartup?.signal ?? '')
+              ? value.failure.chromeStartup.signal
+              : null,
+            markers: value.failure.chromeStartup?.markers?.filter((code) =>
+              [
+                'SANDBOX_UNAVAILABLE',
+                'NAMESPACE',
+                'SUID_SANDBOX',
+                'ROOT_SANDBOX',
+                'CRASHPAD',
+                'CRASHPAD_DATABASE_REQUIRED',
+                'SHARED_LIBRARY',
+                'EACCES',
+                'EPERM',
+                'DISPLAY',
+              ].includes(code),
+            ),
+          },
           markers: value.failure.markers?.filter((marker) =>
             [
               'Execution context was destroyed',
@@ -242,7 +264,10 @@ export async function productionEditBrowser(input) {
     assert.equal(commandFailure, false);
     assert.equal(exit, 0);
     const result = JSON.parse(readFileSync(input.browser.resultFile, 'utf8'));
-    assert.equal(result.trustedTls, true);
+    if (input.browser.preflight) {
+      assert.equal(result.browserStartup, true);
+      assert.equal(result.actualHiddenTab, true);
+    } else assert.equal(result.trustedTls, true);
     assert.equal(result.separateBrowserNetwork, true);
     input.report.editBrowser = result;
   } finally {
