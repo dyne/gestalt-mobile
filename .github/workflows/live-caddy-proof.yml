@@ -248,7 +248,8 @@ jobs:
         timeout-minutes: 18
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
-          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '0'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '1'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
           LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
           LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint

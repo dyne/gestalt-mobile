@@ -170,6 +170,32 @@ it('binds canonical exit to preview revocation and drain without releasing or re
   await expect(loop.run(recovery)).rejects.toThrow('LIVE_POLL_RESTART_REQUIRES_RECONCILIATION');
   expect(poll.next).toHaveBeenCalledOnce();
 });
+it('preserves the original renewal failure and retains ownership when abort revocation also fails', async () => {
+  const f = fixture();
+  const recovery = f.owners.mutate(f.run, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
+  const original = new Error('LIVE_ADMISSION_UNAVAILABLE');
+  const deps = {
+    ...f.resume,
+    resources: {
+      ...f.resume.resources,
+      prepare: async () => {
+        throw original;
+      },
+    },
+  };
+  f.resume.resources.revoke.mockImplementation(async () => {
+    if (f.owners.current(f.run.liveId)?.state === 'starting')
+      throw new Error('LIVE_GENERATION_STALE');
+  });
+  await expect(resumeLive(deps, recovery)).rejects.toBe(original);
+  expect(f.owners.current(f.run.liveId)).toMatchObject({
+    state: 'recoveryRequired',
+    failureCode: 'LIVE_RESUME_REVOCATION_UNVERIFIED',
+  });
+  expect(f.resume.resources.authorize).not.toHaveBeenCalled();
+  expect(f.restore).not.toHaveBeenCalled();
+  expect(() => f.owners.checkOrdinary('other', null)).toThrow();
+});
 it.each(['revoke', 'settle'] as const)(
   'joins pending recovery %s before advancing the lifecycle fence',
   async (delayed) => {

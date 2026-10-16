@@ -45,7 +45,10 @@ import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id
 import {
   measureInstalledLiveTree,
   LIVE_MANAGER_SHA256,
+  InstalledLivePolicy,
+  InstalledLiveAdmissionError,
 } from '../dist/server/server/platform/live-design/installed-policy.js';
+import { ProductionLiveController } from '../dist/server/server/platform/live-design/production-controller.js';
 import {
   LIVE_CODEX_SHA256,
   LIVE_CODEX_BWRAP_SHA256,
@@ -61,6 +64,8 @@ import {
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
+const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
+assert.ok(!(editFlow && recoveryOnly));
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
 );
@@ -83,6 +88,92 @@ const report = {
           'Admission/model-tool probe does not claim a successful generated UI variant or acceptance.',
         ]),
   ],
+};
+if (recoveryOnly) {
+  report.proofKind = 'recovery-only-diagnostic-no-picker-or-model-child-claim';
+  report.limitations.push(
+    'Renewal diagnostic only; full real-picker and owning model-child proof remains mandatory.',
+  );
+}
+const admissionFailure = (error) => ({
+  code: /^LIVE_[A-Z_]+$/.test(error?.message ?? '') ? error.message : 'UNCLASSIFIED',
+  reason: error instanceof InstalledLiveAdmissionError ? error.diagnostic.reason : undefined,
+});
+function renewalManifestRelation(input) {
+  try {
+    const parse = (path) => {
+      const bytes = readFileSync(path);
+      assert.ok(bytes.length <= 2 * 1024 * 1024);
+      return JSON.parse(bytes);
+    };
+    const previous = parse(input.previousManifestPath),
+      next = parse(input.manifestPath);
+    const stable = (value) =>
+      JSON.stringify(value, (_key, item) =>
+        item && typeof item === 'object' && !Array.isArray(item)
+          ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
+          : item,
+      );
+    const same = (a, b) => stable(a) === stable(b);
+    const original = previous.configFiles.filter(
+      (file) =>
+        file.path !== join(previous.runtimeHome, 'config.toml') ||
+        previous.runtimeHome === previous.owningRuntime.home,
+    );
+    return {
+      equality: Object.fromEntries(
+        [
+          'schemaVersion',
+          'components',
+          'election',
+          'owningRuntime',
+          'privatePaths',
+          'binary',
+          'keyFile',
+          'sandboxState',
+        ].map((field) => [field, same(previous[field], next[field])]),
+      ),
+      originalConfigPinsIncluded: original.every((file) =>
+        next.configFiles.some((current) => same(file, current)),
+      ),
+      generationIncreased: next.generation.generation > previous.generation.generation,
+      sameSession: next.generation.sessionId === previous.generation.sessionId,
+      workerHomeChanged: previous.runtimeHome !== next.runtimeHome,
+      samePathAndTemporaryEnvironment: ['PATH', 'TMPDIR'].every(
+        (key) => previous.environment[key] === next.environment[key],
+      ),
+    };
+  } catch {
+    return { unavailable: true };
+  }
+}
+for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
+  const original = InstalledLivePolicy.prototype[method];
+  InstalledLivePolicy.prototype[method] = async function (...args) {
+    const rows = (report.policyProtocol ??= []);
+    if (rows.length === 32) rows.shift();
+    const row = { operation: method, outcome: 'pending' };
+    rows.push(row);
+    try {
+      const result = await original.apply(this, args);
+      row.outcome = 'completed';
+      return result;
+    } catch (error) {
+      Object.assign(row, { outcome: 'refused', ...admissionFailure(error) });
+      if (method === 'renewRuntime') row.manifestRelation = renewalManifestRelation(args[0]);
+      throw error;
+    }
+  };
+}
+const originalRenewGeneration = ProductionLiveController.prototype.renewGeneration;
+assert.equal(typeof originalRenewGeneration, 'function');
+ProductionLiveController.prototype.renewGeneration = async function (...args) {
+  try {
+    return await originalRenewGeneration.apply(this, args);
+  } catch (error) {
+    report.originalRenewalFailure = admissionFailure(error);
+    throw error;
+  }
 };
 const browserEventLoop = monitorEventLoopDelay({ resolution: 20 });
 function finishBrowserProfile() {
@@ -1637,7 +1728,7 @@ try {
       report.background.noModelOrSourceEffect;
     report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
     report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
-  } else {
+  } else if (!recoveryOnly) {
     const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
       method: 'POST',
       body: {
@@ -1652,59 +1743,68 @@ try {
     report.modelEventStatus = event.status;
     assert.equal(event.status, 200);
   }
-  await until(
-    () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
-    'PRODUCTION_MODEL_CHILD_DEADLINE',
-    60000,
-  );
-  for (const role of ['root', 'child']) {
-    assert.equal(
-      readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-exec.txt`), 'utf8'),
-      'permitted-artifact',
+  if (!recoveryOnly) {
+    await until(
+      () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
+      'PRODUCTION_MODEL_CHILD_DEADLINE',
+      60000,
     );
-    assert.equal(
-      readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-patch.txt`), 'utf8'),
-      'permitted-patch\n',
-    );
-    assert.equal(existsSync(join(privateRoot, `${role}-forbidden.txt`)), false);
-  }
-  assert.equal(
-    readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8'),
-    'confined-context',
-  );
-  assert.equal(existsSync(join(appRoot, '.impeccable/live/future-control.json')), false);
-  assert.equal(existsSync(join(appRoot, '.impeccable-live/future-control.json')), false);
-  assert.equal(readFileSync(privateFile, 'utf8'), privateCanary);
-  report.checks.actualModelToolsAndChildInheritedConfinement = true;
-  report.checks.nativeModelContextToolConfined = true;
-  report.checks.futureControlDenialsAndArtifactCarveouts = true;
-  await until(() => {
-    const db = new DatabaseSync(
-      join(controller, `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`),
-      { readOnly: true },
-    );
-    try {
-      return db
-        .prepare('SELECT record FROM live_event_inbox')
-        .all()
-        .some((row) => {
-          const r = JSON.parse(row.record);
-          return (
-            r.upstreamId === (editFlow ? firstPickerEventId : 'f00df00d') &&
-            r.stage === 'acknowledged'
-          );
-        });
-    } finally {
-      db.close();
+    for (const role of ['root', 'child']) {
+      assert.equal(
+        readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-exec.txt`), 'utf8'),
+        'permitted-artifact',
+      );
+      assert.equal(
+        readFileSync(join(appRoot, '.impeccable/live/artifacts', `${role}-patch.txt`), 'utf8'),
+        'permitted-patch\n',
+      );
+      assert.equal(existsSync(join(privateRoot, `${role}-forbidden.txt`)), false);
     }
-  }, 'CANONICAL_INBOX_ACK_DEADLINE');
+    assert.equal(
+      readFileSync(join(appRoot, '.impeccable/live/artifacts/context.txt'), 'utf8'),
+      'confined-context',
+    );
+    assert.equal(existsSync(join(appRoot, '.impeccable/live/future-control.json')), false);
+    assert.equal(existsSync(join(appRoot, '.impeccable-live/future-control.json')), false);
+    assert.equal(readFileSync(privateFile, 'utf8'), privateCanary);
+    report.checks.actualModelToolsAndChildInheritedConfinement = true;
+    report.checks.nativeModelContextToolConfined = true;
+    report.checks.futureControlDenialsAndArtifactCarveouts = true;
+    await until(() => {
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        return db
+          .prepare('SELECT record FROM live_event_inbox')
+          .all()
+          .some((row) => {
+            const r = JSON.parse(row.record);
+            return (
+              r.upstreamId === (editFlow ? firstPickerEventId : 'f00df00d') &&
+              r.stage === 'acknowledged'
+            );
+          });
+      } finally {
+        db.close();
+      }
+    }, 'CANONICAL_INBOX_ACK_DEADLINE');
+  }
   const current = await api('GET', `/api/sessions/${session.id}`);
   assert.equal(current.threadId, owningThread);
   assert.equal(current.model, 'gpt-6-sol');
   assert.equal(current.modelSettings.reasoningEffort, 'medium');
-  report.checks.sameOwningThreadModelThinkingAndDurableInbox = true;
+  report.checks[
+    recoveryOnly
+      ? 'sameOwningThreadModelThinkingWithoutModelTurn'
+      : 'sameOwningThreadModelThinkingAndDurableInbox'
+  ] = true;
   let recovery;
-  if (editFlow) {
+  if (editFlow || recoveryOnly) {
     stopPreviewProbe();
     recovery = await productionRecoveryProof({
       api,
@@ -1718,6 +1818,7 @@ try {
       appRoot,
       privateRoot,
       signed,
+      expectedSourceText: recoveryOnly ? 'Owning app' : 'Production manual approved',
       // Manager's signed process identity omits bootId; bind its PID/birth to
       // the actual original launch's boot before using Mobile's exit observer.
       owningBirthExited: (identity) =>

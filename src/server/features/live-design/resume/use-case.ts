@@ -66,11 +66,19 @@ export async function resumeLive(deps: LiveResumeDependencies, fence: LiveFence)
   } catch (error) {
     // Revocation is attempted even if authorization/route activation partially succeeded.
     deps.owners.assert(run);
+    let revocationFailed = false;
     try {
       await deps.resources.revoke(run);
+    } catch {
+      revocationFailed = true;
     } finally {
       deps.owners.assert(run);
-      deps.owners.mutate(run, { event: 'recover', code: 'LIVE_RESUME_RECOVERY_REQUIRED' });
+      deps.owners.mutate(run, {
+        event: 'recover',
+        code: revocationFailed
+          ? 'LIVE_RESUME_REVOCATION_UNVERIFIED'
+          : 'LIVE_RESUME_RECOVERY_REQUIRED',
+      });
     }
     throw error;
   }

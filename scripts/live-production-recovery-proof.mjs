@@ -316,7 +316,7 @@ export async function productionRecoveryProof(input) {
     assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
     assert.equal(existsSync(join(appRoot, '.impeccable/live/server.json')), false);
     const stoppedSource = source();
-    assert.ok(stoppedSource.includes('Production manual approved'));
+    assert.ok(stoppedSource.includes(input.expectedSourceText ?? 'Production manual approved'));
     assert.ok(!stoppedSource.includes('__IMPECCABLE_LIVE'));
     assert.equal(
       (await remote('/').then(
