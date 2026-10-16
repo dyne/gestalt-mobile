@@ -150,7 +150,22 @@ try {
   ]);
   const mobile = await context.newPage();
   checkpoint('mobile-navigation');
-  const response = await mobile.goto(config.mobileOrigin + '/');
+  let response;
+  try {
+    response = await mobile.goto(config.mobileOrigin + '/');
+  } catch (error) {
+    if (!String(error?.message ?? '').startsWith('page.goto: net::ERR_NETWORK_CHANGED'))
+      throw error;
+    // The namespace notifier can settle after Chromium starts. Repeat only
+    // this initial read-only GET; no grant, exchange or edit has happened yet.
+    await mobile.waitForFunction(
+      () => document.documentURI.startsWith('chrome-error://') && document.readyState !== 'loading',
+      null,
+      { timeout: 5000 },
+    );
+    checkpoint('mobile-get-after-network-change');
+    response = await mobile.goto(config.mobileOrigin + '/');
+  }
   assert.ok(response.status() < 500);
   assert.equal(await mobile.evaluate(() => isSecureContext), true);
   checkpoint('launch-grant');
