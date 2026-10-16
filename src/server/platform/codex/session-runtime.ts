@@ -303,6 +303,16 @@ export class CodexSessionRuntime {
     }
   >();
   private readonly capturedLiveSessions = new Set<string>();
+  private readonly renewedLiveCaptures = new Map<string, string>();
+  private readonly nativeEffects = new WeakMap<AppServer, number>();
+  private readonly quietLiveOwners = new Map<
+    string,
+    { resource: SessionResource; revision: number }
+  >();
+  private readonly exitedQuietOwners = new Map<
+    string,
+    { resource: SessionResource; revision: number }
+  >();
   liveOwnerIds(): readonly string[] {
     return [...this.sessions.keys()];
   }
@@ -345,6 +355,7 @@ export class CodexSessionRuntime {
     launch: LiveProcessIdentity;
     launchEnvironment: Readonly<{ tmpdir: string; home: string; codexHome: string }> | null;
     configuration: unknown;
+    account: unknown;
     thread: unknown;
     mcp: unknown;
     threadSelection: Readonly<Record<string, unknown>> | null;
@@ -434,6 +445,7 @@ export class CodexSessionRuntime {
       threadId: session.threadId,
       includeTurns: false,
     });
+    const account = await bounded('account/read', { refreshToken: false });
     if (
       this.sessions.get(session.id) !== resource ||
       resource.threadId !== session.threadId ||
@@ -444,6 +456,7 @@ export class CodexSessionRuntime {
       launch: before,
       launchEnvironment: resource.process.observeLiveEnvironment?.() ?? null,
       configuration,
+      account,
       thread,
       mcp: { data: servers, nextCursor: null },
       threadSelection: this.nativeThreadSelections.has(resource.process)
@@ -692,6 +705,11 @@ export class CodexSessionRuntime {
     };
   }> {
     const observed = await this.verifiedQuiescence(session, () => {});
+    if (observed.resource.liveCaptureId)
+      this.quietLiveOwners.set(session.id, {
+        resource: observed.resource,
+        revision: this.nativeEffects.get(observed.resource.process) ?? 0,
+      });
     return {
       launch: observed.birth,
       threadIds: observed.threads,
@@ -1039,7 +1057,38 @@ export class CodexSessionRuntime {
     assertCurrent: () => void,
   ): Promise<readonly string[]> {
     const owned = this.sessions.get(session.id);
-    if (!owned || !session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+    if (!owned) {
+      const exited = this.exitedQuietOwners.get(session.id);
+      if (
+        !exited ||
+        !session.threadId ||
+        session.activeTurnId ||
+        exited.resource.threadId !== session.threadId ||
+        !exited.resource.process.waitForExit ||
+        exited.revision !== this.nativeEffects.get(exited.resource.process)
+      )
+        throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+      assertCurrent();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          exited.resource.process.waitForExit(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT')), 5000);
+          }),
+        ]);
+        assertCurrent();
+        if (
+          this.sessions.has(session.id) ||
+          exited.revision !== this.nativeEffects.get(exited.resource.process)
+        )
+          throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+        return [];
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    if (!session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
     assertCurrent();
     const deadline = Date.now() + 5000;
     const bounded = async <T>(work: Promise<T>): Promise<T> => {
@@ -1852,6 +1901,52 @@ export class CodexSessionRuntime {
       throw new Error('LIVE_SAME_THREAD_RESUME_UNAVAILABLE');
     return result.session;
   }
+  /** A replacement is admissible only through the controller's fresh Manager
+   * renewal launch. Ordinary restore never consumes or manufactures this ID. */
+  async restoreRenewedLiveOwner(
+    session: RelaySessionSnapshot,
+    now: string,
+    configuration: {
+      modelConfig: Readonly<Record<string, unknown>>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    },
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+      captureId: string;
+    },
+  ): Promise<RelaySessionSnapshot> {
+    const run = authority.owners.assert(authority.fence);
+    if (
+      run.relayId !== session.id ||
+      run.rootThreadId !== session.threadId ||
+      run.state !== 'starting' ||
+      run.phase !== 'resume:prepare:intent' ||
+      this.sessions.has(session.id) ||
+      !this.capturedLiveSessions.has(session.id) ||
+      this.renewedLiveCaptures.has(session.id) ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+        authority.captureId,
+      )
+    )
+      throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+    this.liveDispatch?.writer(session);
+    this.liveConfigurations.set(session.id, structuredClone(configuration));
+    this.renewedLiveCaptures.set(session.id, authority.captureId);
+    try {
+      const restored = await this.restoreWithOutcome(session, now, true);
+      authority.owners.assert(authority.fence);
+      if (
+        restored.replacementCreated ||
+        restored.session.threadId !== session.threadId ||
+        this.sessions.get(session.id)?.liveCaptureId !== authority.captureId
+      )
+        throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+      return restored.session;
+    } finally {
+      this.renewedLiveCaptures.delete(session.id);
+    }
+  }
 
   /** Controller-only handoff retaining the original captured app-server birth.
    * Native cold-resumes an idle unsubscribed thread when explicit overrides are
@@ -1994,19 +2089,65 @@ export class CodexSessionRuntime {
   ): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const resource = await this.createResource(session);
+    const request = async (method: string, params: unknown): Promise<unknown> => {
+      if (!this.renewedLiveCaptures.has(session.id))
+        return resource.process.rpc.request(method, params);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          resource.process.rpc.request(method, params),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LIVE_RENEWAL_DISCOVERY_TIMEOUT')), 5000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
     try {
-      await resource.process.rpc.request('initialize', {
+      await request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
+      if (this.renewedLiveCaptures.has(session.id)) {
+        const before = resource.process.observeLiveLaunch?.();
+        const config = await request('config/read', {
+          includeLayers: true,
+          cwd: session.workspacePath,
+        });
+        const account = await request('account/read', { refreshToken: false });
+        const models = decodeCodexModels(await request('model/list', {}));
+        const skills = decodeCodexSkills(
+          await request('skills/list', { cwds: [session.workspacePath], forceReload: true }),
+          session.workspacePath,
+        );
+        if (
+          !before ||
+          !session.model ||
+          !models.includes(session.model) ||
+          skills.errors.length ||
+          resource.skillsConfig?.some(
+            (selected) =>
+              selected.enabled && !skills.skills.some((actual) => actual.path === selected.path),
+          ) ||
+          !isDeepStrictEqual(before, resource.process.observeLiveLaunch?.()) ||
+          !isDeepStrictEqual(
+            config,
+            await request('config/read', { includeLayers: true, cwd: session.workspacePath }),
+          ) ||
+          !isDeepStrictEqual(account, await request('account/read', { refreshToken: false }))
+        )
+          throw new Error('LIVE_RENEWAL_DISCOVERY_UNVERIFIED');
+      }
       await this.prepareRetrieval(resource, session);
       this.beforeThreadStart?.(session, resource.modelConfig);
       let result: RestoreSessionResult;
       let missingRollout: unknown;
       try {
-        const resumed = await resource.process.rpc.request('thread/resume', {
+        const resumed = await request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
+          ...(session.model ? { model: session.model } : {}),
           ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
           ...(session.executionPolicy?.approvalPolicy
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
@@ -2217,6 +2358,8 @@ export class CodexSessionRuntime {
               : session;
           };
           if (effect) policy.writer(actor(), kind);
+          if (effect || !reads.has(method))
+            this.nativeEffects.set(guarded, (this.nativeEffects.get(guarded) ?? 0) + 1);
           let result: unknown;
           try {
             result = await process.rpc.request(method, params);
@@ -2245,7 +2388,11 @@ export class CodexSessionRuntime {
           if (effect) policy.writer(actor(), kind);
           return result;
         },
-        onNotification: (listener) => process.rpc.onNotification(listener),
+        onNotification: (listener) =>
+          process.rpc.onNotification((notification) => {
+            this.nativeEffects.set(guarded, (this.nativeEffects.get(guarded) ?? 0) + 1);
+            listener(notification);
+          }),
         onServerRequest: (listener) =>
           process.rpc.onServerRequest(async (request) => {
             const observation = isOrgPlanHealthCall(request);
@@ -2259,6 +2406,7 @@ export class CodexSessionRuntime {
           : {}),
       },
     };
+    this.nativeEffects.set(guarded, 0);
     return guarded;
   }
 
@@ -2312,6 +2460,9 @@ export class CodexSessionRuntime {
       const admittedInput = this.beforeOwnerLaunch
         ? await this.beforeOwnerLaunch(session, launchInput, structuredClone(modelConfig))
         : launchInput;
+      const renewedCapture = this.renewedLiveCaptures.get(session.id);
+      if (renewedCapture && admittedInput.liveCaptureId !== renewedCapture)
+        throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
       signal?.throwIfAborted();
       const process = this.launchGuarded(session, admittedInput);
       const resource = new SessionResource(
@@ -2327,12 +2478,22 @@ export class CodexSessionRuntime {
         },
       );
       resource.liveCaptureId = admittedInput.liveCaptureId;
+      this.quietLiveOwners.delete(session.id);
+      this.exitedQuietOwners.delete(session.id);
       if (resource.liveCaptureId) this.capturedLiveSessions.add(session.id);
       resource.readinessDeadline = deadline;
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =
         process.onExit?.(() => {
+          const quiet = this.quietLiveOwners.get(session.id);
+          if (
+            resource.liveCaptureId &&
+            quiet?.resource === resource &&
+            quiet.revision === this.nativeEffects.get(resource.process) &&
+            !resource.pendingRequests.size
+          )
+            this.exitedQuietOwners.set(session.id, quiet);
           if (resource.dispose() && resource.exitedUnexpectedly) this.onProcessExit?.(session.id);
         }) ?? (() => {});
       resource.attach([exitUnsubscribe]);

@@ -20,6 +20,7 @@ import {
   renameSync,
   readdirSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:http';
@@ -37,6 +38,7 @@ import {
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
+import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -907,9 +909,9 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: '663799058b4c0146a74906061d0b334ae7c0d62c',
-    agentsAcceptedCommit: 'f7a142bbe6bce2e587c53be299226dea1d28cf20',
-    agentsProofSnapshot: '8fcb931eeb57c6eaba6cf1c55c4483973c521ebb',
+    agents: '414a89284efbb050188ca1802563b92667c50994',
+    agentsAcceptedCommit: '2c88bc0694d8386bf3f1716fddce3082b7e6486f',
+    agentsProofSnapshot: '129d33bc6d6c58d280d9bcf5155fab6ed9b6e0bd',
     manager: LIVE_MANAGER_SHA256,
   };
   report.installationStage = 'vendor-copy';
@@ -1201,7 +1203,7 @@ try {
       providerCredentialEnvironment: [],
       project: { bwrap, node, worker, helper },
       components: {
-        manager: '4ea4e0c92b156b6979eff04dbd9cdc9862674ea5',
+        manager: '19114b2389501c0a511b8a77ace4161b0dae2f0e',
         mobile: report.provenance.tree,
         agents: report.provenance.agents,
       },
@@ -1408,6 +1410,12 @@ try {
         source.kind === 'instruction-candidate' && source.path === join(appRoot, 'AGENTS.md'),
     ),
   );
+  assert.equal(sealed.inventory.observation.sessionFlags.model, session.model);
+  assert.equal(
+    sealed.inventory.observation.sessionFlags.reasoningEffort,
+    session.modelSettings.reasoningEffort,
+  );
+  assert.match(sealed.inventory.observation.accountDigest, /^[a-f0-9]{64}$/);
   report.sourceInventory = {
     schemaVersion: sealed.inventory.schemaVersion,
     signatureVerified: true,
@@ -1521,12 +1529,19 @@ try {
     assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
     report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
     let manualSource;
+    let backgroundSourceDigest, backgroundRequestCount;
     const acknowledged = async (kind) =>
       until(
         () => {
-          const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), {
-            readOnly: true,
-          });
+          const db = new DatabaseSync(
+            join(
+              controller,
+              `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+            ),
+            {
+              readOnly: true,
+            },
+          );
           try {
             return db
               .prepare('SELECT record FROM live_event_inbox')
@@ -1588,12 +1603,24 @@ try {
         } else if (command === 'discarded') {
           await acknowledged('discard');
           assert.equal(source(), manualSource);
+        } else if (command === 'background-begin') {
+          backgroundSourceDigest = hash(source());
+          backgroundRequestCount = report.provider.requestCount;
+        } else if (command === 'background-finished') {
+          assert.equal(hash(source()), backgroundSourceDigest);
+          assert.equal(report.provider.requestCount, backgroundRequestCount);
+          const status = await api('GET', `/api/sessions/${session.id}/live`);
+          assert.ok(['active', 'recoveryRequired'].includes(status.state));
+          report.background = { state: status.state, noModelOrSourceEffect: true };
         } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
       },
     });
     finishBrowserProfile();
     assert.equal(report.previewProbeFailure, undefined);
     report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
+    report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
+      report.editBrowser.actualTabHiddenBeyondEightSeconds &&
+      report.background.noModelOrSourceEffect;
     report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
     report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
   } else {
@@ -1638,7 +1665,10 @@ try {
   report.checks.nativeModelContextToolConfined = true;
   report.checks.futureControlDenialsAndArtifactCarveouts = true;
   await until(() => {
-    const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), { readOnly: true });
+    const db = new DatabaseSync(
+      join(controller, `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`),
+      { readOnly: true },
+    );
     try {
       return db
         .prepare('SELECT record FROM live_event_inbox')
@@ -1659,6 +1689,50 @@ try {
   assert.equal(current.model, 'gpt-6-sol');
   assert.equal(current.modelSettings.reasoningEffort, 'medium');
   report.checks.sameOwningThreadModelThinkingAndDurableInbox = true;
+  let recovery;
+  if (editFlow) {
+    stopPreviewProbe();
+    recovery = await productionRecoveryProof({
+      api,
+      inject: (method, url, payload) => mobile.inject({ method, url, payload, headers }),
+      remote,
+      until,
+      report,
+      session: current,
+      started,
+      controller,
+      appRoot,
+      privateRoot,
+      signed,
+      owningBirthExited: observedBirthExited,
+      ownedProcesses: () => [...projectProcesses.keys()].map((owned) => owned.diagnostics()),
+      authenticate: async (run) => {
+        const verifier = previewSecrets.token();
+        const grant = await api('POST', `/api/sessions/${session.id}/live/launch-grants`, {
+          liveId: run.liveId,
+          generation: run.generation,
+          codeChallenge: previewSecrets.challenge(verifier),
+          codeChallengeMethod: 'S256',
+        });
+        const exchanged = await remote('/__gestalt_live/exchange', {
+          method: 'POST',
+          body: { grantId: grant.grantId, grant: grant.grant, codeVerifier: verifier },
+        });
+        assert.equal(exchanged.status, 201);
+        previewCookie = exchanged.headers['set-cookie']
+          .map((cookie) => cookie.split(';')[0])
+          .join('; ');
+        const token = JSON.parse(
+          readFileSync(join(appRoot, '.impeccable/live/server.json'), 'utf8'),
+        ).token;
+        const opened = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
+          streamResponse: true,
+        });
+        assert.equal(opened.statusCode, 200);
+        return opened;
+      },
+    });
+  }
   report.stage = 'revoke-and-production-shutdown';
   stopPreviewProbe();
   await mobile.close();
@@ -1666,7 +1740,7 @@ try {
   assert.equal(existsSync(join(controller, 'live-policy.key')), true);
   const fence = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
   assert.equal(fence.status, 'revoked');
-  assert.equal(fence.captureId, captureId);
+  assert.equal(fence.captureId, recovery?.latestCaptureId ?? captureId);
   assert.equal(observedBirthExited(baselineBirth), true);
   report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
   if (editFlow) {
@@ -1698,8 +1772,22 @@ try {
     generationDirectory ??= readdirSync(controller)
       .filter((name) => name.startsWith('owner-'))
       .map((name) => join(controller, name))[0];
-    if (generationDirectory && existsSync(join(generationDirectory, 'inbox.sqlite'))) {
-      const db = new DatabaseSync(join(generationDirectory, 'inbox.sqlite'), { readOnly: true });
+    if (
+      generationDirectory &&
+      existsSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+      )
+    ) {
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
       try {
         report.editInboxAtFailure = {
           events: db

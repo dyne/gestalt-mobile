@@ -159,7 +159,7 @@ export class InstalledLiveAdmissionError extends Error {
   }
 }
 export const LIVE_MANAGER_SHA256 =
-  'ea653b0802fbafae8baac7c194e15baf03d770abb74848bb892e81e739743d82';
+  '17dcb8d57591c00032c23f0af3de67e83da4abe4c21e0c632bd48bd6fa5c281e';
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const pin = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const packagePin = z
@@ -274,7 +274,7 @@ export class InstalledLivePolicy {
    * operations never accept a command, environment, or project-provided argv. */
   private async runtimeCommand(
     manifestPath: string,
-    action: 'capture-runtime' | 'seal-runtime' | 'revoke-runtime',
+    action: 'capture-runtime' | 'renew-runtime' | 'seal-runtime' | 'revoke-runtime',
     captureId: string,
     tail: readonly string[] = [],
   ): Promise<Record<string, unknown>> {
@@ -302,6 +302,30 @@ export class InstalledLivePolicy {
   }
   captureRuntime(manifestPath: string, captureId: string): Promise<Record<string, unknown>> {
     return this.runtimeCommand(manifestPath, 'capture-runtime', captureId);
+  }
+  renewRuntime(input: {
+    manifestPath: string;
+    captureId: string;
+    previousManifestPath: string;
+    previousCaptureId: string;
+    mode: 'survivor' | 'replacement';
+  }): Promise<Record<string, unknown>> {
+    canonical(input.previousManifestPath);
+    z.uuid({ version: 'v4' }).parse(input.previousCaptureId);
+    z.enum(['survivor', 'replacement']).parse(input.mode);
+    if (
+      input.manifestPath === input.previousManifestPath ||
+      input.captureId === input.previousCaptureId
+    )
+      throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+    return this.runtimeCommand(input.manifestPath, 'renew-runtime', input.captureId, [
+      '--previous-manifest',
+      input.previousManifestPath,
+      '--previous-capture-id',
+      input.previousCaptureId,
+      '--mode',
+      input.mode,
+    ]);
   }
   sealRuntime(
     manifestPath: string,

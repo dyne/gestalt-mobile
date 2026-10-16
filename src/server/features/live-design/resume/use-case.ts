@@ -16,6 +16,8 @@ export type LiveResumeDependencies = {
     reconcileRoutes(run: LiveRun): Promise<void>;
     /** Actual all-process isolation, tree quiescence, helper and current auth/target proof. */
     verify(run: LiveRun): Promise<void>;
+    /** Fresh signed admission/resources; returns the actual new target receipt. */
+    prepare?(run: LiveRun): Promise<{ targetIdentity: string }>;
     authorize(run: LiveRun): Promise<void>;
     expose(run: LiveRun): Promise<void>;
   };
@@ -43,6 +45,16 @@ export async function resumeLive(deps: LiveResumeDependencies, fence: LiveFence)
       run = deps.owners.mutate(run, { event: 'phase', phase: `resume:${name}:ack` });
     }
     run = deps.owners.mutate(run, { event: 'resume' });
+    if (deps.resources.prepare) {
+      run = deps.owners.mutate(run, { event: 'phase', phase: 'resume:prepare:intent' });
+      const prepared = await deps.resources.prepare(run);
+      deps.owners.assert(run);
+      run = deps.owners.mutate(run, {
+        event: 'bindTarget',
+        targetIdentity: prepared.targetIdentity,
+      });
+      run = deps.owners.mutate(run, { event: 'phase', phase: 'resume:prepare:ack' });
+    }
     for (const name of ['authorize', 'verify', 'expose'] as const) {
       const phase = name === 'expose' ? 'route' : `resume:${name}`;
       run = deps.owners.mutate(run, { event: 'phase', phase: `${phase}:intent` });

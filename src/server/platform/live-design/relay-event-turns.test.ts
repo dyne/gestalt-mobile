@@ -341,6 +341,7 @@ it('unresponsive native settlement returns a bounded recovery error and never re
           remove: async () => {},
           cleanup: async () => {},
           verifyClean: async () => {},
+          restore: async () => {},
         },
       },
       f.run,

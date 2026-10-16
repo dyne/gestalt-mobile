@@ -1900,7 +1900,9 @@ async function composeRelayAppOwned(
   }
   if (options.liveController?.bindPollLoop && createLivePollEvents && previewConnections) {
     const create = createLivePollEvents;
-    const revocations = previewConnections;
+    const revocations = productionLive
+      ? { revoke: productionLive.revokePollGeneration }
+      : previewConnections;
     const owners = options.liveController.owners;
     options.liveController.bindPollLoop(
       (cli, inbox) => new LivePollLoop({ owners, poll: create(cli, inbox), revocations }),

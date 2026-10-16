@@ -5,6 +5,7 @@
  */
 
 // Deterministic provider, actual native model-tool/child paths. No genuine-provider claim.
+import { observeOwningNative } from '../dist/server/server/platform/live-design/owning-observation.js';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -111,6 +112,7 @@ const report = {
         'src/server/platform/live-design/native-contract.ts',
         'src/server/platform/live-design/owning-runtime-capture.ts',
         'src/server/platform/live-design/owning-source-inventory.ts',
+        'src/server/platform/live-design/owning-observation.ts',
       ].map((path) => [path, digest(readFileSync(path))]),
     ),
   },
@@ -216,7 +218,7 @@ async function prepareManagedInputs(env) {
     cwd: agentsRoot,
     encoding: 'utf8',
   }).trim();
-  assert.equal(agentsTree, '663799058b4c0146a74906061d0b334ae7c0d62c');
+  assert.equal(agentsTree, '414a89284efbb050188ca1802563b92667c50994');
   const packages = ['context-mode', 'gestalt'].map((name) => {
     const target = join(installation, name);
     cpSync(join(agentsRoot, 'plugins', name), target, {
@@ -271,7 +273,7 @@ async function prepareManagedInputs(env) {
     providerCredentialEnvironment: [],
     privateDirectory: controller,
     components: {
-      manager: '4ea4e0c92b156b6979eff04dbd9cdc9862674ea5',
+      manager: '19114b2389501c0a511b8a77ace4161b0dae2f0e',
       mobile: report.provenance.mobileTree,
       agents: agentsTree,
     },
@@ -699,6 +701,11 @@ try {
   const workerConfig = readLiveConfigFile(join(capture.runtimeHome, 'config.toml'));
   const sources = resolveLiveSourceInventory({
     captured: capture.captured,
+    observation: observeOwningNative({
+      configuration: admitted.configuration,
+      selection: admitted.threadSelection,
+      account: admitted.account,
+    }),
     configuration: admitted.configuration,
     threadConfig: admitted.threadConfig,
     selection: {

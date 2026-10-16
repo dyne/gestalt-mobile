@@ -9,7 +9,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readLiveConfigFile, resolveLiveConfigFiles } from './effective-config.js';
-import { captureLiveSources, resolveLiveSourceInventory } from './owning-source-inventory.js';
+import {
+  captureLiveSources,
+  liveSourceDigest,
+  resolveLiveSourceInventory,
+} from './owning-source-inventory.js';
 import { observeLiveProcess } from './process-identity.js';
 
 // The host's unrelated Native metadata/system config is not part of this
@@ -75,6 +79,28 @@ function fixture() {
 }
 
 describe('original Native source inventory', () => {
+  it('persists generation-one typed flags and account identity without broad internal configuration', () => {
+    const { input, app, loaded } = fixture();
+    const observation = {
+      sessionFlags: {
+        model: 'actual-model',
+        modelProvider: 'actual-provider',
+        cwd: app,
+        approvalPolicy: 'never' as const,
+        activePermissionProfile: { id: 'workspace-git', extends: null },
+        sandbox: { type: 'readOnly' as const, networkAccess: false },
+        reasoningEffort: 'medium',
+        instructionSources: [loaded],
+      },
+      accountDigest: 'b'.repeat(64),
+    };
+    const result = resolveLiveSourceInventory({ ...input, observation });
+    expect(result.observation).toEqual(observation);
+    expect(result.sessionFlagsDigest).toBe(liveSourceDigest(observation.sessionFlags));
+    expect(result.sessionFlagsDigest).not.toBe(liveSourceDigest(input.selection));
+    observation.sessionFlags.model = 'later';
+    expect(result.observation!.sessionFlags.model).toBe('actual-model');
+  });
   it('separates actual config, directory, absent and loaded/shadowed instruction sources', () => {
     const { input, loaded, shadowed, project, config } = fixture();
     const result = resolveLiveSourceInventory(input);

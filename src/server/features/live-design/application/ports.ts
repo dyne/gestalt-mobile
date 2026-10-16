@@ -16,7 +16,9 @@ export type LiveAudience = {
 
 /** Read from authoritative private ownership state, never project metadata or request URLs. */
 export interface LiveOwnershipReader {
-  read(relayId: string): (LiveAudience & { active: boolean }) | null;
+  read(
+    relayId: string,
+  ): (LiveAudience & { active: boolean; state?: import('./ownership.js').LiveState }) | null;
 }
 export type LaunchGrant = LiveAudience & {
   grantId: string;
@@ -89,5 +91,14 @@ export type PreviewGrantDependencies = {
     start(
       request: import('../start/use-case.js').LiveStartRequest,
     ): Promise<import('./ownership.js').LiveRun>;
+    stop?(request: LiveLifecycleRequest): Promise<import('./ownership.js').LiveRun>;
+    resume?(request: LiveLifecycleRequest): Promise<import('./ownership.js').LiveRun>;
   };
+};
+export type LiveLifecycleRequest = {
+  relayId: string;
+  liveId: string;
+  generation: number;
+  authSessionHash: string;
+  deviceId: string;
 };

@@ -392,6 +392,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       const run = this.assert(fence);
       const next: LiveRun = {
         ...run,
+        targetIdentity:
+          mutation.event === 'bindTarget' ? mutation.targetIdentity : run.targetIdentity,
         priorControls: mutation.event === 'captureControls' ? mutation.intent : run.priorControls,
         controlsRestored: mutation.event === 'controlsRestored' ? true : run.controlsRestored,
         state: nextLiveState(run, mutation),
@@ -400,7 +402,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         phase:
           mutation.event === 'phase'
             ? mutation.phase
-            : mutation.event === 'captureControls' || mutation.event === 'controlsRestored'
+            : mutation.event === 'captureControls' ||
+                mutation.event === 'controlsRestored' ||
+                mutation.event === 'bindTarget'
               ? run.phase
               : mutation.event === 'recover' || mutation.event === 'failed'
                 ? run.phase

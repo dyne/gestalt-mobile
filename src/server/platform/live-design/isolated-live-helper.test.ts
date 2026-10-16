@@ -40,7 +40,9 @@ function fixture() {
   const current = structuredClone(run);
   const process = {
     verify: vi.fn(),
-    helperCommand: vi.fn(async () => ({ type: 'timeout' })),
+    helperCommand: vi.fn<(receipt: unknown, args: readonly string[]) => Promise<unknown>>(
+      async () => ({ type: 'timeout' }),
+    ),
     cancelHelperCommand: vi.fn(async () => {}),
   };
   const input = {
@@ -116,4 +118,41 @@ it('a failed source-verified RPC retains intent and cannot be blindly repeated',
   await expect(f.cli.poll()).rejects.toThrow('LIVE_HELPER_RECOVERY_REQUIRED');
   expect(f.process.helperCommand).toHaveBeenCalledOnce();
   expect(() => new IsolatedLiveHelper(f.input)).toThrow('LIVE_HELPER_RECOVERY_REQUIRED');
+});
+
+it('allows a newer exact cleanup fence to reconcile, while old poll and reply remain revoked', async () => {
+  const f = fixture();
+  f.current.generation = 2;
+  f.current.state = 'stopping';
+  f.process.helperCommand.mockImplementation(async (_receipt, args) =>
+    args[0] === 'live-status'
+      ? { activeSessions: [], liveServer: { pendingEvents: [] } }
+      : { active: false },
+  );
+  await f.cli.reconcile(f.current);
+  await expect(f.cli.poll()).rejects.toThrow('LIVE_HELPER_GENERATION_STALE');
+  await expect(f.cli.reply({ id: 'old-event', status: 'done' })).rejects.toThrow(
+    'LIVE_HELPER_GENERATION_STALE',
+  );
+  expect(f.process.helperCommand.mock.calls.map((call) => call[1])).toEqual([
+    ['live-status'],
+    ['live-resume'],
+  ]);
+  f.current.rootThreadId = 'successor';
+  await expect(f.cli.reconcile(f.current)).rejects.toThrow('LIVE_HELPER_GENERATION_STALE');
+});
+it('retains recovery for a pending actual helper checkpoint without replay or completion', async () => {
+  const f = fixture();
+  f.current.generation = 2;
+  f.current.state = 'stopping';
+  f.process.helperCommand.mockImplementation(async (_receipt, args) =>
+    args[0] === 'live-status'
+      ? { activeSessions: [{ phase: 'accept_requested' }], liveServer: { pendingEvents: [] } }
+      : { active: true },
+  );
+  await expect(f.cli.reconcile(f.current)).rejects.toThrow('LIVE_HELPER_RECOVERY_REQUIRED');
+  expect(f.process.helperCommand.mock.calls.map((call) => call[1])).toEqual([
+    ['live-status'],
+    ['live-resume'],
+  ]);
 });

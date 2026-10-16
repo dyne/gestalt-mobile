@@ -15,6 +15,7 @@ import {
   type LiveConfigFile,
 } from './effective-config.js';
 import type { LiveProcessIdentity } from './process-identity.js';
+import type { OwningNativeObservation } from './owning-observation.js';
 
 const systemSources = [
   '/etc/codex/config.toml',
@@ -146,6 +147,7 @@ export function resolveLiveSourceInventory(input: {
   configuration: unknown;
   threadConfig: Readonly<Record<string, unknown>>;
   selection: Readonly<Record<string, unknown>>;
+  observation?: OwningNativeObservation;
   runtime: LiveProcessIdentity;
   policyDigest: string;
   workerConfig: LiveConfigFile;
@@ -266,8 +268,9 @@ export function resolveLiveSourceInventory(input: {
         .regex(/^[a-f0-9]{64}$/)
         .parse(input.policyDigest),
       effectiveConfigDigest: liveSourceDigest(observed.config),
-      sessionFlagsDigest: liveSourceDigest(input.selection),
+      sessionFlagsDigest: liveSourceDigest(input.observation?.sessionFlags ?? input.selection),
       sources,
+      ...(input.observation ? { observation: structuredClone(input.observation) } : {}),
     };
   } catch {
     throw new Error('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');

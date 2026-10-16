@@ -4,9 +4,16 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -19,8 +26,14 @@ import type {
   LiveStartClaim,
   LiveFence,
 } from '../../features/live-design/application/ownership.js';
-import type { PreviewGrantDependencies } from '../../features/live-design/application/ports.js';
+import type {
+  LiveLifecycleRequest,
+  PreviewGrantDependencies,
+  PreviewRevocationScope,
+} from '../../features/live-design/application/ports.js';
 import { startLive, type LiveStartRequest } from '../../features/live-design/start/use-case.js';
+import { stopLive } from '../../features/live-design/stop/use-case.js';
+import { resumeLive } from '../../features/live-design/resume/use-case.js';
 import type { LivePollLoop } from '../../features/live-design/application/poll-loop.js';
 import type {
   CanonicalLivePoll,
@@ -80,6 +93,12 @@ import { SqliteLiveEventInbox } from './sqlite-event-inbox.js';
 import { captureOwningRuntime, type OwningRuntimeCapture } from './owning-runtime-capture.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
+import { observeOwningNative } from './owning-observation.js';
+import {
+  captureLiveInjection,
+  verifyLiveInjectionRemoved,
+  type LiveInjectionArtifacts,
+} from './injection-cleanup.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 type App = ProductionLiveConfiguration['apps'][number];
@@ -102,6 +121,7 @@ type Generation = {
   inbox?: SqliteLiveEventInbox;
   resumed: boolean;
   injected: boolean;
+  injectionArtifacts?: LiveInjectionArtifacts;
   retired: boolean;
 };
 export type ProductionLiveBindings = {
@@ -130,6 +150,14 @@ export class ProductionLiveController {
   private readonly captures = new Map<string, OwningRuntimeCapture>();
   private readonly revokedCaptures = new Set<string>();
   private readonly pendingLaunches = new Map<string, OwningRuntimeCapture>();
+  private readonly renewalLaunches = new Map<
+    string,
+    {
+      capture: OwningRuntimeCapture;
+      fence: LiveFence;
+      threadConfig: Readonly<Record<string, unknown>>;
+    }
+  >();
   private readonly capturedProcesses = new Map<string, ReturnType<typeof launchCodexAppServer>>();
   private readonly preparedOwners = new Map<string, PreparedProductionPolicy>();
   private readonly originalObservations = new Map<string, Observation>();
@@ -158,7 +186,26 @@ export class ProductionLiveController {
     this.controls = controls;
   }
   bindPollLoop(create: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => LivePollLoop): void {
-    this.pollFactory = create;
+    this.pollFactory = (cli, inbox) =>
+      create(
+        {
+          status: () => cli.status(),
+          poll: async () => {
+            const g = [...this.generations.values()].find((candidate) => candidate.cli === cli);
+            const run = g?.run && this.owners.current(g.run.liveId);
+            if (!g || !run || run.state !== 'active' || run.generation !== g.plannedGeneration)
+              throw new Error('LIVE_GENERATION_STALE');
+            await this.requireBindings().runtime.inspectLiveQuiescence(g.session);
+            this.owners.assert(run);
+            return cli.poll();
+          },
+          reply: (reply) => cli.reply(reply),
+          complete: (id, discarded) => cli.complete(id, discarded),
+          settle: (run) =>
+            cli.settle ? cli.settle(run) : Promise.reject(new Error('LIVE_SETTLEMENT_UNAVAILABLE')),
+        },
+        inbox,
+      );
   }
   bindProduction(
     bindings: ProductionLiveBindings,
@@ -324,6 +371,21 @@ export class ProductionLiveController {
     if (selected && (selected !== 'workspace-git' || app.owningPolicy.profileId !== selected))
       return input;
     const previous = this.captures.get(session.id);
+    const renewed = this.renewalLaunches.get(session.id);
+    if (renewed) {
+      const run = this.owners.assert(renewed.fence);
+      if (
+        run.state !== 'starting' ||
+        run.phase !== 'resume:prepare:intent' ||
+        run.rootThreadId !== session.threadId ||
+        previous !== renewed.capture ||
+        !isDeepStrictEqual(modelConfig, renewed.threadConfig) ||
+        !this.pendingLaunches.has(renewed.capture.captureId)
+      )
+        throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+      this.renewalLaunches.delete(session.id);
+      return { ...input, liveCaptureId: renewed.capture.captureId };
+    }
     if (previous) {
       if (this.revokedCaptures.has(previous.captureId)) return input; // Normal restored chat has no Live admission.
       throw new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE');
@@ -636,6 +698,11 @@ export class ProductionLiveController {
         }
       };
       try {
+        const previous = this.generations.get(session.id);
+        if (previous?.retired && this.revokedCaptures.has(previous.policy.capture.captureId)) {
+          lifecycleStage = 'renew-stopped-owner';
+          await this.renewStoppedOwner(session, app, previous);
+        }
         const run = await startLive(
           {
             owners: this.owners,
@@ -672,9 +739,7 @@ export class ProductionLiveController {
         );
         const generation = this.generation(run);
         generation.run = run;
-        generation.inbox = new SqliteLiveEventInbox(
-          join(generation.policy.directory, 'inbox.sqlite'),
-        );
+        generation.inbox = this.openInbox(run);
         generation.loop = this.pollFactory!(generation.cli!, generation.inbox);
         // The sole durable poll owner is the production composition's existing dispatcher.
         void generation.loop.run(run).catch(() => {});
@@ -696,6 +761,361 @@ export class ProductionLiveController {
         this.preflight.delete(session.id);
       }
     });
+  }
+  private lifecycleRun(request: LiveLifecycleRequest): LiveRun {
+    const run = this.owners.current(request.liveId);
+    if (!run || run.relayId !== request.relayId || run.generation !== request.generation)
+      throw new Error('LIVE_GENERATION_STALE');
+    if (
+      run.authSessionHash !== request.authSessionHash ||
+      run.deviceId !== request.deviceId ||
+      !this.preview!.authentication.authorized(
+        request.authSessionHash,
+        request.deviceId,
+        this.preview!.now().toISOString(),
+      )
+    )
+      throw new Error('LIVE_AUTH_UNAVAILABLE');
+    return this.owners.assert(run);
+  }
+  private async renewStoppedOwner(
+    session: RelaySessionSnapshot,
+    app: App,
+    previous: Generation,
+  ): Promise<void> {
+    const b = this.requireBindings();
+    if (!previous.run || this.owners.current(previous.run.liveId)?.state !== 'idle')
+      throw new Error('LIVE_CLEANUP_REQUIRED');
+    this.owners.assertRestorable(this.owners.current(previous.run.liveId)!);
+    b.guard.reacquirePreparation(session);
+    const generation = this.owners.reserveAdmissionGeneration(session.id, app.appRoot);
+    let capture: OwningRuntimeCapture | undefined;
+    try {
+      await b.guard.livePreparation(session, async () => {
+        await b.runtime.inspectLiveQuiescence(session);
+        const observation = await b.runtime.inspectLiveAdmission(session);
+        const original = observeOwningNative({
+          configuration: previous.observation.configuration,
+          selection: previous.observation.threadSelection,
+          account: previous.observation.account,
+        });
+        if (
+          !isDeepStrictEqual(
+            original,
+            observeOwningNative({
+              configuration: observation.configuration,
+              selection: observation.threadSelection,
+              account: observation.account,
+            }),
+          )
+        )
+          throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+        capture = await captureOwningRuntime({
+          configuration: this.cfg,
+          app,
+          session,
+          election: this.election,
+          generation,
+          authenticationDirectory: b.authenticationDirectory,
+          threadConfig: observation.threadConfig,
+          renewal: { previous: previous.policy.capture, mode: 'survivor' },
+        });
+        this.captures.set(session.id, capture);
+        const native = this.capturedProcesses.get(previous.policy.capture.captureId);
+        if (!native) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+        this.capturedProcesses.set(capture.captureId, native);
+        const prepared = await prepareProductionPolicy({
+          configuration: this.cfg,
+          source: this.source,
+          session,
+          observation,
+          app,
+          directory: capture.directory,
+          authenticationDirectory: b.authenticationDirectory,
+          capture,
+          reconfigure: (modelConfig) =>
+            b.runtime.reconfigureLiveOwner(session, {
+              modelConfig,
+              skillsConfig: observation.skillsConfig,
+            }),
+          observe: () => b.runtime.inspectLiveAdmission(session),
+        });
+        this.preparedOwners.set(session.id, prepared);
+        this.originalObservations.set(session.id, observation);
+      });
+    } catch (error) {
+      if (capture) await this.revokeCapture(capture);
+      this.failedPreparations.add(session.id);
+      throw error;
+    }
+  }
+  stop(request: LiveLifecycleRequest): Promise<LiveRun> {
+    return this.serialize(async () => {
+      const run = this.lifecycleRun(request);
+      return stopLive(
+        {
+          owners: this.owners,
+          controls: this.controls!,
+          resources: {
+            revoke: (current) => this.revoke(current),
+            settle: async (current) => {
+              const g = this.cleanupGeneration(current);
+              await g.loop?.drain(current);
+              await this.settleOwningProcess(current);
+              await this.reconcileInbox(current);
+            },
+            remove: (current) => this.remove(current),
+            cleanup: (current) => this.cleanup(current, true),
+            verifyClean: (current) => this.verifyClean(current),
+            restore: (current) => this.restoreOriginal(current),
+          },
+        },
+        run,
+      );
+    });
+  }
+  resume(request: LiveLifecycleRequest): Promise<LiveRun> {
+    return this.serialize(async () => {
+      const run = this.lifecycleRun(request);
+      const resumed = await resumeLive(
+        {
+          owners: this.owners,
+          resources: {
+            revoke: (current) => this.revoke(current),
+            settle: async (current) => {
+              const g = this.cleanupGeneration(current);
+              await g.loop?.drain(current);
+              await this.settleOwningProcess(current);
+            },
+            reconcileJournal: async (current) => {
+              await this.reconcileInbox(current);
+            },
+            reconcileRoutes: async (current) => {
+              await this.remove(current);
+              await this.cleanup(current, true);
+            },
+            verify: async (current) => {
+              if (current.state === 'starting') await this.verifyGeneration(current);
+              else {
+                await this.verifyClean(current);
+                if (this.requireBindings().runtime.liveOwnerIds().includes(current.relayId))
+                  await this.restoreOriginal(current);
+                else await this.settleOwningProcess(current);
+              }
+            },
+            prepare: (current) => this.renewGeneration(current),
+            authorize: async (current) => {
+              await this.prepareOwner(current);
+              await this.authorize(current);
+            },
+            expose: (current) => this.expose(current),
+          },
+        },
+        run,
+      );
+      const g = this.generation(resumed);
+      this.requireBindings().saveSession(g.session);
+      g.inbox = this.openInbox(resumed);
+      g.loop = this.pollFactory!(g.cli!, g.inbox);
+      void g.loop.run(resumed).catch(() => {});
+      this.failedPreparations.delete(resumed.relayId);
+      return resumed;
+    });
+  }
+  private async verifyClean(run: LiveRun): Promise<void> {
+    const g = this.cleanupGeneration(run);
+    if (
+      !g.retired ||
+      g.injected ||
+      g.gateway ||
+      g.registrationId ||
+      [g.helper, g.devserver].some((child) => {
+        const proof = child.diagnostics();
+        return !proof.namespaceExited || !proof.pipeDescriptorsClosed;
+      }) ||
+      existsSync(join(g.app.appRoot, '.impeccable/live/inject-journal.json')) ||
+      existsSync(join(g.app.appRoot, '.impeccable/live/server.json'))
+    )
+      throw new Error('LIVE_CLEANUP_REQUIRED');
+    const route = this.origins.read(g.app.appRoot);
+    const actual = await new UnixCaddyAdmin(this.cfg.caddy.socketPath).request(
+      'GET',
+      '/config/apps/http/servers',
+    );
+    this.owners.assert(run);
+    if (
+      !route ||
+      route.desired !== null ||
+      route.applied !== null ||
+      route.registrationId !== null ||
+      actual.status !== 200 ||
+      !actual.body ||
+      typeof actual.body !== 'object' ||
+      Array.isArray(actual.body) ||
+      Object.hasOwn(actual.body, route.serverId)
+    )
+      throw new Error('LIVE_CLEANUP_REQUIRED');
+    revalidateLiveApp(run.app);
+  }
+  private openInbox(run: LiveRun): SqliteLiveEventInbox {
+    const app = createHash('sha256').update(`${run.app.device}:${run.app.inode}`).digest('hex');
+    return new SqliteLiveEventInbox(join(this.cfg.privateDirectory, `inbox-${app}.sqlite`));
+  }
+  private async reconcileInbox(run: LiveRun): Promise<void> {
+    const g = this.cleanupGeneration(run);
+    if (!g.cli || !g.inbox) throw new Error('LIVE_INBOX_RECONCILIATION_REQUIRED');
+    const digest = await g.cli.reconcile(run);
+    this.owners.assert(run);
+    // Empty helper status cannot settle an ambiguous dispatched source edit.
+    // Keep its intent/history locked for explicit supported reconciliation.
+    const records = g.inbox.records(g.plannedGeneration);
+    if (records.some((record) => record.stage !== 'acknowledged' && !record.reconciliation))
+      throw new Error('LIVE_INBOX_RECONCILIATION_REQUIRED');
+    const prior = records.find((record) => record.reconciliation)?.reconciliation;
+    if (prior && records.some((record) => !record.reconciliation))
+      throw new Error('LIVE_INBOX_RECONCILIATION_REQUIRED');
+    g.inbox.reconcile(run, {
+      disposition: 'completed',
+      proofDigest: prior?.proofDigest ?? digest,
+      generation: g.plannedGeneration,
+    });
+  }
+  private async settleOwningProcess(run: LiveRun): Promise<void> {
+    const g = this.cleanupGeneration(run),
+      b = this.requireBindings();
+    if (b.runtime.liveOwnerIds().includes(run.relayId)) {
+      await b.runtime.inspectLiveQuiescence(g.session);
+      return;
+    }
+    const native = this.capturedProcesses.get(g.policy.capture.captureId);
+    if (!native || b.sessions.find(run.relayId)?.activeTurnId)
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    const session = b.sessions.find(run.relayId);
+    if (!session || session.threadId !== run.rootThreadId)
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    await b.runtime.settleLiveWork(session, () => {
+      this.owners.assert(run);
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        native.waitForExit(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')), 10000);
+        }),
+      ]);
+      this.owners.assert(run);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  private async renewGeneration(run: LiveRun): Promise<{ targetIdentity: string }> {
+    this.owners.assert(run);
+    const previous = this.generations.get(run.relayId);
+    if (
+      !previous ||
+      !previous.retired ||
+      !this.revokedCaptures.has(previous.policy.capture.captureId) ||
+      previous.plannedGeneration >= run.generation ||
+      run.phase !== 'resume:prepare:intent'
+    )
+      throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+    const b = this.requireBindings();
+    const mode = b.runtime.liveOwnerIds().includes(run.relayId) ? 'survivor' : 'replacement';
+    let owningSession = previous.session;
+    let capture: OwningRuntimeCapture | undefined;
+    try {
+      capture = await captureOwningRuntime({
+        configuration: this.cfg,
+        app: previous.app,
+        session: previous.session,
+        election: this.election,
+        generation: run.generation,
+        authenticationDirectory: b.authenticationDirectory,
+        threadConfig: previous.observation.threadConfig,
+        renewal: { previous: previous.policy.capture, mode },
+      });
+      this.owners.assert(run);
+      this.captures.set(run.relayId, capture);
+      await b.guard.liveMaintenance(run, async () => {
+        if (mode === 'replacement') {
+          this.pendingLaunches.set(capture!.captureId, capture!);
+          this.renewalLaunches.set(run.relayId, {
+            capture: capture!,
+            fence: run,
+            threadConfig: previous.observation.threadConfig,
+          });
+          owningSession = await b.runtime.restoreRenewedLiveOwner(
+            previous.session,
+            new Date().toISOString(),
+            {
+              modelConfig: previous.observation.threadConfig,
+              skillsConfig: previous.observation.skillsConfig,
+            },
+            { owners: this.owners, fence: run, captureId: capture!.captureId },
+          );
+        } else {
+          const native = this.capturedProcesses.get(previous.policy.capture.captureId);
+          if (!native) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+          this.capturedProcesses.set(capture!.captureId, native);
+        }
+        const observation = await b.runtime.inspectLiveAdmission(owningSession);
+        if (
+          !isDeepStrictEqual(
+            observeOwningNative({
+              configuration: observation.configuration,
+              selection: observation.threadSelection,
+              account: observation.account,
+            }),
+            observeOwningNative({
+              configuration: previous.observation.configuration,
+              selection: previous.observation.threadSelection,
+              account: previous.observation.account,
+            }),
+          )
+        )
+          throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+        const prepared = await prepareProductionPolicy({
+          configuration: this.cfg,
+          source: this.source,
+          session: owningSession,
+          observation,
+          app: previous.app,
+          directory: capture!.directory,
+          authenticationDirectory: b.authenticationDirectory,
+          capture: capture!,
+          reconfigure: (modelConfig) =>
+            b.runtime.reconfigureLiveOwner(owningSession, {
+              modelConfig,
+              skillsConfig: observation.skillsConfig,
+            }),
+          observe: () => b.runtime.inspectLiveAdmission(owningSession),
+        });
+        this.preparedOwners.set(run.relayId, prepared);
+        this.originalObservations.set(run.relayId, observation);
+      });
+      const claim = await this.register(
+        owningSession,
+        previous.app,
+        {
+          relayId: run.relayId,
+          appId: run.appId,
+          targetId: run.targetId,
+          operationId: run.operationId,
+          authSessionHash: run.authSessionHash,
+          deviceId: run.deviceId,
+        },
+        run,
+      );
+      this.generations.get(run.relayId)!.run = run;
+      return { targetIdentity: claim.targetIdentity };
+    } catch (error) {
+      if (capture) await this.revokeCapture(capture);
+      throw error;
+    } finally {
+      this.renewalLaunches.delete(run.relayId);
+      if (capture) this.pendingLaunches.delete(capture.captureId);
+    }
   }
   private recordStartFailure(
     sessionId: string,
@@ -744,11 +1164,13 @@ export class ProductionLiveController {
     session: RelaySessionSnapshot,
     app: App,
     request: LiveStartRequest,
+    recovery?: LiveRun,
   ): Promise<LiveStartClaim> {
     const b = this.requireBindings();
     await b.settleAuxiliary();
     this.verifyHost();
-    this.owners.checkOrdinary(session.id, this.scopes(session));
+    if (recovery) this.owners.assert(recovery);
+    else this.owners.checkOrdinary(session.id, this.scopes(session));
     const current = await b.runtime.inspectLiveAdmission(session);
     const idle = await b.runtime.inspectLiveQuiescence(session);
     const capture = this.captures.get(session.id);
@@ -771,7 +1193,7 @@ export class ProductionLiveController {
     let stage = 'original-config';
     try {
       let helperReceipt!: IsolatedProjectReceipt, devReceipt!: IsolatedProjectReceipt;
-      await b.guard.livePreparation(session, async () => {
+      const prepare = async () => {
         // Recheck actual original sources before changing its idle thread configuration.
         resolveLiveConfigFiles({
           configuration: observation.configuration,
@@ -875,8 +1297,10 @@ export class ProductionLiveController {
         stage = 'model-output-layout';
         assertProductionSourceObservation(policy, await b.runtime.inspectLiveAdmission(session));
         prepareHelperOutputRoots(app.appRoot, capture.projectState);
-      });
-      b.guard.settle(session.id, idle.outstanding);
+      };
+      if (recovery) await b.guard.liveMaintenance(recovery, prepare);
+      else await b.guard.livePreparation(session, prepare);
+      if (!recovery) b.guard.settle(session.id, idle.outstanding);
       const claim: LiveStartClaim = {
         ...request,
         provider: 'codex',
@@ -952,12 +1376,13 @@ export class ProductionLiveController {
       cleanupFailed ||= closed.some((result) => result.status === 'rejected');
       if (!cleanupFailed) {
         try {
-          await b.guard.livePreparation(session, () =>
+          const restore = () =>
             b.runtime.reconfigureLiveOwner(session, {
               modelConfig: observation.threadConfig,
               skillsConfig: observation.skillsConfig,
-            }),
-          );
+            });
+          if (recovery) await b.guard.liveMaintenance(recovery, restore);
+          else await b.guard.livePreparation(session, restore);
         } catch {
           cleanupFailed = true;
         }
@@ -980,6 +1405,27 @@ export class ProductionLiveController {
     )
       throw new Error('LIVE_GENERATION_STALE');
     g.run = run;
+    return g;
+  }
+  /** Recovery may retire an earlier generation's exact resources, but cannot
+   * use them for admission, model turns, polling, authorization or exposure. */
+  private cleanupGeneration(run: LiveRun): Generation {
+    this.owners.assert(run);
+    const g = this.generations.get(run.relayId);
+    if (
+      !g ||
+      !g.run ||
+      g.run.liveId !== run.liveId ||
+      g.run.controllerEpoch !== run.controllerEpoch ||
+      g.plannedGeneration > run.generation ||
+      g.claim.rootThreadId !== run.rootThreadId ||
+      g.claim.targetIdentity !== run.targetIdentity ||
+      g.claim.app.device !== run.app.device ||
+      g.claim.app.inode !== run.app.inode ||
+      (g.plannedGeneration !== run.generation &&
+        !['stopping', 'recoveryRequired'].includes(run.state))
+    )
+      throw new Error('LIVE_GENERATION_STALE');
     return g;
   }
   private async verifyProjectResources(g: Generation): Promise<void> {
@@ -1126,6 +1572,12 @@ export class ProductionLiveController {
     const injected = (await g.cli.inject()) as { ok?: boolean };
     if (injected?.ok !== true) throw new Error('LIVE_HELPER_NOT_READY');
     g.injected = true;
+    g.injectionArtifacts = captureLiveInjection(g.app.appRoot);
+    writeFileSync(
+      join(g.policy.directory, 'injection-artifacts.json'),
+      JSON.stringify(g.injectionArtifacts) + '\n',
+      { mode: 0o600, flag: 'wx' },
+    );
     await g.cli.status();
     assertProductionSourceObservation(g.policy, await b.runtime.inspectLiveAdmission(g.session));
     prepareHelperOutputRoots(g.app.appRoot, g.policy.capture.projectState);
@@ -1205,8 +1657,21 @@ export class ProductionLiveController {
     );
     this.revokedCaptures.add(capture.captureId);
   }
+  /** Poll failure/lease exit must revoke Native admission too, before drain. */
+  revokePollGeneration = async (scope: PreviewRevocationScope): Promise<void> => {
+    if (!('liveId' in scope) || !('throughGeneration' in scope))
+      throw new Error('LIVE_GENERATION_STALE');
+    const run = this.owners.current(scope.liveId);
+    if (
+      !run ||
+      scope.throughGeneration !== run.generation ||
+      !['stopping', 'recoveryRequired'].includes(run.state)
+    )
+      throw new Error('LIVE_GENERATION_STALE');
+    await this.revoke(run);
+  };
   private async revoke(run: LiveRun): Promise<void> {
-    const g = this.generation(run);
+    const g = this.cleanupGeneration(run);
     const results = await Promise.allSettled([
       this.revokeCapture(g.policy.capture),
       this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation }),
@@ -1215,7 +1680,7 @@ export class ProductionLiveController {
       throw new Error('LIVE_CLEANUP_REQUIRED');
   }
   private async remove(run: LiveRun): Promise<void> {
-    const g = this.generation(run);
+    const g = this.cleanupGeneration(run);
     await g.gateway?.close();
     g.gateway = undefined;
     await new CaddyRoutes(
@@ -1226,8 +1691,8 @@ export class ProductionLiveController {
     if (g.registrationId) this.targets.unregister(g.registrationId);
     g.registrationId = undefined;
   }
-  private async cleanup(run: LiveRun): Promise<void> {
-    const g = this.generation(run);
+  private async cleanup(run: LiveRun, preserveOwner = false): Promise<void> {
+    const g = this.cleanupGeneration(run);
     let failed = false;
     try {
       await this.revoke(run);
@@ -1241,7 +1706,7 @@ export class ProductionLiveController {
         failed = true;
       }
     }
-    if (g.resumed) {
+    if (g.resumed && !preserveOwner) {
       try {
         await this.requireBindings().runtime.abortLiveOwner(g.session, {
           owners: this.owners,
@@ -1254,8 +1719,8 @@ export class ProductionLiveController {
     }
     if (g.injected) {
       try {
-        const removed = (await g.cli!.inject(true)) as { ok?: boolean };
-        if (removed?.ok !== true) throw new Error();
+        await g.cli!.removeInjection(run);
+        verifyLiveInjectionRemoved(g.app.appRoot, g.injectionArtifacts ?? []);
         g.injected = false;
       } catch {
         failed = true;
@@ -1270,7 +1735,7 @@ export class ProductionLiveController {
         processesClosed = false;
       }
     }
-    if (!g.resumed && processesClosed) {
+    if ((!g.resumed || preserveOwner) && processesClosed) {
       try {
         g.cli?.forgetExitedServerRecord();
       } catch {
@@ -1282,15 +1747,47 @@ export class ProductionLiveController {
     if (failed || g.injected || !g.retired) throw new Error('LIVE_CLEANUP_REQUIRED');
   }
   private async restoreOriginal(run: LiveRun): Promise<void> {
-    const g = this.generation(run),
+    const g = this.cleanupGeneration(run),
       b = this.requireBindings();
-    if (!g.retired || g.resumed || g.injected) throw new Error('LIVE_CLEANUP_REQUIRED');
+    if (!g.retired || g.injected) throw new Error('LIVE_CLEANUP_REQUIRED');
     await b.guard.liveMaintenance(run, async () => {
-      const restored = await b.runtime.restoreLiveOwner(g.session, new Date().toISOString(), {
+      const configuration = {
         modelConfig: g.observation.threadConfig,
         skillsConfig: g.observation.skillsConfig,
-      });
-      b.saveSession(restored);
+      };
+      if (b.runtime.liveOwnerIds().includes(g.session.id)) {
+        await b.runtime.reconfigureLiveOwner(g.session, configuration);
+        const current = await b.runtime.inspectLiveAdmission(g.session);
+        if (
+          !isDeepStrictEqual(current.launch, g.observation.launch) ||
+          !isDeepStrictEqual(current.configuration, g.observation.configuration) ||
+          !isDeepStrictEqual(current.threadConfig, g.observation.threadConfig) ||
+          !isDeepStrictEqual(current.skillsConfig, g.observation.skillsConfig) ||
+          !isDeepStrictEqual(
+            observeOwningNative({
+              configuration: current.configuration,
+              selection: current.threadSelection,
+              account: current.account,
+            }),
+            observeOwningNative({
+              configuration: g.observation.configuration,
+              selection: g.observation.threadSelection,
+              account: g.observation.account,
+            }),
+          ) ||
+          !Array.isArray((current.mcp as { data?: unknown[] }).data) ||
+          (current.mcp as { data: unknown[] }).data.length
+        )
+          throw new Error('LIVE_ORIGINAL_CONFIGURATION_UNVERIFIED');
+        g.resumed = false;
+      } else {
+        const restored = await b.runtime.restoreLiveOwner(
+          g.session,
+          new Date().toISOString(),
+          configuration,
+        );
+        b.saveSession(restored);
+      }
     });
   }
   private async unregister(claim: LiveStartClaim): Promise<void> {
@@ -1349,6 +1846,10 @@ export class ProductionLiveController {
                 run.rootThreadId !== g.session.threadId
               )
                 throw new Error('LIVE_GENERATION_STALE');
+              if (run.state === 'idle' && run.controlsRestored && g.retired) {
+                await this.verifyClean(run);
+                continue;
+              }
               if (run.generation !== g.plannedGeneration) {
                 // Recovery has already revoked the old generation. Never reuse
                 // its CLI authority, but still retire these exact owned lifetimes.

@@ -55,6 +55,7 @@ function fixture() {
     remove: action('remove'),
     cleanup: action('cleanup'),
     verifyClean: action('verifyClean'),
+    restore: action('restoreOwner'),
   };
   const restore = vi.fn();
   const deps = {
@@ -237,13 +238,20 @@ it('a late old-controller loop cannot revoke or drain a successor', async () => 
 it('revokes and closes streams before settling work/routes/journal, then restores once', async () => {
   const f = fixture();
   const stopped = await stopLive(f.deps, f.run);
-  expect(f.events).toEqual(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean']);
+  expect(f.events).toEqual([
+    'revoke',
+    'settle',
+    'remove',
+    'cleanup',
+    'verifyClean',
+    'restoreOwner',
+  ]);
   expect(stopped.state).toBe('idle');
   await stopLive(f.deps, stopped);
   expect(f.restore).toHaveBeenCalledOnce();
-  expect(f.events).toHaveLength(5);
+  expect(f.events).toHaveLength(6);
 });
-it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const)(
+it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean', 'restore'] as const)(
   'failed %s retains exclusive recovery ownership and retries only through Stop',
   async (phase) => {
     const f = fixture();
@@ -252,12 +260,53 @@ it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const)(
     const recovery = f.owners.current(f.run.liveId)!;
     expect(recovery.state).toBe('recoveryRequired');
     expect(f.restore).not.toHaveBeenCalled();
-    if (phase === 'revoke') expect(f.deps.resources.settle).toHaveBeenCalledOnce();
+    if (phase === 'revoke') {
+      expect(f.deps.resources.settle).toHaveBeenCalledOnce();
+      expect(f.deps.resources.restore).not.toHaveBeenCalled();
+    }
     expect(() => f.owners.checkOrdinary('relay', [f.run.app.registeredPath])).toThrow(
       'LIVE_MODE_ACTIVE',
     );
     expect((await stopLive(f.deps, recovery)).state).toBe('idle');
     expect(f.restore).toHaveBeenCalledOnce();
+  },
+);
+it.each(['current', 'successor'] as const)(
+  'holds ordinary writers and controls until actual owner restoration settles under the %s fence',
+  async (owner) => {
+    const f = fixture();
+    let finish!: () => void;
+    f.deps.resources.restore.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    const pending = stopLive(f.deps, f.run);
+    const outcome = pending.then(
+      (run) => ({ run, error: null }),
+      (error: Error) => ({ run: null, error }),
+    );
+    await vi.waitFor(() => expect(f.deps.resources.restore).toHaveBeenCalledOnce());
+    const restoring = f.owners.current(f.run.liveId)!;
+    expect(restoring.state).toBe('stopping');
+    expect(restoring.phase).toBe('stop:restore:intent');
+    expect(() => f.owners.checkOrdinary('relay', [f.run.app.registeredPath])).toThrow(
+      'LIVE_MODE_ACTIVE',
+    );
+    expect(f.restore).not.toHaveBeenCalled();
+    const successor =
+      owner === 'successor'
+        ? f.owners.mutate(restoring, { event: 'recover', code: 'LIVE_CONTROLLER_CHANGED' })
+        : null;
+    finish();
+    const result = await outcome;
+    if (successor) {
+      expect(result.error?.message).toBe('LIVE_GENERATION_STALE');
+      expect(f.owners.current(f.run.liveId)).toEqual(successor);
+      expect(f.restore).not.toHaveBeenCalled();
+    } else {
+      expect(result.error).toBeNull();
+      expect(result.run?.state).toBe('idle');
+      expect(f.restore).toHaveBeenCalledOnce();
+    }
   },
 );
 it('Resume reconciles an interrupted accept/source and partially removed routes before regrant', async () => {

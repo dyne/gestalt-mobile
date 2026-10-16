@@ -35,6 +35,8 @@ function fixture(
   hooks: {
     beforeLaunch?: ConstructorParameters<typeof CodexSessionRuntime>[16];
     beforeThread?: ConstructorParameters<typeof CodexSessionRuntime>[17];
+    dispatch?: ConstructorParameters<typeof CodexSessionRuntime>[14];
+    lifetime?: boolean;
   } = {},
 ) {
   const calls: { method: string; params: unknown }[] = [];
@@ -43,11 +45,16 @@ function fixture(
   let mcp: (params: unknown) => Promise<unknown> = async () => ({ data: [], nextCursor: null });
   let mcpTool: (params: unknown) => Promise<unknown> = async () => ({});
   let notify: Parameters<AppServer['rpc']['onNotification']>[0] = () => {};
+  let exited: () => void = () => {};
+  let closeLifetime!: () => void;
+  const lifetime = new Promise<void>((resolve) => {
+    closeLifetime = resolve;
+  });
   const process: AppServer = {
     rpc: {
       request: async (method, params) => {
         calls.push({ method, params });
-        if (method === 'thread/start')
+        if (method === 'thread/start' || method === 'thread/resume')
           return {
             thread: { id: 'same-thread' },
             model: 'selected-model',
@@ -58,6 +65,11 @@ function fixture(
             instructionSources: [],
           };
         if (method === 'config/read') return configuration();
+        if (method === 'account/read') return { account: null, requiresOpenaiAuth: false };
+        if (method === 'model/list') return { data: [{ id: 'selected-model' }] };
+        if (method === 'skills/list')
+          return { data: [{ cwd: globalThis.process.cwd(), skills: [], errors: [] }] };
+        if (method === 'thread/backgroundTerminals/list') return { data: [], nextCursor: null };
         if (method === 'thread/list') return children();
         if (method === 'thread/read') {
           const id = (params as { threadId: string }).threadId;
@@ -86,17 +98,31 @@ function fixture(
       onServerRequest: () => () => {},
     },
     close: vi.fn(),
+    ...(hooks.lifetime
+      ? {
+          onExit: (listener: () => void) => {
+            exited = listener;
+            return () => {};
+          },
+          waitForExit: () => lifetime,
+        }
+      : {}),
     ...(observe ? { observeLiveLaunch: () => observeLiveProcess(globalThis.process.pid) } : {}),
   };
   const launch = vi.fn<(input: AppServerLaunchInput) => AppServer>(() => process);
   const arguments_: ConstructorParameters<typeof CodexSessionRuntime> = [launch];
   arguments_[16] = hooks.beforeLaunch;
   arguments_[17] = hooks.beforeThread;
+  arguments_[14] = hooks.dispatch;
   const runtime = new CodexSessionRuntime(...arguments_);
   return {
     runtime,
     launch,
     calls,
+    exit: () => {
+      closeLifetime();
+      exited();
+    },
     notify: (notification: Parameters<typeof notify>[0]) => notify(notification),
     setConfiguration: (read: typeof configuration) => {
       configuration = read;
@@ -398,7 +424,9 @@ describe('owning runtime admission observations', () => {
         },
         { method: 'config/read', params: { cwd: owning.workspacePath, includeLayers: true } },
         { method: 'thread/read', params: { threadId: 'same-thread', includeTurns: false } },
+        { method: 'account/read', params: { refreshToken: false } },
       ]);
+      expect(result.account).toEqual({ account: null, requiresOpenaiAuth: false });
       expect(result.thread).toEqual({
         thread: {
           id: owning.threadId,
@@ -553,5 +581,100 @@ describe('owning runtime admission observations', () => {
     expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
     expect(f.runtime.liveOwnerIds()).toEqual([]);
     expect(f.launch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('renewal through a private owning RPC', () => {
+  const dispatch = { writer: vi.fn(), check: vi.fn(), interaction: vi.fn(), blocked: () => false };
+  it.each(['unchanged', 'notification', 'effect'] as const)(
+    'requires actual unchanged idle observation before settling an exited %s owner',
+    async (change) => {
+      const f = fixture(true, {
+        lifetime: true,
+        dispatch,
+        beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'captured' }),
+      });
+      const owner = await f.runtime.start(session(), 'time');
+      await f.runtime.inspectLiveQuiescence(owner);
+      if (change === 'notification') f.notify({ method: 'unknown/stateChanged', params: {} });
+      if (change === 'effect')
+        await f.runtime.startTurn(owner, 'fixture', undefined, 'later').catch(() => {});
+      f.exit();
+      const settled = f.runtime.settleLiveWork(owner, () => {});
+      if (change === 'unchanged') await expect(settled).resolves.toEqual([]);
+      else await expect(settled).rejects.toThrow('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+      expect(f.launch).toHaveBeenCalledOnce();
+    },
+  );
+  it('refuses an invented replacement token before launching a process or consulting auxiliary discovery', async () => {
+    const f = fixture(true, {
+      dispatch,
+      beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'original' }),
+    });
+    const owner = await f.runtime.start(session(), 'time');
+    f.runtime.stop(owner.id);
+    const fence = { liveId: 'live', generation: 3, controllerEpoch: 1, revision: 4 };
+    const authority = {
+      owners: {
+        assert: () => ({
+          ...fence,
+          relayId: owner.id,
+          rootThreadId: owner.threadId,
+          state: 'starting',
+          phase: 'resume:prepare:intent',
+        }),
+      } as never,
+      fence,
+      captureId: '6eaa81bc-763f-4bf2-84f0-980b94325cdc',
+    };
+    await expect(
+      f.runtime.restoreRenewedLiveOwner(
+        owner,
+        'later',
+        { modelConfig: {}, skillsConfig: [] },
+        authority,
+      ),
+    ).rejects.toThrow('LIVE_RUNTIME_RENEWAL_INVALID');
+    expect(f.launch).toHaveBeenCalledOnce();
+  });
+  it('discovers actual replacement catalogs before resuming the exact selected thread', async () => {
+    const capture = '6eaa81bc-763f-4bf2-84f0-980b94325cdc';
+    let fresh = false;
+    const f = fixture(true, {
+      dispatch,
+      beforeLaunch: async (_session, input) => ({
+        ...input,
+        liveCaptureId: fresh ? capture : 'original',
+      }),
+    });
+    const owner = await f.runtime.start(session(), 'time');
+    f.runtime.stop(owner.id);
+    fresh = true;
+    const fence = { liveId: 'live', generation: 3, controllerEpoch: 1, revision: 4 };
+    const owners = {
+      assert: () => ({
+        ...fence,
+        relayId: owner.id,
+        rootThreadId: owner.threadId,
+        state: 'starting',
+        phase: 'resume:prepare:intent',
+      }),
+    } as never;
+    const before = f.calls.length;
+    const restored = await f.runtime.restoreRenewedLiveOwner(
+      owner,
+      'later',
+      { modelConfig: {}, skillsConfig: [] },
+      { owners, fence, captureId: capture },
+    );
+    expect(restored.threadId).toBe(owner.threadId);
+    const methods = f.calls.slice(before).map((call) => call.method);
+    expect(methods.indexOf('model/list')).toBeLessThan(methods.indexOf('thread/resume'));
+    expect(methods.indexOf('skills/list')).toBeLessThan(methods.indexOf('thread/resume'));
+    expect(
+      f.calls.slice(before).find((call) => call.method === 'thread/resume')?.params,
+    ).toMatchObject({ threadId: owner.threadId, model: 'selected-model' });
+    expect(f.launch).toHaveBeenCalledTimes(2);
+    f.runtime.stopAll();
   });
 });

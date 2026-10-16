@@ -56,6 +56,10 @@ export async function captureOwningRuntime(input: {
   generation: number;
   authenticationDirectory: string;
   threadConfig: Readonly<Record<string, unknown>>;
+  renewal?: Readonly<{
+    previous: OwningRuntimeCapture;
+    mode: 'survivor' | 'replacement';
+  }>;
 }): Promise<OwningRuntimeCapture> {
   const { configuration: cfg, app, session } = input;
   if (!app.owningPolicy || session.provider !== 'codex' || session.workspacePath !== app.appRoot)
@@ -74,11 +78,25 @@ export async function captureOwningRuntime(input: {
     files: app.owningPolicy.configFiles,
     threadConfig: input.threadConfig,
   });
-  const captured = captureLiveSources(
-    app.appRoot,
-    cfg.nativeEnvironment.CODEX_HOME,
-    app.owningPolicy.instructionFiles,
-  );
+  const previous = input.renewal?.previous;
+  if (
+    previous &&
+    (previous.sessionId !== session.id ||
+      previous.generation >= input.generation ||
+      previous.captured.appRoot !== app.appRoot ||
+      previous.keyPath !== join(cfg.privateDirectory, 'live-policy.key'))
+  )
+    throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+  // Initial absence belongs to the original birth, never to a later empty
+  // directory. Manager independently revalidates every inherited source and
+  // the signed immutable parent lineage before it accepts this renewal.
+  const captured = previous
+    ? structuredClone(previous.captured)
+    : captureLiveSources(
+        app.appRoot,
+        cfg.nativeEnvironment.CODEX_HOME,
+        app.owningPolicy.instructionFiles,
+      );
   for (const file of app.owningPolicy.configFiles) {
     const stat = lstatSync(file.path);
     if (
@@ -218,7 +236,15 @@ export async function captureOwningRuntime(input: {
   );
   await policy.bootstrapRuntime(manifestPath);
   const captureId = randomUUID();
-  const reply = await policy.captureRuntime(manifestPath, captureId);
+  const reply = previous
+    ? await policy.renewRuntime({
+        manifestPath,
+        captureId,
+        previousManifestPath: previous.manifestPath,
+        previousCaptureId: previous.captureId,
+        mode: input.renewal!.mode,
+      })
+    : await policy.captureRuntime(manifestPath, captureId);
   if (typeof reply.policyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(reply.policyDigest))
     throw new Error('LIVE_RUNTIME_CAPTURE_REPLY_INVALID');
   return Object.freeze({

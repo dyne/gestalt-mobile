@@ -22,6 +22,7 @@ import type { OwningRuntimeCapture } from './owning-runtime-capture.js';
 import { resolveLiveSourceInventory } from './owning-source-inventory.js';
 import type { ProductionLiveConfiguration } from './production-configuration.js';
 import { normalizedLivePermissions as normalize, owningPermissions } from './owning-permissions.js';
+import { observeOwningNative } from './owning-observation.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 
@@ -68,6 +69,7 @@ export type PreparedProductionPolicy = {
   baselineState: ManagedProjectSandboxState;
   selection: Readonly<Record<string, unknown>>;
   modelConfig: Readonly<Record<string, unknown>>;
+  skillsConfig: Observation['skillsConfig'];
   digests: { policyDigest: string; configDigest: string; admissionDigest: string };
 };
 const json = (path: string, value: unknown) =>
@@ -116,6 +118,11 @@ export async function prepareProductionPolicy(input: {
       code: 'LIVE_OWNING_CAPTURE_MISMATCH',
     });
   const original = observation.configuration as { config?: Record<string, unknown> };
+  const originalObservation = observeOwningNative({
+    configuration: observation.configuration,
+    selection: observation.threadSelection,
+    account: observation.account,
+  });
   const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
   if (!Array.isArray(mcp?.data) || mcp.data.length || mcp.nextCursor)
     throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
@@ -183,6 +190,7 @@ export async function prepareProductionPolicy(input: {
     threadConfig: observation.threadConfig,
     skillsConfig: observation.skillsConfig,
     selection,
+    observation: originalObservation,
     files,
   });
   const keyPath = capture.keyPath;
@@ -326,6 +334,13 @@ export async function prepareProductionPolicy(input: {
     )
   )
     throw new Error('LIVE_INSTRUCTION_DISCOVERY_CHANGED');
+  const typedObservation = observeOwningNative({
+    configuration: actual.configuration,
+    selection: actual.threadSelection,
+    account: actual.account,
+  });
+  if (typedObservation.accountDigest !== originalObservation.accountDigest)
+    throw new Error('LIVE_ACCOUNT_CHANGED');
   const sourceInventory = resolveLiveSourceInventory({
     captured: capture.captured,
     configuration: actual.configuration,
@@ -335,6 +350,7 @@ export async function prepareProductionPolicy(input: {
       threadConfig: actual.threadConfig,
       skillsConfig: actual.skillsConfig ?? null,
     },
+    observation: typedObservation,
     runtime: actual.launch,
     policyDigest: capture.policyDigest,
     workerConfig: readLiveConfigFile(workerConfig),
@@ -373,6 +389,7 @@ export async function prepareProductionPolicy(input: {
     baselineState,
     selection,
     modelConfig,
+    skillsConfig: structuredClone(observation.skillsConfig),
     digests,
   };
 }
@@ -383,6 +400,11 @@ export function assertProductionSourceObservation(
   policy: PreparedProductionPolicy,
   observation: Observation,
 ): void {
+  if (
+    !isDeepStrictEqual(observation.threadConfig, policy.modelConfig) ||
+    !isDeepStrictEqual(observation.skillsConfig, policy.skillsConfig)
+  )
+    throw new Error('LIVE_CONFIG_CHANGED');
   const current = resolveLiveSourceInventory({
     captured: policy.capture.captured,
     configuration: observation.configuration,
@@ -392,6 +414,11 @@ export function assertProductionSourceObservation(
       threadConfig: observation.threadConfig,
       skillsConfig: observation.skillsConfig ?? null,
     },
+    observation: observeOwningNative({
+      configuration: observation.configuration,
+      selection: observation.threadSelection,
+      account: observation.account,
+    }),
     runtime: observation.launch,
     policyDigest: policy.capture.policyDigest,
     workerConfig: readLiveConfigFile(join(policy.capture.runtimeHome, 'config.toml')),

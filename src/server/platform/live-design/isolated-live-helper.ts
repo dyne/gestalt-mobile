@@ -25,6 +25,7 @@ import type {
 } from '../../features/live-design/application/ownership.js';
 import type { IsolatedProjectProcess, IsolatedProjectReceipt } from './isolated-project-process.js';
 import { readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
+import { helperCheckpointDigest } from './helper-checkpoint.js';
 
 const id = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
 type CommandRecord = {
@@ -33,8 +34,14 @@ type CommandRecord = {
   generation: number;
   controllerEpoch: number;
   receiptSignature: string;
-  pending: null | { name: string; digest: string; ambiguous: boolean };
-  cancelled?: { name: string; digest: string; ambiguous: true; foregroundClosed: true };
+  pending: null | { name: string; digest: string; ambiguous: boolean; checkpointDigest?: string };
+  cancelled?: {
+    name: string;
+    digest: string;
+    ambiguous: true;
+    foregroundClosed: true;
+    checkpointDigest?: string;
+  };
 };
 
 /** Canonical foreground helper CLI inside its verified owned namespace. Browser
@@ -109,6 +116,24 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     this.input.owners.assert(current);
     return current;
   }
+  /** Newer recovery ownership may only drain/reconcile this exact old helper.
+   * This fence never authorizes poll, reply, completion or model dispatch. */
+  private assertCleanup(run: LiveRun): void {
+    const current = this.input.owners.assert(run);
+    if (
+      current.liveId !== this.run.liveId ||
+      current.controllerEpoch !== this.run.controllerEpoch ||
+      current.generation < this.run.generation ||
+      current.relayId !== this.run.relayId ||
+      current.rootThreadId !== this.run.rootThreadId ||
+      current.app.device !== this.run.app.device ||
+      current.app.inode !== this.run.app.inode ||
+      current.authSessionHash !== this.run.authSessionHash ||
+      current.deviceId !== this.run.deviceId ||
+      !['stopping', 'recoveryRequired'].includes(current.state)
+    )
+      throw new Error('LIVE_HELPER_GENERATION_STALE');
+  }
   private record(cleanup = false, pending = false): CommandRecord {
     const stat = lstatSync(this.metadata);
     if (
@@ -148,6 +173,9 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       name: args[0]!,
       digest: createHash('sha256').update(JSON.stringify(args)).digest('hex'),
       ambiguous: false,
+      ...(args[0] === 'live-poll' && !args.includes('--reply')
+        ? { checkpointDigest: helperCheckpointDigest(this.run.app.canonicalAppRoot) }
+        : {}),
     };
     this.save(record); // Durable intent precedes any helper/source/journal IO.
     this.inFlight = true;
@@ -178,15 +206,15 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       finish();
     }
   }
-  async settle(): Promise<void> {
-    const run = this.assertGeneration();
-    if (run.state !== 'stopping') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+  async settle(fence?: LiveRun): Promise<void> {
+    const run = fence ?? this.assertGeneration();
+    this.assertCleanup(run);
     if (this.inFlight) {
       const finished = this.finished;
       await this.input.process.cancelHelperCommand(this.receipt);
       await finished;
     }
-    this.assertGeneration();
+    this.assertCleanup(run);
     const record = this.record(true, true);
     if (record.pending) {
       // Closing a poll does not prove that an upstream lease/source effect did
@@ -195,6 +223,71 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       record.cancelled = { ...record.pending, ambiguous: true, foregroundClosed: true };
       record.pending = null;
       this.save(record);
+    }
+  }
+  async reconcile(run: LiveRun): Promise<string> {
+    await this.settle(run);
+    this.assertCleanup(run);
+    const record = this.record(true);
+    if (
+      record.cancelled &&
+      (!record.cancelled.checkpointDigest ||
+        record.cancelled.checkpointDigest !== helperCheckpointDigest(this.run.app.canonicalAppRoot))
+    )
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    const status = (await this.input.process.helperCommand(
+      this.receipt,
+      ['live-status'],
+      20000,
+    )) as {
+      activeSessions?: unknown[];
+      liveServer?: { pendingEvents?: unknown[] };
+    };
+    this.assertCleanup(run);
+    const resume = (await this.input.process.helperCommand(
+      this.receipt,
+      ['live-resume'],
+      20000,
+    )) as {
+      active?: boolean;
+    };
+    this.assertCleanup(run);
+    // A pending accept/apply or unknown response requires explicit reconciliation.
+    // Never replay or discard source work just to make Resume succeed.
+    if (
+      !Array.isArray(status?.activeSessions) ||
+      status.activeSessions.length ||
+      !Array.isArray(status.liveServer?.pendingEvents) ||
+      status.liveServer.pendingEvents.length ||
+      resume?.active !== false
+    )
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+    return createHash('sha256').update(JSON.stringify({ status, resume })).digest('hex');
+  }
+  async removeInjection(run: LiveRun): Promise<void> {
+    await this.settle(run);
+    this.assertCleanup(run);
+    const record = this.record(true);
+    record.pending = {
+      name: 'live-inject',
+      digest: createHash('sha256').update('["live-inject","--remove"]').digest('hex'),
+      ambiguous: false,
+    };
+    this.save(record);
+    try {
+      const result = (await this.input.process.helperCommand(
+        this.receipt,
+        ['live-inject', '--remove'],
+        20000,
+      )) as { ok?: boolean };
+      this.assertCleanup(run);
+      if (result?.ok !== true) throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
+      record.pending = null;
+      this.save(record);
+    } catch {
+      if (record.pending) record.pending.ambiguous = true;
+      this.save(record);
+      throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     }
   }
   async inject(remove = false): Promise<unknown> {

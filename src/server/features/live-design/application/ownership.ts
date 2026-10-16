@@ -67,6 +67,7 @@ export type LiveMutation =
   | { event: 'controlsRestored' }
   | { event: 'ready' }
   | { event: 'resume' }
+  | { event: 'bindTarget'; targetIdentity: string }
   | { event: 'stop' }
   | { event: 'failed'; code: string }
   | { event: 'recover'; code: string }
@@ -82,12 +83,15 @@ export interface LiveOwnershipStore extends LiveOwnershipReader {
 }
 
 export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
+  if (mutation.event === 'bindTarget' && run.phase !== 'resume:prepare:intent')
+    throw new Error('LIVE_STATE_CONFLICT');
   const allowed: Record<LiveMutation['event'], readonly LiveState[]> = {
     phase: ['starting', 'stopping'],
     captureControls: ['starting'],
     controlsRestored: ['idle'],
     ready: ['starting'],
     resume: ['stopping'],
+    bindTarget: ['starting'],
     stop: ['starting', 'active', 'error', 'recoveryRequired'],
     failed: ['starting', 'active', 'stopping'],
     recover: ['starting', 'active', 'stopping', 'error', 'recoveryRequired'],
@@ -101,6 +105,7 @@ export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
       if (run.priorControls !== null) throw new Error('LIVE_STATE_CONFLICT');
       return run.state;
     case 'controlsRestored':
+    case 'bindTarget':
     case 'phase':
       return run.state;
     case 'ready':

@@ -5,7 +5,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFile, readlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readlink, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
@@ -15,6 +17,8 @@ import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
 let browser;
+let browserProcess;
+let browserExit;
 const networkErrors = [];
 const exchangeStatuses = [];
 const resourcePending = {};
@@ -50,22 +54,61 @@ try {
   checkpoint('ui-import');
   const ui = await import(pathToFileURL(config.uiModule).href);
   checkpoint('browser-launch');
-  browser = await chromium.launch({
-    headless: true,
-    chromiumSandbox: true,
-    env: {
-      ...process.env,
-      HOME: config.browserHome,
-      HTTP_PROXY: '',
-      HTTPS_PROXY: '',
-      ALL_PROXY: '',
-    },
-    args: [
+  // Playwright's normal launch forces page focus/visibility. Attach without
+  // overrides to a fresh owned Chrome profile so backgrounding is real.
+  const profile = join(config.browserHome, 'chromium-profile');
+  await mkdir(profile, { mode: 0o700 });
+  browserProcess = spawn(
+    chromium.executablePath(),
+    [
+      '--headless=new',
+      '--remote-debugging-port=0',
+      '--remote-debugging-address=127.0.0.1',
+      `--user-data-dir=${profile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-dev-shm-usage',
+      '--window-size=1440,900',
       `--host-resolver-rules=MAP *.preview.entrypoint.test ${config.hostAddress}, MAP preview.entrypoint.test ${config.hostAddress}, MAP mobile.entrypoint.test ${config.hostAddress}`,
       '--no-proxy-server',
+      'about:blank',
     ],
+    {
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        HOME: config.browserHome,
+        HTTP_PROXY: '',
+        HTTPS_PROXY: '',
+        ALL_PROXY: '',
+      },
+    },
+  );
+  browserExit = new Promise((resolve) => browserProcess.once('close', resolve));
+  browserProcess.on('error', () => {});
+  let debugPort;
+  const launchDeadline = Date.now() + 30000;
+  while (Date.now() < launchDeadline) {
+    try {
+      const lines = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
+      if (/^[1-9][0-9]{0,4}$/.test(lines[0]) && Number(lines[0]) <= 65535) {
+        debugPort = lines[0];
+        break;
+      }
+    } catch {
+      /* Private startup publication is asynchronous. */
+    }
+    if (browserProcess.exitCode !== null || browserProcess.signalCode !== null)
+      throw new Error('BROWSER_STARTUP_FAILED');
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  assert.ok(debugPort, 'BROWSER_STARTUP_DEADLINE');
+  browser = await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, {
+    noDefaults: true,
+    isLocal: true,
   });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = browser.contexts()[0];
+  assert.ok(context);
   context.on('page', (page) => {
     page.on('pageerror', (error) => {
       if (pageErrors.length < 8) pageErrors.push(safeBrowserFailure(error.message));
@@ -179,6 +222,7 @@ try {
     },
   ]);
   const mobile = await context.newPage();
+  await mobile.setViewportSize({ width: 1440, height: 900 });
   checkpoint('mobile-navigation');
   let response;
   try {
@@ -248,6 +292,7 @@ try {
   checkpoint('preview-popup');
   await mobile.locator('#production-proof-launch').click();
   const preview = await popup;
+  await preview.setViewportSize({ width: 1440, height: 900 });
   let hmrUpdates = 0;
   preview.on('websocket', (socket) =>
     socket.on('framereceived', (message) => {
@@ -355,6 +400,19 @@ try {
     await preview.getByRole('heading', { name: 'Production manual approved', exact: true }).count(),
     1,
   );
+  checkpoint('background-beyond-eight-seconds');
+  await command('background-begin');
+  const foreground = await context.newPage();
+  await foreground.bringToFront();
+  await preview.waitForFunction(() => document.visibilityState === 'hidden');
+  const hiddenAt = Date.now();
+  await new Promise((done) => setTimeout(done, 9200));
+  assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
+  assert.ok(Date.now() - hiddenAt > 8000);
+  await preview.bringToFront();
+  await preview.waitForFunction(() => document.visibilityState === 'visible');
+  await foreground.close();
+  await command('background-finished');
   await preview.screenshot({ path: config.screenshot });
   await writeFile(
     config.resultFile,
@@ -367,6 +425,8 @@ try {
         realPickerSteer: true,
         realPickerManualApply: true,
         realPickerDiscard: true,
+        actualTabHiddenBeyondEightSeconds: true,
+        playwrightFocusOverrideDisabled: true,
         hmrUpdates,
         extraPollOwnerDenied: true,
         initialPreviewGetRetried,
@@ -417,5 +477,23 @@ try {
   process.exitCode = 1;
 } finally {
   await browser?.close();
+  if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
+    browserProcess.kill('SIGTERM');
+    let timer;
+    try {
+      await Promise.race([
+        browserExit,
+        new Promise((done) => {
+          timer = setTimeout(done, 5000);
+        }),
+      ]);
+      if (browserProcess.exitCode === null && browserProcess.signalCode === null) {
+        browserProcess.kill('SIGKILL');
+        await browserExit;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   process.stdin.destroy();
 }
