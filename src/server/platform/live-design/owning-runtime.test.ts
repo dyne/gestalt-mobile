@@ -42,6 +42,7 @@ function fixture(
   const calls: { method: string; params: unknown }[] = [];
   let configuration: () => Promise<unknown> = async () => ({ config: {}, layers: [] });
   let children: () => Promise<unknown> = async () => ({ data: [], nextCursor: null });
+  let loaded: () => Promise<unknown> = async () => ({ data: ['same-thread'], nextCursor: null });
   let mcp: (params: unknown) => Promise<unknown> = async () => ({ data: [], nextCursor: null });
   let mcpTool: (params: unknown) => Promise<unknown> = async () => ({});
   let notify: Parameters<AppServer['rpc']['onNotification']>[0] = () => {};
@@ -71,6 +72,8 @@ function fixture(
           return { data: [{ cwd: globalThis.process.cwd(), skills: [], errors: [] }] };
         if (method === 'thread/backgroundTerminals/list') return { data: [], nextCursor: null };
         if (method === 'thread/list') return children();
+        if (method === 'thread/loaded/list') return loaded();
+        if (method === 'thread/unsubscribe') return { status: 'unsubscribed' };
         if (method === 'thread/read') {
           const id = (params as { threadId: string }).threadId;
           return {
@@ -81,6 +84,7 @@ function fixture(
                     sessionId: 'native-session',
                     parentThreadId: null,
                     status: { type: 'idle' },
+                    ...((params as { includeTurns?: boolean }).includeTurns ? { turns: [] } : {}),
                   }
                 : ((await children()) as { data: { id: string }[] }).data.find(
                     (thread) => thread.id === id,
@@ -129,6 +133,9 @@ function fixture(
     },
     setChildren: (read: typeof children) => {
       children = read;
+    },
+    setLoaded: (read: typeof loaded) => {
+      loaded = read;
     },
     setMcp: (read: typeof mcp) => {
       mcp = read;
@@ -586,6 +593,109 @@ describe('owning runtime admission observations', () => {
 
 describe('renewal through a private owning RPC', () => {
   const dispatch = { writer: vi.fn(), check: vi.fn(), interaction: vi.fn(), blocked: () => false };
+  it('reconfigures and settles historical children only after actual notLoaded and loaded-registry absence', async () => {
+    const f = fixture(true, { lifetime: true, dispatch });
+    const owner = await f.runtime.start(session(), 'time');
+    f.setChildren(async () => ({
+      data: [
+        {
+          id: 'historical-child',
+          parentThreadId: owner.threadId,
+          sessionId: 'historical-child',
+          status: { type: 'notLoaded' },
+        },
+      ],
+      nextCursor: null,
+    }));
+    try {
+      await f.runtime.reconfigureLiveOwner(owner, { modelConfig: {}, skillsConfig: [] });
+      await f.runtime.reconfigureLiveOwner(owner, { modelConfig: {}, skillsConfig: [] });
+      const writes = dispatch.writer.mock.calls.length;
+      await f.runtime.inspectLiveQuiescence(owner);
+      await f.runtime.settleLiveWork(owner, () => {});
+      expect(dispatch.writer.mock.calls).toHaveLength(writes);
+      expect(f.calls.filter((call) => call.method === 'thread/loaded/list').length).toBeGreaterThan(
+        0,
+      );
+      expect(
+        f.calls
+          .filter((call) => (call.params as { threadId?: string })?.threadId === 'historical-child')
+          .every(
+            (call) =>
+              call.method === 'thread/unsubscribe' ||
+              (call.method === 'thread/read' &&
+                (call.params as { includeTurns?: boolean }).includeTurns === false),
+          ),
+      ).toBe(true);
+      expect(f.launch).toHaveBeenCalledOnce();
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
+  it.each(['still-loaded', 'unbounded', 'unknown-registry', 'duplicate-registry'])(
+    'refuses %s historical identity without loading or adopting it',
+    async (kind) => {
+      const f = fixture(true, { lifetime: true });
+      const owner = await f.runtime.start(session(), 'time');
+      f.setChildren(async () => ({
+        data: [
+          {
+            id: 'historical-child',
+            parentThreadId: owner.threadId,
+            sessionId: 'historical-child',
+            status: { type: 'notLoaded' },
+          },
+        ],
+        nextCursor: null,
+      }));
+      f.setLoaded(async () =>
+        kind === 'still-loaded'
+          ? { data: ['same-thread', 'historical-child'], nextCursor: null }
+          : kind === 'unbounded'
+            ? { data: ['same-thread'], nextCursor: 'more' }
+            : kind === 'duplicate-registry'
+              ? { data: ['same-thread', 'same-thread'], nextCursor: null }
+              : {},
+      );
+      try {
+        await expect(f.runtime.inspectLiveQuiescence(owner)).rejects.toThrow(
+          'LIVE_CHILD_TOPOLOGY_UNAVAILABLE',
+        );
+        expect(f.calls.some((call) => call.method === 'thread/unsubscribe')).toBe(false);
+        expect(f.launch).toHaveBeenCalledOnce();
+      } finally {
+        f.runtime.stopAll();
+      }
+    },
+  );
+  it('checks actual terminals when Native caches a child without a watch subscription', async () => {
+    const f = fixture(true, { lifetime: true });
+    const owner = await f.runtime.start(session(), 'time');
+    f.setChildren(async () => ({
+      data: [
+        {
+          id: 'cached-child',
+          parentThreadId: owner.threadId,
+          sessionId: 'native-session',
+          status: { type: 'notLoaded' },
+        },
+      ],
+      nextCursor: null,
+    }));
+    f.setLoaded(async () => ({ data: ['same-thread', 'cached-child'], nextCursor: null }));
+    try {
+      await f.runtime.inspectLiveQuiescence(owner);
+      expect(
+        f.calls.some(
+          (call) =>
+            call.method === 'thread/backgroundTerminals/list' &&
+            (call.params as { threadId?: string }).threadId === 'cached-child',
+        ),
+      ).toBe(true);
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
   it.each(['unchanged', 'notification', 'effect'] as const)(
     'requires actual unchanged idle observation before settling an exited %s owner',
     async (change) => {

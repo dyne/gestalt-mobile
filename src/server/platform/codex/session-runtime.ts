@@ -819,6 +819,13 @@ export class CodexSessionRuntime {
         !['idle', 'notLoaded'].includes(String(asRecord(thread?.status)?.type))
       )
         throw new Error('LIVE_SESSION_BUSY');
+      if (
+        threadId !== session.threadId &&
+        (await this.liveThreadIsUnloaded(thread!, (method, params) =>
+          bounded(() => resource.process.rpc.request(method, params)),
+        ))
+      )
+        continue;
       const terminals = asRecord(
         await bounded(() =>
           resource.process.rpc.request('thread/backgroundTerminals/list', { threadId, limit: 64 }),
@@ -1173,8 +1180,9 @@ export class CodexSessionRuntime {
             );
             if (
               native?.id !== id ||
-              native.sessionId !== sessionId ||
-              native.parentThreadId !== child.parent
+              native.parentThreadId !== child.parent ||
+              (native.sessionId !== sessionId &&
+                !(await this.liveThreadIsUnloaded(native, request)))
             )
               throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
             verified.add(id);
@@ -1190,6 +1198,13 @@ export class CodexSessionRuntime {
     };
     await discover();
     for (const threadId of threadIds) {
+      if (threadId !== session.threadId) {
+        const thread = asRecord(
+          asRecord(await request('thread/read', { threadId, includeTurns: false }))?.thread,
+        );
+        if (thread?.id !== threadId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        if (await this.liveThreadIsUnloaded(thread, request)) continue;
+      }
       const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
       if (history.activeTurnId)
         await request('turn/interrupt', {
@@ -1233,6 +1248,12 @@ export class CodexSessionRuntime {
     for (const threadId of threadIds) {
       const native = asRecord(await request('thread/read', { threadId, includeTurns: false }));
       const thread = asRecord(native?.thread);
+      if (
+        threadId !== session.threadId &&
+        thread?.id === threadId &&
+        (await this.liveThreadIsUnloaded(thread, request))
+      )
+        continue;
       if (thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
         throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
       const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
@@ -1353,6 +1374,28 @@ export class CodexSessionRuntime {
   }
 
   /** Live controller read: one existing owner, no detached reader or child resume. */
+  /** Native historical reads use the thread ID as sessionId. Absence from the
+   * actual owning connection's loaded registry proves no live thread work;
+   * it never grants cancellation, loading or process-adoption authority. */
+  private async liveThreadIsUnloaded(
+    thread: Record<string, unknown>,
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<boolean> {
+    if (asRecord(thread.status)?.type !== 'notLoaded') return false;
+    const result = asRecord(await request('thread/loaded/list', { limit: 64 }));
+    if (
+      !result ||
+      !Array.isArray(result.data) ||
+      result.data.length > 64 ||
+      result.nextCursor !== null ||
+      result.data.some((id) => !boundedString(id, 256)) ||
+      new Set(result.data).size !== result.data.length
+    )
+      throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    if (result.data.includes(thread.id)) return false;
+    if (thread.sessionId !== thread.id) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    return true;
+  }
   private async readLiveTree(
     resource: SessionResource,
     rootThreadId: string,
@@ -1412,8 +1455,9 @@ export class CodexSessionRuntime {
           !verified.has(candidate.parentThreadId)
         )
           continue;
-        // Stored list summaries use thread id as sessionId in pinned Native;
-        // only the fresh owning-connection thread/read carries live identity.
+        // Stored summaries use thread id as sessionId. A loaded read must
+        // carry live identity; historical reads additionally require actual
+        // loaded-registry absence and confer no live-work authority.
         if (verified.size >= 64) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
         const current = asRecord(
           asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
@@ -1421,7 +1465,7 @@ export class CodexSessionRuntime {
         if (
           current?.id !== id ||
           current.parentThreadId !== candidate.parentThreadId ||
-          current.sessionId !== sessionId
+          (current.sessionId !== sessionId && !(await this.liveThreadIsUnloaded(current, request)))
         )
           throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
         verified.set(id, current);
@@ -2319,6 +2363,7 @@ export class CodexSessionRuntime {
     const reads = new Set([
       'thread/read',
       'thread/list',
+      'thread/loaded/list',
       'config/read',
       'mcpServerStatus/list',
       'account/rateLimits/read',
@@ -2376,6 +2421,7 @@ export class CodexSessionRuntime {
                 'thread/name/set',
                 'thread/read',
                 'thread/list',
+                'thread/loaded/list',
                 'mcpServerStatus/list',
                 'thread/backgroundTerminals/list',
                 'thread/unsubscribe',

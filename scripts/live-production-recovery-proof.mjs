@@ -247,15 +247,28 @@ export async function productionRecoveryProof(input) {
       () => {
         const db = new DatabaseSync(join(controller, inbox[0]), { readOnly: true });
         try {
-          return db
+          const polling = db
             .prepare("SELECT 1 FROM live_poll_intents WHERE generation=? AND phase='polling'")
             .get(survivor.generation);
+          if (!polling) return false;
+          const metadata = join(
+            surviving.directory,
+            `helper-${survivor.liveId}-${survivor.generation}.json`,
+          );
+          if (!existsSync(metadata)) return false;
+          const command = JSON.parse(readFileSync(metadata));
+          return (
+            command.liveId === survivor.liveId &&
+            command.generation === survivor.generation &&
+            command.pending?.name === 'live-poll' &&
+            command.pending.ambiguous === false
+          );
         } finally {
           db.close();
         }
       },
       'RECOVERY_IDLE_CANONICAL_POLL_DEADLINE',
-      15000,
+      30000,
     );
     assert.equal(owningBirthExited(surviving.sealed.runtime.process), false);
     process.kill(surviving.sealed.runtime.process.pid, 'SIGTERM');
