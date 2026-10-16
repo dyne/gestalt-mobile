@@ -16,6 +16,7 @@ const phases = new Set([
   'generate_requested',
   'manual_edit_apply_requested',
   'steer_done',
+  'steer',
   'steer_requested',
   'variants_ready',
 ]);

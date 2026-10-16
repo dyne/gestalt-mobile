@@ -192,21 +192,25 @@ function settledSteer() {
     onComplete: (work: () => Promise<void>) => (complete = work),
   };
 }
-it('closes only an acknowledged settled steer through canonical completion and preserves source', async () => {
-  const f = settledSteer();
-  await f.cli.reconcile(f.current, ['1234abcd']);
-  expect(readFileSync(f.source, 'utf8')).toBe('<h1>Approved source</h1>');
-  expect(
-    f.process.helperCommand.mock.calls
-      .filter((call) => call[1][0] === 'live-complete')
-      .map((call) => call[1]),
-  ).toEqual([['live-complete', '--id', '1234abcd']]);
-  expect(f.record().pending).toBeNull();
-  await f.cli.reconcile(f.current, ['1234abcd']);
-  expect(
-    f.process.helperCommand.mock.calls.filter((call) => call[1][0] === 'live-complete'),
-  ).toHaveLength(1);
-});
+it.each(['steer_done', 'steer'])(
+  'closes only an acknowledged settled %s through canonical completion and preserves source',
+  async (phase) => {
+    const f = settledSteer();
+    f.snapshot.phase = phase;
+    await f.cli.reconcile(f.current, ['1234abcd']);
+    expect(readFileSync(f.source, 'utf8')).toBe('<h1>Approved source</h1>');
+    expect(
+      f.process.helperCommand.mock.calls
+        .filter((call) => call[1][0] === 'live-complete')
+        .map((call) => call[1]),
+    ).toEqual([['live-complete', '--id', '1234abcd']]);
+    expect(f.record().pending).toBeNull();
+    await f.cli.reconcile(f.current, ['1234abcd']);
+    expect(
+      f.process.helperCommand.mock.calls.filter((call) => call[1][0] === 'live-complete'),
+    ).toHaveLength(1);
+  },
+);
 it.each([
   'unacknowledged',
   'pending',

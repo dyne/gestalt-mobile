@@ -251,7 +251,8 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     };
     this.assertCleanup(run);
     // Canonical steer_done acknowledges source work but deliberately leaves its
-    // durable session active. Only the controller's already-acknowledged steer
+    // durable session active. Its browser then checkpoints phase "steer" with
+    // reason "steer_done", replacing that phase. Only already-acknowledged steer
     // IDs can close that metadata, after actual pending/source checks. No model,
     // poll, accept, discard, force or replay is authorized here.
     if (Array.isArray(status?.activeSessions) && status.activeSessions.length) {
@@ -264,7 +265,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
             !item ||
             typeof item.id !== 'string' ||
             !/^[a-f0-9]{8}$/.test(item.id) ||
-            item.phase !== 'steer_done' ||
+            !['steer_done', 'steer'].includes(String(item.phase)) ||
             !acknowledgedSteers.includes(item.id) ||
             ids.has(item.id)
           )
@@ -294,7 +295,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
           observed?.active !== true ||
           observed.pendingEvent !== null ||
           snapshot?.id !== sessionId ||
-          snapshot.phase !== 'steer_done' ||
+          !['steer_done', 'steer'].includes(String(snapshot.phase)) ||
           snapshot.pendingEvent !== null ||
           typeof snapshot.sourceFile !== 'string' ||
           !snapshot.sourceFile ||
