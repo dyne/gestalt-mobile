@@ -188,6 +188,89 @@ function finishBrowserProfile() {
 }
 // Fixture-only observation: retain the production verifier, inputs and outcome.
 // Record timing/codes only, never receipts, process environments or credentials.
+const originalNativeLaunch = ProductionLiveController.prototype.launchNative;
+ProductionLiveController.prototype.launchNative = function (input) {
+  const child = originalNativeLaunch.call(this, input);
+  const observation = {
+    capturedOwner: !!input.liveCaptureId,
+    treeObservations: 0,
+    treeFailures: 0,
+    requests: [],
+    stderrMarkers: [],
+  };
+  (report.nativeLaunchLifetimes ??= []).push(observation);
+  child.child.once('error', (error) => {
+    observation.spawnError = ['ENOENT', 'EACCES', 'EPERM'].includes(error.code)
+      ? error.code
+      : 'UNCLASSIFIED';
+  });
+  child.child.once('exit', (code, signal) => {
+    observation.exitCode = code;
+    observation.signal = signal;
+  });
+  child.child.stderr.on('data', (chunk) => {
+    for (const marker of [
+      'not found',
+      'not installed',
+      'No such file',
+      'Permission denied',
+      'Read-only',
+      'sandbox',
+      'mode',
+      'unsupported',
+      'usage:',
+      'error:',
+      'Error:',
+      'requires',
+    ]) {
+      if (String(chunk).includes(marker) && !observation.stderrMarkers.includes(marker))
+        observation.stderrMarkers.push(marker);
+    }
+  });
+  const observe = child.observeLiveDescendants.bind(child);
+  child.observeLiveDescendants = () => {
+    observation.treeObservations++;
+    try {
+      return observe();
+    } catch (error) {
+      observation.treeFailures++;
+      throw error;
+    }
+  };
+  const close = child.close.bind(child);
+  child.close = () => {
+    observation.closeWhileAlive = child.child.exitCode === null && child.child.signalCode === null;
+    return close();
+  };
+  const wait = child.waitForExit.bind(child);
+  child.waitForExit = async () => {
+    try {
+      await wait();
+      observation.exitVerified = true;
+    } catch (error) {
+      observation.exitVerified = false;
+      observation.exitFailure = /^LIVE_[A-Z_]+$/.test(error?.message ?? '')
+        ? error.message
+        : 'UNCLASSIFIED';
+      throw error;
+    }
+  };
+  const request = child.rpc.request.bind(child.rpc);
+  child.rpc.request = async (method, params) => {
+    const tracked =
+      ['initialize', 'model/list', 'skills/list'].includes(method) &&
+      observation.requests.length < 12;
+    try {
+      const value = await request(method, params);
+      if (tracked) observation.requests.push({ method, completed: true });
+      return value;
+    } catch (error) {
+      if (tracked) observation.requests.push({ method, completed: false });
+      throw error;
+    }
+  };
+  return child;
+};
 const projectProcesses = new Map();
 const originalHelperCommand = IsolatedProjectProcess.prototype.helperCommand;
 IsolatedProjectProcess.prototype.helperCommand = async function (receipt, args, deadline) {

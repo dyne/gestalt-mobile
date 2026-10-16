@@ -348,6 +348,16 @@ try {
     );
     await mobile.getByRole('button', { name: 'Start Live', exact: true }).click();
     const result = await startResponse;
+    if (result.status() !== 200) {
+      const failure = await result.json();
+      await writeFile(
+        config.resultFile,
+        JSON.stringify({
+          startStatus: result.status(),
+          startCode: /^LIVE_[A-Z_]+$/.test(failure?.code ?? '') ? failure.code : 'UNCLASSIFIED',
+        }),
+      );
+    }
     assert.equal(result.status(), 200);
     const started = await result.json();
     assert.equal(started.state, 'active');

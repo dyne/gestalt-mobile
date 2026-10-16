@@ -58,11 +58,15 @@ describe('Live acquisition', () => {
       .mockResolvedValue(run);
     await controller.refresh();
     await controller.start();
+    expect(controller.view.uncertainStart).toBe(true);
+    controller.select(1);
+    expect(controller.view.selection).toBe(0);
     await controller.start();
     expect(vi.mocked(client.liveStart).mock.calls[0]?.[1].operationId).toEqual(
       vi.mocked(client.liveStart).mock.calls[1]?.[1].operationId,
     );
     expect(notify).toHaveBeenCalledOnce();
+    expect(controller.view.uncertainStart).toBe(false);
   });
 
   it('reconciles a successful uncertain Start without acquiring again', async () => {

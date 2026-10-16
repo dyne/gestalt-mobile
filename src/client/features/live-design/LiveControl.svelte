@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     run: null,
     pending: false,
     checking: true,
+    uncertainStart: false,
     guidance: 'Checking Live availability…',
   });
   const controller = new LiveController(
@@ -111,7 +112,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <select
         id={`${id}-app`}
         value={view.selection}
-        disabled={view.pending}
+        disabled={view.pending || view.uncertainStart}
         onchange={(event) => controller.select(Number(event.currentTarget.value))}
       >
         {#each view.targets as target, index (`${target.appId}:${target.targetId}`)}<option

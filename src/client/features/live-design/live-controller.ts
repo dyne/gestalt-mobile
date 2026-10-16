@@ -12,6 +12,7 @@ export type LiveView = {
   run: LiveRun | null;
   pending: boolean;
   checking: boolean;
+  uncertainStart: boolean;
   guidance: string;
 };
 const setup =
@@ -32,6 +33,7 @@ export class LiveController {
     run: null,
     pending: false,
     checking: true,
+    uncertainStart: false,
     guidance: 'Checking Live availability…',
   };
   private revision = 0;
@@ -70,17 +72,19 @@ export class LiveController {
     ]);
     if (this.disposed || revision !== this.revision) return;
     const run = status.status === 'fulfilled' ? status.value : this.view.run;
+    const acquired = run && !['idle', 'stopped'].includes(run.state ?? '');
+    if (acquired) this.operation = null;
     const available = targets.status === 'fulfilled' ? targets.value.targets : [];
     this.update({
       targets: available,
       run,
       checking: false,
-      guidance:
-        run && !['idle', 'stopped'].includes(run.state ?? '')
-          ? 'Live controls this session. Open the preview to design your app.'
-          : available.length
-            ? 'Live controls this session while you design. Choose an app to start.'
-            : setup,
+      uncertainStart: acquired ? false : this.view.uncertainStart,
+      guidance: acquired
+        ? 'Live controls this session. Open the preview to design your app.'
+        : available.length
+          ? 'Live controls this session while you design. Choose an app to start.'
+          : setup,
     });
     if (reportFailure && targets.status === 'rejected') this.notify(setup);
   }
@@ -114,15 +118,20 @@ export class LiveController {
       this.update({
         run,
         pending: false,
+        uncertainStart: false,
         guidance: 'Live controls this session. Open the preview to design your app.',
       });
     } catch (error) {
       if (this.disposed || revision !== this.revision) return;
+      const code = (error as { code?: string }).code ?? '';
+      const definitive = !!code && code !== 'LIVE_START_FAILED';
       const message =
-        messages[(error as { code?: string }).code ?? ''] ??
-        'Live could not start. Ask the operator to check Live setup, then retry Start.';
-      if (messages[(error as { code?: string }).code ?? '']) this.operation = null;
-      this.update({ pending: false, guidance: message });
+        messages[code] ??
+        (definitive
+          ? 'Live could not start. Ask the operator to check Live setup, then retry Start.'
+          : 'Start may still be completing. Keep this app selected and retry Start to check safely.');
+      if (definitive) this.operation = null;
+      this.update({ pending: false, uncertainStart: !definitive, guidance: message });
       this.notify(message);
     }
   }
