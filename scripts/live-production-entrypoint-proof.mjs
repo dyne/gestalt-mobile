@@ -54,6 +54,10 @@ import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-d
 import { observedBirthExited } from '../dist/server/server/platform/live-design/process-identity.js';
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
+import {
+  helperEventIdDigest,
+  helperProtocolSummary,
+} from './live-production-helper-diagnostics.mjs';
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
@@ -94,6 +98,16 @@ function finishBrowserProfile() {
 // Fixture-only observation: retain the production verifier, inputs and outcome.
 // Record timing/codes only, never receipts, process environments or credentials.
 const projectProcesses = new Map();
+const originalHelperCommand = IsolatedProjectProcess.prototype.helperCommand;
+IsolatedProjectProcess.prototype.helperCommand = async function (receipt, args, deadline) {
+  const result = await originalHelperCommand.call(this, receipt, args, deadline);
+  if (['live-status', 'live-resume', 'live-complete'].includes(args[0])) {
+    const rows = (report.helperProtocol ??= []);
+    if (rows.length === 40) rows.shift();
+    rows.push(helperProtocolSummary(args, result));
+  }
+  return result;
+};
 const originalProjectVerify = IsolatedProjectProcess.prototype.verify;
 IsolatedProjectProcess.prototype.verify = function (receipt) {
   const started = performance.now();
@@ -1798,7 +1812,12 @@ try {
             .all()
             .map((row) => {
               const item = JSON.parse(row.record);
-              return { kind: item.kind, stage: item.stage, history: item.history };
+              return {
+                kind: item.kind,
+                stage: item.stage,
+                history: item.history,
+                idDigest: helperEventIdDigest(item.upstreamId),
+              };
             }),
           intents: db.prepare('SELECT phase, code FROM live_poll_intents').all(),
         };
