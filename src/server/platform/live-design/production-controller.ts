@@ -854,6 +854,8 @@ export class ProductionLiveController {
   stop(request: LiveLifecycleRequest): Promise<LiveRun> {
     return this.serialize(async () => {
       const run = this.lifecycleRun(request);
+      if (run.state === 'recoveryRequired' || run.state === 'error')
+        await this.cleanupGeneration(run).loop?.waitForRecoveryDrain(run);
       return stopLive(
         {
           owners: this.owners,
@@ -879,6 +881,8 @@ export class ProductionLiveController {
   resume(request: LiveLifecycleRequest): Promise<LiveRun> {
     return this.serialize(async () => {
       const run = this.lifecycleRun(request);
+      if (run.state === 'recoveryRequired' || run.state === 'error')
+        await this.cleanupGeneration(run).loop?.waitForRecoveryDrain(run);
       const resumed = await resumeLive(
         {
           owners: this.owners,

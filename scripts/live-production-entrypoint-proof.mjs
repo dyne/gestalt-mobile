@@ -1704,7 +1704,10 @@ try {
       appRoot,
       privateRoot,
       signed,
-      owningBirthExited: observedBirthExited,
+      // Manager's signed process identity omits bootId; bind its PID/birth to
+      // the actual original launch's boot before using Mobile's exit observer.
+      owningBirthExited: (identity) =>
+        observedBirthExited({ ...identity, bootId: baselineBirth.bootId }),
       ownedProcesses: () => [...projectProcesses.keys()].map((owned) => owned.diagnostics()),
       authenticate: async (run) => {
         const verifier = previewSecrets.token();

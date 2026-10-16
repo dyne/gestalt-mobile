@@ -19,6 +19,17 @@ export class LivePollLoop {
       revocations: PreviewRevocationBarrier;
     },
   ) {}
+  /** Recovery is visible before its physical revocation/settlement completes.
+   * A lifecycle command must join that work before advancing its exact fence.
+   * A failed attempt may be retried by the command's own revoke/settle steps.
+   */
+  async waitForRecoveryDrain(fence: LiveFence): Promise<void> {
+    const run = this.input.owners.assert(fence);
+    if (run.state !== 'recoveryRequired' && run.state !== 'error') return;
+    const pending = this.draining;
+    if (pending) await pending.catch(() => {});
+    this.input.owners.assert(fence);
+  }
   /** Regrant must use a strictly newer generation; old cookies and delayed grants stay denied. */
   async revoke(run: LiveRun): Promise<void> {
     this.input.owners.assert(run);

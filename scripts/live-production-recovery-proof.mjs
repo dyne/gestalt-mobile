@@ -167,8 +167,20 @@ export async function productionRecoveryProof(input) {
       'RECOVERY_BROWSER_DISCONNECT_DEADLINE',
       30000,
     );
+    report.recoveryDisconnect = {
+      originalGeneration: started.generation,
+      recoveryGeneration: disconnected.generation,
+      initialSignedStatus: signed(fencePath).status,
+    };
     assert.ok(disconnected.generation > started.generation);
-    assert.equal(signed(fencePath).status, 'revoked');
+    // The denial state is durable before the asynchronous Manager invocation
+    // returns. Require the actual authenticated revocation, not state alone.
+    await until(
+      () => signed(fencePath).status === 'revoked',
+      'RECOVERY_SIGNED_REVOCATION_DEADLINE',
+      30000,
+    );
+    report.recoveryDisconnect.signedRevocationObserved = true;
     const beforeResume = userSource();
     stage('survivor-renewal');
     const attempts = await Promise.all(

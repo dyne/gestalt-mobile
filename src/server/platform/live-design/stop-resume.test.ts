@@ -170,6 +170,46 @@ it('binds canonical exit to preview revocation and drain without releasing or re
   await expect(loop.run(recovery)).rejects.toThrow('LIVE_POLL_RESTART_REQUIRES_RECONCILIATION');
   expect(poll.next).toHaveBeenCalledOnce();
 });
+it.each(['revoke', 'settle'] as const)(
+  'joins pending recovery %s before advancing the lifecycle fence',
+  async (delayed) => {
+    const f = fixture();
+    let release!: () => void;
+    const pending = new Promise<void>((done) => (release = done));
+    const poll = {
+      next: vi.fn(async () => {
+        f.owners.mutate(f.run, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
+        return 'exit' as const;
+      }),
+      settle: vi.fn(async () => {
+        if (delayed === 'settle') await pending;
+        f.events.push('settled');
+      }),
+    };
+    const loop = new LivePollLoop({
+      owners: f.owners,
+      poll,
+      revocations: {
+        revoke: async () => {
+          f.events.push('revoke');
+          if (delayed === 'revoke') await pending;
+        },
+      },
+    });
+    const work = loop.run(f.run);
+    await vi.waitFor(() => expect(f.events).toContain('revoke'));
+    const recovery = f.owners.current(f.run.liveId)!;
+    const resumed = loop.waitForRecoveryDrain(recovery).then(() => resumeLive(f.resume, recovery));
+    await new Promise((done) => setTimeout(done, 0));
+    expect(f.owners.current(f.run.liveId)).toEqual(recovery);
+    expect(f.resume.resources.authorize).not.toHaveBeenCalled();
+    release();
+    await expect(work).resolves.toBe('exit');
+    await expect(resumed).resolves.toMatchObject({ state: 'active' });
+    expect(f.events.indexOf('settled')).toBeLessThan(f.events.indexOf('journal'));
+    expect(poll.next).toHaveBeenCalledOnce();
+  },
+);
 it('drains on failed revocation but retains recovery and does not replay a failed poll', async () => {
   const f = fixture();
   const poll = {
