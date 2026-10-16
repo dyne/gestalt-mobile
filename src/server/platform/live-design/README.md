@@ -331,13 +331,11 @@ accept already applied before Stop finishes its chosen source; it never receives
 a conflicting discard or another accept transformation. Missing/outside/dirty sources or conflicting receipts
 retain recovery. Repeated terminal acknowledgements yield the same proof digest.
 
-Production Start remains unavailable: the CLI does not supply a production
-`liveController`. The elected store, canonical poll loop, durable generation
-cutoffs and Stop/Resume adapters are lifecycle foundations, not an admission
-receipt for an existing process tree. The request guard cannot confine native
-child/tool writers.
+Production Start requires private host configuration and verified admission of
+the original owning runtime. The elected store, canonical poll loop and request
+guard cannot independently establish native child/tool confinement.
 
-## Host launch foundation and remaining admission
+## Historical host launch foundation
 
 The supported launch chain starts Mobile from the trusted host, then uses
 `launchCodexAppServer` with private stdio. The app-server inherits that host
@@ -394,3 +392,61 @@ and `sessionId` through the owning root using fresh `thread/read` observations;
 locally observed child IDs alone grant no cancellation authority. Missing,
 conflicting or unavailable lineage retains recovery ownership. Production L11
 must prove this discovery against the actual owning native session tree.
+
+## Original owning-runtime admission
+
+Trusted host launch uses `gestalt mobile -- --live-config /absolute/private/config.json`
+with the existing Mobile options. Mobile launches the original Native child through
+the Manager's private `gestalt cli -- --live-policy-owning-runtime` handoff and
+retains its real process handle and private stdio. Never launch this controller
+from a model sandbox or substitute a PID for the original child handle.
+
+Each registered app can declare `owningPolicy` with `profileId`, `sandboxState`,
+the complete original `configFiles` array of `{path, sha256}`, and optional
+`instructionFiles`. This is a private host expectation, checked against the actual
+Native configuration and selected permissions after birth. It cannot manufacture
+an observed source inventory or grant readiness. Sources are parsed before keys
+or threads are created; unknown MCP/plugin/hook/notification executables,
+unapproved role sources, enabled hooks and disabled project instruction discovery
+make admission unavailable. Configured hooks must explicitly be disabled.
+Missing provenance, present system config, or pre-existing project metadata
+cannot be adopted. Ordinary configurations without admission remain unavailable
+for Live.
+
+The accepted private original handoff uses a fixed Native environment. Captured
+launches refuse nonempty `providerCredentialEnvironment` declarations rather than
+drop those bindings. A provider requiring environment credentials needs a supported
+host contract before it can use this capture path.
+
+Manager v2 capture signs metadata absence and all instruction candidates before
+original birth. Sealing binds actual Native configuration layers, session flags,
+loaded instructions, precedence-shadowed candidates, directory identities and
+absent sources to the elected controller and reserved session/app generation.
+The existing idle thread is cold-resumed inside the same original app-server;
+Start never destroys that original process to prepare a replacement. Private
+RPC state is re-resolved before every Live model admission. A change revokes the
+old admission and retains recovery ownership.
+
+New captured sessions initialize that one original app-server and read its actual
+model and skill catalogs before selecting a thread. Provider/account metadata,
+configuration, process identity and environment must remain unchanged across
+discovery. The reservation remains held through thread creation and sealing;
+discovery never starts a model turn or borrows another home's catalog.
+
+The prepared context-mode and Org descriptors have empty environments. The exact
+typed `suspension-v1` consumer declaration is bound to the Mobile component,
+bootstrap, config and receipt; it does not export an ambient capability token.
+The controller owns publication when no proxy publication destination is configured.
+Original restricted or enabled network policy is preserved. Project instructions
+remain readable when originally permitted, while their source files and absent
+candidates cannot be changed by model/helper/dev-server work.
+
+Native pins in `native-contract.ts` identify the reviewed GNU CLI, sandbox helper
+and bwrap artifact from run 38645681271 and the signed official static MUSL
+code-mode host at the same upstream source revision. Hosted tests reuse those
+artifacts and verify every digest and the host signature after cache restoration.
+They do not rebuild or activate an installed runtime.
+
+Production admission still requires current supported-host process/tool proof;
+unit tests and a configured expectation alone do not establish readiness. The
+genuine-provider smoke remains separate from controlled-provider evidence.

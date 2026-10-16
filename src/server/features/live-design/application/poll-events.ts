@@ -53,7 +53,7 @@ export interface CanonicalLivePoll {
   reply(reply: LiveEventReply): Promise<unknown>;
   complete(id: string, discarded?: boolean): Promise<unknown>;
   /** End the owned helper poll and await its foreground command; never replay it. */
-  settle?(): Promise<void>;
+  settle?(run?: LiveRun): Promise<void>;
 }
 export interface LiveEventTurns {
   /** Interrupt the owned turn and prove root/descendant/command settlement. */
@@ -80,7 +80,11 @@ export function parseLivePollEvent(value: unknown): LivePollEvent {
     throw new Error('LIVE_POLL_PROTOCOL_INVALID');
   if (event.id !== undefined && (typeof event.id !== 'string' || !/^[a-f0-9]{8}$/.test(event.id)))
     throw new Error('LIVE_POLL_PROTOCOL_INVALID');
-  return event;
+  // The pinned helper retains the request body's authentication token in its
+  // queue and canonical CLI output. It is transport authority, never edit data.
+  const content = { ...event };
+  delete content.token;
+  return content;
 }
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -124,7 +128,7 @@ export class PollLiveEvents {
     // Stop's state transition has already fenced every later apply/reply.
     const flight = this.flight;
     const results = await Promise.allSettled([
-      this.input.cli.settle(),
+      this.input.cli.settle(run),
       this.input.turns.settle(run),
     ]);
     if (results.some((result) => result.status === 'rejected'))

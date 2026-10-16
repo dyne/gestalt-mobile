@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ManagedCaddyAdminBoundary,
   protectCaddyControllerState,
+  privateDenialFailure,
   type ManagedProjectSandboxState,
 } from './caddy-admin-boundary.js';
 import { CaddyRouteBroker } from './caddy-route-broker.js';
@@ -21,6 +23,7 @@ import { CaddyRouteStore } from './caddy-route-store.js';
 import { RegisteredPreviewTargets } from './preview-targets.js';
 import { UnixCaddyAdmin } from './caddy-admin.js';
 import { realCaddyFixture } from './caddy-routes.fixture.js';
+import { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -45,6 +48,43 @@ function effectivePolicy(projectDirectory: string): ManagedProjectSandboxState {
   };
 }
 describe('Caddy private controller boundary', () => {
+  it('accepts covering denials while refusing reopened, conflicting and unresolved grants', () => {
+    const filesystem = effectivePolicy('/app').permissionProfile.file_system;
+    const entries = [
+      ...filesystem.entries,
+      { path: { type: 'path' as const, path: '/private' }, access: 'deny' as const },
+    ];
+    const denied = (extra: typeof filesystem.entries = []) =>
+      privateDenialFailure({ ...filesystem, entries: [...entries, ...extra] }, '/private/caddy');
+    expect(denied()).toBeUndefined();
+    expect(
+      denied([{ path: { type: 'path', path: '/private/caddy/socket' }, access: 'read' }]),
+    ).toBe('private-denial-overridden');
+    expect(denied([{ path: { type: 'path', path: '/private/caddy' }, access: 'write' }])).toBe(
+      'private-denial-missing',
+    );
+    expect(denied([{ path: { type: 'path', path: '/private' }, access: 'read' }])).toBe(
+      'private-denial-missing',
+    );
+    expect(
+      denied([{ path: { type: 'glob_pattern', pattern: '/private/**' }, access: 'read' }]),
+    ).toBe('private-denial-overridden');
+    expect(
+      denied([{ path: { type: 'special', value: { kind: 'unknown' } }, access: 'write' }]),
+    ).toBe('private-denial-overridden');
+    expect(
+      privateDenialFailure(
+        {
+          ...filesystem,
+          entries: [
+            { path: { type: 'special', value: { kind: 'root' } }, access: 'deny' },
+            { path: { type: 'special', value: { kind: 'tmpdir' } }, access: 'write' },
+          ],
+        },
+        '/tmp/caddy',
+      ),
+    ).toBe('private-denial-missing');
+  });
   it('retains inherited permission entries while excluding private controller state', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'live-controller-policy-'));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -136,6 +176,43 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
       });
       const proof = await boundary.verify();
       expect(proof.uid).toBe(process.getuid!());
+      const nativePath = process.env.LIVE_HOST_CODEX_BINARY;
+      if (!nativePath) throw new Error('LIVE_NATIVE_BINARY_UNAVAILABLE');
+      expect(createHash('sha256').update(readFileSync(nativePath)).digest('hex')).toBe(
+        LIVE_CODEX_SHA256,
+      );
+      const productionPolicy: ManagedProjectSandboxState = {
+        ...policy,
+        permissionProfile: {
+          ...policy.permissionProfile,
+          network: 'restricted',
+          file_system: {
+            ...policy.permissionProfile.file_system,
+            entries: [
+              ...policy.permissionProfile.file_system.entries,
+              { path: { type: 'path', path: '/proc' }, access: 'deny' },
+            ],
+          },
+        },
+      };
+      const productionBoundary = new ManagedCaddyAdminBoundary({
+        codexExecutable: nativePath,
+        nativeNoProc: true,
+        projectDirectory: f.appRoots[0]!,
+        controllerDirectory: f.controllerDirectory,
+        socketPath: f.socket,
+        credentialPath,
+        effectiveSandboxState: () => productionPolicy,
+        sandboxEnvironment: {
+          PATH: '/usr/bin:/bin',
+          HOME: sandboxHome,
+          CODEX_HOME: sandboxHome,
+          TMPDIR: '/tmp',
+          LANG: 'C.UTF-8',
+        },
+      });
+      const productionProof = await productionBoundary.verify();
+      expect(productionProof).toEqual({ uid: process.getuid!(), procPidsChecked: 0 });
       const store = new CaddyRouteStore(
         join(f.controllerDirectory, 'routes.sqlite'),
         'preview.example.test',
@@ -164,6 +241,7 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
       await f.stop();
       await f.start();
       const restartProof = await boundary.verify();
+      const productionRestartProof = await productionBoundary.verify();
       await broker.execute(credential, { action: 'reconcile' });
       await broker.execute(credential, { action: 'remove', appRoot: f.appRoots[0]! });
       if (process.env.LIVE_CADDY_EVIDENCE_DIR) {
@@ -181,6 +259,8 @@ describe.runIf(process.env.LIVE_NATIVE_CADDY_PROOF === '1')(
               noAlternateUid: true,
               beforeRestart: proof,
               afterRestart: restartProof,
+              productionRestrictedNoProcBeforeRestart: productionProof,
+              productionRestrictedNoProcAfterRestart: productionRestartProof,
               authenticatedNamespacedActivationReconcileTeardown: true,
             },
             null,

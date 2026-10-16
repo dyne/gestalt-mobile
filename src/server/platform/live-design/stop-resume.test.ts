@@ -55,6 +55,7 @@ function fixture() {
     remove: action('remove'),
     cleanup: action('cleanup'),
     verifyClean: action('verifyClean'),
+    restore: action('restoreOwner'),
   };
   const restore = vi.fn();
   const deps = {
@@ -169,6 +170,72 @@ it('binds canonical exit to preview revocation and drain without releasing or re
   await expect(loop.run(recovery)).rejects.toThrow('LIVE_POLL_RESTART_REQUIRES_RECONCILIATION');
   expect(poll.next).toHaveBeenCalledOnce();
 });
+it('preserves the original renewal failure and retains ownership when abort revocation also fails', async () => {
+  const f = fixture();
+  const recovery = f.owners.mutate(f.run, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
+  const original = new Error('LIVE_ADMISSION_UNAVAILABLE');
+  const deps = {
+    ...f.resume,
+    resources: {
+      ...f.resume.resources,
+      prepare: async () => {
+        throw original;
+      },
+    },
+  };
+  f.resume.resources.revoke.mockImplementation(async () => {
+    if (f.owners.current(f.run.liveId)?.state === 'starting')
+      throw new Error('LIVE_GENERATION_STALE');
+  });
+  await expect(resumeLive(deps, recovery)).rejects.toBe(original);
+  expect(f.owners.current(f.run.liveId)).toMatchObject({
+    state: 'recoveryRequired',
+    failureCode: 'LIVE_RESUME_REVOCATION_UNVERIFIED',
+  });
+  expect(f.resume.resources.authorize).not.toHaveBeenCalled();
+  expect(f.restore).not.toHaveBeenCalled();
+  expect(() => f.owners.checkOrdinary('other', null)).toThrow();
+});
+it.each(['revoke', 'settle'] as const)(
+  'joins pending recovery %s before advancing the lifecycle fence',
+  async (delayed) => {
+    const f = fixture();
+    let release!: () => void;
+    const pending = new Promise<void>((done) => (release = done));
+    const poll = {
+      next: vi.fn(async () => {
+        f.owners.mutate(f.run, { event: 'recover', code: 'LIVE_BROWSER_DISCONNECTED' });
+        return 'exit' as const;
+      }),
+      settle: vi.fn(async () => {
+        if (delayed === 'settle') await pending;
+        f.events.push('settled');
+      }),
+    };
+    const loop = new LivePollLoop({
+      owners: f.owners,
+      poll,
+      revocations: {
+        revoke: async () => {
+          f.events.push('revoke');
+          if (delayed === 'revoke') await pending;
+        },
+      },
+    });
+    const work = loop.run(f.run);
+    await vi.waitFor(() => expect(f.events).toContain('revoke'));
+    const recovery = f.owners.current(f.run.liveId)!;
+    const resumed = loop.waitForRecoveryDrain(recovery).then(() => resumeLive(f.resume, recovery));
+    await new Promise((done) => setTimeout(done, 0));
+    expect(f.owners.current(f.run.liveId)).toEqual(recovery);
+    expect(f.resume.resources.authorize).not.toHaveBeenCalled();
+    release();
+    await expect(work).resolves.toBe('exit');
+    await expect(resumed).resolves.toMatchObject({ state: 'active' });
+    expect(f.events.indexOf('settled')).toBeLessThan(f.events.indexOf('journal'));
+    expect(poll.next).toHaveBeenCalledOnce();
+  },
+);
 it('drains on failed revocation but retains recovery and does not replay a failed poll', async () => {
   const f = fixture();
   const poll = {
@@ -237,13 +304,20 @@ it('a late old-controller loop cannot revoke or drain a successor', async () => 
 it('revokes and closes streams before settling work/routes/journal, then restores once', async () => {
   const f = fixture();
   const stopped = await stopLive(f.deps, f.run);
-  expect(f.events).toEqual(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean']);
+  expect(f.events).toEqual([
+    'revoke',
+    'settle',
+    'remove',
+    'cleanup',
+    'verifyClean',
+    'restoreOwner',
+  ]);
   expect(stopped.state).toBe('idle');
   await stopLive(f.deps, stopped);
   expect(f.restore).toHaveBeenCalledOnce();
-  expect(f.events).toHaveLength(5);
+  expect(f.events).toHaveLength(6);
 });
-it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const)(
+it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean', 'restore'] as const)(
   'failed %s retains exclusive recovery ownership and retries only through Stop',
   async (phase) => {
     const f = fixture();
@@ -252,12 +326,53 @@ it.each(['revoke', 'settle', 'remove', 'cleanup', 'verifyClean'] as const)(
     const recovery = f.owners.current(f.run.liveId)!;
     expect(recovery.state).toBe('recoveryRequired');
     expect(f.restore).not.toHaveBeenCalled();
-    if (phase === 'revoke') expect(f.deps.resources.settle).toHaveBeenCalledOnce();
+    if (phase === 'revoke') {
+      expect(f.deps.resources.settle).toHaveBeenCalledOnce();
+      expect(f.deps.resources.restore).not.toHaveBeenCalled();
+    }
     expect(() => f.owners.checkOrdinary('relay', [f.run.app.registeredPath])).toThrow(
       'LIVE_MODE_ACTIVE',
     );
     expect((await stopLive(f.deps, recovery)).state).toBe('idle');
     expect(f.restore).toHaveBeenCalledOnce();
+  },
+);
+it.each(['current', 'successor'] as const)(
+  'holds ordinary writers and controls until actual owner restoration settles under the %s fence',
+  async (owner) => {
+    const f = fixture();
+    let finish!: () => void;
+    f.deps.resources.restore.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    const pending = stopLive(f.deps, f.run);
+    const outcome = pending.then(
+      (run) => ({ run, error: null }),
+      (error: Error) => ({ run: null, error }),
+    );
+    await vi.waitFor(() => expect(f.deps.resources.restore).toHaveBeenCalledOnce());
+    const restoring = f.owners.current(f.run.liveId)!;
+    expect(restoring.state).toBe('stopping');
+    expect(restoring.phase).toBe('stop:restore:intent');
+    expect(() => f.owners.checkOrdinary('relay', [f.run.app.registeredPath])).toThrow(
+      'LIVE_MODE_ACTIVE',
+    );
+    expect(f.restore).not.toHaveBeenCalled();
+    const successor =
+      owner === 'successor'
+        ? f.owners.mutate(restoring, { event: 'recover', code: 'LIVE_CONTROLLER_CHANGED' })
+        : null;
+    finish();
+    const result = await outcome;
+    if (successor) {
+      expect(result.error?.message).toBe('LIVE_GENERATION_STALE');
+      expect(f.owners.current(f.run.liveId)).toEqual(successor);
+      expect(f.restore).not.toHaveBeenCalled();
+    } else {
+      expect(result.error).toBeNull();
+      expect(result.run?.state).toBe('idle');
+      expect(f.restore).toHaveBeenCalledOnce();
+    }
   },
 );
 it('Resume reconciles an interrupted accept/source and partially removed routes before regrant', async () => {

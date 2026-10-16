@@ -16,6 +16,11 @@ import {
 import { SkillProfileError } from '../../skills/model/errors.js';
 import type { LlmProvider } from '../../../../shared/contracts/llm-provider.js';
 
+export type OwningStartupDiscovery = {
+  models: readonly string[];
+  skills: Awaited<ReturnType<SkillCatalog['list']>>;
+};
+
 export async function startSession(
   input: { workspaceId: string; profile: string; skillProfile?: string } & StartSessionSettings,
   deps: {
@@ -33,11 +38,21 @@ export async function startSession(
     defaultSkillProfile?: SkillProfile;
     /** Durable admission before model/skill discovery can start a native helper. */
     reserve?(session: RelaySessionSnapshot): void;
+    owningStartup?: {
+      supports(session: RelaySessionSnapshot): boolean;
+      start(
+        session: RelaySessionSnapshot,
+        select: (discovery: OwningStartupDiscovery) => Promise<RelaySessionSnapshot>,
+        signal?: AbortSignal,
+      ): Promise<RelaySessionSnapshot>;
+    };
+    releaseStartup?(session: RelaySessionSnapshot): Promise<void>;
     activate?(
       session: RelaySessionSnapshot,
       settings: StartSessionSettings,
     ): Promise<RelaySessionSnapshot>;
   },
+  options: { signal?: AbortSignal } = {},
 ): Promise<RelaySessionSnapshot> {
   // Codex launcher profiles select the app-server skill directory. Kimi owns
   // its isolated profile lifecycle, so it must not require a Codex launcher
@@ -48,71 +63,15 @@ export async function startSession(
   ]);
   const id = deps.createId();
   const startedAt = deps.now();
-  deps.reserve?.(
-    RelaySession.create({
-      id,
-      workspaceId: workspace.id,
-      workspacePath: workspace.realPath,
-      provider: input.provider,
-      profile: input.profile,
-      model: input.model,
-      sandbox: input.sandbox,
-      approvalPolicy: input.approvalPolicy,
-      effectiveSkillSelection: { skills: [] },
-      now: startedAt,
-    }).snapshot,
-  );
-  let model = input.model;
-  const modelCatalog = deps.sessionModels ?? deps.models;
-  if (modelCatalog) {
-    const models = await modelCatalog.list(input.provider);
-    // An omitted model resolves to the provider's own default: the relay-wide
-    // default when that provider serves it, otherwise the provider's first
-    // available model, so a kimi request never inherits the codex default.
-    model ??= models.includes(DEFAULT_SESSION_MODEL)
-      ? DEFAULT_SESSION_MODEL
-      : (models[0] ?? DEFAULT_SESSION_MODEL);
-    if (!models.includes(model))
-      throw new Error(
-        input.provider === 'codex' ? 'CODEX_MODEL_UNAVAILABLE' : 'KIMI_MODEL_UNAVAILABLE',
-      );
-  } else {
-    model ??= DEFAULT_SESSION_MODEL;
-  }
-  const selectedProfile = input.skillProfile
-    ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
-    : deps.defaultSkillProfile;
-  if (input.skillProfile && !selectedProfile)
-    throw new SkillProfileError(
-      'UNKNOWN_SKILL_PROFILE',
-      'The selected skill profile does not exist.',
-    );
-  const [projectProfile, catalog] = await Promise.all([
-    deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
-    deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
-  ]);
-  const sourceProfile = selectedProfile ?? projectProfile;
-  const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
-  const effectiveSkillSelection = {
-    ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
-    skills: [
-      ...reconciledSkills.skills.map((skill) => ({
-        name: skill.name,
-        path: skill.path,
-        enabled: skill.enabled,
-      })),
-      ...reconciledSkills.missing,
-    ],
-    ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
-  };
-  const branch = await deps.gitBranch?.(workspace.realPath);
-  const session = RelaySession.create({
+  const provisional = RelaySession.create({
     id,
     workspaceId: workspace.id,
     workspacePath: workspace.realPath,
     provider: input.provider,
     profile: input.profile,
-    model,
+    model: input.model,
+    sandbox: input.sandbox,
+    approvalPolicy: input.approvalPolicy,
     ...(input.provider === 'codex' &&
     (input.reasoningEffort || input.executorModel || input.executorReasoningEffort)
       ? {
@@ -125,15 +84,96 @@ export async function startSession(
           },
         }
       : {}),
-    ...(branch ? { branch } : {}),
-    sandbox: input.sandbox,
-    approvalPolicy: input.approvalPolicy,
-    effectiveSkillSelection,
+    effectiveSkillSelection: { skills: [] },
     now: startedAt,
   }).snapshot;
-  deps.save(session);
-  if (!deps.activate) return session;
-  const active = await deps.activate(session, { provider: session.provider });
-  deps.save(active);
-  return active;
+  deps.reserve?.(provisional);
+
+  let saved: RelaySessionSnapshot | undefined;
+  const complete = async (discovery?: OwningStartupDiscovery, prepared = false) => {
+    let model = input.model;
+    const modelCatalog = deps.sessionModels ?? deps.models;
+    if (modelCatalog || discovery) {
+      const models = discovery?.models ?? (await modelCatalog!.list(input.provider));
+      // An omitted model resolves to the provider's own default: the relay-wide
+      // default when that provider serves it, otherwise the provider's first
+      // available model, so a kimi request never inherits the codex default.
+      model ??= models.includes(DEFAULT_SESSION_MODEL)
+        ? DEFAULT_SESSION_MODEL
+        : (models[0] ?? DEFAULT_SESSION_MODEL);
+      if (!models.includes(model))
+        throw new Error(
+          input.provider === 'codex' ? 'CODEX_MODEL_UNAVAILABLE' : 'KIMI_MODEL_UNAVAILABLE',
+        );
+    } else {
+      model ??= DEFAULT_SESSION_MODEL;
+    }
+    const selectedProfile = input.skillProfile
+      ? await deps.skillProfiles.readGlobalProfile(input.skillProfile)
+      : deps.defaultSkillProfile;
+    if (input.skillProfile && !selectedProfile)
+      throw new SkillProfileError(
+        'UNKNOWN_SKILL_PROFILE',
+        'The selected skill profile does not exist.',
+      );
+    const [projectProfile, catalog] = await Promise.all([
+      deps.skillProfiles.readWorkspaceDefault(workspace.realPath),
+      discovery
+        ? Promise.resolve(discovery.skills)
+        : deps.skillCatalog(input.provider, input.profile).list(workspace.realPath),
+    ]);
+    const sourceProfile = selectedProfile ?? projectProfile;
+    const reconciledSkills = reconcileSkillSelectionSnapshot(catalog.skills, sourceProfile?.skills);
+    const effectiveSkillSelection = {
+      ...(selectedProfile ? { selectedProfileName: selectedProfile.name } : {}),
+      skills: [
+        ...reconciledSkills.skills.map((skill) => ({
+          name: skill.name,
+          path: skill.path,
+          enabled: skill.enabled,
+        })),
+        ...reconciledSkills.missing,
+      ],
+      ...(reconciledSkills.warnings.length > 0 ? { warnings: reconciledSkills.warnings } : {}),
+    };
+    const branch = await deps.gitBranch?.(workspace.realPath);
+    const session = RelaySession.create({
+      id,
+      workspaceId: workspace.id,
+      workspacePath: workspace.realPath,
+      provider: input.provider,
+      profile: input.profile,
+      model,
+      ...(provisional.modelSettings ? { modelSettings: provisional.modelSettings } : {}),
+      ...(branch ? { branch } : {}),
+      sandbox: input.sandbox,
+      approvalPolicy: input.approvalPolicy,
+      effectiveSkillSelection,
+      now: startedAt,
+    }).snapshot;
+    options.signal?.throwIfAborted();
+    deps.save(session);
+    saved = session;
+    if (prepared || !deps.activate) return session;
+    const active = await deps.activate(session, { ...input, model: session.model });
+    deps.save(active);
+    return active;
+  };
+  try {
+    options.signal?.throwIfAborted();
+    if (deps.owningStartup?.supports(provisional)) {
+      const active = await deps.owningStartup.start(
+        provisional,
+        (discovery) => complete(discovery, true),
+        options.signal,
+      );
+      deps.save(active);
+      return active;
+    }
+    return await complete();
+  } catch (error) {
+    await deps.releaseStartup?.(provisional);
+    if (saved) deps.save(RelaySession.rehydrate(saved).stop(deps.now()).snapshot);
+    throw error;
+  }
 }

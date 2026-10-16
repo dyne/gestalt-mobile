@@ -18,6 +18,8 @@ export type LiveStopDependencies = {
     cleanup(run: LiveRun): Promise<void>;
     /** Actual route/auth/helper/process reconciliation, including pending results and descendants. */
     verifyClean(run: LiveRun): Promise<void>;
+    /** Restore and verify the original ordinary owning configuration while exclusion is held. */
+    restore(run: LiveRun): Promise<void>;
   };
 };
 
@@ -48,6 +50,13 @@ export async function stopLive(deps: LiveStopDependencies, fence: LiveFence): Pr
         run = deps.owners.mutate(run, { event: 'phase', phase: 'stop:revoke:intent' });
         throw revocationError;
       }
+      // Cleanup alone cannot enable ordinary writers or prior control timers.
+      // A disposed captured birth requires supported renewal, never a silent
+      // ordinary relaunch; restoration failure keeps the exclusive recovery lock.
+      run = deps.owners.mutate(run, { event: 'phase', phase: 'stop:restore:intent' });
+      await deps.resources.restore(run);
+      deps.owners.assert(run);
+      run = deps.owners.mutate(run, { event: 'phase', phase: 'stop:restore:ack' });
       run = deps.owners.mutate(run, { event: 'cleaned' });
     } catch (error) {
       // A newer controller/Stop owns a stale callback; it cannot mark or clean that generation.

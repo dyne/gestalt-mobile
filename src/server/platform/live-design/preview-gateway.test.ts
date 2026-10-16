@@ -6,6 +6,7 @@
 
 import { afterEach, expect, test } from 'vitest';
 import { createServer, request } from 'node:http';
+import { createConnection } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { previewAuthFixture, origin } from '../../features/live-design/preview-auth.fixture.js';
 import { createPreviewGateway } from './preview-gateway.js';
@@ -16,7 +17,7 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
-async function fixture() {
+async function fixture(isolatedTransport = false, beforeOpen = async () => {}) {
   const auth = await previewAuthFixture(cleanup);
   const requests: { path: string; body: string; headers: Record<string, unknown> }[] = [];
   const upstream = createServer(async (req, res) => {
@@ -58,6 +59,7 @@ async function fixture() {
     helperPort,
     gatewayPort,
   });
+  const opened: ('app' | 'helper')[] = [];
   const gateway = await createPreviewGateway({
     deps: auth.deps,
     instance: {
@@ -71,6 +73,20 @@ async function fixture() {
     targets,
     registrationId,
     connections: auth.connections,
+    ...(isolatedTransport
+      ? {
+          upstreams: {
+            async open(role: 'app' | 'helper') {
+              opened.push(role);
+              await beforeOpen();
+              return createConnection({
+                host: '127.0.0.1',
+                port: role === 'app' ? address.port : helperPort,
+              });
+            },
+          },
+        }
+      : {}),
   });
   await gateway.listen();
   cleanup.push(() => gateway.close());
@@ -119,8 +135,81 @@ async function fixture() {
       },
     );
   }
-  return { ...auth, gateway, gatewayPort, headers, targets, registrationId, requests, send };
+  return {
+    ...auth,
+    gateway,
+    gatewayPort,
+    headers,
+    targets,
+    registrationId,
+    requests,
+    send,
+    opened,
+  };
 }
+
+test('routes HTTP and HMR through the supplied fixed transport only after preview authentication', async () => {
+  // Real HTTP/WebSocket transport fixture; this does not assert native confinement.
+  const f = await fixture(true);
+  expect((await f.send('/', undefined, { cookie: '' })).status).toBe(401);
+  expect(f.opened).toEqual([]);
+  expect((await f.send('/src/main.js')).status).toBe(200);
+  expect((await f.send('/__gestalt_live/live.js')).status).toBe(200);
+  const peer = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/`, 'vite-hmr', {
+    headers: f.headers,
+  });
+  cleanup.push(() => peer.terminate());
+  await new Promise<void>((resolve, reject) => {
+    peer.once('open', resolve);
+    peer.once('error', reject);
+  });
+  const frame = new Promise<string>((resolve) =>
+    peer.once('message', (data) => resolve(String(data))),
+  );
+  peer.send('pipe HMR');
+  expect(await frame).toBe('pipe HMR');
+  expect(f.opened).toEqual(['app', 'helper', 'app']);
+  await f.connections.revoke({ liveId: 'live' });
+});
+
+test.each(['http', 'hmr'] as const)(
+  'revocation fences %s while isolated connection verification is pending',
+  async (transport) => {
+    let release!: () => void;
+    let started!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const f = await fixture(true, async () => {
+      started();
+      await barrier;
+    });
+    const peer =
+      transport === 'hmr'
+        ? new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/`, 'vite-hmr', { headers: f.headers })
+        : undefined;
+    peer?.on('error', () => {});
+    const completed = peer
+      ? new Promise<void>((resolve) => peer.once('close', () => resolve()))
+      : f.send('/').then(
+          () => {
+            throw new Error('Revoked HTTP must not succeed');
+          },
+          () => {},
+        );
+    await entered;
+    await f.connections.revoke({ liveId: 'live' });
+    release();
+    await completed;
+    // Let the pending transport complete so the post-await fence runs too.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(f.requests).toHaveLength(0);
+    expect(f.connections.size).toBe(0);
+  },
+);
 
 test('binds registered app/helper targets, relays JSON bodies and strips credentials and unsafe responses', async () => {
   const f = await fixture();
@@ -141,6 +230,29 @@ test('binds registered app/helper targets, relays JSON bodies and strips credent
   f.targets.unregister(f.registrationId);
   expect((await f.send('/')).status).toBe(503);
   expect(f.connections.size).toBe(0);
+});
+
+test('authenticated preview content cannot become a poll owner or bypass controller cleanup', async () => {
+  const f = await fixture();
+  for (const path of [
+    '/__gestalt_live/poll?token=fixture',
+    '/__gestalt_live/%70oll?token=fixture',
+    '/__gestalt_live//poll?token=fixture',
+    '/__gestalt_live/stop?token=fixture',
+    '/__gestalt_live/agent-target?token=fixture',
+  ]) {
+    expect((await f.send(path)).status).toBe(403);
+    expect((await f.send(path, '{}')).status).toBe(403);
+    expect(f.requests).toHaveLength(0);
+    expect(f.connections.size).toBe(0);
+  }
+  // The pinned browser itself posts these targeting verdicts and claims.
+  expect((await f.send('/__gestalt_live/agent-target-result', '{}')).status).toBe(200);
+  expect((await f.send('/__gestalt_live/agent-target-claim', '{}')).status).toBe(200);
+  expect(f.requests.map((request) => request.path)).toEqual([
+    '/agent-target-result',
+    '/agent-target-claim',
+  ]);
 });
 
 test('authorizes the actual HMR upgrade and closes its transport before revocation returns', async () => {
@@ -165,6 +277,37 @@ test('authorizes the actual HMR upgrade and closes its transport before revocati
   expect((await f.send('/')).status).toBe(401);
   expect(f.connections.size).toBe(0);
 });
+
+test.each([
+  ['/__gestalt_live/events', 'retry: 0\n\ndata: connected\n\n'],
+  ['/events', 'data: connected\n\n'],
+])(
+  'preserves real SSE events and changes reconnect delay only for helper %s',
+  async (path, body) => {
+    const f = await fixture(true);
+    const received = await new Promise<string>((resolve, reject) => {
+      const req = request(
+        { hostname: '127.0.0.1', port: f.gatewayPort, path, headers: f.headers },
+        (response) => {
+          let received = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk) => {
+            received += chunk;
+            if (received.endsWith('data: connected\n\n')) {
+              response.destroy();
+              resolve(received);
+            }
+          });
+          response.once('error', reject);
+        },
+      );
+      req.once('error', reject);
+      req.end();
+    });
+    expect(received).toBe(body);
+    expect(f.opened).toEqual([path.startsWith('/__gestalt_live/') ? 'helper' : 'app']);
+  },
+);
 
 test('closes an active SSE and actual HMR listener without waiting for stream expiry', async () => {
   const f = await fixture();

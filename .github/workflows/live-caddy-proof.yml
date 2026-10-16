@@ -4,12 +4,22 @@
 
 name: Isolated Live Caddy proof (no deployment)
 on:
+  push:
+    branches:
+      - test/live-production-l11
   pull_request:
     paths:
       - src/server/platform/live-design/**
+      - src/server/platform/codex/codex-process-launcher.ts
+      - src/server/platform/codex/session-runtime.ts
       - src/server/features/live-design/application/**
       - .github/workflows/live-caddy-proof.yml
       - scripts/live-remote-*.mjs
+      - scripts/live-model-tools-proof.mjs
+      - scripts/live-native-proof-preflight.mjs
+      - scripts/live-project-isolation-proof.mjs
+      - scripts/live-production-entrypoint-proof.mjs
+      - scripts/live-production-edit-*.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,34 +31,138 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.21.0
           cache: npm
       - run: npm ci
-      - name: Prepare pinned test tools in runner temporary state
+      - name: Read-only accepted Manager input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: dyne/gestalt
+          ref: dd46fb4d99780ca3d9df73480834aabc102db8a2 # accepted Manager tree 96632966
+          path: .host-manager-input
+          persist-credentials: false
+      - name: Read-only accepted Agents input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: dyne/gestalt-agents
+          ref: 129d33bc6d6c58d280d9bcf5155fab6ed9b6e0bd # accepted Agents tree 414a8928; canonical 2c88bc0
+          path: .host-agents-input
+          persist-credentials: false
+      - name: Verify exact accepted dependency trees
         run: |
           set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/live-proof-tools"
-          curl --fail --silent --show-error --location \
-            https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz \
-            --output "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz"
+          test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = 966329668f6b967105a4b89b69875d73e54a08f9
+          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 414a89284efbb050188ca1802563b92667c50994
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: verified-archives
+        with:
+          path: ${{ runner.temp }}/live-proof-cache
+          key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
+      - name: Prepare verified existing native artifacts and pinned test tools
+        run: |
+          set -Eeuo pipefail
+          tool_root="$RUNNER_TEMP/live-proof-tools"
+          archive_root="$RUNNER_TEMP/live-proof-cache"
+          mkdir -p "$tool_root" "$archive_root"
+          echo "BUN_INSTALL_CACHE_DIR=$archive_root/bun" >> "$GITHUB_ENV"
+          install -m0755 .host-manager-input/public/gestalt "$tool_root/gestalt"
+          if [[ ! -f "$archive_root/native-artifact.zip" ]]; then
+            curl --fail --silent --show-error --location \
+              https://nightly.link/dyne/gestalt/actions/runs/38645681271/native-mask-candidate-results.zip \
+              --output "$archive_root/native-artifact.zip"
+          fi
+          printf '%s  %s\n' 8e2e197ce1f35bbebc2f73682b34b4e44c5d8661f7638d731979f0e054939e7f "$archive_root/native-artifact.zip" | sha256sum --check --status
+          mkdir -p "$tool_root/native-artifact"
+          unzip -q "$archive_root/native-artifact.zip" -d "$tool_root/native-artifact"
+          native_archive="$tool_root/native-artifact/native-mask-candidate.tar.gz"
+          printf '%s  %s\n' 08a44f4ea2d27d48eaf98b0d67b804c0cc621fcf0bd4db71b8b6832ea282c153 "$native_archive" | sha256sum --check --status
+          mkdir -p "$tool_root/native"
+          tar -xzf "$native_archive" -C "$tool_root/native" bin provenance.json
+          native_binary="$tool_root/native/bin/codex"
+          printf '%s  %s\n' b2730ae901da317bcc5933d9b87de6dfbea3e46a46b64f806e4268fd9a095578 "$native_binary" | sha256sum --check --status
+          printf '%s  %s\n' 335aa87510fc0eee1bcdbedd3d9bf4aa4d112cffed72d5f1ad7a10b6cc855066 "$tool_root/native/bin/codex-resources/bwrap" | sha256sum --check --status
+          printf '%s  %s\n' 396915091a1f0387b48fd06e98d06e61d22f6ff6af33bc806891a634ee03d199 "$tool_root/native/bin/codex-linux-sandbox" | sha256sum --check --status
+          node --input-type=module - "$tool_root/native/provenance.json" <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const built=JSON.parse(readFileSync(process.argv[2]));
+          const pins=JSON.parse(readFileSync('.host-manager-input/tests/fixtures/live-host-native-runtime.json'));
+          for(const [key,value] of Object.entries(built))assert.deepEqual(value,pins[key],`Native build provenance ${key}`);
+          assert.equal(built.runId,'38645681271');
+          assert.equal(built.managerHead,'75e420c5f65b1b1acb0cd0b3615564d462e365ce');
+          NODE
+          host_release=https://github.com/openai/codex/releases/download/rust-v0.161.0
+          host_name=codex-code-mode-host-x86_64-unknown-linux-musl
+          if [[ ! -f "$archive_root/host.tar.gz" ]]; then
+            curl --fail --silent --show-error --location "$host_release/$host_name.tar.gz" --output "$archive_root/host.tar.gz"
+          fi
+          if [[ ! -f "$archive_root/host.sigstore" ]]; then
+            curl --fail --silent --show-error --location "$host_release/$host_name.sigstore" --output "$archive_root/host.sigstore"
+          fi
+          printf '%s  %s\n' 30cc945f77b3eed15ee385cc2f844a33bf1d7c422ff3a97161f701bffe4f77f8 "$archive_root/host.tar.gz" | sha256sum --check --status
+          printf '%s  %s\n' 5b7992b56b00440c56951c05ea9e8076a98236cefd1d6eb356c1cfafe4bc29aa "$archive_root/host.sigstore" | sha256sum --check --status
+          tar -xzf "$archive_root/host.tar.gz" -C "$tool_root" "$host_name"
+          printf '%s  %s\n' e87096087c02aa6ab90a5a85031659665aa0bf3ee20c07ca0b8ab701c83fcd5b "$tool_root/$host_name" | sha256sum --check --status
+          node --input-type=module - "$tool_root" "$archive_root" <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync,writeFileSync} from 'node:fs';
+          import {X509Certificate} from 'node:crypto';
+          const root=process.argv[2],legacy=JSON.parse(readFileSync(`${process.argv[3]}/host.sigstore`));
+          const entry=legacy.rekorBundle.Payload,body=JSON.parse(Buffer.from(entry.body,'base64'));
+          const certificate=new X509Certificate(Buffer.from(legacy.cert,'base64'));
+          const pins=JSON.parse(readFileSync('.host-manager-input/tests/fixtures/live-host-native-runtime.json')).codeModeHost;
+          assert.equal(body.spec.data.hash.algorithm,'sha256');
+          assert.equal(body.spec.data.hash.value,pins.binarySha256);
+          assert.ok(certificate.raw.includes(Buffer.from(pins.sourceCommit)));
+          const bundle={mediaType:'application/vnd.dev.sigstore.bundle+json;version=0.1',
+            verificationMaterial:{x509CertificateChain:{certificates:[{rawBytes:certificate.raw.toString('base64')}]},
+              tlogEntries:[{logIndex:String(entry.logIndex),logId:{keyId:Buffer.from(entry.logID,'hex').toString('base64')},
+                kindVersion:{kind:body.kind,version:body.apiVersion},integratedTime:String(entry.integratedTime),
+                inclusionPromise:{signedEntryTimestamp:legacy.rekorBundle.SignedEntryTimestamp},canonicalizedBody:entry.body}]},
+            messageSignature:{messageDigest:{algorithm:'SHA2_256',digest:Buffer.from(body.spec.data.hash.value,'hex').toString('base64')},signature:legacy.base64Signature}};
+          writeFileSync(`${root}/host.bundle.json`,JSON.stringify(bundle));
+          NODE
+          npm exec --cache "$archive_root/npm" --yes --package=@sigstore/cli@0.10.3 -- \
+            sigstore verify "$tool_root/host.bundle.json" --blob-file "$tool_root/$host_name" \
+            --certificate-identity-uri https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.161.0 \
+            --certificate-issuer https://token.actions.githubusercontent.com \
+            --tuf-cache-path "$archive_root/sigstore-tuf" --json
+          install -m0755 "$tool_root/$host_name" "$tool_root/native/bin/codex-code-mode-host"
+          if [[ ! -f "$archive_root/caddy.tar.gz" ]]; then
+            curl --fail --silent --show-error --location \
+              https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz \
+              --output "$archive_root/caddy.tar.gz"
+          fi
           printf '%s  %s\n' \
             a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7 \
-            "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" | sha512sum --check --status
-          tar -xzf "$RUNNER_TEMP/live-proof-tools/caddy.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" caddy
-          npm install --prefix "$RUNNER_TEMP/live-proof-tools" --no-save --ignore-scripts @openai/codex@0.161.0
-          echo "LIVE_TEST_CADDY=$RUNNER_TEMP/live-proof-tools/caddy" >> "$GITHUB_ENV"
-          echo "LIVE_TEST_CODEX=$RUNNER_TEMP/live-proof-tools/node_modules/.bin/codex" >> "$GITHUB_ENV"
-          curl --fail --silent --show-error --location \
-            https://github.com/dyne/gestalt/releases/download/impeccable-gestalt-live-1/impeccable-gestalt-live-1-x86_64-unknown-linux-musl.tar.gz \
-            --output "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz"
-          printf '%s  %s\n' \
-            65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 \
-            "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" | sha256sum --check --status
-          echo "LIVE_PUBLISHED_RUNTIME=$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" >> "$GITHUB_ENV"
-          tar -xzf "$RUNNER_TEMP/live-proof-tools/impeccable.tar.gz" -C "$RUNNER_TEMP/live-proof-tools" impeccable
-          echo "LIVE_TEST_IMPECCABLE=$RUNNER_TEMP/live-proof-tools/impeccable" >> "$GITHUB_ENV"
+            "$archive_root/caddy.tar.gz" | sha512sum --check --status
+          tar -xzf "$archive_root/caddy.tar.gz" -C "$tool_root" caddy
+          if [[ ! -f "$archive_root/impeccable.tar.gz" ]]; then
+            curl --fail --silent --show-error --location \
+              https://github.com/dyne/gestalt/releases/download/impeccable-gestalt-live-1/impeccable-gestalt-live-1-x86_64-unknown-linux-musl.tar.gz \
+              --output "$archive_root/impeccable.tar.gz"
+          fi
+          printf '%s  %s\n' 65e619d4126e3d3fd10fc5bb7a43d332fe327dbc38e0085883d920a2ba752898 "$archive_root/impeccable.tar.gz" | sha256sum --check --status
+          tar -xzf "$archive_root/impeccable.tar.gz" -C "$tool_root" impeccable
+          npm install --cache "$archive_root/npm" --prefix "$RUNNER_TEMP/live-proof-bun" --no-save --ignore-scripts bun@1.3.14
+          {
+            echo "LIVE_TEST_CADDY=$tool_root/caddy"
+            echo "LIVE_TEST_CODEX=$native_binary"
+            echo "LIVE_HOST_CODEX_BINARY=$native_binary"
+            echo "LIVE_TEST_IMPECCABLE=$tool_root/impeccable"
+            echo "LIVE_PUBLISHED_RUNTIME=$archive_root/impeccable.tar.gz"
+            echo "LIVE_HOST_MANAGER_BINARY=$tool_root/gestalt"
+            echo "LIVE_HOST_AGENTS_ROOT=$GITHUB_WORKSPACE/.host-agents-input"
+          } >> "$GITHUB_ENV"
+          dirname "$native_binary" >> "$GITHUB_PATH"
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        if: steps.verified-archives.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/live-proof-cache
+          key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
       - name: Prepare disposable browser trust and network prerequisites
         run: |
           set -Eeuo pipefail
@@ -67,24 +181,61 @@ jobs:
           if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: Actual browser namespace and visibility preflight before Native
+        timeout-minutes: 2
+        env:
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
+        run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
         run: |
           set -Eeuo pipefail
+          # Native enforcement fixtures must not create ordinary Codex sources
+          # in an ancestor of the later captured-original application.
+          caddy_home=$(mktemp -d "$RUNNER_TEMP/caddy-native-home.XXXXXXXX")
+          export HOME="$caddy_home"
+          node --input-type=module <<'NODE'
+          import {lstatSync,mkdirSync,writeFileSync} from 'node:fs';
+          import {dirname,join} from 'node:path';
+          const entries=[];
+          for(let path=process.env.RUNNER_TEMP,depth=0;;path=dirname(path),depth++){
+            try {const stat=lstatSync(join(path,'.codex'));entries.push({depth,present:true,directory:stat.isDirectory()});}
+            catch(error){if(error.code!=='ENOENT')throw error;entries.push({depth,present:false});}
+            if(path==='/')break;
+          }
+          mkdirSync('test-results/live-caddy-proof',{recursive:true});
+          writeFileSync('test-results/live-caddy-proof/before-native-gates-metadata.json',JSON.stringify(entries)+'\n');
+          NODE
           "$LIVE_TEST_CADDY" version
-          "$LIVE_TEST_CODEX" --version
+          "$LIVE_HOST_MANAGER_BINARY" version
           npx vitest run src/server/platform/live-design/caddy-routes.test.ts \
             src/server/platform/live-design/caddy-admin-boundary.test.ts \
             src/server/platform/live-design/caddy-route-store.test.ts \
             src/server/platform/live-design/preview-gateway.test.ts \
             src/server/platform/live-design/helper-process.test.ts \
+            src/server/platform/live-design/project-pipe-socket.test.ts \
+            src/server/platform/live-design/project-worker-output.test.ts \
             src/server/platform/live-design/poll-events.test.ts \
             src/server/platform/live-design/relay-event-turns.test.ts \
             src/server/platform/live-design/stop-resume.test.ts \
             src/server/platform/live-design/live-autopilot.test.ts \
             --reporter=default --reporter=json --outputFile=test-results/live-caddy-proof/vitest.json
+      - name: Build Mobile server for Native proofs
+        run: npm run build:server
+      - name: Actual owning native model tools and permitted child with deterministic provider
+        timeout-minutes: 3
+        env:
+          LIVE_NATIVE_MODEL_PROOF: '1'
+          LIVE_MODEL_EVIDENCE: test-results/live-caddy-proof/native-model-tools
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
+          node scripts/live-native-proof-preflight.mjs
+          native_binary="$LIVE_HOST_CODEX_BINARY"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
         timeout-minutes: 5
         env:
@@ -92,8 +243,34 @@ jobs:
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
         run: |
           set -Eeuo pipefail
-          npm run build:server
           node scripts/live-remote-proof.mjs
+      - name: Sole production admission and real picker editing through Native
+        timeout-minutes: 18
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
+          LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          native_binary="$LIVE_HOST_CODEX_BINARY"
+          export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
+          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs
+          mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
+      - name: Actual pinned helper and project process namespaces with native confinement
+        timeout-minutes: 3
+        env:
+          LIVE_PROJECT_ISOLATION_PROOF: '1'
+          LIVE_PROJECT_ISOLATION_EVIDENCE: test-results/live-caddy-proof/project-isolation
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          native_binary="$LIVE_HOST_CODEX_BINARY"
+          LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-project-isolation-proof.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

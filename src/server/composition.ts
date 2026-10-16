@@ -5,6 +5,10 @@
  */
 
 import { LiveDispatchGuard } from './platform/live-design/live-dispatch.js';
+import { createProductionLiveController } from './platform/live-design/production-controller.js';
+import { AuxiliaryLifetimes } from './platform/live-design/auxiliary-lifetimes.js';
+import { baselineHasNoManagedDelegates } from './platform/live-design/baseline-capabilities.js';
+import { beforeDeadline } from './platform/retrieval/codex-xerj.js';
 import { RelayLiveEventTurns } from './platform/live-design/relay-event-turns.js';
 import { LivePollLoop } from './features/live-design/application/poll-loop.js';
 import {
@@ -216,6 +220,7 @@ export type ComposeRelayAppOptions = {
   homeDirectory?: string;
   /** Live remains unavailable until an authoritative ownership controller is supplied. */
   liveOwnership?: LiveOwnershipReader;
+  liveConfigFile?: string;
   /** Trusted elected controller; shares one durable DB and actual effective runtime scope. */
   liveController?: ConstructorParameters<typeof LiveDispatchGuard>[0] & {
     /** Trusted controller binding only; this grants no Start capability/readiness. */
@@ -241,6 +246,40 @@ export type ComposeRelayAppOptions = {
 };
 
 export async function composeRelayApp(options: ComposeRelayAppOptions) {
+  if (
+    options.liveConfigFile &&
+    (options.liveController ||
+      options.liveOwnership ||
+      options.launchAppServer ||
+      options.passkeyAuthEnabled === false ||
+      !options.relyingParty.publicOrigin.startsWith('https://'))
+  )
+    throw new Error('LIVE_PRODUCTION_COMPOSITION_UNAVAILABLE');
+  if (options.liveConfigFile && options.startAppServers !== true)
+    throw Object.assign(new Error('LIVE_DEPENDENCIES_UNAVAILABLE'), {
+      liveDependency: 'owning-runtime-disabled',
+    });
+  const productionLive = options.liveConfigFile
+    ? await createProductionLiveController(options.liveConfigFile)
+    : undefined;
+  if (productionLive)
+    options = {
+      ...options,
+      liveController: productionLive,
+      launchAppServer: productionLive.launchNative.bind(productionLive),
+    };
+  try {
+    return await composeRelayAppOwned(options, productionLive);
+  } catch (error) {
+    await productionLive?.close();
+    throw error;
+  }
+}
+
+async function composeRelayAppOwned(
+  options: ComposeRelayAppOptions,
+  productionLive?: import('./platform/live-design/production-controller.js').ProductionLiveController,
+) {
   const passkeyAuthEnabled = options.passkeyAuthEnabled ?? true;
   const relyingParty = createRelyingPartyConfig(options.relyingParty.publicOrigin);
   if (
@@ -321,8 +360,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   };
   const launchAuxiliary: NonNullable<ComposeRelayAppOptions['launchAppServer']> = (input) => {
     admitAuxiliary();
-    return (options.launchAppServer ?? launchCodexAppServer)(input);
+    if (productionLive?.preflightBlocked() && !productionLive.auxiliaryConstructionAllowed())
+      throw new LiveDispatchError();
+    const process = (options.launchAppServer ?? launchCodexAppServer)(input);
+    auxiliaryLifetimes.record(process);
+    return process;
   };
+  const auxiliaryLifetimes = new AuxiliaryLifetimes();
 
   // Only sessions found while opening the relay database belong to a previous
   // process. A listen hook can run after a new session has already started in
@@ -1544,6 +1588,29 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 session.effectiveSkillSelection?.skills ?? options.explicitSkillProfile?.skills,
               project: project?.skills,
             });
+            if (productionLive) {
+              const observed = await beforeDeadline(
+                rpc.request('config/read', {
+                  includeLayers: false,
+                  cwd: session.workspacePath,
+                }),
+                deadline,
+              );
+              if (
+                baselineHasNoManagedDelegates({
+                  observed,
+                  threadConfig: config,
+                  skills: catalog.skills,
+                })
+              )
+                return {
+                  ready: false,
+                  deadline,
+                  config,
+                  skillsConfig: selected.skillsConfig,
+                  fallback() {},
+                };
+            }
             return capabilities.prepare({
               cwd: session.workspacePath,
               approvalPolicy: session.executionPolicy?.approvalPolicy ?? 'on-request',
@@ -1558,6 +1625,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
         },
         liveDispatch,
+        productionLive ? (session) => productionLive.observeOwnerStarted(session) : undefined,
+        productionLive?.prepareOwningLaunch,
+        productionLive?.validateOriginalThreadFlags,
+        productionLive ? { run: productionLive.withOwningAdmission } : undefined,
       )
     : null;
   const handleKimiNotification = (
@@ -1691,7 +1762,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     const owners = options.liveController.owners;
     const turns = new RelayLiveEventTurns({
       owners,
-      sessions: { find: (id) => sessions.find(id), save: saveSession, list: () => sessions.list() },
+      sessions: {
+        find: (id) => sessions.find(id),
+        save: saveSession,
+        list: () => sessions.list(),
+      },
       runtime,
       now: Date.now,
       wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -1825,11 +1900,48 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   if (options.liveController?.bindPollLoop && createLivePollEvents && previewConnections) {
     const create = createLivePollEvents;
-    const revocations = previewConnections;
+    const revocations = productionLive
+      ? { revoke: productionLive.revokePollGeneration }
+      : previewConnections;
     const owners = options.liveController.owners;
     options.liveController.bindPollLoop(
       (cli, inbox) => new LivePollLoop({ owners, poll: create(cli, inbox), revocations }),
     );
+  }
+  if (productionLive) {
+    if (!runtime || !liveEventAuthority || !liveDesign || !previewConnections)
+      throw Object.assign(new Error('LIVE_DEPENDENCIES_UNAVAILABLE'), {
+        liveDependency: !runtime
+          ? 'owning-runtime'
+          : !liveEventAuthority
+            ? 'event-authority'
+            : !liveDesign
+              ? 'authenticated-preview'
+              : 'preview-connections',
+      });
+    productionLive.bindProduction(
+      {
+        runtime,
+        sessions,
+        guard: liveEventAuthority,
+        saveSession,
+        authenticationDirectory: join(
+          options.homeDirectory ?? homedir(),
+          '.codex-gestalt',
+          'gestalt-mobile',
+        ),
+        settleAuxiliary: async () => {
+          const proof = await auxiliaryLifetimes.settle();
+          if (auxiliaryReservation) {
+            productionLive.owners.releaseQuiescentWriter(auxiliaryReservation, proof);
+            auxiliaryReservation = undefined;
+          }
+        },
+      },
+      liveDesign,
+      previewConnections,
+    );
+    liveDesign.control = productionLive;
   }
   let app;
   try {
@@ -2064,6 +2176,20 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         skillCatalog,
         defaultSkillProfile: options.explicitSkillProfile,
         reserve: (session) => liveDispatch?.writer(session),
+        ...(productionLive && runtime
+          ? {
+              owningStartup: {
+                supports: productionLive.supportsOwningStartup,
+                start: (
+                  session: RelaySessionSnapshot,
+                  select: Parameters<CodexSessionRuntime['startWithDiscovery']>[2],
+                  signal?: AbortSignal,
+                ) => runtime.startWithDiscovery(session, new Date().toISOString(), select, signal),
+              },
+              releaseStartup: (session: RelaySessionSnapshot) =>
+                productionLive.releaseFailedStartup(session),
+            }
+          : {}),
         activate:
           runtime || kimiRuntime
             ? async (session) => {
@@ -2677,6 +2803,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           publishInteractionResolved(session.id, interaction.requestId, occurredAt, 'dismissed');
       }
     }
+    await productionLive?.close();
     runtime?.stopAll();
     kimiRuntime?.stopAll();
     await kimiManager?.stopAll();

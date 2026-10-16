@@ -6,9 +6,9 @@
 
 import cookie from '@fastify/cookie';
 import fastify from 'fastify';
-import { request as upstreamRequest } from 'node:http';
+import { Agent, request as upstreamRequest } from 'node:http';
 import type { IncomingMessage } from 'node:http';
-import type { Readable } from 'node:stream';
+import type { Duplex, Readable } from 'node:stream';
 import type { Socket } from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import type {
@@ -26,6 +26,7 @@ import {
 import { PreviewConnections } from './preview-connections.js';
 import type { PreviewConnectionPermit } from './preview-connections.js';
 import { RegisteredPreviewTargets } from './preview-targets.js';
+import type { PreviewUpstreams } from './isolated-preview-upstreams.js';
 import {
   ownedPreviewHttp,
   relayPreviewHttpBody,
@@ -41,6 +42,8 @@ export async function createPreviewGateway(options: {
   targets: RegisteredPreviewTargets;
   registrationId: string;
   connections: PreviewConnections;
+  /** Production isolated resources; every connect revalidates the owning receipts. */
+  upstreams?: PreviewUpstreams;
 }) {
   const { deps, instance, assignment, targets, registrationId, connections } = options;
   if (assignment.origin !== instance.previewOrigin) throw new Error('LIVE_ORIGIN_MISMATCH');
@@ -77,6 +80,7 @@ export async function createPreviewGateway(options: {
     proxy.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
     proxy.all('/*', async (req, reply) => {
       let upstream: ReturnType<typeof upstreamRequest> | undefined;
+      let connection: Duplex | undefined;
       let permit: PreviewConnectionPermit | undefined;
       try {
         const authorized = authorization.open(
@@ -93,6 +97,19 @@ export async function createPreviewGateway(options: {
         const current = targets.read(registrationId, assignment.canonicalAppRoot);
         const route = helperRoute(req.raw.url ?? '/');
         const port = route.helper ? current.helperPort : current.appPort;
+        reply.raw.once('close', () => {
+          authorized.release();
+          upstream?.destroy();
+        });
+        connection = await options.upstreams?.open(route.helper ? 'helper' : 'app');
+        targets.read(registrationId, assignment.canonicalAppRoot);
+        if (closing || !authorized.active() || reply.raw.destroyed) {
+          connection?.destroy();
+          authorized.release();
+          return;
+        }
+        const agent = options.upstreams ? new Agent({ keepAlive: false }) : undefined;
+        if (agent) agent.createConnection = () => connection!;
         reply.hijack();
         upstream = upstreamRequest(
           {
@@ -100,7 +117,7 @@ export async function createPreviewGateway(options: {
             port,
             method: req.method,
             path: route.path,
-            agent: false,
+            agent: agent ?? false,
             headers: { ...authorized.upstreamHeaders, host: `127.0.0.1:${port}` },
           },
           (response) => {
@@ -108,23 +125,39 @@ export async function createPreviewGateway(options: {
               response.destroy();
               return;
             }
-            reply.raw.writeHead(
-              response.statusCode ?? 502,
-              stripPreviewResponseHeaders(response.headers),
-            );
+            const headers = stripPreviewResponseHeaders(response.headers);
+            const immediateReconnect =
+              route.helper &&
+              req.method === 'GET' &&
+              route.path.split('?')[0] === '/events' &&
+              response.statusCode === 200 &&
+              /^text\/event-stream(?:\s*;|$)/i.test(
+                String(response.headers['content-type'] ?? ''),
+              ) &&
+              !response.headers['content-encoding'];
+            if (immediateReconnect) delete headers['content-length'];
+            reply.raw.writeHead(response.statusCode ?? 502, headers);
+            // Physical streams still expire at60s. Reconnect the real browser
+            // immediately so its fresh admission does not also consume the
+            // helper's8s disconnect grace with EventSource's default retry delay.
+            // This SSE control field emits no event or readiness acknowledgement.
+            if (immediateReconnect) reply.raw.write('retry: 0\n\n');
             relayPreviewHttpBody(authorized, response, reply.raw);
           },
         );
         upstream.once('error', () => {
+          agent?.destroy();
           authorized.release();
           reply.raw.destroy();
         });
         reply.raw.once('close', () => {
           authorized.release();
           upstream?.destroy();
+          agent?.destroy();
         });
         ((req.body as Readable | undefined) ?? req.raw).pipe(upstream);
       } catch (error) {
+        connection?.destroy();
         permit?.release();
         const status = error instanceof LiveAuthError ? error.status : 503;
         reply
@@ -144,8 +177,9 @@ export async function createPreviewGateway(options: {
     });
   });
   const sockets = new WebSocketServer({ noServer: true });
-  app.server.on('upgrade', (req, socket, head) => {
+  app.server.on('upgrade', async (req, socket, head) => {
     let upstream: WebSocket | undefined;
+    let connection: Duplex | undefined;
     let permit: PreviewConnectionPermit | undefined;
     const owned = new OwnedPreviewWebSockets(() => {
       upstream?.terminate();
@@ -174,8 +208,21 @@ export async function createPreviewGateway(options: {
         host: `127.0.0.1:${current.appPort}`,
       };
       delete headers['sec-websocket-protocol'];
+      socket.once('close', () => {
+        authorized.release();
+        upstream?.terminate();
+      });
+      connection = await options.upstreams?.open('app');
+      targets.read(registrationId, assignment.canonicalAppRoot);
+      if (closing || !authorized.active() || socket.destroyed) {
+        connection?.destroy();
+        authorized.release();
+        socket.destroy();
+        return;
+      }
       upstream = new WebSocket(`ws://127.0.0.1:${current.appPort}${req.url}`, protocols, {
         headers,
+        ...(options.upstreams ? { createConnection: () => connection as Socket } : {}),
       });
       owned.bind(upstream);
       upstream.once('open', () => {
@@ -202,6 +249,7 @@ export async function createPreviewGateway(options: {
         upstream?.terminate();
       });
     } catch (error) {
+      connection?.destroy();
       permit?.release();
       const status = error instanceof LiveAuthError ? error.status : 503;
       socket.end(
@@ -226,7 +274,19 @@ export async function createPreviewGateway(options: {
 }
 function helperRoute(path: string): { helper: boolean; path: string } {
   const helper = path.startsWith('/__gestalt_live/');
-  return { helper, path: helper ? path.slice('/__gestalt_live'.length) : path };
+  if (!helper) return { helper, path };
+  const upstream = path.slice('/__gestalt_live'.length);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(upstream.split('?')[0]!);
+  } catch {
+    throw new LiveAuthError('LIVE_INVALID_REQUEST', 400);
+  }
+  // These are controller operations at the pin, never picker/browser operations.
+  // Authentication does not grant a second canonical poll owner or bypass Stop.
+  if (/^\/(poll|stop|agent-target)(\/|$)/i.test(decoded.replace(/\/+/g, '/')))
+    throw new LiveAuthError('LIVE_INVALID_REQUEST', 403);
+  return { helper, path: upstream };
 }
 function loopback(request: IncomingMessage): boolean {
   return (

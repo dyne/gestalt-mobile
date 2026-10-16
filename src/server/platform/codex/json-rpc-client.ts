@@ -14,8 +14,77 @@ export const CODEX_THREAD_WRITER_BUSY = 'CODEX_THREAD_WRITER_BUSY';
 type CodexJsonRpcErrorKind =
   typeof CODEX_THREAD_NOT_FOUND | typeof CODEX_THREAD_WRITER_BUSY | typeof CODEX_JSON_RPC_ERROR;
 
+// Fixed vocabulary only; classify before message truncation without retaining raw details.
+const liveDiagnosticMarkers = [
+  'error resuming thread:',
+  'failed to initialize',
+  'failed to read',
+  'failed to load',
+  'failed to load rules',
+  'failed to load model context',
+  'failed to load thread-spawn descendants',
+  'failed to spawn',
+  'permission denied',
+  'no such file or directory',
+  'os error 13',
+  'os error 2',
+  'writer',
+  'lock',
+  'sqlite',
+  'history',
+  'session',
+  'config',
+  'permission',
+  'mcp',
+  'code-mode',
+  'sandbox',
+  'bwrap',
+  'metadata',
+  'shutdown',
+  'initialize',
+  'invalid',
+  'unknown',
+  'unsupported',
+  'not found',
+  'expected',
+  'parse',
+  'deserialize',
+  'toml',
+  'json',
+  'profile',
+  'executable',
+  'permission_profile',
+  'codex_bwrap',
+  'bwrap_path',
+  'linux_sandbox',
+  'model context',
+
+  'executor-local config',
+  'agents.md',
+  'operation not permitted',
+  'read-only file system',
+  'file exists',
+  'not a directory',
+  "can't bind mount",
+  "can't mkdir",
+  "can't open",
+  "can't mount",
+  "can't create",
+  'mount namespace',
+  'user namespace',
+  'uid map',
+  'symbolic link',
+  'symlink',
+  'proc/self/fd',
+  'failed to enqueue',
+  'thread listener',
+] as const;
+
 /** A bounded representation of an app-server JSON-RPC failure. */
 export class CodexJsonRpcError extends Error {
+  /** Fixed internal operation label only; never parameters or response contents. */
+  liveRpcMethod?: string;
+  readonly liveDiagnosticMarkers: readonly string[];
   constructor(
     readonly code: number | undefined,
     message: string,
@@ -23,6 +92,42 @@ export class CodexJsonRpcError extends Error {
   ) {
     super(boundMessage(message));
     this.name = 'CodexJsonRpcError';
+    const lower = message.toLowerCase();
+    this.liveDiagnosticMarkers = liveDiagnosticMarkers.filter((marker) => lower.includes(marker));
+  }
+}
+
+/** Tool-result errors carry arbitrary content; retain fixed diagnostic tokens only. */
+export class CodexLiveContextProbeError extends Error {
+  readonly stage = 'context-tool-error';
+  readonly markers: readonly string[];
+  constructor(text: string) {
+    super('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const lower = text.slice(0, 65536).toLowerCase();
+    this.markers = [
+      ...liveDiagnosticMarkers,
+      'eacces',
+      'eperm',
+      'enoent',
+      'enotdir',
+      'erofs',
+      'enospc',
+      'spawn',
+      'bun',
+      'node',
+      'require',
+      'module',
+      'execution',
+      'timeout',
+      'timed out',
+      'cancelled',
+      'context-call-unavailable',
+      'invalid-native-response',
+      'temporary',
+      'syntaxerror',
+      'referenceerror',
+      'typeerror',
+    ].filter((marker) => lower.includes(marker));
   }
 }
 
@@ -78,13 +183,28 @@ export class JsonRpcClient {
     input: Readable,
     private readonly output: Writable,
   ) {
-    createInterface({ input, crlfDelay: Infinity }).on('line', (line) => this.receive(line));
+    const closed = () => this.fail(new Error('CODEX_RPC_TRANSPORT_CLOSED'));
+    createInterface({ input, crlfDelay: Infinity })
+      .on('line', (line) => this.receive(line))
+      .once('close', closed);
+    input.once('error', () => this.fail(new Error('CODEX_RPC_INPUT_FAILED')));
+    output.once('error', () => this.fail(new Error('CODEX_RPC_OUTPUT_FAILED')));
+    output.once('close', closed);
   }
   request(method: string, params: unknown): Promise<unknown> {
     if (this.failure) return Promise.reject(this.failure);
     const id = ++this.sequence;
-    this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    const line = `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      try {
+        this.output.write(line, (error) => {
+          if (error) this.fail(new Error('CODEX_RPC_OUTPUT_FAILED'));
+        });
+      } catch {
+        this.fail(new Error('CODEX_RPC_OUTPUT_FAILED'));
+      }
+    });
   }
   fail(error: unknown): void {
     if (this.failure) return;

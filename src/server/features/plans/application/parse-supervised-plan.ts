@@ -28,7 +28,7 @@ type ParsedHeading = {
   descriptions: Map<string, string>;
 };
 
-const headingPattern = /^(\*{1,2}) (TODO|WIP|DONE) \[#([ABC])\] (.+)$/;
+const headingPattern = /^(\*{1,2}) (TODO|WIP|DONE|SUSPENDED) \[#([ABC])\] (.+)$/;
 const propertyPattern = /^:([A-Z_]+):(?:[ \t](.*))?$/;
 const descriptionPattern = /^- ([A-Za-z][A-Za-z ]*?) ::(?:[ \t](.*))?$/;
 
@@ -128,6 +128,7 @@ export function parseSupervisedPlan(input: {
   if (new Set(headings.map((heading) => heading.id)).size !== headings.length)
     return unavailable('DUPLICATE_ID');
 
+  if (!hasValidSuspension(headings)) return unavailable('MALFORMED_ORG');
   if (!hasValidWipPath(headings)) return unavailable('MULTIPLE_WIP');
   const built = buildSteps(headings);
   if (!built) return unavailable('MISSING_REQUIRED_FIELD');
@@ -314,6 +315,45 @@ function descriptionFor(heading: ParsedHeading): PlanStepDescription | null {
       };
 }
 
+/** Match the helper's bounded suspension-v1 lifecycle dialect. */
+function hasValidSuspension(headings: readonly ParsedHeading[]): boolean {
+  const parents = headings.filter((heading) => heading.level === 1);
+  const suspended = parents.filter((heading) => heading.state === 'SUSPENDED');
+  if (
+    suspended.length > 1 ||
+    headings.filter((heading) => heading.level === 2 && heading.state === 'SUSPENDED').length > 1
+  )
+    return false;
+  let parent: ParsedHeading | undefined;
+  for (const heading of headings) {
+    if (heading.level === 1) parent = heading;
+    const dependency = heading.properties.get('SUSPENDED_FOR');
+    if (heading.level === 1 && heading.state === 'SUSPENDED') {
+      const index = parents.findIndex((candidate) => candidate.id === dependency);
+      if (
+        index < 0 ||
+        index >= parents.indexOf(heading) ||
+        heading.properties.get('REVIEW_STATUS') !== 'UNREVIEWED'
+      )
+        return false;
+    } else if (dependency !== undefined) return false;
+    if (heading.level === 2) {
+      if (!parent) return false;
+      if (heading.state === 'SUSPENDED' && parent.state !== 'SUSPENDED') return false;
+      if (parent.state === 'SUSPENDED' && heading.state === 'WIP') return false;
+      if (parent.state === 'DONE' && heading.state !== 'DONE') return false;
+      if (parent.state === 'TODO' && heading.state !== 'TODO') return false;
+    }
+  }
+  return (
+    !suspended.length ||
+    !parents.some(
+      (heading) =>
+        heading.state === 'WIP' && parents.indexOf(heading) >= parents.indexOf(suspended[0]!),
+    )
+  );
+}
+
 function hasValidWipPath(headings: readonly ParsedHeading[]): boolean {
   const wipByLevel = new Map<PlanLevel, ParsedHeading[]>();
   for (const heading of headings) {
@@ -344,8 +384,17 @@ function findCurrentStepId(headings: readonly ParsedHeading[], allDone: boolean)
       heading.properties.get('REVIEW_STATUS') === 'UNREVIEWED',
   );
   if (review) return review.id;
-  const todo = headings.find((heading) => heading.state === 'TODO');
+  const suspended = headings.find(
+    (heading) => heading.level === 1 && heading.state === 'SUSPENDED',
+  );
+  const todo = headings.find(
+    (heading) =>
+      heading.state === 'TODO' &&
+      (!suspended || headings.indexOf(heading) < headings.indexOf(suspended)),
+  );
   if (todo) return todo.id;
+  if (suspended) return suspended.id;
+
   return allDone ? (headings.findLast((heading) => heading.level === 1)?.id ?? null) : null;
 }
 

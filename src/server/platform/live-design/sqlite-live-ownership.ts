@@ -43,6 +43,7 @@ const runSchema = z
     provider: z.literal('codex'),
     appId: id,
     app: appSchema,
+    globallyExclusive: z.boolean().optional(),
     targetId: id,
     targetIdentity: z.string().min(1).max(256),
     previewOrigin: z.url(),
@@ -146,6 +147,10 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       `);
       if (!exists)
         this.db.prepare('INSERT INTO live_controller VALUES (1,1,?,1,0)').run(controllerId);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS live_admission_generations (
+        generation INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, relayId TEXT NOT NULL,
+        appRoot TEXT NOT NULL, claimed INTEGER NOT NULL DEFAULT 0
+      )`);
       this.admittedEpoch = this.controller().epoch;
       this.list();
     } catch (error) {
@@ -228,6 +233,36 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
     this.db.prepare('UPDATE live_controller SET generation=? WHERE singleton=1').run(generation);
     return generation;
   }
+  /** Planning hint under the sole elected controller; claim still allocates atomically. */
+  preparationGeneration(): number {
+    this.assertController();
+    return this.generation();
+  }
+  reserveAdmissionGeneration(relayId: string, appRoot: string): number {
+    this.assertController();
+    id.parse(relayId);
+    const app = liveAppIdentity(appRoot);
+    return withImmediateTransaction(this.db, () => {
+      const generation = this.generation();
+      this.db
+        .prepare(
+          'INSERT INTO live_admission_generations(generation,epoch,relayId,appRoot) VALUES (?,?,?,?)',
+        )
+        .run(generation, this.controller().epoch, relayId, app.canonicalAppRoot);
+      return generation;
+    });
+  }
+  assertCaptureWriters(relayId: string, quietProtectedOwners: readonly string[]): void {
+    this.assertController();
+    if (
+      this.writers().some(
+        (writer) =>
+          writer.auxiliary ||
+          (writer.relayId !== relayId && !quietProtectedOwners.includes(writer.relayId)),
+      )
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+  }
   retry(input: LiveStartClaim): LiveRun | null {
     this.assertController();
     revalidateLiveApp(input.app);
@@ -246,6 +281,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         prior.app.inode !== input.app.inode ||
         prior.rootThreadId !== input.rootThreadId ||
         prior.targetIdentity !== input.targetIdentity ||
+        Boolean(prior.globallyExclusive) !== Boolean(input.globallyExclusive) ||
+        (input.admissionGeneration !== undefined &&
+          prior.generation !== input.admissionGeneration) ||
         prior.previewOrigin !== input.previewOrigin
       )
         throw new Error('IDEMPOTENCY_KEY_REUSED');
@@ -279,7 +317,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         runs.some(
           (run) =>
             run.state !== 'idle' &&
-            (overlaps(run.app.canonicalAppRoot, input.app.canonicalAppRoot) ||
+            (run.globallyExclusive ||
+              input.globallyExclusive ||
+              overlaps(run.app.canonicalAppRoot, input.app.canonicalAppRoot) ||
               (run.app.device === input.app.device && run.app.inode === input.app.inode)),
         )
       )
@@ -287,6 +327,7 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       if (
         this.writers().some(
           (writer) =>
+            input.globallyExclusive ||
             writer.relayId === input.relayId ||
             writer.scopes === null ||
             writer.scopes.some((scope) =>
@@ -296,12 +337,32 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       )
         throw new Error('LIVE_SESSION_BUSY');
       const now = new Date().toISOString();
+      const { admissionGeneration, ...claim } = input;
+      let generation: number;
+      if (admissionGeneration !== undefined) {
+        integer.parse(admissionGeneration);
+        const row = this.db
+          .prepare('SELECT * FROM live_admission_generations WHERE generation=?')
+          .get(admissionGeneration);
+        if (
+          !row ||
+          row.epoch !== this.controller().epoch ||
+          row.relayId !== input.relayId ||
+          row.appRoot !== input.app.canonicalAppRoot ||
+          row.claimed !== 0
+        )
+          throw new Error('LIVE_GENERATION_STALE');
+        this.db
+          .prepare('UPDATE live_admission_generations SET claimed=1 WHERE generation=?')
+          .run(admissionGeneration);
+        generation = admissionGeneration;
+      } else generation = this.generation();
       const run: LiveRun = {
-        ...input,
+        ...claim,
         version: 1,
         revision: 1,
         liveId: randomUUID(),
-        generation: this.generation(),
+        generation,
         controllerId: this.controllerId,
         controllerEpoch: this.controller().epoch,
         state: 'starting',
@@ -331,6 +392,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       const run = this.assert(fence);
       const next: LiveRun = {
         ...run,
+        targetIdentity:
+          mutation.event === 'bindTarget' ? mutation.targetIdentity : run.targetIdentity,
         priorControls: mutation.event === 'captureControls' ? mutation.intent : run.priorControls,
         controlsRestored: mutation.event === 'controlsRestored' ? true : run.controlsRestored,
         state: nextLiveState(run, mutation),
@@ -339,7 +402,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         phase:
           mutation.event === 'phase'
             ? mutation.phase
-            : mutation.event === 'captureControls' || mutation.event === 'controlsRestored'
+            : mutation.event === 'captureControls' ||
+                mutation.event === 'controlsRestored' ||
+                mutation.event === 'bindTarget'
               ? run.phase
               : mutation.event === 'recover' || mutation.event === 'failed'
                 ? run.phase
@@ -374,7 +439,9 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         (other) =>
           other.liveId !== run.liveId &&
           (other.generation > run.generation || other.state !== 'idle') &&
-          (other.relayId === run.relayId ||
+          (other.globallyExclusive ||
+            run.globallyExclusive ||
+            other.relayId === run.relayId ||
             overlaps(other.app.canonicalAppRoot, run.app.canonicalAppRoot) ||
             (other.app.device === run.app.device && other.app.inode === run.app.inode)),
       )
@@ -443,7 +510,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
       this.list().some(
         (run) =>
           run.state !== 'idle' &&
-          (run.relayId === relayId ||
+          (run.globallyExclusive ||
+            run.relayId === relayId ||
             scopes === null ||
             scopes.some(
               (scope) =>
@@ -485,7 +553,8 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         this.list().some(
           (run) =>
             run.state !== 'idle' &&
-            (run.relayId === relayId ||
+            (run.globallyExclusive ||
+              run.relayId === relayId ||
               scopes === null ||
               scopes.some((scope) => overlaps(scope.canonicalAppRoot, run.app.canonicalAppRoot))),
         )
@@ -555,6 +624,41 @@ export class SqliteLiveOwnership implements LiveOwnershipStore {
         .prepare('DELETE FROM live_writers WHERE id=? AND relayId=?')
         .run(reservation.id, reservation.relayId);
       if (result.changes !== 1) throw new Error('LIVE_GENERATION_STALE');
+    });
+  }
+  /** Atomic narrowing after actual whole-tree quiescence, never a broader source claim. */
+  narrowQuiescentWriter(
+    reservation: WriterReservation,
+    effectiveScopes: readonly string[],
+    outstanding: Parameters<SqliteLiveOwnership['releaseQuiescentWriter']>[1],
+  ): WriterReservation {
+    if (
+      outstanding.unknown ||
+      Object.entries(outstanding).some(([key, value]) => key !== 'unknown' && value !== 0) ||
+      !effectiveScopes.length
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    const scopes = effectiveScopes.map(liveAppIdentity);
+    if (
+      reservation.scopes &&
+      scopes.some(
+        (scope) =>
+          !reservation.scopes!.some(
+            (parent) =>
+              scope.canonicalAppRoot === parent.canonicalAppRoot ||
+              scope.canonicalAppRoot.startsWith(parent.canonicalAppRoot + sep),
+          ),
+      )
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    return withImmediateTransaction(this.db, () => {
+      this.assertWriter(reservation);
+      this.checkOrdinary(reservation.relayId, effectiveScopes);
+      const updated = { ...reservation, scopes };
+      this.db
+        .prepare('UPDATE live_writers SET scopes=? WHERE id=? AND relayId=?')
+        .run(JSON.stringify(scopes), reservation.id, reservation.relayId);
+      return updated;
     });
   }
   close(): void {

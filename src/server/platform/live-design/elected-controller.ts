@@ -8,13 +8,18 @@ import { spawn } from 'node:child_process';
 import { constants, closeSync, fstatSync, lstatSync, openSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { SqliteLiveOwnership } from './sqlite-live-ownership.js';
+import { observeLiveProcess, type LiveProcessIdentity } from './process-identity.js';
 
 /** Private controller construction only; election is not managed-runtime admission. */
 export async function electLiveController(input: {
   privateDirectory: string;
   controllerId: string;
   initialize?: boolean;
-}): Promise<{ ownership: SqliteLiveOwnership; close(): Promise<void> }> {
+}): Promise<{
+  ownership: SqliteLiveOwnership;
+  election: Readonly<{ holder: LiveProcessIdentity; lockFile: string }>;
+  close(): Promise<void>;
+}> {
   const directory = input.privateDirectory;
   const stat = lstatSync(directory);
   if (
@@ -102,6 +107,7 @@ export async function electLiveController(input: {
       let closed = false;
       return {
         ownership,
+        election: Object.freeze({ holder: observeLiveProcess(holder.pid!), lockFile: path }),
         async close() {
           if (closed) return;
           closed = true;

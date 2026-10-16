@@ -48,6 +48,55 @@ afterEach(() => {
 });
 
 describe('shared durable Live ownership', () => {
+  it('binds a pre-birth generation to its actual session/app and consumes it once', () => {
+    const f = fixture();
+    const generation = f.store.reserveAdmissionGeneration('relay-a', f.app);
+    const otherGeneration = f.store.reserveAdmissionGeneration('relay-b', f.other);
+    expect(() =>
+      f.second.claim({ ...f.claim('relay-b', f.other), admissionGeneration: generation }),
+    ).toThrow('LIVE_GENERATION_STALE');
+    const a = { ...f.claim(), admissionGeneration: generation };
+    expect(f.second.claim(a).run.generation).toBe(generation);
+    expect(f.store.claim(a).acquired).toBe(false);
+    expect(() => f.store.retry({ ...a, admissionGeneration: otherGeneration })).toThrow(
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    expect(
+      f.store.claim({ ...f.claim('relay-b', f.other), admissionGeneration: otherGeneration }).run
+        .generation,
+    ).toBe(otherGeneration);
+    expect(f.store.current(f.store.read('relay-a')!.liveId)).not.toHaveProperty(
+      'admissionGeneration',
+    );
+  });
+  it('does not reuse a pre-birth generation after elected-controller recovery', () => {
+    const f = fixture();
+    const generation = f.store.reserveAdmissionGeneration('relay-a', f.app);
+    f.store.recoverElectedController();
+    expect(() => f.store.claim({ ...f.claim(), admissionGeneration: generation })).toThrow(
+      'LIVE_GENERATION_STALE',
+    );
+  });
+  it('retains global exclusion for actual broader production rights, including recovery and retry', () => {
+    const f = fixture();
+    const broad = { ...f.claim(), globallyExclusive: true };
+    const { run } = f.store.claim(broad);
+    expect(() => f.second.checkOrdinary('other-session', [f.other])).toThrow('LIVE_MODE_ACTIVE');
+    expect(() => f.second.claim(f.claim('other-session', f.other))).toThrow('LIVE_APP_BUSY');
+    expect(() => f.second.retry({ ...broad, globallyExclusive: false })).toThrow(
+      'IDEMPOTENCY_KEY_REUSED',
+    );
+    const recovered = f.store.mutate(run, { event: 'recover', code: 'LIVE_SCOPE_CHANGED' });
+    expect(recovered.globallyExclusive).toBe(true);
+    expect(() => f.second.reserveWriter('other-session', [f.other])).toThrow('LIVE_MODE_ACTIVE');
+  });
+  it('refuses a global production claim while even an unrelated proven writer remains', () => {
+    const f = fixture();
+    f.store.reserveWriter('other-session', [f.other]);
+    expect(() => f.second.claim({ ...f.claim(), globallyExclusive: true })).toThrow(
+      'LIVE_SESSION_BUSY',
+    );
+  });
   it('atomically claims both relay and app across independent Mobile connections', () => {
     const f = fixture();
     const first = f.store.claim(f.claim()).run;

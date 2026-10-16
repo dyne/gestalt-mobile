@@ -22,6 +22,86 @@ import { CodexJsonRpcError } from './json-rpc-client.js';
 import { CodexSessionRuntime } from './session-runtime.js';
 
 describe('CodexSessionRuntime', () => {
+  it('keeps the fixed Live MCP inventory through same-thread restoration while ordinary restoration prepares capabilities', async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const prepare = vi.fn<
+      NonNullable<ConstructorParameters<typeof CodexSessionRuntime>[13]>['prepare']
+    >(async (_session, _rpc, config, deadline) => ({
+      ready: false,
+      deadline,
+      config: { ...config, mcp_servers: { optional: { enabled: false } } },
+      skillsConfig: [],
+      fallback() {},
+    }));
+    const runtime = new CodexSessionRuntime(
+      () => ({
+        rpc: {
+          request: async (method, params) => {
+            calls.push({ method, params });
+            return method === 'thread/resume'
+              ? { thread: { id: (params as { threadId: string }).threadId } }
+              : {};
+          },
+          onNotification: () => () => {},
+          onServerRequest: () => () => {},
+        },
+        close() {},
+      }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      64,
+      undefined,
+      undefined,
+      { prepare, verify: async () => false },
+    );
+    const session = RelaySession.create({
+      id: 'fixed-live',
+      effectiveSkillSelection: { skills: [] },
+      provider: 'codex',
+      workspaceId: 'w',
+      workspacePath: '/w',
+      profile: 'default',
+      model: 'gpt-6-sol',
+      modelSettings: { reasoningEffort: 'medium' },
+      now: 't',
+    }).bindThread('owning-thread', 't').snapshot;
+    const fixed = {
+      model_reasoning_effort: 'medium',
+      mcp_servers: {
+        'context-mode': { command: '/signed/context-proxy' },
+        gestalt: { command: '/signed/org-proxy' },
+      },
+    };
+    const restored = await runtime.restoreLiveOwner(session, 't', {
+      modelConfig: fixed,
+      skillsConfig: [],
+    });
+    expect(restored.threadId).toBe('owning-thread');
+    expect(restored.model).toBe('gpt-6-sol');
+    expect(restored.modelSettings?.reasoningEffort).toBe('medium');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(calls.find(({ method }) => method === 'thread/resume')?.params).toMatchObject({
+      threadId: 'owning-thread',
+      config: fixed,
+    });
+    expect(
+      (
+        calls.find(({ method }) => method === 'thread/resume')?.params as {
+          config: { mcp_servers: unknown };
+        }
+      ).config.mcp_servers,
+    ).toEqual(fixed.mcp_servers);
+    await runtime.restore({ ...session, id: 'ordinary', threadId: 'ordinary-thread' }, 't');
+    expect(prepare).toHaveBeenCalledTimes(1);
+    runtime.stopAll();
+  });
   it('reconciles metadata on untouched threads and preserves genuine history failures', async () => {
     const calls: unknown[] = [];
     let status = 'idle';
@@ -1773,7 +1853,10 @@ describe('CodexSessionRuntime', () => {
       {
         profile: 'default',
         cwd: '/workspace',
-        environment: { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json' },
+        environment: {
+          GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json',
+          GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1',
+        },
       },
     ]);
     runtime.stop('session-1');

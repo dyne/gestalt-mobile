@@ -4,18 +4,79 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   CODEX_JSON_RPC_ERROR,
   CODEX_THREAD_NOT_FOUND,
   CODEX_THREAD_WRITER_BUSY,
   CodexJsonRpcError,
+  CodexLiveContextProbeError,
   isMissingCodexThreadRollout,
   JsonRpcClient,
 } from './json-rpc-client.js';
 
 describe('JsonRpcClient', () => {
+  it('rejects pending and future initialization when the owned transport ends', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const client = new JsonRpcClient(input, output);
+    const pending = expect(client.request('initialize', {})).rejects.toThrow(
+      'CODEX_RPC_TRANSPORT_CLOSED',
+    );
+    input.end();
+    await pending;
+    await expect(client.request('thread/start', {})).rejects.toThrow('CODEX_RPC_TRANSPORT_CLOSED');
+  });
+  it('settles a synchronous transport response registered during write', async () => {
+    const input = new PassThrough();
+    const output = new Writable({
+      write(chunk, _encoding, done) {
+        const request = JSON.parse(chunk.toString());
+        input.write(
+          JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { ready: true } }) + '\n',
+        );
+        done();
+      },
+    });
+    const client = new JsonRpcClient(input, output);
+    await expect(client.request('initialize', {})).resolves.toEqual({ ready: true });
+  });
+  it('rejects write failures without retaining transport error contents', async () => {
+    const input = new PassThrough();
+    const output = new Writable({
+      write(_chunk, _encoding, done) {
+        done(new Error('private-transport-detail'));
+      },
+    });
+    const client = new JsonRpcClient(input, output);
+    await expect(client.request('initialize', {})).rejects.toThrow('CODEX_RPC_OUTPUT_FAILED');
+    await expect(client.request('thread/start', {})).rejects.toThrow('CODEX_RPC_OUTPUT_FAILED');
+  });
+  it('never retains raw context tool failure contents in diagnostics', () => {
+    const error = new CodexLiveContextProbeError(
+      'Error executing node: spawn EACCES /private-owner-path token=private-value',
+    );
+    expect(error.message).toBe('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    expect(error.stage).toBe('context-tool-error');
+    expect(error.markers).toEqual(['eacces', 'spawn', 'node']);
+    expect(JSON.stringify(error)).not.toContain('private-owner-path');
+    expect(JSON.stringify(error)).not.toContain('private-value');
+    expect(new CodexLiveContextProbeError('x'.repeat(65536) + 'EACCES').markers).toEqual([]);
+  });
+  it('retains only fixed failure categories beyond the bounded redacted message', () => {
+    const error = new CodexJsonRpcError(
+      -32603,
+      `token=private-value ${'x'.repeat(300)} executor-local config: bwrap: Can't bind mount /private-owner-path: Operation not permitted`,
+    );
+    expect(error.message.length).toBeLessThanOrEqual(256);
+    expect(error.message).not.toContain('private-value');
+    expect(error.liveDiagnosticMarkers).toContain('executor-local config');
+    expect(error.liveDiagnosticMarkers).toContain("can't bind mount");
+    expect(error.liveDiagnosticMarkers).toContain('operation not permitted');
+    expect(JSON.stringify(error.liveDiagnosticMarkers)).not.toContain('private-owner-path');
+    expect(JSON.stringify(error)).not.toContain('private-value');
+  });
   it('classifies only the confirmed active-writer protocol response', () => {
     expect(new CodexJsonRpcError(-32600, 'Thread thread-1 already has an active writer').kind).toBe(
       CODEX_THREAD_WRITER_BUSY,

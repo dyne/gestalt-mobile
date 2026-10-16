@@ -9,6 +9,7 @@ import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import type { AppIdentity } from '../../features/live-design/application/ownership.js';
 import { liveAppIdentity, revalidateLiveApp } from './sqlite-live-ownership.js';
 import { loopbackPort } from './preview-targets.js';
+import type { ConnectionFileVerification } from './process-identity.js';
 
 export type DevServerIdentity = Readonly<{
   pid: number;
@@ -24,16 +25,22 @@ export type RegisteredDevServer = Readonly<{
 }>;
 
 /** Linux listener identity, including the owning process start fence; a port/PID alone is insufficient. */
-export function observeLoopbackListener(pid: number, port: number): DevServerIdentity {
+export function observeLoopbackListener(
+  pid: number,
+  port: number,
+  files?: ConnectionFileVerification,
+): DevServerIdentity {
   try {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error();
     const processRoot = `/proc/${pid}`;
     const stat = readFileSync(`${processRoot}/stat`, 'utf8');
     const startTicks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
     if (!startTicks || !/^\d+$/.test(startTicks)) throw new Error();
-    const executableDigest = createHash('sha256')
-      .update(readFileSync(`${processRoot}/exe`))
-      .digest('hex');
+    const executableDigest = files
+      ? files.verifiedDigest(`${processRoot}/exe`)
+      : createHash('sha256')
+          .update(readFileSync(`${processRoot}/exe`))
+          .digest('hex');
     const sockets = new Set<string>();
     for (const fd of readdirSync(`${processRoot}/fd`)) {
       try {

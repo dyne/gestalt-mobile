@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -162,6 +163,7 @@ async function fixture() {
 it('uses the existing Codex relay/model/effort/policy and waits for completion while ordinary turns remain blocked', async () => {
   const f = await fixture();
   const before = f.session();
+  const bearerCanary = randomBytes(32).toString('hex');
   let release!: () => void;
   f.wait.mockImplementationOnce(
     () =>
@@ -172,7 +174,7 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
   const work = f.guard.liveEvent(f.run, '1234abcd', () =>
     f.turns.apply(
       f.run,
-      { type: 'generate', id: '1234abcd', count: 1 },
+      { type: 'generate', id: '1234abcd', count: 1, token: bearerCanary, action: 'distill' },
       595000,
       'operation-digest',
     ),
@@ -188,6 +190,8 @@ it('uses the existing Codex relay/model/effort/policy and waits for completion w
   expect(f.launch).toHaveBeenCalledOnce();
   const starts = f.requests.filter((r) => r.method === 'turn/start');
   expect(starts).toHaveLength(1);
+  expect(JSON.stringify(starts[0].params)).not.toContain(bearerCanary);
+  expect(JSON.stringify(starts[0].params)).toContain('distill');
   expect(starts[0].params).toMatchObject({
     threadId: 'root',
     model: 'own-model',
@@ -337,6 +341,7 @@ it('unresponsive native settlement returns a bounded recovery error and never re
           remove: async () => {},
           cleanup: async () => {},
           verifyClean: async () => {},
+          restore: async () => {},
         },
       },
       f.run,
@@ -388,11 +393,20 @@ it('native Stop validates pinned parent lineage and leaves unrelated roots and d
   const interrupted = new Set<string>();
   const inspected: string[] = [];
   f.server.rpc.request = async (method, params) => {
-    const p = params as { threadId?: string; parentThreadId?: string; sourceKinds?: string[] };
+    const p = params as {
+      threadId?: string;
+      ancestorThreadId?: string;
+      modelProviders?: string[];
+      sourceKinds?: string[];
+    };
     if (method === 'thread/list') {
-      expect(p.parentThreadId).toBeUndefined();
-      expect(p.sourceKinds).toContain('subAgentThreadSpawn');
-      return { data: lineage, nextCursor: null };
+      expect(p.ancestorThreadId).toBe('root');
+      expect(p.modelProviders).toEqual([]);
+      expect(p.sourceKinds).toBeUndefined();
+      return {
+        data: lineage.map((thread) => ({ ...thread, sessionId: thread.id })),
+        nextCursor: null,
+      };
     }
     if (method === 'thread/read' && p.threadId !== 'root') {
       inspected.push(p.threadId!);

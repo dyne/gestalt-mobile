@@ -15,11 +15,22 @@ import { revalidateLiveApp, type SqliteLiveOwnership } from './sqlite-live-owner
 
 type Reservation = ReturnType<SqliteLiveOwnership['reserveWriter']>;
 type LiveAuthority = { fence: LiveFence; relayId: string; eventId: string; active: boolean };
+type PreparationAuthority = {
+  session: RelaySessionSnapshot;
+  reservation: Reservation;
+  active: boolean;
+};
 
 /** Shared-store reservations remain durable until whole-tree quiescence is externally proved. */
 export class LiveDispatchGuard implements LiveDispatchPolicy {
   private readonly writers = new Map<string, Reservation>();
   private readonly events = new AsyncLocalStorage<LiveAuthority>();
+  private readonly preparation = new AsyncLocalStorage<PreparationAuthority>();
+  private readonly maintenance = new AsyncLocalStorage<{
+    fence: LiveFence;
+    relayId: string;
+    active: boolean;
+  }>();
   constructor(
     private readonly input: {
       owners: SqliteLiveOwnership;
@@ -27,6 +38,8 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
       scopes(session: RelaySessionSnapshot): readonly string[] | null;
       /** Verify current runtime denies collaboration/external writers without broadening permissions. */
       verifyLiveRuntime?(fence: LiveFence): Promise<void>;
+      /** Controller-private preflight hold; public/model requests cannot set it. */
+      preflightBlocked?(): boolean;
     },
   ) {}
   private authority(sessionId: string): boolean {
@@ -40,6 +53,7 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
   }
   check(session: RelaySessionSnapshot): void {
     if (this.authority(session.id)) return;
+    if (this.input.preflightBlocked?.()) throw new LiveDispatchError();
     try {
       this.input.owners.checkOrdinary(session.id, this.input.scopes(session));
     } catch (error) {
@@ -51,6 +65,25 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     }
   }
   writer(session: RelaySessionSnapshot, kind: 'writer' | 'turn' | 'executor' = 'writer'): void {
+    const preparation = this.preparation.getStore();
+    if (preparation?.session.id === session.id) {
+      if (!preparation.active) throw new LiveDispatchError('LIVE_GENERATION_STALE');
+      if (kind !== 'writer' || !this.input.preflightBlocked?.()) throw new LiveDispatchError();
+      this.input.owners.assertWriter(preparation.reservation, this.input.scopes(session));
+      return;
+    }
+    const maintenance = this.maintenance.getStore();
+    if (maintenance?.relayId === session.id) {
+      const run = this.input.owners.assert(maintenance.fence);
+      if (
+        !maintenance.active ||
+        kind !== 'writer' ||
+        !['starting', 'stopping'].includes(run.state) ||
+        run.rootThreadId !== session.threadId
+      )
+        throw new LiveDispatchError();
+      return;
+    }
     if (this.authority(session.id)) {
       if (kind !== 'turn' || session.provider !== 'codex') throw new LiveDispatchError();
       return;
@@ -79,6 +112,7 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     if (this.blocked(sessionId)) throw new LiveDispatchError();
   }
   blocked(sessionId: string): boolean {
+    if (this.input.preflightBlocked?.()) return true;
     try {
       const writer = this.writers.get(sessionId);
       this.input.owners.checkOrdinary(
@@ -89,6 +123,49 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     } catch {
       return true;
     }
+  }
+  /** Trusted preflight lifecycle only. Never authorizes a model turn/executor. */
+  reacquirePreparation(session: RelaySessionSnapshot): void {
+    if (!this.input.preflightBlocked?.()) throw new LiveDispatchError('LIVE_RUNTIME_UNISOLATED');
+    const reservation = this.writers.get(session.id);
+    if (reservation) this.input.owners.assertWriter(reservation, this.input.scopes(session));
+    else
+      this.writers.set(
+        session.id,
+        this.input.owners.reserveWriter(session.id, this.input.scopes(session)),
+      );
+  }
+  async livePreparation<T>(session: RelaySessionSnapshot, work: () => Promise<T>): Promise<T> {
+    const reservation = this.writers.get(session.id);
+    if (!reservation || !this.input.preflightBlocked?.())
+      throw new LiveDispatchError('LIVE_RUNTIME_UNISOLATED');
+    this.input.owners.assertWriter(reservation, this.input.scopes(session));
+    const authority = { session, reservation, active: true };
+    return this.preparation.run(authority, async () => {
+      try {
+        const result = await work();
+        this.input.owners.assertWriter(authority.reservation, this.input.scopes(session));
+        return result;
+      } finally {
+        authority.active = false;
+      }
+    });
+  }
+  /** Claim-fenced host reconfiguration only; no turn or child-agent dispatch. */
+  async liveMaintenance<T>(fence: LiveFence, work: () => Promise<T>): Promise<T> {
+    const run = this.input.owners.assert(fence);
+    if (!['starting', 'stopping'].includes(run.state) || run.provider !== 'codex')
+      throw new LiveDispatchError();
+    const authority = { fence, relayId: run.relayId, active: true };
+    return this.maintenance.run(authority, async () => {
+      try {
+        const result = await work();
+        this.input.owners.assert(fence);
+        return result;
+      } finally {
+        authority.active = false;
+      }
+    });
   }
   /** Trusted controller-only event boundary; never offered as a generic tool or HTTP flag. */
   async liveEvent<T>(fence: LiveFence, eventId: string, work: () => Promise<T>): Promise<T> {
@@ -122,5 +199,23 @@ export class LiveDispatchGuard implements LiveDispatchPolicy {
     if (!reservation) throw new LiveDispatchError('LIVE_GENERATION_STALE');
     this.input.owners.releaseQuiescentWriter(reservation, proof);
     this.writers.delete(sessionId);
+  }
+  /** Controller binds actual observed initial scope before any turn can start. */
+  narrowQuiescentWriter(
+    sessionId: string,
+    scopes: readonly string[],
+    proof: Parameters<SqliteLiveOwnership['releaseQuiescentWriter']>[1],
+  ): void {
+    const reservation = this.writers.get(sessionId);
+    if (!reservation) throw new LiveDispatchError('LIVE_GENERATION_STALE');
+    const updated = this.input.owners.narrowQuiescentWriter(reservation, scopes, proof);
+    this.writers.set(sessionId, updated);
+    const preparation = this.preparation.getStore();
+    if (
+      preparation?.active &&
+      preparation.session.id === sessionId &&
+      preparation.reservation.id === reservation.id
+    )
+      preparation.reservation = updated;
   }
 }

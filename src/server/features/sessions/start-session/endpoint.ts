@@ -36,10 +36,34 @@ export function registerStartSession(
         retryable: false,
       });
     let started;
+    const cancellation = new AbortController();
+    const abort = () => {
+      if (!reply.raw.writableEnded) cancellation.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    };
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', abort);
     try {
-      started = await startSession(body, deps);
+      started = await startSession(body, deps, { signal: cancellation.signal });
     } catch (error) {
       deps.reportFailure?.('start-session', error);
+      const candidate =
+        error instanceof Error ? ('code' in error ? error.code : error.message) : undefined;
+      if (typeof candidate === 'string' && /^LIVE_[A-Z0-9_]{1,80}$/.test(candidate)) {
+        const busy = candidate === 'LIVE_SESSION_BUSY' || candidate === 'LIVE_MODE_ACTIVE';
+        const status = busy ? 409 : 503;
+        return reply
+          .code(status)
+          .type('application/problem+json')
+          .send(
+            problem(
+              candidate,
+              status,
+              busy
+                ? 'Another session currently owns the requested runtime.'
+                : 'The registered runtime could not be admitted. Restore its configuration or complete host recovery before retrying.',
+            ),
+          );
+      }
       if (
         error instanceof Error &&
         ['ORG_EXECUTOR_PROFILE_UNAVAILABLE', 'ORG_EXECUTOR_PROFILE_INVALID'].includes(error.message)
@@ -68,6 +92,9 @@ export function registerStartSession(
             ),
           );
       throw error;
+    } finally {
+      request.raw.off('aborted', abort);
+      reply.raw.off('close', abort);
     }
     if (key) deps.idempotency?.put('start-session', key, 202, JSON.stringify(started));
     return reply.code(202).send(started);

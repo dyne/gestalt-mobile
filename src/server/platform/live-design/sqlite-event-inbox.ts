@@ -243,10 +243,16 @@ export class SqliteLiveEventInbox implements LiveEventInbox {
     });
   }
   /** Read-only recovery evidence; never a retry/lease-takeover API. */
-  records(): InboxEvent[] {
+  records(generation?: number): InboxEvent[] {
+    if (generation !== undefined && (!Number.isSafeInteger(generation) || generation < 1))
+      throw new Error('LIVE_GENERATION_STALE');
     return this.db
-      .prepare('SELECT record FROM live_event_inbox')
-      .all()
+      .prepare(
+        generation === undefined
+          ? 'SELECT record FROM live_event_inbox'
+          : 'SELECT record FROM live_event_inbox WHERE generation=?',
+      )
+      .all(...(generation === undefined ? [] : [generation]))
       .map((row) => JSON.parse(String(row.record)) as InboxEvent);
   }
   close(): void {

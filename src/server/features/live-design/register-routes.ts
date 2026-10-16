@@ -10,6 +10,9 @@ import { registerLaunchGrant } from './launch/endpoint.js';
 import { registerRenewLease } from './renew/endpoint.js';
 import { registerLiveGrantStatus } from './status/endpoint.js';
 import { registerLiveHttpBoundary } from './http/boundary.js';
+import { registerLiveStart } from './start/endpoint.js';
+import { registerLiveStop } from './stop/endpoint.js';
+import { registerLiveResume } from './resume/endpoint.js';
 
 /** Mobile routes only; preview endpoints belong to the separately bound private gateway. */
 export function registerLiveDesignRoutes(
@@ -18,6 +21,9 @@ export function registerLiveDesignRoutes(
 ): void {
   app.register(async (scope) => {
     registerLiveHttpBoundary(scope);
+    registerLiveStart(scope, deps);
+    registerLiveStop(scope, deps);
+    registerLiveResume(scope, deps);
     registerLaunchGrant(scope, deps);
     registerRenewLease(scope, deps);
     registerLiveGrantStatus(scope, deps);

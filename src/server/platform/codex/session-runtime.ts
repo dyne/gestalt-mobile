@@ -4,12 +4,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
+
 import {
   RelaySession,
   type RelaySessionSnapshot,
 } from '../../features/sessions/model/relay-session.js';
 import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
+import type { LiveProcessIdentity } from '../live-design/process-identity.js';
 import { randomUUID } from 'node:crypto';
+import { lstatSync, realpathSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   createPlanMeasurementSnapshot,
   type RateLimitWindow,
@@ -40,12 +46,16 @@ import {
 } from '../../features/sessions/application/writer-acquisition.js';
 import {
   CodexJsonRpcError,
+  CodexLiveContextProbeError,
   isCodexThreadWriterBusy,
   isMissingCodexThreadRollout,
 } from './json-rpc-client.js';
 import { resolvedServerRequestId } from './server-request.js';
 import type { CodexRetrievalState } from '../retrieval/codex-xerj.js';
 import { xerjDeadline } from '../retrieval/managed-xerj.js';
+import { decodeCodexModels } from './codex-model-catalog.js';
+import { decodeCodexSkills } from '../skills/codex-skill-discovery.js';
+import type { OwningStartupDiscovery } from '../../features/sessions/start-session/use-case.js';
 
 export type AppServer = {
   rpc: {
@@ -65,12 +75,20 @@ export type AppServer = {
   };
   close(): void;
   onExit?(listener: () => void): () => void;
+  /** Positive completion from the exact owned ChildProcess, not a PID disappearance. */
+  waitForExit?(): Promise<void>;
+  /** Trusted controller observation only; no raw host RPC crosses this port. */
+  observeLiveLaunch?(): LiveProcessIdentity;
+  observeLiveEnvironment?(): Readonly<{ tmpdir: string; home: string; codexHome: string }>;
+  observeLiveDescendants?(): void;
 };
 
 export type AppServerLaunchInput = {
   profile: string;
   cwd: string;
   environment?: Readonly<Record<string, string>>;
+  /** Private composition token, never accepted from a relay/browser request. */
+  liveCaptureId?: string;
 };
 
 /** Sticky thread config keeps skill paths out of the app-server process argv. */
@@ -142,6 +160,8 @@ export type OwnedChildProcess = Readonly<{
 
 /** One private owner for every resource acquired for a live Codex child. */
 class SessionResource {
+  liveCaptureId?: string;
+  readonly lifetime = new AbortController();
   private disposed = false;
   private explicitShutdown = false;
   readonly pendingRequests = new Map<string, PendingRequest>();
@@ -176,6 +196,7 @@ class SessionResource {
   dispose(): boolean {
     if (this.disposed) return false;
     this.disposed = true;
+    this.lifetime.abort(new Error('LIVE_RUNTIME_UNAVAILABLE'));
     for (const pending of this.pendingRequests.values()) {
       pending.reject(new Error('CODEX_SERVER_REQUEST_CANCELLED'));
     }
@@ -253,49 +274,381 @@ export class CodexSessionRuntime {
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
     private readonly liveDispatch?: LiveDispatchPolicy,
+    /** Private composition observation after actual start/resume, never a readiness grant. */
+    private readonly onOwnerStarted?: (session: RelaySessionSnapshot) => Promise<void>,
+    private readonly beforeOwnerLaunch?: (
+      session: RelaySessionSnapshot,
+      input: AppServerLaunchInput,
+      modelConfig: Readonly<Record<string, unknown>>,
+    ) => Promise<AppServerLaunchInput>,
+    private readonly beforeThreadStart?: (
+      session: RelaySessionSnapshot,
+      modelConfig: Readonly<Record<string, unknown>>,
+    ) => void,
+    private readonly owningAdmission?: {
+      run<T>(session: RelaySessionSnapshot, work: () => Promise<T>): Promise<T>;
+    },
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
   }
   private readonly sessions = new Map<string, SessionResource>();
+  private readonly startupAttempts = new Map<string, AbortController>();
+  private readonly startingResources = new Map<string, SessionResource>();
+  private readonly liveConfigurations = new Map<
+    string,
+    {
+      modelConfig: Record<string, unknown>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    }
+  >();
+  private readonly capturedLiveSessions = new Set<string>();
+  private readonly renewedLiveCaptures = new Map<string, string>();
+  private readonly nativeEffects = new WeakMap<AppServer, number>();
+  private readonly quietLiveOwners = new Map<
+    string,
+    { resource: SessionResource; revision: number }
+  >();
+  private readonly exitedQuietOwners = new Map<
+    string,
+    { resource: SessionResource; revision: number }
+  >();
+  liveOwnerIds(): readonly string[] {
+    return [...this.sessions.keys()];
+  }
   private readonly historyReads = new Map<
     string,
     Promise<{ turns: HistoryTurn[]; activeTurnId: string | null }>
   >();
   private readonly childTopologyReads = new Map<string, Promise<readonly DirectChildThread[]>>();
   private readonly writerAcquisitions = new Map<string, Promise<WriterAcquisition>>();
+  private readonly nativeThreadSelections = new WeakMap<
+    AppServer,
+    Readonly<Record<string, unknown>>
+  >();
+  private observeNativeThreadSelection(process: AppServer, response: unknown): void {
+    const native = asRecord(response);
+    const thread = asRecord(native?.thread);
+    if (!native || typeof thread?.id !== 'string') {
+      this.nativeThreadSelections.delete(process);
+      return;
+    }
+    const selection: Record<string, unknown> = { threadId: thread.id };
+    for (const name of [
+      'model',
+      'modelProvider',
+      'cwd',
+      'approvalPolicy',
+      'activePermissionProfile',
+      'sandbox',
+      'reasoningEffort',
+      'runtimeWorkspaceRoots',
+      'instructionSources',
+    ]) {
+      if (Object.hasOwn(native, name)) selection[name] = structuredClone(native[name]);
+    }
+    this.nativeThreadSelections.set(process, Object.freeze(selection));
+  }
+
+  /** Reads only the already-owned process. Admission must never launch a replacement reader. */
+  async inspectLiveAdmission(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    launchEnvironment: Readonly<{ tmpdir: string; home: string; codexHome: string }> | null;
+    configuration: unknown;
+    account: unknown;
+    thread: unknown;
+    mcp: unknown;
+    threadSelection: Readonly<Record<string, unknown>> | null;
+    threadConfig: Readonly<Record<string, unknown>>;
+    skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+  }> {
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const before = resource.process.observeLiveLaunch();
+    resource.process.observeLiveDescendants?.();
+    const bounded = async (method: string, params: unknown, timeoutMs = 5000): Promise<unknown> => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
+      try {
+        resource.lifetime.signal.throwIfAborted();
+        if (timeoutMs <= 0) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+        return await Promise.race([
+          resource.process.rpc.request(method, params),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), timeoutMs);
+            abort = () => reject(new Error('LIVE_RUNTIME_UNAVAILABLE'));
+            resource.lifetime.signal.addEventListener('abort', abort, { once: true });
+            if (resource.lifetime.signal.aborted) abort();
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+        if (abort) resource.lifetime.signal.removeEventListener('abort', abort);
+      }
+    };
+    // Native's broad query creates threadless clients. Only these supported
+    // owning-thread queries inspect the existing two admitted connections.
+    // Cold full catalogs can take over thirty seconds; one shared deadline
+    // bounds both servers, and disposal cancels pending discovery immediately.
+    const mcpDeadline = Date.now() + 125_000;
+    const servers: unknown[] = [];
+    for (const serverName of ['context-mode', 'gestalt-org-plan']) {
+      for (;;) {
+        const page = asRecord(
+          await bounded(
+            'mcpServerStatus/list',
+            { threadId: session.threadId, serverName, detail: 'full' },
+            mcpDeadline - Date.now(),
+          ),
+        );
+        if (
+          !page ||
+          !Array.isArray(page.data) ||
+          page.data.length > 1 ||
+          page.nextCursor !== null ||
+          page.data.some((server: unknown) => asRecord(server)?.name !== serverName)
+        )
+          throw new Error('LIVE_MCP_UNAVAILABLE');
+        const status = asRecord(page.data[0])?.runtimeStatus;
+        if (status === 'notStarted' || status === 'starting') {
+          if (Date.now() >= mcpDeadline) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+          await delay(Math.min(250, mcpDeadline - Date.now()), undefined, {
+            signal: resource.lifetime.signal,
+          });
+          continue;
+        }
+        if (
+          page.data.length &&
+          !['connected', 'failed', 'authenticationRequired', 'cancelled', 'disabled'].includes(
+            String(status),
+          )
+        )
+          throw new Error('LIVE_MCP_UNAVAILABLE');
+        servers.push(...page.data);
+        break;
+      }
+    }
+    // Observe mutable sources after catalog initialization, never return a
+    // configuration snapshot taken before a long asynchronous startup.
+    const configuration = await bounded('config/read', {
+      includeLayers: true,
+      cwd: session.workspacePath,
+    });
+    const thread = await bounded('thread/read', {
+      threadId: session.threadId,
+      includeTurns: false,
+    });
+    const account = await bounded('account/read', { refreshToken: false });
+    if (
+      this.sessions.get(session.id) !== resource ||
+      resource.threadId !== session.threadId ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(before)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    return {
+      launch: before,
+      launchEnvironment: resource.process.observeLiveEnvironment?.() ?? null,
+      configuration,
+      account,
+      thread,
+      mcp: { data: servers, nextCursor: null },
+      threadSelection: this.nativeThreadSelections.has(resource.process)
+        ? structuredClone(this.nativeThreadSelections.get(resource.process)!)
+        : null,
+      threadConfig: structuredClone(resource.modelConfig),
+      skillsConfig: resource.skillsConfig && structuredClone(resource.skillsConfig),
+    };
+  }
 
   async start(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
-    const resource = await this.createResource(session);
+    return this.owningAdmission
+      ? this.owningAdmission.run(session, () => this.startOwned(session, now))
+      : this.startOwned(session, now);
+  }
+  /** One captured original supplies its own catalogs before thread selection.
+   * The admission hold encloses discovery, selection, thread creation and seal. */
+  async startWithDiscovery(
+    session: RelaySessionSnapshot,
+    now: string,
+    select: (discovery: OwningStartupDiscovery) => Promise<RelaySessionSnapshot>,
+    signal?: AbortSignal,
+  ): Promise<RelaySessionSnapshot> {
+    if (
+      !this.owningAdmission ||
+      this.startupAttempts.has(session.id) ||
+      this.sessions.has(session.id)
+    )
+      throw new Error('LIVE_SESSION_BUSY');
+    const controller = new AbortController();
+    const abort = () => controller.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    this.startupAttempts.set(session.id, controller);
     try {
-      await resource.process.rpc.request('initialize', {
-        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-        capabilities: { experimentalApi: true },
-      });
+      return await this.owningAdmission.run(session, () =>
+        this.startOwned(session, now, select, controller.signal),
+      );
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.startupAttempts.delete(session.id);
+      this.startingResources.delete(session.id);
+    }
+  }
+  private async startOwned(
+    session: RelaySessionSnapshot,
+    now: string,
+    select?: (discovery: OwningStartupDiscovery) => Promise<RelaySessionSnapshot>,
+    signal?: AbortSignal,
+  ): Promise<RelaySessionSnapshot> {
+    signal?.throwIfAborted();
+    const resource = await this.createResource(session, !!select, signal);
+    if (select) this.startingResources.set(session.id, resource);
+    const abort = () => resource.dispose();
+    signal?.addEventListener('abort', abort, { once: true });
+    const query = async (method: string, params: unknown) => {
+      signal?.throwIfAborted();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let cancelled: (() => void) | undefined;
+      try {
+        const interrupted = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('CODEX_STARTUP_DISCOVERY_TIMEOUT')), 5000);
+          cancelled = () => reject(new Error('CODEX_STARTUP_CANCELLED'));
+          signal?.addEventListener('abort', cancelled, { once: true });
+        });
+        signal?.throwIfAborted();
+        return await Promise.race([resource.process.rpc.request(method, params), interrupted]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (cancelled) signal?.removeEventListener('abort', cancelled);
+      }
+    };
+    try {
+      await (select ? query : resource.process.rpc.request.bind(resource.process.rpc))(
+        'initialize',
+        {
+          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+          capabilities: { experimentalApi: true },
+        },
+      );
+      if (select) {
+        if (!resource.liveCaptureId) throw new Error('LIVE_RUNTIME_CAPTURE_TOKEN_MISSING');
+        if (!resource.process.observeLiveLaunch || !resource.process.observeLiveEnvironment)
+          throw new Error('LIVE_RUNTIME_OBSERVER_UNAVAILABLE');
+        const birth = resource.process.observeLiveLaunch();
+        const environment = resource.process.observeLiveEnvironment();
+        resource.process.observeLiveDescendants?.();
+        const configuration = await query('config/read', {
+          includeLayers: true,
+          cwd: session.workspacePath,
+        });
+        const account = await query('account/read', { refreshToken: false });
+        const identity = asRecord(account);
+        if (
+          !identity ||
+          !Object.hasOwn(identity, 'account') ||
+          typeof identity.requiresOpenaiAuth !== 'boolean'
+        )
+          throw new Error('LIVE_ACCOUNT_UNVERIFIED');
+        const models = decodeCodexModels(await query('model/list', {}));
+        const skills = decodeCodexSkills(
+          await query('skills/list', { cwds: [session.workspacePath], forceReload: true }),
+          session.workspacePath,
+        );
+        const selected = await select({ models, skills });
+        signal?.throwIfAborted();
+        if (
+          [
+            'id',
+            'provider',
+            'profile',
+            'workspaceId',
+            'workspacePath',
+            'modelSettings',
+            'executionPolicy',
+          ].some(
+            (key) =>
+              !isDeepStrictEqual(
+                selected[key as keyof RelaySessionSnapshot],
+                session[key as keyof RelaySessionSnapshot],
+              ),
+          ) ||
+          (session.model && session.model !== selected.model) ||
+          !selected.model ||
+          !models.includes(selected.model) ||
+          selected.threadId !== null ||
+          selected.activeTurnId !== null ||
+          selected.state !== 'starting'
+        )
+          throw new Error('LIVE_STARTUP_SELECTION_CHANGED');
+        if (
+          !isDeepStrictEqual(
+            configuration,
+            await query('config/read', { includeLayers: true, cwd: session.workspacePath }),
+          ) ||
+          !isDeepStrictEqual(account, await query('account/read', { refreshToken: false })) ||
+          !isDeepStrictEqual(birth, resource.process.observeLiveLaunch()) ||
+          !isDeepStrictEqual(environment, resource.process.observeLiveEnvironment())
+        )
+          throw new Error('LIVE_STARTUP_SOURCE_CHANGED');
+        session = selected;
+        resource.skillsConfig = selected.effectiveSkillSelection?.skills.map(
+          ({ path, enabled }) => ({ path, enabled }),
+        );
+      }
+      signal?.throwIfAborted();
       await this.prepareRetrieval(resource, session);
+      this.beforeThreadStart?.(session, resource.modelConfig);
       const startedThreadId = await this.startThread(
         resource.process,
         session,
         resource.skillsConfig,
         resource.modelConfig,
+        !!select,
       );
       resource.threadId = startedThreadId;
+      if (select) {
+        // Native deliberately defers a new rollout until a turn or an explicit
+        // name. Naming a paginated thread persists it through Native's own
+        // metadata API, allowing the admission handoff before any model turn.
+        const named = asRecord(
+          await query('thread/name/set', {
+            threadId: startedThreadId,
+            name: `Gestalt Mobile ${session.id}`,
+          }),
+        );
+        if (!named || Object.keys(named).length !== 0)
+          throw new Error('LIVE_THREAD_PERSISTENCE_UNVERIFIED');
+      }
       await this.verifyRetrieval(resource, session, true);
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return this.withEffectiveRetrieval(
+      const started = this.withEffectiveRetrieval(
         RelaySession.rehydrate(session)
           .bindThread(resource.threadId!, now)
           .supportsAttentionTool(now).snapshot,
         resource,
       );
+      await this.onOwnerStarted?.(started);
+      signal?.throwIfAborted();
+      return started;
     } catch (error) {
       resource.dispose();
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', abort);
     }
   }
 
   stop(sessionId: string): void {
+    this.startupAttempts.get(sessionId)?.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    this.startingResources.get(sessionId)?.dispose();
     const resource = this.sessions.get(sessionId);
     resource?.beginExplicitShutdown();
     resource?.dispose();
@@ -316,6 +669,201 @@ export class CodexSessionRuntime {
     this.stop(sessionId);
   }
 
+  /** Controller-only quiescent handoff. Refuse reconfiguration until native unload
+   * and the exact owning app-server's close event have both completed.
+   */
+  async releaseLiveOwner(
+    session: RelaySessionSnapshot,
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+    },
+  ): Promise<void> {
+    const assertHeld = () => {
+      const run = authority.owners.assert(authority.fence);
+      if (
+        run.relayId !== session.id ||
+        run.rootThreadId !== session.threadId ||
+        run.state !== 'starting' ||
+        run.phase !== 'quiesce:intent'
+      )
+        throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    };
+    await this.releaseVerifiedOwner(session, assertHeld);
+  }
+
+  /** Read-only actual root/tree/terminal/approval observation through the existing owner. */
+  async inspectLiveQuiescence(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    threadIds: readonly string[];
+    outstanding: {
+      roots: number;
+      descendants: number;
+      commands: number;
+      approvals: number;
+      unknown: boolean;
+    };
+  }> {
+    const observed = await this.verifiedQuiescence(session, () => {});
+    if (observed.resource.liveCaptureId)
+      this.quietLiveOwners.set(session.id, {
+        resource: observed.resource,
+        revision: this.nativeEffects.get(observed.resource.process) ?? 0,
+      });
+    return {
+      launch: observed.birth,
+      threadIds: observed.threads,
+      outstanding: { roots: 0, descendants: 0, commands: 0, approvals: 0, unknown: false },
+    };
+  }
+
+  /** Ordinary writer reservation is still held during controller preflight.
+   * This is accessible only to the private controller lifecycle, never a model tool.
+   */
+  async releaseLivePreparation(session: RelaySessionSnapshot): Promise<void> {
+    if (!this.liveDispatch) throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    await this.releaseVerifiedOwner(session, () => this.liveDispatch!.writer(session));
+  }
+  /** Revoke-first lifecycle cancellation of this exact owning process. No PID
+   * signaling or successor adoption; failure retains recovery authority locks.
+   */
+  async abortLiveOwner(
+    session: RelaySessionSnapshot,
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+    },
+  ): Promise<void> {
+    const run = authority.owners.assert(authority.fence);
+    if (
+      run.relayId !== session.id ||
+      run.rootThreadId !== session.threadId ||
+      !['starting', 'stopping', 'recoveryRequired'].includes(run.state)
+    )
+      throw new Error('LIVE_GENERATION_STALE');
+    const resource = this.sessions.get(session.id);
+    if (
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.waitForExit ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    resource.process.observeLiveLaunch();
+    resource.process.observeLiveDescendants?.();
+    resource.beginExplicitShutdown();
+    resource.dispose();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        resource.process.waitForExit(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')), 10000);
+        }),
+      ]);
+      authority.owners.assert(authority.fence);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async verifiedQuiescence(session: RelaySessionSnapshot, assertAuthority: () => void) {
+    assertAuthority();
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      session.activeTurnId ||
+      resource.pendingRequests.size ||
+      !resource.process.observeLiveLaunch ||
+      !resource.process.waitForExit
+    )
+      throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    const birth = resource.process.observeLiveLaunch();
+    const bounded = async (work: () => Promise<unknown>): Promise<unknown> => {
+      assertAuthority();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          work(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE')),
+              5000,
+            );
+          }),
+        ]);
+        assertAuthority();
+        return result;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const tree = (await bounded(() =>
+      this.readLiveTree(resource, session.threadId!, (method, params) =>
+        resource.process.rpc.request(method, params),
+      ),
+    )) as readonly Record<string, unknown>[];
+    const threads = tree.map((thread) => String(thread.id));
+    for (const threadId of threads) {
+      const read = asRecord(
+        await bounded(() =>
+          resource.process.rpc.request('thread/read', { threadId, includeTurns: false }),
+        ),
+      );
+      const thread = asRecord(read?.thread);
+      if (
+        thread?.id !== threadId ||
+        !['idle', 'notLoaded'].includes(String(asRecord(thread?.status)?.type))
+      )
+        throw new Error('LIVE_SESSION_BUSY');
+      if (
+        threadId !== session.threadId &&
+        (await this.liveThreadIsUnloaded(thread!, (method, params) =>
+          bounded(() => resource.process.rpc.request(method, params)),
+        ))
+      )
+        continue;
+      const terminals = asRecord(
+        await bounded(() =>
+          resource.process.rpc.request('thread/backgroundTerminals/list', { threadId, limit: 64 }),
+        ),
+      );
+      if (!Array.isArray(terminals?.data) || terminals.data.length || terminals.nextCursor)
+        throw new Error('LIVE_SESSION_BUSY');
+    }
+    if (
+      this.sessions.get(session.id) !== resource ||
+      resource.pendingRequests.size ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(birth)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+
+    return { resource, birth, threads, bounded };
+  }
+  private async releaseVerifiedOwner(
+    session: RelaySessionSnapshot,
+    assertAuthority: () => void,
+  ): Promise<void> {
+    const { resource, threads, bounded } = await this.verifiedQuiescence(session, assertAuthority);
+    resource.beginExplicitShutdown();
+    resource.process.observeLiveDescendants?.();
+    try {
+      for (const threadId of threads.reverse()) {
+        const result = asRecord(
+          await bounded(() => resource.process.rpc.request('thread/unsubscribe', { threadId })),
+        );
+        if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(String(result?.status)))
+          throw new Error('LIVE_RUNTIME_UNLOAD_UNVERIFIED');
+      }
+    } finally {
+      resource.dispose();
+      await bounded(() => resource.process.waitForExit!());
+    }
+  }
+
   /** Replaces only this session's app-server while retaining its durable root thread. */
   async recycle(session: RelaySessionSnapshot, now: string): Promise<RelaySessionSnapshot> {
     this.liveDispatch?.writer(session);
@@ -325,6 +873,9 @@ export class CodexSessionRuntime {
 
   /** Releases all relay-owned app-server children during graceful shutdown. */
   stopAll(): void {
+    for (const attempt of this.startupAttempts.values())
+      attempt.abort(new Error('CODEX_STARTUP_CANCELLED'));
+    for (const resource of this.startingResources.values()) resource.dispose();
     // Exit delivery can already be queued when shutdown begins. Declare the
     // shared intent for every owner before closing any process.
     const resources = [...this.sessions.values()];
@@ -513,7 +1064,38 @@ export class CodexSessionRuntime {
     assertCurrent: () => void,
   ): Promise<readonly string[]> {
     const owned = this.sessions.get(session.id);
-    if (!owned || !session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+    if (!owned) {
+      const exited = this.exitedQuietOwners.get(session.id);
+      if (
+        !exited ||
+        !session.threadId ||
+        session.activeTurnId ||
+        exited.resource.threadId !== session.threadId ||
+        !exited.resource.process.waitForExit ||
+        exited.revision !== this.nativeEffects.get(exited.resource.process)
+      )
+        throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+      assertCurrent();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          exited.resource.process.waitForExit(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LIVE_NATIVE_SETTLEMENT_TIMEOUT')), 5000);
+          }),
+        ]);
+        assertCurrent();
+        if (
+          this.sessions.has(session.id) ||
+          exited.revision !== this.nativeEffects.get(exited.resource.process)
+        )
+          throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
+        return [];
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    if (!session.threadId) throw new Error('LIVE_NATIVE_SETTLEMENT_UNAVAILABLE');
     assertCurrent();
     const deadline = Date.now() + 5000;
     const bounded = async <T>(work: Promise<T>): Promise<T> => {
@@ -553,8 +1135,8 @@ export class CodexSessionRuntime {
     if (root?.id !== session.threadId || !sessionId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
     const threadIds = new Set<string>([session.threadId]);
     const discover = async () => {
-      // Codex 0.161 ThreadListParams has no parent filter. List supported
-      // subagent sources, then prove the parent chain and session identity.
+      // Enumerate the pinned Native descendant relation, including v2 children
+      // recorded under other sources/providers; still prove every parent chain.
       const candidates = new Map<string, { parent: string | null; session: string }>();
       let cursor: string | undefined;
       const cursors = new Set<string>();
@@ -563,13 +1145,8 @@ export class CodexSessionRuntime {
         const result = asRecord(
           await request('thread/list', {
             limit: 64,
-            sourceKinds: [
-              'subAgent',
-              'subAgentReview',
-              'subAgentCompact',
-              'subAgentThreadSpawn',
-              'subAgentOther',
-            ],
+            ancestorThreadId: session.threadId,
+            modelProviders: [],
             ...(cursor ? { cursor } : {}),
           }),
         );
@@ -596,20 +1173,16 @@ export class CodexSessionRuntime {
       do {
         added = false;
         for (const [id, child] of candidates) {
-          if (
-            child.session === sessionId &&
-            child.parent !== null &&
-            verified.has(child.parent) &&
-            !verified.has(id)
-          ) {
+          if (child.parent !== null && verified.has(child.parent) && !verified.has(id)) {
             // Verify fresh native lineage before granting cancellation authority.
             const native = asRecord(
               asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
             );
             if (
               native?.id !== id ||
-              native.sessionId !== sessionId ||
-              native.parentThreadId !== child.parent
+              native.parentThreadId !== child.parent ||
+              (native.sessionId !== sessionId &&
+                !(await this.liveThreadIsUnloaded(native, request)))
             )
               throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
             verified.add(id);
@@ -625,6 +1198,13 @@ export class CodexSessionRuntime {
     };
     await discover();
     for (const threadId of threadIds) {
+      if (threadId !== session.threadId) {
+        const thread = asRecord(
+          asRecord(await request('thread/read', { threadId, includeTurns: false }))?.thread,
+        );
+        if (thread?.id !== threadId) throw new Error('LIVE_NATIVE_TREE_UNKNOWN');
+        if (await this.liveThreadIsUnloaded(thread, request)) continue;
+      }
       const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
       if (history.activeTurnId)
         await request('turn/interrupt', {
@@ -668,6 +1248,12 @@ export class CodexSessionRuntime {
     for (const threadId of threadIds) {
       const native = asRecord(await request('thread/read', { threadId, includeTurns: false }));
       const thread = asRecord(native?.thread);
+      if (
+        threadId !== session.threadId &&
+        thread?.id === threadId &&
+        (await this.liveThreadIsUnloaded(thread, request))
+      )
+        continue;
       if (thread?.id !== threadId || asRecord(thread.status)?.type !== 'idle')
         throw new Error('LIVE_NATIVE_SETTLEMENT_REQUIRED');
       const history = await bounded(this.decodeHistory(owned.process, threadId, owned));
@@ -784,6 +1370,155 @@ export class CodexSessionRuntime {
       return await read;
     } finally {
       if (this.historyReads.get(session.id) === read) this.historyReads.delete(session.id);
+    }
+  }
+
+  /** Live controller read: one existing owner, no detached reader or child resume. */
+  /** Native historical reads use the thread ID as sessionId. Absence from the
+   * actual owning connection's loaded registry proves no live thread work;
+   * it never grants cancellation, loading or process-adoption authority. */
+  private async liveThreadIsUnloaded(
+    thread: Record<string, unknown>,
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<boolean> {
+    if (asRecord(thread.status)?.type !== 'notLoaded') return false;
+    const result = asRecord(await request('thread/loaded/list', { limit: 64 }));
+    if (
+      !result ||
+      !Array.isArray(result.data) ||
+      result.data.length > 64 ||
+      result.nextCursor !== null ||
+      result.data.some((id) => !boundedString(id, 256)) ||
+      new Set(result.data).size !== result.data.length
+    )
+      throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    if (result.data.includes(thread.id)) return false;
+    if (thread.sessionId !== thread.id) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    return true;
+  }
+  private async readLiveTree(
+    resource: SessionResource,
+    rootThreadId: string,
+    request: (method: string, params: unknown) => Promise<unknown>,
+  ): Promise<readonly Record<string, unknown>[]> {
+    const root = asRecord(
+      asRecord(await request('thread/read', { threadId: rootThreadId, includeTurns: false }))
+        ?.thread,
+    );
+    const sessionId = boundedString(root?.sessionId, 256);
+    if (root?.id !== rootThreadId || !sessionId) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    const candidates = new Map<string, Record<string, unknown>>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; ; page++) {
+      if (page >= 16) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+      // The pinned Native relation filter includes descendants regardless of
+      // their recorded source/provider. Source-only lists can omit v2 children.
+      // Independently recheck every actual same-session parent chain below.
+      const response = asRecord(
+        await request('thread/list', {
+          limit: 64,
+          ancestorThreadId: rootThreadId,
+          modelProviders: [],
+          ...(cursor ? { cursor } : {}),
+        }),
+      );
+      if (!Array.isArray(response?.data) || response.data.length > 64)
+        throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+      for (const value of response.data) {
+        const thread = asRecord(value),
+          id = boundedString(thread?.id, 256);
+        if (
+          !thread ||
+          !id ||
+          id === rootThreadId ||
+          candidates.has(id) ||
+          !boundedString(thread.sessionId, 256) ||
+          (thread.parentThreadId !== null && !boundedString(thread.parentThreadId, 256))
+        )
+          throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+        candidates.set(id, thread);
+      }
+      if (response.nextCursor === null || response.nextCursor === undefined) break;
+      cursor = boundedString(response.nextCursor, 256) ?? undefined;
+      if (!cursor || cursors.has(cursor)) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+      cursors.add(cursor);
+    }
+    const verified = new Map<string, Record<string, unknown>>([[rootThreadId, root]]);
+    let added: boolean;
+    do {
+      added = false;
+      for (const [id, candidate] of candidates) {
+        if (
+          verified.has(id) ||
+          typeof candidate.parentThreadId !== 'string' ||
+          !verified.has(candidate.parentThreadId)
+        )
+          continue;
+        // Stored summaries use thread id as sessionId. A loaded read must
+        // carry live identity; historical reads additionally require actual
+        // loaded-registry absence and confer no live-work authority.
+        if (verified.size >= 64) throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+        const current = asRecord(
+          asRecord(await request('thread/read', { threadId: id, includeTurns: false }))?.thread,
+        );
+        if (
+          current?.id !== id ||
+          current.parentThreadId !== candidate.parentThreadId ||
+          (current.sessionId !== sessionId && !(await this.liveThreadIsUnloaded(current, request)))
+        )
+          throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+        verified.set(id, current);
+        added = true;
+      }
+    } while (added);
+    if ([...resource.childThreads].some((id) => !verified.has(id)))
+      throw new Error('LIVE_CHILD_TOPOLOGY_UNAVAILABLE');
+    return [...verified.values()];
+  }
+
+  async inspectLiveSpawnedChildren(session: RelaySessionSnapshot): Promise<{
+    launch: LiveProcessIdentity;
+    threads: readonly Readonly<Record<string, unknown>>[];
+  }> {
+    const resource = this.sessions.get(session.id);
+    if (
+      session.provider !== 'codex' ||
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const launch = resource.process.observeLiveLaunch();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const tree = await Promise.race([
+        this.readLiveTree(resource, session.threadId, (method, params) =>
+          resource.process.rpc.request(method, params),
+        ),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), 5000);
+        }),
+      ]);
+      if (
+        this.sessions.get(session.id) !== resource ||
+        resource.threadId !== session.threadId ||
+        !isDeepStrictEqual(resource.process.observeLiveLaunch(), launch)
+      )
+        throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+      return {
+        launch,
+        threads: tree
+          .filter((thread) => thread.parentThreadId === session.threadId)
+          .map((thread) => structuredClone(thread)),
+      };
+    } catch (error) {
+      if (this.sessions.get(session.id) !== resource)
+        throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 
@@ -1186,24 +1921,277 @@ export class CodexSessionRuntime {
     return (await this.restoreWithOutcome(session, now)).session;
   }
 
+  /** Private claim-fenced composition calls this only after actual owner exit.
+   * A missing rollout fails; Live never silently creates a replacement thread.
+   */
+  async restoreLiveOwner(
+    session: RelaySessionSnapshot,
+    now: string,
+    configuration: {
+      modelConfig: Readonly<Record<string, unknown>>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    },
+  ): Promise<RelaySessionSnapshot> {
+    this.liveDispatch?.writer(session);
+    if (!session.threadId || this.sessions.has(session.id))
+      throw new Error('LIVE_RUNTIME_QUIESCENCE_UNAVAILABLE');
+    // A disposed original birth cannot be restored by ordinary startup. That
+    // would silently recapture/replace it, and can reenter its controller's
+    // serialized Start while rollback is awaiting this method.
+    if (this.capturedLiveSessions.has(session.id)) throw new Error('LIVE_RUNTIME_RENEWAL_REQUIRED');
+    this.liveConfigurations.set(session.id, structuredClone(configuration));
+    const result = await this.restoreWithOutcome(session, now, true);
+    if (result.replacementCreated || result.session.threadId !== session.threadId)
+      throw new Error('LIVE_SAME_THREAD_RESUME_UNAVAILABLE');
+    return result.session;
+  }
+  /** A replacement is admissible only through the controller's fresh Manager
+   * renewal launch. Ordinary restore never consumes or manufactures this ID. */
+  async restoreRenewedLiveOwner(
+    session: RelaySessionSnapshot,
+    now: string,
+    configuration: {
+      modelConfig: Readonly<Record<string, unknown>>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    },
+    authority: {
+      owners: import('../../features/live-design/application/ownership.js').LiveOwnershipStore;
+      fence: import('../../features/live-design/application/ownership.js').LiveFence;
+      captureId: string;
+    },
+  ): Promise<RelaySessionSnapshot> {
+    const run = authority.owners.assert(authority.fence);
+    if (
+      run.relayId !== session.id ||
+      run.rootThreadId !== session.threadId ||
+      run.state !== 'starting' ||
+      run.phase !== 'resume:prepare:intent' ||
+      this.sessions.has(session.id) ||
+      !this.capturedLiveSessions.has(session.id) ||
+      this.renewedLiveCaptures.has(session.id) ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+        authority.captureId,
+      )
+    )
+      throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+    this.liveDispatch?.writer(session);
+    this.liveConfigurations.set(session.id, structuredClone(configuration));
+    this.renewedLiveCaptures.set(session.id, authority.captureId);
+    try {
+      const restored = await this.restoreWithOutcome(session, now, true);
+      authority.owners.assert(authority.fence);
+      if (
+        restored.replacementCreated ||
+        restored.session.threadId !== session.threadId ||
+        this.sessions.get(session.id)?.liveCaptureId !== authority.captureId
+      )
+        throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+      return restored.session;
+    } finally {
+      this.renewedLiveCaptures.delete(session.id);
+    }
+  }
+
+  /** Controller-only handoff retaining the original captured app-server birth.
+   * Native cold-resumes an idle unsubscribed thread when explicit overrides are
+   * supplied. A failed/ignored resume never authorizes a replacement process. */
+  async reconfigureLiveOwner(
+    session: RelaySessionSnapshot,
+    configuration: {
+      modelConfig: Readonly<Record<string, unknown>>;
+      skillsConfig: readonly { path: string; enabled: boolean }[] | undefined;
+    },
+  ): Promise<void> {
+    const assertAuthority = () => this.liveDispatch?.writer(session);
+    const { resource, birth, threads, bounded } = await this.verifiedQuiescence(
+      session,
+      assertAuthority,
+    );
+    for (const threadId of threads.toReversed()) {
+      const result = asRecord(
+        await bounded(() => resource.process.rpc.request('thread/unsubscribe', { threadId })),
+      );
+      if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(String(result?.status)))
+        throw new Error('LIVE_RUNTIME_UNLOAD_UNVERIFIED');
+    }
+    const resumed = await bounded(() =>
+      resource.process.rpc.request('thread/resume', {
+        ...this.threadStartParams(session, configuration.skillsConfig, {
+          ...configuration.modelConfig,
+        }),
+        threadId: session.threadId,
+        excludeTurns: true,
+      }),
+    );
+    if (
+      asRecord(asRecord(resumed)?.thread)?.id !== session.threadId ||
+      this.sessions.get(session.id) !== resource ||
+      !isDeepStrictEqual(resource.process.observeLiveLaunch!(), birth)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    this.observeNativeThreadSelection(resource.process, resumed);
+    resource.modelConfig = structuredClone(configuration.modelConfig);
+    resource.skillsConfig = structuredClone(configuration.skillsConfig);
+    this.liveConfigurations.set(session.id, structuredClone(configuration));
+    assertAuthority();
+  }
+
+  /** Fixed existing-owner admission probe. Never exposes a generic raw MCP call port. */
+  async probeLiveContext(session: RelaySessionSnapshot, privatePath: string): Promise<void> {
+    this.liveDispatch?.writer(session);
+    const unavailable = (stage: string) =>
+      Object.assign(new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE'), { stage });
+    // ENOENT inside the sandbox is evidence only for a real, protected host file.
+    const canary = lstatSync(privatePath);
+    if (
+      !canary.isFile() ||
+      canary.isSymbolicLink() ||
+      canary.size !== 32 ||
+      canary.uid !== process.getuid?.() ||
+      (canary.mode & 0o077) !== 0 ||
+      realpathSync(privatePath) !== privatePath
+    )
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const resource = this.sessions.get(session.id);
+    if (
+      !session.threadId ||
+      !resource ||
+      resource.threadId !== session.threadId ||
+      !resource.process.observeLiveLaunch
+    )
+      throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+    const before = resource.process.observeLiveLaunch();
+    // Context executes app-local .js files, which inherit the app's module type.
+    const code = `const fs = await import('node:fs'); let denied = false; try { fs.readFileSync(${JSON.stringify(privatePath)}); } catch (e) { denied = ['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code); } console.log('LIVE_ADMISSION_PROBE_V1:'+JSON.stringify({privateReadDenied:denied}));`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let result: unknown;
+    try {
+      result = await Promise.race([
+        resource.process.rpc.request('mcpServer/tool/call', {
+          threadId: session.threadId,
+          server: 'context-mode',
+          tool: 'ctx_execute',
+          arguments: {
+            language: 'javascript',
+            code,
+            intent: 'Verify isolated Live private-state denial',
+          },
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(unavailable('context-tool-deadline')), 30000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (
+      this.sessions.get(session.id) !== resource ||
+      JSON.stringify(resource.process.observeLiveLaunch()) !== JSON.stringify(before)
+    )
+      throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    const afterCanary = lstatSync(privatePath);
+    if (
+      afterCanary.dev !== canary.dev ||
+      afterCanary.ino !== canary.ino ||
+      afterCanary.size !== canary.size ||
+      afterCanary.mtimeMs !== canary.mtimeMs ||
+      afterCanary.ctimeMs !== canary.ctimeMs
+    )
+      throw new Error('LIVE_CONTEXT_PROBE_UNAVAILABLE');
+    const reply = asRecord(result);
+    if (!Array.isArray(reply?.content)) throw unavailable('context-result-invalid');
+    const text = reply.content
+      .filter((item: unknown) => asRecord(item)?.type === 'text')
+      .map((item: unknown) => asRecord(item)?.text)
+      .join('\n');
+    if (reply?.isError) throw new CodexLiveContextProbeError(text);
+    if (text.length > 65536) throw unavailable('context-result-oversized');
+    const matches = [...text.matchAll(/LIVE_ADMISSION_PROBE_V1:(\{[^\n]*\})/g)];
+    if (matches.length !== 1) throw unavailable('context-result-marker');
+    try {
+      const proof = JSON.parse(matches[0]![1]!);
+      if (proof.privateReadDenied !== true || Object.keys(proof).length !== 1) throw new Error();
+    } catch {
+      throw unavailable('context-denial-not-proven');
+    }
+    this.liveDispatch?.writer(session);
+  }
+
   async restoreWithOutcome(
     session: RelaySessionSnapshot,
     now: string,
+    requireSameThread = false,
+  ): Promise<RestoreSessionResult> {
+    return this.owningAdmission
+      ? this.owningAdmission.run(session, () => this.restoreOwned(session, now, requireSameThread))
+      : this.restoreOwned(session, now, requireSameThread);
+  }
+  private async restoreOwned(
+    session: RelaySessionSnapshot,
+    now: string,
+    requireSameThread: boolean,
   ): Promise<RestoreSessionResult> {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     const resource = await this.createResource(session);
+    const request = async (method: string, params: unknown): Promise<unknown> => {
+      if (!this.renewedLiveCaptures.has(session.id))
+        return resource.process.rpc.request(method, params);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          resource.process.rpc.request(method, params),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LIVE_RENEWAL_DISCOVERY_TIMEOUT')), 5000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
     try {
-      await resource.process.rpc.request('initialize', {
+      await request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
+      if (this.renewedLiveCaptures.has(session.id)) {
+        const before = resource.process.observeLiveLaunch?.();
+        const config = await request('config/read', {
+          includeLayers: true,
+          cwd: session.workspacePath,
+        });
+        const account = await request('account/read', { refreshToken: false });
+        const models = decodeCodexModels(await request('model/list', {}));
+        const skills = decodeCodexSkills(
+          await request('skills/list', { cwds: [session.workspacePath], forceReload: true }),
+          session.workspacePath,
+        );
+        if (
+          !before ||
+          !session.model ||
+          !models.includes(session.model) ||
+          skills.errors.length ||
+          resource.skillsConfig?.some(
+            (selected) =>
+              selected.enabled && !skills.skills.some((actual) => actual.path === selected.path),
+          ) ||
+          !isDeepStrictEqual(before, resource.process.observeLiveLaunch?.()) ||
+          !isDeepStrictEqual(
+            config,
+            await request('config/read', { includeLayers: true, cwd: session.workspacePath }),
+          ) ||
+          !isDeepStrictEqual(account, await request('account/read', { refreshToken: false }))
+        )
+          throw new Error('LIVE_RENEWAL_DISCOVERY_UNVERIFIED');
+      }
       await this.prepareRetrieval(resource, session);
+      this.beforeThreadStart?.(session, resource.modelConfig);
       let result: RestoreSessionResult;
       let missingRollout: unknown;
       try {
-        await resource.process.rpc.request('thread/resume', {
+        const resumed = await request('thread/resume', {
           threadId: session.threadId,
           cwd: session.workspacePath,
+          ...(session.model ? { model: session.model } : {}),
           ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
           ...(session.executionPolicy?.approvalPolicy
             ? { approvalPolicy: session.executionPolicy.approvalPolicy }
@@ -1218,12 +2206,14 @@ export class CodexSessionRuntime {
             gestaltAgentCapacityRecoveryDynamicTool,
           ],
         });
+        this.observeNativeThreadSelection(resource.process, resumed);
         result = {
           session: RelaySession.rehydrate(session).restore(now).supportsAttentionTool(now).snapshot,
           historyUnavailable: false,
           replacementCreated: false,
         };
       } catch (error) {
+        if (requireSameThread) throw new Error('LIVE_SAME_THREAD_RESUME_UNAVAILABLE');
         if (!canRebindMissingRollout(session, error)) throw error;
         missingRollout = error;
         const replacementThreadId = await this.startThread(
@@ -1241,7 +2231,9 @@ export class CodexSessionRuntime {
       this.sessions.get(session.id)?.dispose();
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
-      return { ...result, session: this.withEffectiveRetrieval(result.session, resource) };
+      const restored = this.withEffectiveRetrieval(result.session, resource);
+      await this.onOwnerStarted?.(restored);
+      return { ...result, session: restored };
     } catch (error) {
       resource.dispose();
       throw error;
@@ -1322,13 +2314,15 @@ export class CodexSessionRuntime {
     session: RelaySessionSnapshot,
     skillsConfig?: readonly { path: string; enabled: boolean }[],
     modelConfig: Record<string, unknown> = {},
+    persistBeforeTurn = false,
   ): Promise<string> {
-    return decodeThreadStart(
-      await process.rpc.request(
-        'thread/start',
-        this.threadStartParams(session, skillsConfig, modelConfig),
-      ),
-    );
+    const response = await process.rpc.request('thread/start', {
+      ...this.threadStartParams(session, skillsConfig, modelConfig),
+      ...(persistBeforeTurn ? { historyMode: 'paginated' } : {}),
+    });
+    const id = decodeThreadStart(response);
+    this.observeNativeThreadSelection(process, response);
+    return id;
   }
 
   private threadStartParams(
@@ -1369,8 +2363,13 @@ export class CodexSessionRuntime {
     const reads = new Set([
       'thread/read',
       'thread/list',
+      'thread/loaded/list',
+      'config/read',
+      'mcpServerStatus/list',
       'account/rateLimits/read',
       'model/list',
+      'account/read',
+      'skills/list',
       'thread/backgroundTerminals/list',
     ]);
     const safeStop = new Set([
@@ -1378,19 +2377,68 @@ export class CodexSessionRuntime {
       'thread/unsubscribe',
       'thread/backgroundTerminals/terminate',
     ]);
-    return {
+    const guarded: AppServer = {
       close: () => process.close(),
       ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
+      ...(process.waitForExit ? { waitForExit: process.waitForExit.bind(process) } : {}),
+      ...(process.observeLiveLaunch
+        ? { observeLiveLaunch: process.observeLiveLaunch.bind(process) }
+        : {}),
+      ...(process.observeLiveEnvironment
+        ? { observeLiveEnvironment: process.observeLiveEnvironment.bind(process) }
+        : {}),
+      ...(process.observeLiveDescendants
+        ? { observeLiveDescendants: process.observeLiveDescendants.bind(process) }
+        : {}),
       rpc: {
         request: async (method, params) => {
-          const effect = !reads.has(method) && !safeStop.has(method);
+          const effect =
+            (!reads.has(method) && !safeStop.has(method)) ||
+            (method === 'account/read' && asRecord(params)?.refreshToken !== false);
           const kind = method === 'turn/start' || method === 'turn/steer' ? 'turn' : 'writer';
-          if (effect) policy.writer(session, kind);
-          const result = await process.rpc.request(method, params);
-          if (effect) policy.writer(session, kind);
+          const actor = () => {
+            const selection = this.nativeThreadSelections.get(guarded);
+            return typeof selection?.threadId === 'string'
+              ? { ...session, threadId: selection.threadId }
+              : session;
+          };
+          if (effect) policy.writer(actor(), kind);
+          if (effect || !reads.has(method))
+            this.nativeEffects.set(guarded, (this.nativeEffects.get(guarded) ?? 0) + 1);
+          let result: unknown;
+          try {
+            result = await process.rpc.request(method, params);
+          } catch (error) {
+            if (
+              error instanceof CodexJsonRpcError &&
+              [
+                'initialize',
+                'config/read',
+                'account/read',
+                'model/list',
+                'skills/list',
+                'thread/start',
+                'thread/name/set',
+                'thread/read',
+                'thread/list',
+                'thread/loaded/list',
+                'mcpServerStatus/list',
+                'thread/backgroundTerminals/list',
+                'thread/unsubscribe',
+                'thread/resume',
+              ].includes(method)
+            )
+              error.liveRpcMethod = method;
+            throw error;
+          }
+          if (effect) policy.writer(actor(), kind);
           return result;
         },
-        onNotification: (listener) => process.rpc.onNotification(listener),
+        onNotification: (listener) =>
+          process.rpc.onNotification((notification) => {
+            this.nativeEffects.set(guarded, (this.nativeEffects.get(guarded) ?? 0) + 1);
+            listener(notification);
+          }),
         onServerRequest: (listener) =>
           process.rpc.onServerRequest(async (request) => {
             const observation = isOrgPlanHealthCall(request);
@@ -1404,9 +2452,15 @@ export class CodexSessionRuntime {
           : {}),
       },
     };
+    this.nativeEffects.set(guarded, 0);
+    return guarded;
   }
 
-  private async createResource(session: RelaySessionSnapshot): Promise<SessionResource> {
+  private async createResource(
+    session: RelaySessionSnapshot,
+    owningDiscovery = false,
+    signal?: AbortSignal,
+  ): Promise<SessionResource> {
     this.liveDispatch?.writer(session);
     const deadline = xerjDeadline();
     const lease = this.planStatusSource
@@ -1417,16 +2471,26 @@ export class CodexSessionRuntime {
       : undefined;
     try {
       const token = randomUUID();
-      const skillsConfig = await this.resolveSkills?.(session);
-      const modelConfig = (await this.resolveModelConfig?.(session)) ?? {};
-      const process = this.launchGuarded(session, {
+      const fixed = this.liveConfigurations.get(session.id);
+      const skillsConfig = fixed
+        ? structuredClone(fixed.skillsConfig)
+        : owningDiscovery
+          ? undefined
+          : await this.resolveSkills?.(session);
+      const modelConfig = fixed
+        ? structuredClone(fixed.modelConfig)
+        : ((await this.resolveModelConfig?.(session)) ?? {});
+      const launchInput: AppServerLaunchInput = {
         profile: session.profile,
         cwd: session.workspacePath,
         ...(lease || this.planMeasurementBaseUrl
           ? {
               environment: {
                 ...(lease
-                  ? { GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory }
+                  ? {
+                      GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: lease.statusDirectory,
+                      GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: ORG_PLAN_CAPABILITIES,
+                    }
                   : {}),
                 ...(this.planMeasurementBaseUrl
                   ? {
@@ -1437,7 +2501,16 @@ export class CodexSessionRuntime {
               },
             }
           : {}),
-      });
+      };
+      signal?.throwIfAborted();
+      const admittedInput = this.beforeOwnerLaunch
+        ? await this.beforeOwnerLaunch(session, launchInput, structuredClone(modelConfig))
+        : launchInput;
+      const renewedCapture = this.renewedLiveCaptures.get(session.id);
+      if (renewedCapture && admittedInput.liveCaptureId !== renewedCapture)
+        throw new Error('LIVE_RUNTIME_RENEWAL_INVALID');
+      signal?.throwIfAborted();
+      const process = this.launchGuarded(session, admittedInput);
       const resource = new SessionResource(
         session.id,
         process,
@@ -1450,11 +2523,23 @@ export class CodexSessionRuntime {
           if (this.sessions.get(session.id) === resource) this.sessions.delete(session.id);
         },
       );
+      resource.liveCaptureId = admittedInput.liveCaptureId;
+      this.quietLiveOwners.delete(session.id);
+      this.exitedQuietOwners.delete(session.id);
+      if (resource.liveCaptureId) this.capturedLiveSessions.add(session.id);
       resource.readinessDeadline = deadline;
       // Own process exit before resume/initialization can make this resource appear healthy.
       // A short-lived child could otherwise leave a durable ready session without a writer.
       const exitUnsubscribe =
         process.onExit?.(() => {
+          const quiet = this.quietLiveOwners.get(session.id);
+          if (
+            resource.liveCaptureId &&
+            quiet?.resource === resource &&
+            quiet.revision === this.nativeEffects.get(resource.process) &&
+            !resource.pendingRequests.size
+          )
+            this.exitedQuietOwners.set(session.id, quiet);
           if (resource.dispose() && resource.exitedUnexpectedly) this.onProcessExit?.(session.id);
         }) ?? (() => {});
       resource.attach([exitUnsubscribe]);
@@ -1464,6 +2549,33 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (notification.method === 'thread/settings/updated') {
+          const params = asRecord(notification.params);
+          const settings = asRecord(params?.threadSettings);
+          if (
+            typeof resource.threadId === 'string' &&
+            params?.threadId === resource.threadId &&
+            settings
+          ) {
+            const prior = this.nativeThreadSelections.get(process);
+            const unchangedPolicy =
+              settings.cwd === prior?.cwd &&
+              Object.hasOwn(settings, 'sandboxPolicy') &&
+              isDeepStrictEqual(settings.sandboxPolicy, prior?.sandbox) &&
+              isDeepStrictEqual(settings.activePermissionProfile, prior?.activePermissionProfile);
+            this.observeNativeThreadSelection(process, {
+              ...settings,
+              // Pinned ThreadSettings cannot update workspace roots and omits
+              // them from notifications. Retain the actual startup inventory
+              // only when cwd and effective policy remain identical.
+              runtimeWorkspaceRoots: unchangedPolicy ? prior?.runtimeWorkspaceRoots : undefined,
+              instructionSources: unchangedPolicy ? prior?.instructionSources : undefined,
+              thread: { id: resource.threadId },
+              sandbox: settings.sandboxPolicy,
+              reasoningEffort: settings.effort,
+            });
+          }
+        }
         if (notification.method === 'mcpServer/statusUpdated') {
           const status = notification.params as { name?: string; status?: string } | null;
           if (
@@ -1578,7 +2690,11 @@ export class CodexSessionRuntime {
     resource: SessionResource,
     session: RelaySessionSnapshot,
   ): Promise<void> {
-    if (!this.retrieval) return;
+    // Claim-fenced Live restoration already supplies the complete signed MCP
+    // surface. Ordinary optional capability preparation must not add transports.
+    // The controller verifies actual native MCP connections before activation.
+    if (!this.retrieval || resource.liveCaptureId || this.liveConfigurations.has(session.id))
+      return;
     const state = await this.retrieval.prepare(
       session,
       resource.process.rpc,
@@ -1672,7 +2788,7 @@ export class CodexSessionRuntime {
       );
       return;
     }
-    await resource.process.rpc.request('thread/resume', {
+    const resumed = await resource.process.rpc.request('thread/resume', {
       threadId: resource.threadId,
       cwd: session.workspacePath,
       ...threadSkillConfig(resource.skillsConfig, resource.modelConfig),
@@ -1681,6 +2797,7 @@ export class CodexSessionRuntime {
         : {}),
       ...this.permissionParams(session),
     });
+    this.observeNativeThreadSelection(resource.process, resumed);
   }
 
   private resolveNotificationOrigin(

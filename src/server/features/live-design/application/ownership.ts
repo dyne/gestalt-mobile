@@ -31,6 +31,8 @@ export type LiveRun = LiveAudience &
     rootThreadId: string;
     provider: 'codex';
     app: AppIdentity;
+    /** Trusted production admission: broader/scratch rights retain global exclusion. */
+    globallyExclusive?: boolean;
     targetId: string;
     targetIdentity: string;
     operationId: string;
@@ -54,13 +56,18 @@ export type LiveStartClaim = Omit<
   | 'updatedAt'
   | 'priorControls'
   | 'controlsRestored'
->;
+> & {
+  /** Private controller reservation made before original Native birth. Never a
+   * browser input or permission to reuse another session's admission. */
+  admissionGeneration?: number;
+};
 export type LiveMutation =
   | { event: 'phase'; phase: string }
   | { event: 'captureControls'; intent: LiveControlIntent }
   | { event: 'controlsRestored' }
   | { event: 'ready' }
   | { event: 'resume' }
+  | { event: 'bindTarget'; targetIdentity: string }
   | { event: 'stop' }
   | { event: 'failed'; code: string }
   | { event: 'recover'; code: string }
@@ -76,12 +83,15 @@ export interface LiveOwnershipStore extends LiveOwnershipReader {
 }
 
 export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
+  if (mutation.event === 'bindTarget' && run.phase !== 'resume:prepare:intent')
+    throw new Error('LIVE_STATE_CONFLICT');
   const allowed: Record<LiveMutation['event'], readonly LiveState[]> = {
     phase: ['starting', 'stopping'],
     captureControls: ['starting'],
     controlsRestored: ['idle'],
     ready: ['starting'],
     resume: ['stopping'],
+    bindTarget: ['starting'],
     stop: ['starting', 'active', 'error', 'recoveryRequired'],
     failed: ['starting', 'active', 'stopping'],
     recover: ['starting', 'active', 'stopping', 'error', 'recoveryRequired'],
@@ -95,6 +105,7 @@ export function nextLiveState(run: LiveRun, mutation: LiveMutation): LiveState {
       if (run.priorControls !== null) throw new Error('LIVE_STATE_CONFLICT');
       return run.state;
     case 'controlsRestored':
+    case 'bindTarget':
     case 'phase':
       return run.state;
     case 'ready':

@@ -17,6 +17,7 @@ import { registerSelectModel } from '../../features/sessions/select-model/endpoi
 import { registerProblemHandler } from '../http/problem-handler.js';
 import { KimiSessionRuntime } from '../kimi/kimi-session-runtime.js';
 import type { KimiWebServerManager } from '../kimi/kimi-web-server-manager.js';
+import type { SupervisedPlan } from '../../features/plans/domain/supervised-plan.js';
 import { LiveDispatchGuard } from './live-dispatch.js';
 import { liveAppIdentity, SqliteLiveOwnership } from './sqlite-live-ownership.js';
 
@@ -146,6 +147,23 @@ afterEach(() => {
 });
 
 describe('actual Codex outbound Live dispatch boundary', () => {
+  it('uses the actual bound root for private maintenance on the original first-start process', async () => {
+    const f = fixture();
+    const owning = await f.runtime.start(f.session, '2026-10-10T00:00:00.000Z');
+    f.guard.settle(owning.id, quiet);
+    const run = f.claim();
+    await f.guard.liveMaintenance(run, () =>
+      f.runtime.syncThreadPlanName(owning.id, {
+        title: 'Maintenance',
+        steps: [],
+      } as unknown as SupervisedPlan),
+    );
+    expect(f.calls).toContainEqual({
+      method: 'thread/name/set',
+      params: { threadId: 'root', name: 'Maintenance — Authoring' },
+    });
+    expect(f.launch).toHaveBeenCalledTimes(1);
+  });
   it('Start first prevents process creation, thread resume, fallback and model turns', async () => {
     const f = fixture();
     f.claim();
