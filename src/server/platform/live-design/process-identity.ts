@@ -32,8 +32,9 @@ const fileIdentity = (info: BigIntStats) =>
     ].map(String),
   );
 
-/** Fresh bytes for ONE physical connection. Aliases share only an actual inode
- * observation, never authority across calls. First connect consumes the scope.
+/** Fresh bytes for ONE admission operation. Every physical connection has its
+ * own operation. Aliases share actual inode observations, never authority across
+ * calls. A connect consumes the scope; control verification closes it directly.
  */
 export class ConnectionFileVerification {
   readonly #cancellation = new AbortController();

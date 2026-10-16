@@ -82,7 +82,8 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     )
       throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     this.metadata = join(root, `helper-${this.run.liveId}-${this.run.generation}.json`);
-    this.verify();
+    this.assertGeneration();
+    this.input.process.verify(this.receipt);
     if (!existsSync(this.metadata))
       this.save({
         version: 1,
@@ -94,7 +95,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       });
     this.record();
   }
-  private verify(): LiveRun {
+  private assertGeneration(): LiveRun {
     const current = this.input.owners.current(this.run.liveId);
     if (
       !current ||
@@ -106,7 +107,6 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     )
       throw new Error('LIVE_HELPER_GENERATION_STALE');
     this.input.owners.assert(current);
-    this.input.process.verify(this.receipt);
     return current;
   }
   private record(cleanup = false, pending = false): CommandRecord {
@@ -139,7 +139,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     renameSync(next, this.metadata);
   }
   private async command(args: readonly string[], deadlineMs = 20000): Promise<unknown> {
-    const run = this.verify();
+    const run = this.assertGeneration();
     if (this.inFlight || (args[0] === 'live-poll' && run.state !== 'active'))
       throw new Error('LIVE_HELPER_COMMAND_UNAVAILABLE');
     const removal = args[0] === 'live-inject' && args[1] === '--remove' && run.state === 'stopping';
@@ -157,7 +157,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     });
     try {
       const result = await this.input.process.helperCommand(this.receipt, args, deadlineMs);
-      this.verify();
+      this.assertGeneration();
       record.pending = null;
       this.save(record);
       return result;
@@ -179,14 +179,14 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
     }
   }
   async settle(): Promise<void> {
-    const run = this.verify();
+    const run = this.assertGeneration();
     if (run.state !== 'stopping') throw new Error('LIVE_HELPER_RECOVERY_REQUIRED');
     if (this.inFlight) {
       const finished = this.finished;
       await this.input.process.cancelHelperCommand(this.receipt);
       await finished;
     }
-    this.verify();
+    this.assertGeneration();
     const record = this.record(true, true);
     if (record.pending) {
       // Closing a poll does not prove that an upstream lease/source effect did
@@ -228,7 +228,7 @@ export class IsolatedLiveHelper implements CanonicalLivePoll {
       state.publicBaseUrl !== this.input.publicBaseUrl.replace(/\/$/, '')
     )
       throw new Error('LIVE_HELPER_NOT_READY');
-    this.verify();
+    this.assertGeneration();
     this.serverRecord = readLiveConfigFile(path);
     return value;
   }

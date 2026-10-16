@@ -932,6 +932,16 @@ export class IsolatedProjectProcess {
     assertCurrent();
     return assertCurrent;
   }
+  /** Full fresh control-operation verification; no connection or cached grant. */
+  async revalidate(receipt: IsolatedProjectReceipt): Promise<void> {
+    const files = new ConnectionFileVerification();
+    try {
+      const assertCurrent = await this.verifyForConnection(receipt, undefined, files);
+      assertCurrent();
+    } finally {
+      files.close();
+    }
+  }
   /** Post-await fence only; open always performs full independent verification. */
   assertConnectionLifetime(
     receipt: IsolatedProjectReceipt,
@@ -1043,7 +1053,13 @@ export class IsolatedProjectProcess {
           reject(new Error('LIVE_HELPER_COMMAND_UNAVAILABLE'));
         }
       });
-      this.verify(receipt);
+      // The foreground deadline ends at its actual close acknowledgement.
+      // Subsequent full verification has its own bounded authority check.
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      await this.revalidate(receipt);
       return result;
     } finally {
       if (timer) clearTimeout(timer);
@@ -1067,7 +1083,13 @@ export class IsolatedProjectProcess {
         }, 5000);
         this.send({ op: 'helper-command-cancel', requestId });
       });
-      this.verify(receipt);
+      // The foreground deadline ends at its actual close acknowledgement.
+      // Subsequent full verification has its own bounded authority check.
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      await this.revalidate(receipt);
     } finally {
       if (timer) clearTimeout(timer);
     }

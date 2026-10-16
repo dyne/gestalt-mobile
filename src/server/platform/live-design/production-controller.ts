@@ -65,6 +65,7 @@ import {
   type IsolatedProjectReceipt,
   type IsolatedProjectSpecification,
 } from './isolated-project-process.js';
+import { ConnectionFileVerification } from './process-identity.js';
 import { IsolatedLiveHelper } from './isolated-live-helper.js';
 import { CaddyRouteStore } from './caddy-route-store.js';
 import { CaddyRoutes } from './caddy-routes.js';
@@ -981,6 +982,22 @@ export class ProductionLiveController {
     g.run = run;
     return g;
   }
+  private async verifyProjectResources(g: Generation): Promise<void> {
+    const files = new ConnectionFileVerification();
+    const cancellation = new AbortController();
+    try {
+      const current = await Promise.all([
+        g.helper.verifyForConnection(g.helperReceipt, cancellation.signal, files),
+        g.devserver.verifyForConnection(g.devReceipt, cancellation.signal, files),
+      ]);
+      for (const assertCurrent of current) assertCurrent();
+    } catch (error) {
+      cancellation.abort();
+      throw error;
+    } finally {
+      files.close();
+    }
+  }
   private async verifyGeneration(run: LiveRun): Promise<void> {
     const g = this.generation(run);
     this.verifyHost();
@@ -999,8 +1016,8 @@ export class ProductionLiveController {
       g.policy.files,
     );
     if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
-    g.helper.verify(g.helperReceipt);
-    g.devserver.verify(g.devReceipt);
+    await this.verifyProjectResources(g);
+    this.owners.assert(run);
     if (g.resumed) await this.verifyLiveRuntime(run);
   }
   verifyLiveRuntime = async (fence: LiveFence): Promise<void> => {
@@ -1062,8 +1079,7 @@ export class ProductionLiveController {
         g.policy.files,
       );
       if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
-      g.helper.verify(g.helperReceipt);
-      g.devserver.verify(g.devReceipt);
+      await this.verifyProjectResources(g);
       this.owners.assert(fence);
     } catch (error) {
       // Flags are private Native RPC state: Manager cannot observe their change
