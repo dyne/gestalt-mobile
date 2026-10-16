@@ -108,10 +108,14 @@ IsolatedProjectProcess.prototype.verify = function (receipt) {
   }
 };
 const originalConnectionVerify = IsolatedProjectProcess.prototype.verifyForConnection;
-IsolatedProjectProcess.prototype.verifyForConnection = async function (receipt, cancellation) {
+IsolatedProjectProcess.prototype.verifyForConnection = async function (
+  receipt,
+  cancellation,
+  files,
+) {
   const started = performance.now();
   try {
-    return await originalConnectionVerify.call(this, receipt, cancellation);
+    return await originalConnectionVerify.call(this, receipt, cancellation, files);
   } finally {
     const metrics = projectProcesses.get(this);
     if (metrics) {
@@ -119,6 +123,11 @@ IsolatedProjectProcess.prototype.verifyForConnection = async function (receipt, 
       metrics.connectionCount = (metrics.connectionCount ?? 0) + 1;
       metrics.connectionTotalMs = (metrics.connectionTotalMs ?? 0) + elapsed;
       metrics.connectionMaxMs = Math.max(metrics.connectionMaxMs ?? 0, elapsed);
+      if (files)
+        metrics.maxConnectionFileBytes = Math.max(
+          metrics.maxConnectionFileBytes ?? 0,
+          files.statistics().bytesRead,
+        );
       report.projectVerification = [...projectProcesses].map(([owned, value]) => ({
         ...value,
         diagnostics: owned.diagnostics(),

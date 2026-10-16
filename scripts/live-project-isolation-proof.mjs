@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
 import { isolatedPreviewUpstreams } from '../dist/server/server/platform/live-design/isolated-preview-upstreams.js';
 import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
+import { ConnectionFileVerification } from '../dist/server/server/platform/live-design/process-identity.js';
 import {
   LIVE_CODEX_SHA256,
   LIVE_CODEX_BWRAP_SHA256,
@@ -253,11 +254,13 @@ createServer((q,r)=>{if(q.url==='/crash')process.exit(0);r.setHeader('content-ty
   report.checks.nativeFilesystemAndHostUnixDenials = true;
   report.checks.knownBrowserTokenCannotCompeteForPoll = true;
   report.checks.fixedPipeHttpRelay = true;
-  const prepared = await devserver.prepareConnection(devReceipt);
+  const files = new ConnectionFileVerification();
+  const prepared = await devserver.prepareConnection(devReceipt, undefined, files);
   const single = prepared.open();
   single.on('error', () => {});
   single.destroy();
   assert.throws(() => prepared.open());
+  await assert.rejects(() => helper.prepareConnection(helperReceipt, undefined, files));
   report.checks.preparedConnectionSingleUse = true;
   report.stage = 'tampered-launch-input';
   const assertSameCallCurrent = await devserver.verifyForConnection(devReceipt);

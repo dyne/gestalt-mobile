@@ -5,7 +5,138 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createReadStream, readFileSync, readlinkSync, realpathSync, readdirSync } from 'node:fs';
+import {
+  createReadStream,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  readdirSync,
+  fstatSync,
+  statSync,
+  type BigIntStats,
+} from 'node:fs';
+import { open } from 'node:fs/promises';
+
+const fileIdentity = (info: BigIntStats) =>
+  JSON.stringify(
+    [
+      info.dev,
+      info.ino,
+      info.mode,
+      info.uid,
+      info.gid,
+      info.nlink,
+      info.size,
+      info.mtimeNs,
+      info.ctimeNs,
+    ].map(String),
+  );
+
+/** Fresh bytes for ONE physical connection. Aliases share only an actual inode
+ * observation, never authority across calls. First connect consumes the scope.
+ */
+export class ConnectionFileVerification {
+  readonly #cancellation = new AbortController();
+  #readOperations = 0;
+  #bytesRead = 0;
+  #consumed = false;
+  #binding?: string;
+  readonly #roles = new Set<string>();
+  readonly #files = new Map<
+    string,
+    { identity: string; pending: Promise<string>; digest?: string }
+  >();
+  assertOpen(): void {
+    if (this.#consumed) throw new Error('LIVE_CONNECTION_VERIFICATION_CONSUMED');
+  }
+  statistics(): Readonly<{ readOperations: number; bytesRead: number }> {
+    return { readOperations: this.#readOperations, bytesRead: this.#bytesRead };
+  }
+  claim(sessionId: string, generation: number, appRoot: string, role: string): void {
+    this.assertOpen();
+    const binding = JSON.stringify([sessionId, generation, appRoot]);
+    if (
+      (this.#binding && this.#binding !== binding) ||
+      this.#roles.has(role) ||
+      !['helper', 'devserver'].includes(role)
+    )
+      throw new Error('LIVE_CONNECTION_VERIFICATION_SCOPE');
+    this.#binding = binding;
+    this.#roles.add(role);
+  }
+  consume(): void {
+    this.assertOpen();
+    this.close();
+  }
+  close(): void {
+    this.#consumed = true;
+    this.#cancellation.abort();
+    this.#files.clear();
+  }
+  verifiedDigest(path: string): string {
+    this.assertOpen();
+    const info = statSync(path, { bigint: true });
+    const entry = this.#files.get(`${info.dev}:${info.ino}`);
+    if (!entry?.digest || entry.identity !== fileIdentity(info))
+      throw new Error('LIVE_CONNECTION_FILE_CHANGED');
+    return entry.digest;
+  }
+  async digest(path: string, signal: AbortSignal): Promise<string> {
+    this.assertOpen();
+    signal = AbortSignal.any([signal, this.#cancellation.signal]);
+    signal.throwIfAborted();
+    const handle = await open(path, 'r');
+    let owned = true;
+    try {
+      this.assertOpen();
+      signal.throwIfAborted();
+      const info = fstatSync(handle.fd, { bigint: true });
+      if (!info.isFile()) throw new Error('LIVE_CONNECTION_FILE_CHANGED');
+      const key = `${info.dev}:${info.ino}`,
+        identity = fileIdentity(info);
+      let entry = this.#files.get(key);
+      if (entry && entry.identity !== identity) throw new Error('LIVE_CONNECTION_FILE_CHANGED');
+      if (!entry) {
+        this.#readOperations++;
+        const observation = {
+          identity,
+          pending: Promise.resolve(''),
+          digest: undefined as string | undefined,
+        };
+        observation.pending = (async () => {
+          try {
+            const hash = createHash('sha256');
+            for await (const bytes of handle.createReadStream({
+              autoClose: false,
+              signal,
+              highWaterMark: 65536,
+            })) {
+              this.#bytesRead += bytes.length;
+              hash.update(bytes);
+            }
+            if (fileIdentity(fstatSync(handle.fd, { bigint: true })) !== identity)
+              throw new Error('LIVE_CONNECTION_FILE_CHANGED');
+            observation.digest = hash.digest('hex');
+            return observation.digest;
+          } finally {
+            await handle.close();
+          }
+        })();
+        owned = false;
+        this.#files.set(key, observation);
+        entry = observation;
+      }
+      const digest = await entry.pending;
+      signal.throwIfAborted();
+      this.assertOpen();
+      if (fileIdentity(statSync(path, { bigint: true })) !== identity)
+        throw new Error('LIVE_CONNECTION_FILE_CHANGED');
+      return digest;
+    } finally {
+      if (owned) await handle.close();
+    }
+  }
+}
 
 export type LiveProcessIdentity = Readonly<{
   pid: number;
@@ -19,7 +150,12 @@ export type LiveProcessIdentity = Readonly<{
 }>;
 
 /** Full content verification without large synchronous reads on the controller. */
-export async function liveFileDigest(path: string, signal: AbortSignal): Promise<string> {
+export async function liveFileDigest(
+  path: string,
+  signal: AbortSignal,
+  files?: ConnectionFileVerification,
+): Promise<string> {
+  if (files) return files.digest(path, signal);
   signal.throwIfAborted();
   const digest = createHash('sha256');
   for await (const bytes of createReadStream(path, { signal, highWaterMark: 65536 }))
@@ -70,10 +206,11 @@ export function assertObservedProcessMetadata(identity: LiveProcessIdentity): vo
 export async function observeLiveProcessAsync(
   pid: number,
   signal: AbortSignal,
+  files?: ConnectionFileVerification,
 ): Promise<LiveProcessIdentity> {
   try {
     const before = liveProcessMetadata(pid);
-    const executableDigest = await liveFileDigest(`/proc/${pid}/exe`, signal);
+    const executableDigest = await liveFileDigest(`/proc/${pid}/exe`, signal, files);
     if (JSON.stringify(before) !== JSON.stringify(liveProcessMetadata(pid))) throw new Error();
     return Object.freeze({
       pid: before.pid,

@@ -5,6 +5,7 @@
  */
 
 import type { Duplex } from 'node:stream';
+import { ConnectionFileVerification } from './process-identity.js';
 import type { PreviewInstance } from '../../features/live-design/application/ports.js';
 import type { IsolatedProjectProcess, IsolatedProjectReceipt } from './isolated-project-process.js';
 
@@ -53,10 +54,11 @@ export function isolatedPreviewUpstreams(input: {
       // helper must revoke the app's browser authority too. Never fall back to TCP.
       bindings();
       const cancellation = new AbortController();
+      const files = new ConnectionFileVerification();
       try {
         const [helperReady, appReady] = await Promise.all([
-          helper.process.prepareConnection(helper.receipt, cancellation.signal),
-          devserver.process.prepareConnection(devserver.receipt, cancellation.signal),
+          helper.process.prepareConnection(helper.receipt, cancellation.signal, files),
+          devserver.process.prepareConnection(devserver.receipt, cancellation.signal, files),
         ]);
         helperReady.assertCurrent();
         appReady.assertCurrent();
@@ -64,6 +66,8 @@ export function isolatedPreviewUpstreams(input: {
       } catch (error) {
         cancellation.abort();
         throw error;
+      } finally {
+        files.close();
       }
     },
   };

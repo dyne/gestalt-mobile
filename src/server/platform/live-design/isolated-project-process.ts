@@ -29,6 +29,7 @@ import { once } from 'node:events';
 import { privateDenialFailure, type ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { LIVE_CODEX_SHA256, LIVE_CODEX_BWRAP_SHA256 } from './native-contract.js';
 import {
+  ConnectionFileVerification,
   assertObservedProcessMetadata,
   liveFileDigest,
   observeControllerIsolation,
@@ -748,11 +749,11 @@ export class IsolatedProjectProcess {
     }
     return this.targetFromIdentities(observeControllerIsolation(), identities);
   }
-  private async observeTargetAsync(signal: AbortSignal) {
+  private async observeTargetAsync(signal: AbortSignal, files: ConnectionFileVerification) {
     if (!this.owner || !this.child?.pid || this.revoked) throw failure();
     const owner = this.owner;
     if (
-      JSON.stringify(await observeLiveProcessAsync(this.child.pid, signal)) !==
+      JSON.stringify(await observeLiveProcessAsync(this.child.pid, signal, files)) !==
       JSON.stringify(owner)
     )
       throw failure();
@@ -761,19 +762,23 @@ export class IsolatedProjectProcess {
     for (const pid of this.targetCandidates()) {
       signal.throwIfAborted();
       try {
-        identities.push(await observeLiveProcessAsync(pid, signal));
+        identities.push(await observeLiveProcessAsync(pid, signal, files));
       } catch {
         signal.throwIfAborted(); /* An exiting candidate cannot qualify. */
       }
     }
-    if (JSON.stringify(await observeLiveProcessAsync(owner.pid, signal)) !== JSON.stringify(owner))
+    if (
+      JSON.stringify(await observeLiveProcessAsync(owner.pid, signal, files)) !==
+      JSON.stringify(owner)
+    )
       throw failure();
     signal.throwIfAborted();
-    return this.targetFromIdentities(host, identities);
+    return this.targetFromIdentities(host, identities, files);
   }
   private targetFromIdentities(
     host: Pick<LiveProcessIdentity, 'uid' | 'namespaces'>,
     identities: readonly LiveProcessIdentity[],
+    files?: ConnectionFileVerification,
   ) {
     if (!this.network || this.network === host.namespaces.net || this.revoked) throw failure();
     let relay: LiveProcessIdentity | undefined;
@@ -794,7 +799,7 @@ export class IsolatedProjectProcess {
           identity.cwd === this.spec.appRoot
         ) {
           try {
-            observeLoopbackListener(pid, this.spec.port);
+            observeLoopbackListener(pid, this.spec.port, files);
             targets++;
             target = identity;
           } catch {
@@ -862,6 +867,7 @@ export class IsolatedProjectProcess {
   async verifyForConnection(
     receipt: IsolatedProjectReceipt,
     cancellation?: AbortSignal,
+    files = new ConnectionFileVerification(),
   ): Promise<() => void> {
     this.assertReceipt(receipt);
     const signal = AbortSignal.any([
@@ -869,6 +875,7 @@ export class IsolatedProjectProcess {
       AbortSignal.timeout(15000),
       ...(cancellation ? [cancellation] : []),
     ]);
+    files.claim(this.spec.sessionId, this.spec.generation, this.spec.appRoot, this.spec.role);
     const observedPins: { pin: Pin; before: Stats }[] = [];
     const pins = [
       this.spec.native,
@@ -891,7 +898,7 @@ export class IsolatedProjectProcess {
         realpathSync(pin.path) !== pin.path
       )
         throw failure('connection-pin-metadata');
-      if ((await liveFileDigest(pin.path, signal)) !== pin.sha256)
+      if ((await liveFileDigest(pin.path, signal, files)) !== pin.sha256)
         throw failure('connection-pin-digest');
       const after = lstatSync(pin.path);
       if (
@@ -903,11 +910,12 @@ export class IsolatedProjectProcess {
         throw failure('connection-pin-changed');
       observedPins.push({ pin, before });
     }
-    const current = await this.observeTargetAsync(signal);
+    const current = await this.observeTargetAsync(signal, files);
     this.assertTarget(receipt, current);
     // Keep the same-call digest observations until BOTH resource checks finish.
     // This fence cannot grant a connection or replace a fresh full verification.
     const assertCurrent = () => {
+      files.assertOpen();
       for (const { pin, before } of observedPins) {
         const after = lstatSync(pin.path);
         if (
@@ -919,16 +927,22 @@ export class IsolatedProjectProcess {
           throw failure('connection-pin-changed');
       }
       signal.throwIfAborted();
-      this.assertConnectionLifetime(receipt);
+      this.assertConnectionLifetime(receipt, files);
     };
     assertCurrent();
     return assertCurrent;
   }
   /** Post-await fence only; open always performs full independent verification. */
-  assertConnectionLifetime(receipt: IsolatedProjectReceipt): void {
+  assertConnectionLifetime(
+    receipt: IsolatedProjectReceipt,
+    files?: ConnectionFileVerification,
+  ): void {
     this.assertReceipt(receipt);
-    for (const identity of [receipt.owner, receipt.relay, receipt.target])
+    for (const identity of [receipt.owner, receipt.relay, receipt.target]) {
       assertObservedProcessMetadata(identity);
+      if (files && files.verifiedDigest(`/proc/${identity.pid}/exe`) !== identity.executableDigest)
+        throw failure('connection-process-image');
+    }
   }
   /** Full preparation only: no physical connection before all resources admit.
    * The returned operation is bound to this real verifier, revocation and one use;
@@ -937,6 +951,7 @@ export class IsolatedProjectProcess {
   async prepareConnection(
     receipt: IsolatedProjectReceipt,
     cancellation?: AbortSignal,
+    files = new ConnectionFileVerification(),
   ): Promise<{
     assertCurrent(): void;
     open(): Duplex;
@@ -945,7 +960,7 @@ export class IsolatedProjectProcess {
     this.pendingConnections++;
     let assertCurrent!: () => void;
     try {
-      assertCurrent = await this.verifyForConnection(receipt, cancellation);
+      assertCurrent = await this.verifyForConnection(receipt, cancellation, files);
     } finally {
       this.pendingConnections--;
     }
@@ -956,6 +971,7 @@ export class IsolatedProjectProcess {
         if (consumed) throw failure('connection-preparation-consumed');
         consumed = true;
         assertCurrent();
+        files.consume();
         if (this.channels.size >= 32) throw failure();
         const id = ++this.nextChannel;
         const stream = new ProjectPipeSocket(
