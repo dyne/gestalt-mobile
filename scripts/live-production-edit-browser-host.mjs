@@ -200,9 +200,15 @@ export async function productionEditBrowser(input) {
             elapsedMs:
               Number.isSafeInteger(item.elapsedMs) && item.elapsedMs >= 0 ? item.elapsedMs : null,
             method: ['GET', 'POST'].includes(item.method) ? item.method : 'other',
-            route: ['live.js', 'events', 'status', 'lease', 'agent-target-claim'].includes(
-              item.route,
-            )
+            route: [
+              'live.js',
+              'events',
+              'status',
+              'lease',
+              'agent-target-claim',
+              'manual-edit-stash',
+              'manual-edit-commit',
+            ].includes(item.route)
               ? item.route
               : 'other',
             status: Number.isSafeInteger(item.status) ? item.status : null,

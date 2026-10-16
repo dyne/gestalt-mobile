@@ -105,7 +105,15 @@ try {
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
     if (url.pathname.startsWith('/__gestalt_live/')) {
-      const allowed = ['live.js', 'events', 'status', 'lease', 'agent-target-claim'];
+      const allowed = [
+        'live.js',
+        'events',
+        'status',
+        'lease',
+        'agent-target-claim',
+        'manual-edit-stash',
+        'manual-edit-commit',
+      ];
       const tail = url.pathname.slice('/__gestalt_live/'.length);
       let headers = {};
       try {
@@ -328,7 +336,7 @@ try {
   await ui.clickEditCopy(preview);
   await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
   await ui.clickSaveEdit(preview);
-  await ui.assertApplyDockVisible(preview, 1);
+  await ui.assertApplyDockVisible(preview, 1, { timeout: terminalEffectTimeout });
   await ui.clickApplyEdits(preview);
   await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
   await command('manual-applied');
