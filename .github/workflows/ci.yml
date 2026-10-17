@@ -66,7 +66,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: dyne/gestalt-agents
-          ref: 4108e08a34d8642fb6ce89e4947102cdbf2a43cf
+          ref: 3a7d87be1eb61c1ae7e9157292e2f13988b7dc29
           path: .ci/agents-suspension
       - name: Prove suspension handoff with pinned helper
         run: npm run test:org-plan-integration -- .ci/agents-suspension

@@ -315,16 +315,12 @@ function descriptionFor(heading: ParsedHeading): PlanStepDescription | null {
       };
 }
 
-/** Match the helper's bounded suspension-v1 lifecycle dialect. */
+/** Match the helper's ordered nested-suspension-v1 lifecycle dialect. */
 function hasValidSuspension(headings: readonly ParsedHeading[]): boolean {
   const parents = headings.filter((heading) => heading.level === 1);
   const suspended = parents.filter((heading) => heading.state === 'SUSPENDED');
-  if (
-    suspended.length > 1 ||
-    headings.filter((heading) => heading.level === 2 && heading.state === 'SUSPENDED').length > 1
-  )
-    return false;
   let parent: ParsedHeading | undefined;
+  const pausedChildren = new Set<ParsedHeading>();
   for (const heading of headings) {
     if (heading.level === 1) parent = heading;
     const dependency = heading.properties.get('SUSPENDED_FOR');
@@ -340,11 +336,20 @@ function hasValidSuspension(headings: readonly ParsedHeading[]): boolean {
     if (heading.level === 2) {
       if (!parent) return false;
       if (heading.state === 'SUSPENDED' && parent.state !== 'SUSPENDED') return false;
+      if (heading.state === 'SUSPENDED') {
+        if (pausedChildren.has(parent)) return false;
+        pausedChildren.add(parent);
+      }
       if (parent.state === 'SUSPENDED' && heading.state === 'WIP') return false;
       if (parent.state === 'DONE' && heading.state !== 'DONE') return false;
       if (parent.state === 'TODO' && heading.state !== 'TODO') return false;
     }
   }
+  // Earlier-only targets exclude cycles; immediate-inner linkage excludes
+  // forks and disconnected stacks while dependency review/unwind is pending.
+  for (let index = 1; index < suspended.length; index += 1)
+    if (suspended[index]!.properties.get('SUSPENDED_FOR') !== suspended[index - 1]!.id)
+      return false;
   return (
     !suspended.length ||
     !parents.some(

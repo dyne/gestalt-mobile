@@ -44,7 +44,7 @@ describe('plan measurement command adapter', () => {
           'child',
           JSON.stringify(snapshot),
         ],
-        capability: 'suspension-v1',
+        capability: 'suspension-v1,nested-suspension-v1',
       });
     } finally {
       vi.unstubAllEnvs();
