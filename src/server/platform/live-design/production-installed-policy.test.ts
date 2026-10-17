@@ -258,7 +258,9 @@ function fixture(
     threadConfig: modelConfig,
     configuration: {
       ...observation.configuration,
-      config: { ...observation.configuration.config, ...modelConfig },
+      // Native config/read retains original file layers; session flags are
+      // returned separately and must not erase original disabled plugin entries.
+      config: observation.configuration.config,
     },
     mcp: {
       data: [
@@ -314,6 +316,7 @@ it('seals separate executable provenance only after original retirement and term
       .every((source) => !String(source.path).endsWith('.mjs')),
   ).toBe(true);
   expect(f.input.observe).toHaveBeenCalledTimes(2);
+  expect(policy.modelConfig.plugins).toEqual(f.input.observation.configuration.config.plugins);
   expect(f.input.observation.configuration.config.mcp_servers['context-mode']).toMatchObject({
     enabled: true,
     required: true,

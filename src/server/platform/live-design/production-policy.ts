@@ -130,6 +130,7 @@ export async function prepareProductionPolicy(input: {
     account: observation.account,
   });
   const originalSource = app.owningPolicy?.originalLaunchSources?.[0];
+  const expectedPlugins = originalLaunchSurfaces(originalSource).plugins;
   assertOriginalLiveMcp(observation.mcp, originalSource);
   // Original host delegates remain unsupported. The installed two Live packages
   // below are explicitly selected by the trusted host configuration, not claimed
@@ -251,7 +252,7 @@ export async function prepareProductionPolicy(input: {
     model_provider: selection.modelProvider,
     ...(selection.reasoningEffort ? { model_reasoning_effort: selection.reasoningEffort } : {}),
     mcp_servers: expectedServers,
-    plugins: {},
+    plugins: expectedPlugins,
     shell_environment_policy: { inherit: 'none', include_only: [], set: {} },
     permissions: {
       [active.id]: {
@@ -358,7 +359,7 @@ export async function prepareProductionPolicy(input: {
     runtime: actual.launch,
     policyDigest: capture.policyDigest,
     workerConfig: readLiveConfigFile(workerConfig),
-    approved: { mcpServers: expectedServers, plugins: {} },
+    approved: { mcpServers: expectedServers, plugins: expectedPlugins },
     originalLaunchSources: capture.originalLaunchSources,
   });
   if (!isDeepStrictEqual(actual.threadConfig, modelConfig)) throw new Error('LIVE_CONFIG_CHANGED');
@@ -441,7 +442,10 @@ export function assertProductionSourceObservation(
     runtime: observation.launch,
     policyDigest: policy.capture.policyDigest,
     workerConfig: readLiveConfigFile(join(policy.capture.runtimeHome, 'config.toml')),
-    approved: { mcpServers: policy.expectedServers, plugins: {} },
+    approved: {
+      mcpServers: policy.expectedServers,
+      plugins: originalLaunchSurfaces(policy.capture.originalLaunchSources[0]?.descriptor).plugins,
+    },
     originalLaunchSources: policy.capture.originalLaunchSources,
   });
   if (!isDeepStrictEqual(current, policy.sourceInventory)) throw new Error('LIVE_CONFIG_CHANGED');
