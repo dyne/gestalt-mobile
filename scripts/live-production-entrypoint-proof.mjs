@@ -39,7 +39,7 @@ import {
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
-import { pickerSmokeBaseline } from './live-picker-smoke.mjs';
+import { contextToolResultDiagnostic, pickerSmokeBaseline } from './live-picker-smoke.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -960,6 +960,7 @@ async function eventFor(body) {
     );
   }
   if (role === 'root' && step === 5) {
+    report.provider.contextToolResult = contextToolResultDiagnostic(body.input);
     check(
       'native-context-artifact',
       existsSync(join(appRoot, '.impeccable/live/artifacts/context.txt')) &&

@@ -12,7 +12,32 @@ import {
   validateSmokeDelta,
   validateSmokeEvidence,
   validateSmokeWorkflow,
+  contextToolResultDiagnostic,
 } from './live-picker-smoke.mjs';
+
+test('context failure classification retains fixed markers but never raw tool text', () => {
+  const secret = 'private-cookie-and-token-canary';
+  const result = contextToolResultDiagnostic([
+    {
+      type: 'custom_tool_call_output',
+      call_id: 'root-4',
+      output: `Error: context-call-unavailable ${secret}`,
+    },
+  ]);
+  assert.equal(result.present, true);
+  assert.deepEqual(result.markers, ['context-call-unavailable', 'Error:']);
+  assert.ok(!JSON.stringify(result).includes(secret));
+  assert.equal(contextToolResultDiagnostic([]).present, false);
+  const echoOnly = contextToolResultDiagnostic([
+    {
+      type: 'custom_tool_call_output',
+      call_id: 'root-4',
+      output: "console.log('production-context-denied')",
+    },
+  ]);
+  assert.deepEqual(echoOnly.markers, []);
+  assert.equal(Object.hasOwn(echoOnly, 'success'), false);
+});
 
 test('smoke requires explicit selection; ordinary push, PR and dispatch retain their modes', () => {
   assert.equal(proofMode({ eventName: 'push' }), 'preflight');

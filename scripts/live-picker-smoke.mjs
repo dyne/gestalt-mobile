@@ -19,6 +19,51 @@ export const pickerSmokeBaseline = Object.freeze({
   artifactId: 12113569089,
   artifactSha256: 'db42a0e830501a2c1af30f257d940dc2312a8d0cfb03ecbacfd9c8c3a4922157',
 });
+/** Never retain tool text: it can contain private paths, prompts or credentials.
+ * Markers classify a failed probe; echoed source is never evidence of success. */
+export function contextToolResultDiagnostic(input) {
+  const item = input.find(
+    (entry) =>
+      entry.call_id === 'root-4' &&
+      ['function_call_output', 'custom_tool_call_output'].includes(entry.type),
+  );
+  const serialized = JSON.stringify(item?.output ?? null);
+  const bounded = serialized.slice(0, 262144);
+  return {
+    present: item !== undefined,
+    outputBytes: Buffer.byteLength(serialized),
+    inspectedBytesBounded: serialized.length > bounded.length,
+    markers: [
+      'context-call-unavailable',
+      'live-context-unavailable',
+      'live-tool-unavailable',
+      'native-policy-unavailable',
+      'context-call-cancelled',
+      'invalid-native-response',
+      'package-changed',
+      'runtime-changed',
+      'interpreter-changed',
+      'configuration-changed',
+      'stale-admission-receipt',
+      'NATIVE_CONTEXT_CATALOG_UNAVAILABLE',
+      'SyntaxError',
+      'ReferenceError',
+      'ERR_MODULE_NOT_FOUND',
+      'Cannot find module',
+      'No JavaScript runtime available',
+      'Invalid Live executor temporary directory',
+      'EACCES:',
+      'EPERM:',
+      'EROFS:',
+      'ENOENT:',
+      'Permission denied',
+      'Read-only file system',
+      'timed out',
+      'Timeout',
+      'Error:',
+    ].filter((marker) => bounded.includes(marker)),
+  };
+}
 const permittedDelta = new Set([
   '.github/workflows/live-caddy-proof.yml',
   'scripts/live-picker-smoke.mjs',
