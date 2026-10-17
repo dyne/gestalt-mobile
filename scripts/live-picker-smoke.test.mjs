@@ -13,7 +13,158 @@ import {
   validateSmokeEvidence,
   validateSmokeWorkflow,
   contextToolResultDiagnostic,
+  NativeContextCompletion,
 } from './live-picker-smoke.mjs';
+
+const nativeCell = '1';
+const running = (cell = nativeCell) => `Script running with cell ID ${cell}`;
+const completed = (
+  result = { content: [{ type: 'text', text: 'actual controlled MCP output' }], isError: false },
+) => `Script completed\nWall time 82.1 seconds\nOutput:\n${JSON.stringify(result)}`;
+const reply = (callId, output) => [{ type: 'custom_tool_call_output', call_id: callId, output }];
+
+test('requires an actual completed MCP result for immediate completion', () => {
+  const probe = new NativeContextCompletion({ startedAt: 0, now: () => 1000 });
+  assert.deepEqual(probe.advance(reply('root-4', completed())), { state: 'completed' });
+  assert.equal(probe.diagnostics().nativeState, 'completed');
+  assert.equal(probe.diagnostics().cellObserved, false);
+  assert.equal(probe.diagnostics().waits, 0);
+  assert.throws(() => probe.advance(reply('root-4', completed())), /CONTEXT_PROTOCOL_TERMINAL/);
+});
+
+test('waits only the exact Native cell through repeated yield without redispatching ctx', () => {
+  let clock = 10_000;
+  const probe = new NativeContextCompletion({ startedAt: 0, now: () => clock });
+  assert.equal(JSON.stringify(running() + '\nWall time 10.0 seconds\nOutput:\n').length, 66);
+  let next = probe.advance(reply('root-4', running()));
+  assert.deepEqual(next, {
+    state: 'wait',
+    callId: 'root-context-wait-1',
+    arguments: {
+      cell_id: nativeCell,
+      yield_time_ms: 10_000,
+      max_tokens: 2000,
+    },
+  });
+  assert.equal(probe.diagnostics().nativeState, 'pending');
+  clock = 20_000;
+  next = probe.advance(
+    reply(
+      next.callId,
+      `Script running with cell ID ${nativeCell}\nWall time 10.0 seconds\nOutput:\n`,
+    ),
+  );
+  assert.equal(next.callId, 'root-context-wait-2');
+  assert.equal(next.arguments.cell_id, nativeCell);
+  clock = 90_000;
+  assert.deepEqual(
+    probe.advance([
+      {
+        type: 'function_call_output',
+        call_id: next.callId,
+        output: [
+          {
+            type: 'input_text',
+            text: 'Script completed\nWall time 10.003 seconds (code-mode 10.000 seconds; overhead 0.003 seconds)\nOutput:\n',
+          },
+          {
+            type: 'input_text',
+            text: JSON.stringify({ content: [{ type: 'text', text: 'actual result' }] }),
+          },
+        ],
+      },
+    ]),
+    { state: 'completed' },
+  );
+  assert.equal(probe.diagnostics().waits, 2);
+  assert.equal(probe.diagnostics().elapsedMs, 90_000);
+  assert.equal(Object.hasOwn(probe.diagnostics(), 'cellId'), false);
+});
+
+test('does not reset the original300s deadline when a cell yields', () => {
+  let clock = 299_999;
+  const probe = new NativeContextCompletion({ startedAt: 0, now: () => clock });
+  const next = probe.advance(reply('root-4', running()));
+  assert.equal(next.arguments.yield_time_ms, 1);
+  clock = 300_000;
+  assert.throws(
+    () => probe.advance(reply(next.callId, completed())),
+    /CONTEXT_OBSERVATION_DEADLINE/,
+  );
+  assert.equal(probe.diagnostics().state, 'failed');
+});
+
+test('limits immediate repeated yields even when no wall time has elapsed', () => {
+  const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+  let callId = 'root-4';
+  for (let wait = 0; wait < 30; wait++) callId = probe.advance(reply(callId, running())).callId;
+  assert.throws(() => probe.advance(reply(callId, running())), /CONTEXT_WAIT_LIMIT/);
+});
+
+test('preserves pinned Native generation-qualified counters and refuses malformed values', () => {
+  for (const cell of ['2', 'g2:1', 'g9:18446744073709551615']) {
+    const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+    const next = probe.advance(reply('root-4', running(cell)));
+    assert.equal(next.arguments.cell_id, cell);
+    assert.ok(!JSON.stringify(probe.diagnostics()).includes('g9:'));
+  }
+  for (const cell of [
+    '0',
+    '-1',
+    '01',
+    'g0:1',
+    'g1:1',
+    'g2:01',
+    'g2:',
+    '18446744073709551616',
+    'g18446744073709551616:1',
+    'g2:1\nScript completed',
+  ]) {
+    const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+    assert.throws(() => probe.advance(reply('root-4', running(cell))), /CONTEXT_/);
+  }
+});
+
+test('refuses changed, malformed, missing and duplicate cell replies', () => {
+  for (const output of [
+    running('bad-id'),
+    `echo ${running()}`,
+    running() + '\nScript completed',
+    'Script completed',
+    completed({ content: [], isError: false }),
+    completed({ content: [{ type: 'text', text: 'echo only' }], isError: 'false' }),
+    completed({ content: [{ type: 'text', text: 'echo only' }], isError: true }),
+  ]) {
+    const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+    assert.throws(() => probe.advance(reply('root-4', output)), /CONTEXT_/);
+    assert.equal(probe.diagnostics().state, 'failed');
+  }
+  const changed = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+  const next = changed.advance(reply('root-4', running()));
+  assert.throws(() => changed.advance(reply(next.callId, running('2'))), /CONTEXT_CELL_CHANGED/);
+  for (const input of [
+    [],
+    reply('other-cell', completed()),
+    [...reply('root-4', running()), ...reply('root-4', running())],
+  ]) {
+    const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+    assert.throws(() => probe.advance(input), /CONTEXT_RESPONSE_MISSING_OR_DUPLICATE/);
+  }
+});
+
+test('classifies actual failures without retaining tokens, text or a cell id', () => {
+  for (const output of [
+    'Script failed\nScript error:\nprivate-token-canary',
+    'Script terminated',
+    completed({ error: { message: 'private-token-canary' } }),
+  ]) {
+    const probe = new NativeContextCompletion({ startedAt: 0, now: () => 0 });
+    assert.throws(() => probe.advance(reply('root-4', output)), /CONTEXT_/);
+    const diagnostic = JSON.stringify(probe.diagnostics());
+    assert.ok(!diagnostic.includes('private-token-canary'));
+    assert.equal(probe.diagnostics().state, 'failed');
+  }
+});
 
 test('context failure classification retains fixed markers but never raw tool text', () => {
   const secret = 'private-cookie-and-token-canary';

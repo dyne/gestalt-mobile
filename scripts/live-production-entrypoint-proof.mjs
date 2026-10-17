@@ -39,7 +39,11 @@ import {
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
-import { contextToolResultDiagnostic, pickerSmokeBaseline } from './live-picker-smoke.mjs';
+import {
+  NativeContextCompletion,
+  contextToolResultDiagnostic,
+  pickerSmokeBaseline,
+} from './live-picker-smoke.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -617,6 +621,8 @@ const browserSession = previewSecrets.token();
 const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browserSession}` };
 const roles = new Map();
 let firstPickerEventId;
+let firstPickerObservationStarted;
+let contextCompletion;
 const editResponse = createProductionEditProvider(appRoot, final, report);
 let seed = true,
   owningThread,
@@ -947,6 +953,8 @@ async function eventFor(body) {
       'native-context-catalog-result',
       discovery && JSON.stringify(discovery.output).includes('production-context-tool-discovered'),
     );
+    assert.equal(contextCompletion, undefined);
+    contextCompletion = new NativeContextCompletion({ startedAt: firstPickerObservationStarted });
     const args = {
       language: 'javascript',
       code: `const fs=await import('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
@@ -960,7 +968,29 @@ async function eventFor(body) {
     );
   }
   if (role === 'root' && step === 5) {
-    report.provider.contextToolResult = contextToolResultDiagnostic(body.input);
+    assert.ok(contextCompletion);
+    report.provider.contextToolResult = contextToolResultDiagnostic(
+      body.input,
+      contextCompletion.expectedCallId(),
+    );
+    let completion;
+    try {
+      completion = contextCompletion.advance(body.input);
+    } finally {
+      report.provider.contextProtocol = contextCompletion.diagnostics();
+    }
+    if (completion.state === 'wait') {
+      // Continue this exact Native cell. Never issue a second ctx_execute or
+      // advance the deterministic model phase while its original call is pending.
+      const wait = available.filter(
+        (tool) =>
+          tool.name === 'wait' && tool.type === 'function' && tool.namespace === code?.namespace,
+      );
+      check('native-context-wait-advertised', wait.length === 1);
+      roles.set(role, step);
+      return call(wait[0], completion.callId, completion.arguments);
+    }
+    report.checks.actualContextMcpCompletedBeforeArtifactValidation = true;
     check(
       'native-context-artifact',
       existsSync(join(appRoot, '.impeccable/live/artifacts/context.txt')) &&
@@ -2209,6 +2239,7 @@ try {
       certificate: join(caddyRoot, 'tls.pem'),
       report,
       checkpoint: (stage) => {
+        if (stage === 'picker-generate') firstPickerObservationStarted ??= performance.now();
         if (stage === 'helper-connected') {
           stopPreviewProbe();
           report.checks.previewProbeHandedToActualBrowserConnection = true;
@@ -2276,6 +2307,7 @@ try {
     assert.equal(report.editBrowser.openThroughMobileControls, true);
     report.checks.actualMobileUiOpenAuthenticatedRemoteOverlay = true;
   } else if (!recoveryOnly) {
+    firstPickerObservationStarted ??= performance.now();
     const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
       method: 'POST',
       body: {

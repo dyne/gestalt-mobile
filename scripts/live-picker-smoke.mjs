@@ -10,6 +10,153 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { performance } from 'node:perf_hooks';
+
+const contextObservationMs = 300_000;
+// Pinned Native allocates positive u64 counters; later host generations prefix gN:.
+const cellIdPattern = '(?:g[1-9][0-9]{0,19}:)?[1-9][0-9]{0,19}';
+function contextCheck(condition, reason) {
+  if (!condition) throw new Error(reason);
+}
+function nativeContextResponse(output) {
+  const text =
+    typeof output === 'string'
+      ? output
+      : Array.isArray(output) &&
+          output.every((part) => part.type === 'input_text' && typeof part.text === 'string')
+        ? output.map((part) => part.text).join('\n')
+        : undefined;
+  contextCheck(text && Buffer.byteLength(text) <= 262144, 'CONTEXT_RESULT_INVALID');
+  const newline = text.indexOf('\n');
+  const status = newline < 0 ? text : text.slice(0, newline);
+  let payload = newline < 0 ? '' : text.slice(newline + 1);
+  // Pinned Native emits this header; its status-only compatibility form has
+  // also been observed. Neither arbitrary text nor an echoed banner is status.
+  payload = payload.replace(
+    /^Wall time \d+(?:\.\d+)? seconds(?: \(code-mode \d+(?:\.\d+)? seconds; overhead -?\d+(?:\.\d+)? seconds\))?\nOutput:\n/,
+    '',
+  );
+  const pending = new RegExp(`^Script running with cell ID (${cellIdPattern})$`).exec(status);
+  if (pending) {
+    const values = pending[1].replace(/^g/, '').split(':').map(BigInt);
+    contextCheck(
+      values.every((value) => value <= 18446744073709551615n) &&
+        (values.length === 1 || values[0] >= 2n),
+      'CONTEXT_CELL_INVALID',
+    );
+    contextCheck(payload.trim() === '', 'CONTEXT_PENDING_OUTPUT_INVALID');
+    return { state: 'pending', cellId: pending[1] };
+  }
+  if (status === 'Script failed' || status === 'Script terminated') return { state: 'failed' };
+  contextCheck(status === 'Script completed', 'CONTEXT_STATUS_INVALID');
+  return { state: 'completed', payload };
+}
+function validateContextMcpResult(payload) {
+  let result;
+  try {
+    result = JSON.parse(payload.trim());
+  } catch {
+    throw new Error('CONTEXT_MCP_RESULT_INVALID');
+  }
+  contextCheck(
+    result && !Array.isArray(result) && typeof result === 'object',
+    'CONTEXT_MCP_RESULT_INVALID',
+  );
+  contextCheck(
+    result.isError === undefined || typeof result.isError === 'boolean',
+    'CONTEXT_MCP_RESULT_INVALID',
+  );
+  contextCheck(result.isError !== true && result.error == null, 'CONTEXT_MCP_FAILED');
+  contextCheck(
+    Array.isArray(result.content) &&
+      result.content.length > 0 &&
+      result.content.every((part) => part.type === 'text' && typeof part.text === 'string'),
+    'CONTEXT_MCP_RESULT_INVALID',
+  );
+}
+
+/** One already-dispatched probe. Waits never mint another execution or extend
+ * the original browser observation window. Native cell IDs remain private. */
+export class NativeContextCompletion {
+  #startedAt;
+  #now;
+  #cellId;
+  #callId = 'root-4';
+  #state = 'awaiting-result';
+  #nativeState = 'unclassified';
+  #waits = 0;
+  #failure;
+  constructor({ startedAt, now = () => performance.now() }) {
+    contextCheck(
+      Number.isFinite(startedAt) && startedAt <= now(),
+      'CONTEXT_OBSERVATION_START_INVALID',
+    );
+    this.#startedAt = startedAt;
+    this.#now = now;
+  }
+  expectedCallId() {
+    return this.#callId;
+  }
+  diagnostics() {
+    return {
+      state: this.#state,
+      nativeState: this.#nativeState,
+      waits: this.#waits,
+      cellObserved: this.#cellId !== undefined,
+      elapsedMs: Math.max(0, Math.round(this.#now() - this.#startedAt)),
+      budgetMs: contextObservationMs,
+      ...(this.#failure ? { failure: this.#failure } : {}),
+    };
+  }
+  advance(input) {
+    try {
+      contextCheck(!['completed', 'failed'].includes(this.#state), 'CONTEXT_PROTOCOL_TERMINAL');
+      const remaining = Math.floor(contextObservationMs - (this.#now() - this.#startedAt));
+      contextCheck(remaining > 0, 'CONTEXT_OBSERVATION_DEADLINE');
+      const matches = input.filter(
+        (entry) =>
+          entry.call_id === this.#callId &&
+          ['function_call_output', 'custom_tool_call_output'].includes(entry.type),
+      );
+      contextCheck(matches.length === 1, 'CONTEXT_RESPONSE_MISSING_OR_DUPLICATE');
+      const response = nativeContextResponse(matches[0].output);
+      this.#nativeState = response.state;
+      contextCheck(response.state !== 'failed', 'CONTEXT_SCRIPT_FAILED');
+      if (response.state === 'completed') {
+        validateContextMcpResult(response.payload);
+        contextCheck(
+          this.#now() - this.#startedAt < contextObservationMs,
+          'CONTEXT_OBSERVATION_DEADLINE',
+        );
+        this.#state = 'completed';
+        return { state: 'completed' };
+      }
+      contextCheck(!this.#cellId || this.#cellId === response.cellId, 'CONTEXT_CELL_CHANGED');
+      contextCheck(this.#waits < contextObservationMs / 10_000, 'CONTEXT_WAIT_LIMIT');
+      this.#cellId = response.cellId;
+      this.#state = 'pending';
+      this.#waits++;
+      this.#callId = `root-context-wait-${this.#waits}`;
+      const waitRemaining = Math.floor(contextObservationMs - (this.#now() - this.#startedAt));
+      contextCheck(waitRemaining > 0, 'CONTEXT_OBSERVATION_DEADLINE');
+      return {
+        state: 'wait',
+        callId: this.#callId,
+        arguments: {
+          cell_id: this.#cellId,
+          yield_time_ms: Math.min(10_000, waitRemaining),
+          max_tokens: 2000,
+        },
+      };
+    } catch (error) {
+      this.#state = 'failed';
+      // Only fixed local classifications enter evidence; never Native output.
+      const reason = error instanceof Error ? error.message : '';
+      this.#failure = /^CONTEXT_[A-Z_]+$/.test(reason) ? reason : 'CONTEXT_RESULT_INVALID';
+      throw new Error(this.#failure);
+    }
+  }
+}
 
 // These independent lanes passed even though the enclosing run failed before
 // actual UI Start. They are diagnostic reuse only, never acceptance evidence.
@@ -21,10 +168,10 @@ export const pickerSmokeBaseline = Object.freeze({
 });
 /** Never retain tool text: it can contain private paths, prompts or credentials.
  * Markers classify a failed probe; echoed source is never evidence of success. */
-export function contextToolResultDiagnostic(input) {
+export function contextToolResultDiagnostic(input, callId = 'root-4') {
   const item = input.find(
     (entry) =>
-      entry.call_id === 'root-4' &&
+      entry.call_id === callId &&
       ['function_call_output', 'custom_tool_call_output'].includes(entry.type),
   );
   const serialized = JSON.stringify(item?.output ?? null);
