@@ -1819,67 +1819,88 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
               };
             },
             readTrace: (debug) => debugWorkspace.readTrace(debug),
-            create: (context) =>
-              createSelfDebugSession(context, {
-                createId: randomUUID,
-                now: () => new Date().toISOString(),
-                settings: async (source) => {
-                  if (!source.model || !source.effectiveSkillSelection)
-                    throw new Error('DEBUG_SOURCE_SETTINGS_UNAVAILABLE');
-                  return {
-                    name: 'root',
-                    model: source.model,
-                    reasoningEffort: source.modelSettings?.reasoningEffort,
-                  };
+            problem: (sessionId, requestId) => {
+              const interaction = pendingInteractionsWithReports(sessionId).find(
+                (item) => item.kind === 'orgPlanAttention' && item.requestId === requestId,
+              );
+              const attention = interaction ? parseOrgPlanAttention(interaction.payload) : null;
+              return interaction && attention
+                ? {
+                    requestId: interaction.requestId,
+                    turnId: interaction.turnId ?? null,
+                    requestedAt: interaction.requestedAt ?? null,
+                    attention,
+                    ...(interaction.supervisorReport
+                      ? { supervisorReport: interaction.supervisorReport }
+                      : {}),
+                  }
+                : null;
+            },
+            create: (context, problem) =>
+              createSelfDebugSession(
+                context,
+                {
+                  createId: randomUUID,
+                  now: () => new Date().toISOString(),
+                  settings: async (source) => {
+                    if (!source.model || !source.effectiveSkillSelection)
+                      throw new Error('DEBUG_SOURCE_SETTINGS_UNAVAILABLE');
+                    return {
+                      name: 'root',
+                      model: source.model,
+                      reasoningEffort: source.modelSettings?.reasoningEffort,
+                    };
+                  },
+                  capture: async (id, capturedContext, agent) => {
+                    const captured = await debugWorkspace.capture(id, capturedContext, agent);
+                    return {
+                      ...captured,
+                      absoluteTracePath: join(captured.root, captured.debug.tracePath),
+                    };
+                  },
+                  createSession: async (id, root, agent, source) => {
+                    await debugWorkspace.prepare();
+                    const debugCatalog = new FilesystemWorkspaceCatalog(root);
+                    const [workspace] = await debugCatalog.list();
+                    return startSession(
+                      {
+                        workspaceId: workspace!.id,
+                        profile: source.profile,
+                        provider: 'codex',
+                        model: agent.model,
+                        reasoningEffort: agent.reasoningEffort,
+                        sandbox: 'workspace-git',
+                        approvalPolicy: 'never',
+                      },
+                      {
+                        createId: () => id,
+                        now: () => new Date().toISOString(),
+                        save: saveSession,
+                        workspaces: debugCatalog,
+                        profiles: options.profiles,
+                        skillProfiles,
+                        skillCatalog,
+                        inheritedSkillSelection: source.effectiveSkillSelection,
+                        sessionModels,
+                      },
+                    );
+                  },
+                  start: (session) => runtime.start(session, new Date().toISOString()),
+                  startTurn: (session, prompt, messageId) =>
+                    runtime.startTurn(session, prompt, messageId, new Date().toISOString()),
+                  find: (id) => sessions.find(id),
+                  save: saveSession,
+                  onStarted: (session) =>
+                    activity.observe({
+                      sessionId: session.id,
+                      occurredAt: session.updatedAt,
+                      kind: 'turnStarted',
+                      threadId: session.threadId!,
+                      turnId: session.activeTurnId!,
+                    }),
                 },
-                capture: async (id, capturedContext, agent) => {
-                  const captured = await debugWorkspace.capture(id, capturedContext, agent);
-                  return {
-                    ...captured,
-                    absoluteTracePath: join(captured.root, captured.debug.tracePath),
-                  };
-                },
-                createSession: async (id, root, agent, source) => {
-                  await debugWorkspace.prepare();
-                  const debugCatalog = new FilesystemWorkspaceCatalog(root);
-                  const [workspace] = await debugCatalog.list();
-                  return startSession(
-                    {
-                      workspaceId: workspace!.id,
-                      profile: source.profile,
-                      provider: 'codex',
-                      model: agent.model,
-                      reasoningEffort: agent.reasoningEffort,
-                      sandbox: 'workspace-git',
-                      approvalPolicy: 'never',
-                    },
-                    {
-                      createId: () => id,
-                      now: () => new Date().toISOString(),
-                      save: saveSession,
-                      workspaces: debugCatalog,
-                      profiles: options.profiles,
-                      skillProfiles,
-                      skillCatalog,
-                      inheritedSkillSelection: source.effectiveSkillSelection,
-                      sessionModels,
-                    },
-                  );
-                },
-                start: (session) => runtime.start(session, new Date().toISOString()),
-                startTurn: (session, prompt, messageId) =>
-                  runtime.startTurn(session, prompt, messageId, new Date().toISOString()),
-                find: (id) => sessions.find(id),
-                save: saveSession,
-                onStarted: (session) =>
-                  activity.observe({
-                    sessionId: session.id,
-                    occurredAt: session.updatedAt,
-                    kind: 'turnStarted',
-                    threadId: session.threadId!,
-                    turnId: session.activeTurnId!,
-                  }),
-              }),
+                problem,
+              ),
           }
         : undefined,
       sessionRoutes: {

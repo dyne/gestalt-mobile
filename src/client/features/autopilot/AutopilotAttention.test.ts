@@ -21,6 +21,21 @@ const attention = {
   },
 };
 describe('AutopilotAttention', () => {
+  it('opens focused DEBUG without resolving the blocker and suppresses the action for history', async () => {
+    const ondebug = vi.fn();
+    const onresolve = vi.fn();
+    const view = render(AutopilotAttention, { attention, ondebug, onresolve });
+    const button = screen.getByRole('button', { name: 'DEBUG' });
+    await fireEvent.click(button);
+    expect(ondebug).toHaveBeenCalledWith('r', button);
+    expect(onresolve).not.toHaveBeenCalled();
+    await view.rerender({ attention, ondebug, onresolve, debugPending: true });
+    expect(
+      (screen.getByRole('button', { name: 'Preparing DEBUG…' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await view.rerender({ attention, ondebug, historical: true });
+    expect(screen.queryByRole('button', { name: 'DEBUG' })).toBeNull();
+  });
   it('explains a compact blocker in the alert and sends recovery guidance', async () => {
     const onresolve = vi.fn();
     render(AutopilotAttention, {

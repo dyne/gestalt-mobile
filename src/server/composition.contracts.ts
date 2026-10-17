@@ -5464,9 +5464,30 @@ describe('production composition', () => {
           JSON.stringify(inheritedSkills),
           sourceId,
         );
+      database
+        .prepare(
+          'INSERT INTO pending_interactions (session_id,request_id,kind,payload_json,turn_id,requested_at,supervisor_report) VALUES (?,?,?,?,?,?,?)',
+        )
+        .run(
+          sourceId,
+          'debug-blocker',
+          'orgPlanAttention',
+          JSON.stringify({
+            reason: 'externalState',
+            resumeCondition: 'externalStateChanged',
+            summary: 'Installed guard mismatch.',
+            requestedAction: 'Reconcile compatible tooling.',
+          }),
+          'blocked-turn',
+          '2026-10-17T08:10:33.000Z',
+          'FOCUSED_BLOCKER_EXPLANATION',
+        );
       database.close();
-      const confirmation = (await app.inject(`/api/sessions/${sourceId}/debug`)).json();
+      const confirmation = (
+        await app.inject(`/api/sessions/${sourceId}/debug?attentionRequestId=debug-blocker`)
+      ).json();
       expect(confirmation.context.mobileSession).toBe(sourceId);
+      expect(confirmation.problem.supervisorReport).toBe('FOCUSED_BLOCKER_EXPLANATION');
       const response = await app.inject({
         method: 'POST',
         url: `/api/sessions/${sourceId}/debug`,
@@ -5507,6 +5528,14 @@ describe('production composition', () => {
         effort: 'medium',
         input: [{ type: 'text', text: expect.stringContaining('User detected an error') }],
       });
+      expect(JSON.stringify(request?.params)).toContain('FOCUSED_BLOCKER_EXPLANATION');
+      expect(JSON.stringify(debug.selfDebug)).not.toContain('FOCUSED_BLOCKER_EXPLANATION');
+      expect((await app.inject(`/api/sessions/${debug.id}/debug/trace`)).body).not.toContain(
+        'FOCUSED_BLOCKER_EXPLANATION',
+      );
+      expect((await app.inject(`/api/sessions/${sourceId}/attention`)).json().requestId).toBe(
+        'debug-blocker',
+      );
       expect(
         (await app.inject('/api/sessions'))
           .json()

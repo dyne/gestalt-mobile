@@ -6,7 +6,11 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { DebugContext, SelfDebugSession } from '../../../shared/contracts/self-debug.js';
+import type {
+  DebugContext,
+  DebugProblem,
+  SelfDebugSession,
+} from '../../../shared/contracts/self-debug.js';
 import type { RelaySessionSnapshot } from '../sessions/model/relay-session.js';
 import { problem } from '../../platform/http/problem.js';
 
@@ -15,12 +19,16 @@ export type SelfDebugDependencies = {
   context(session: RelaySessionSnapshot): DebugContext;
   createId(): string;
   now(): string;
-  create(context: DebugContext): Promise<RelaySessionSnapshot>;
+  create(context: DebugContext, problem?: DebugProblem): Promise<RelaySessionSnapshot>;
+  problem?(sessionId: string, requestId: string): DebugProblem | null;
   readTrace(debug: SelfDebugSession): Promise<string>;
 };
 
 const paramsSchema = z.object({ sessionId: z.string().min(1).max(200) });
 const bodySchema = z.object({ confirmationId: z.string().min(1).max(200) }).strict();
+const querySchema = z
+  .object({ attentionRequestId: z.string().min(1).max(200).optional() })
+  .strict();
 
 /** A confirmation is bound to one existing thread; repeat submits share the same operation. */
 export function registerSelfDebug(app: FastifyInstance, deps: SelfDebugDependencies): void {
@@ -28,6 +36,7 @@ export function registerSelfDebug(app: FastifyInstance, deps: SelfDebugDependenc
     string,
     {
       context: DebugContext;
+      problem?: DebugProblem;
       expiresAt: number;
       operation?: Promise<RelaySessionSnapshot>;
     }
@@ -35,6 +44,11 @@ export function registerSelfDebug(app: FastifyInstance, deps: SelfDebugDependenc
 
   app.get('/api/sessions/:sessionId/debug', async (request, reply) => {
     const parsed = paramsSchema.safeParse(request.params);
+    const query = querySchema.safeParse(request.query);
+    if (!query.success)
+      return reply
+        .code(400)
+        .send(problem('DEBUG_CONTEXT_INVALID', 400, 'Select a valid blocker to debug.'));
     const source = parsed.success ? deps.find(parsed.data.sessionId) : null;
     if (!source?.threadId)
       return reply
@@ -54,8 +68,22 @@ export function registerSelfDebug(app: FastifyInstance, deps: SelfDebugDependenc
         );
     const confirmationId = deps.createId();
     const context = deps.context(source);
-    confirmations.set(confirmationId, { context, expiresAt: now + 30 * 60 * 1000 });
-    return { confirmationId, context };
+    const selectedProblem = query.data.attentionRequestId
+      ? deps.problem?.(source.id, query.data.attentionRequestId)
+      : undefined;
+    if (query.data.attentionRequestId && !selectedProblem)
+      return reply
+        .code(409)
+        .send(
+          problem(
+            'DEBUG_ATTENTION_CHANGED',
+            409,
+            'This blocker is no longer active. Refresh the session and try again.',
+          ),
+        );
+    const focus = selectedProblem ? { problem: structuredClone(selectedProblem) } : {};
+    confirmations.set(confirmationId, { context, ...focus, expiresAt: now + 30 * 60 * 1000 });
+    return { confirmationId, context, ...focus };
   });
 
   app.post('/api/sessions/:sessionId/debug', { bodyLimit: 1024 }, async (request, reply) => {
@@ -86,7 +114,9 @@ export function registerSelfDebug(app: FastifyInstance, deps: SelfDebugDependenc
         return reply
           .code(409)
           .send(problem('DEBUG_SOURCE_CHANGED', 409, 'The source session changed. Reopen DEBUG.'));
-      confirmation.operation = deps.create(confirmation.context);
+      confirmation.operation = confirmation.problem
+        ? deps.create(confirmation.context, confirmation.problem)
+        : deps.create(confirmation.context);
     }
     try {
       return reply.code(202).send(await confirmation.operation);

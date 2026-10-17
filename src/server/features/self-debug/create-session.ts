@@ -7,6 +7,7 @@
 import {
   selfDebugPrompt,
   type DebugContext,
+  type DebugProblem,
   type SelfDebugSession,
 } from '../../../shared/contracts/self-debug.js';
 import { RelaySession, type RelaySessionSnapshot } from '../sessions/model/relay-session.js';
@@ -40,6 +41,7 @@ export type CreateDebugDependencies = {
 export async function createSelfDebugSession(
   context: DebugContext,
   deps: CreateDebugDependencies,
+  problem?: DebugProblem,
 ): Promise<RelaySessionSnapshot> {
   const id = deps.createId();
   const source = deps.find(context.mobileSession);
@@ -55,7 +57,7 @@ export async function createSelfDebugSession(
     deps.save(session);
     session = await deps.startTurn(
       session,
-      selfDebugPrompt(captured.debug, captured.absoluteTracePath),
+      selfDebugPrompt(captured.debug, captured.absoluteTracePath, problem),
       `self-debug-root-${id}`,
     );
     deps.save(session);

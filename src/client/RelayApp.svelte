@@ -767,14 +767,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   }
 
-  async function openDebug(): Promise<void> {
-    if (!selectedSession?.threadId || debugLoading) return;
-    const id = selectedSession.id;
+  let debugTrigger: HTMLButtonElement | undefined;
+  async function openDebug(
+    attentionRequestId?: string,
+    id = selectedSession?.id,
+    trigger?: HTMLButtonElement,
+  ): Promise<void> {
+    if (!id || debugLoading || (!attentionRequestId && !selectedSession?.threadId)) return;
+    const selection = sessionId;
+    const view = tab;
+    debugTrigger =
+      trigger ?? document.querySelector<HTMLButtonElement>('.menu-trigger') ?? undefined;
     const generation = ++debugRequestGeneration;
     debugLoading = true;
     try {
-      const confirmation = await relay.debugConfirmation(id);
-      if (generation === debugRequestGeneration && sessionId === id && tab === 'chat')
+      const confirmation = await relay.debugConfirmation(id, attentionRequestId);
+      if (generation === debugRequestGeneration && sessionId === selection && tab === view)
         debugConfirmation = confirmation;
     } catch (error) {
       reportRelayError(error, 'DEBUG_CONTEXT_FAILED');
@@ -785,7 +793,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   function closeDebug(): void {
     debugConfirmation = null;
-    queueMicrotask(() => document.querySelector<HTMLButtonElement>('.menu-trigger')?.focus());
+    queueMicrotask(() => debugTrigger?.focus());
   }
 
   async function confirmDebug(): Promise<void> {
@@ -1809,6 +1817,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               attentionPending={autopilotState.pending.has(sessionId)}
               onattentionresolve={(action, guidance) =>
                 resolveAutopilotAttention(sessionId!, action, guidance)}
+              onattentiondebug={(requestId, trigger) =>
+                void openDebug(requestId, sessionId!, trigger)}
+              debugPending={debugLoading}
               footer={autopilotSafety}
               messages={chatView ? [...chatView.messages] : []}
               activities={chatView ? [...chatView.activities] : []}
@@ -2012,6 +2023,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             onautopilottoggle={toggleAutopilot}
             onactivityopen={(id) => void activityController.resync(id)}
             onautopilotresolve={resolveAutopilotAttention}
+            onattentiondebug={(id, requestId, trigger) => void openDebug(requestId, id, trigger)}
+            debugPending={debugLoading}
             onopenrecent={(session) => void openRecentSession(session)}
             onforget={(id) => void forgetSession(id)}
             oncopyresume={(command) => void copyResumeCommand(command)}
