@@ -150,3 +150,83 @@ test('controlled provider rejects an authentication token in model request event
     ),
   );
 });
+
+test('manual-first lane plans a real source patch then actual helper Generate/Discard restores that exact manual result', () => {
+  const helper = process.env.LIVE_TEST_IMPECCABLE;
+  assert.equal(
+    createHash('sha256').update(readFileSync(helper)).digest('hex'),
+    '81fe24a7430571de1003f34fecf787bdc0acefa1be80525ccea9d4b74b5441a0',
+  );
+  const root = mkdtempSync(join(tmpdir(), 'l11-manual-discard-contract-'));
+  try {
+    mkdirSync(join(root, '.impeccable/live'), { recursive: true });
+    writeFileSync(
+      join(root, '.impeccable/live/config.json'),
+      JSON.stringify({ files: ['index.html'], insertBefore: '</body>', commentSyntax: 'html' }),
+    );
+    writeFileSync(
+      join(root, 'index.html'),
+      '<html>\n<body>\n<h1 class="hero-title">Owning app</h1>\n</body>\n</html>\n',
+    );
+    const run = (args) =>
+      JSON.parse(
+        execFileSync(helper, [...args, '--target', root], {
+          cwd: root,
+          encoding: 'utf8',
+          stdio: 'pipe',
+        })
+          .trim()
+          .split('\n')
+          .at(-1),
+      );
+    const provider = createProductionEditProvider(root, final, {}, { lane: 'manual-discard' });
+    const manual = body({
+      type: 'manual_edit_apply',
+      id: 'abcd1234',
+      batch: {
+        entries: [
+          {
+            id: 'real-draft',
+            ops: [{ originalText: 'Owning app', newText: 'Production manual approved' }],
+          },
+        ],
+      },
+    });
+    const patch = provider(manual, tool);
+    assert.equal(
+      readFileSync(join(root, 'index.html'), 'utf8').includes('Production manual approved'),
+      false,
+    );
+    simulatePatch(root, patch);
+    assert.deepEqual(provider(manual, tool).data.appliedEntryIds, ['real-draft']);
+    const manualSource = readFileSync(join(root, 'index.html'), 'utf8');
+    const scaffold = run([
+      'live-wrap',
+      '--id',
+      'abcd1235',
+      '--count',
+      '2',
+      '--classes',
+      'hero-title',
+      '--tag',
+      'h1',
+      '--text',
+      'Production manual approved',
+      '--defer-source-write',
+    ]);
+    const generate = body({ type: 'generate', id: 'abcd1235', count: 2, scaffold });
+    simulatePatch(root, provider(generate, tool));
+    assert.equal(provider(generate, tool).status, 'done');
+    assert.ok(
+      readFileSync(join(root, 'index.html'), 'utf8').includes('Production discarded variant'),
+    );
+    assert.equal(run(['live-accept', '--id', 'abcd1235', '--discard']).handled, true);
+    assert.equal(readFileSync(join(root, 'index.html'), 'utf8'), manualSource);
+    assert.throws(() => createProductionEditProvider(root, final, {}, { lane: 'unreviewed' }));
+    writeFileSync(join(root, 'index.html'), '<h1>Unexpected source</h1>');
+    const changed = createProductionEditProvider(root, final, {}, { lane: 'manual-discard' });
+    assert.throws(() => changed(manual, tool));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

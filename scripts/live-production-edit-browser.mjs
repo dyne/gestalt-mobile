@@ -493,16 +493,23 @@ try {
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
     403,
   );
-  checkpoint('picker-generate');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 2);
-  await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-  await preview.getByRole('heading', { name: 'Production chosen variant', exact: true }).waitFor();
-  await ui.clickAccept(preview, { expectedVariant: 1 });
-  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
-  await command('accepted');
-  if (!config.pickerSmoke) {
+  const actions = new Set();
+  const generate = async (label) => {
+    checkpoint('picker-generate');
+    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+    await ui.setCount(preview, 2);
+    await ui.clickGo(preview);
+    await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
+    await preview.getByRole('heading', { name: label, exact: true }).waitFor();
+    actions.add('generate');
+  };
+  const accept = async () => {
+    await ui.clickAccept(preview, { expectedVariant: 1 });
+    await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
+    await command('accepted');
+    actions.add('accept');
+  };
+  const steer = async () => {
     checkpoint('picker-steer');
     await ui.submitSteer(preview, 'production steer: update the HMR marker');
     await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
@@ -511,6 +518,9 @@ try {
     await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
     assert.ok(hmrUpdates > 0);
     await command('steered');
+    actions.add('steer');
+  };
+  const manual = async () => {
     checkpoint('picker-manual-apply');
     await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
     await ui.clickEditCopy(preview);
@@ -520,14 +530,11 @@ try {
     await ui.clickApplyEdits(preview);
     await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
     await command('manual-applied');
+    actions.add('manual');
+  };
+  const discard = async () => {
     checkpoint('picker-discard');
-    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-    await ui.setCount(preview, 2);
-    await ui.clickGo(preview);
-    await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-    await preview
-      .getByRole('heading', { name: 'Production discarded variant', exact: true })
-      .waitFor();
+    await generate('Production discarded variant');
     await ui.clickDiscard(preview);
     await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
     await command('discarded');
@@ -537,6 +544,9 @@ try {
         .count(),
       1,
     );
+    actions.add('discard');
+  };
+  const background = async () => {
     checkpoint('background-beyond-eight-seconds');
     await command('background-begin');
     const foreground = await context.newPage();
@@ -553,6 +563,23 @@ try {
     await preview.waitForFunction(() => document.visibilityState === 'visible');
     await foreground.close();
     await command('background-finished');
+    actions.add('background');
+  };
+  assert.ok(['', 'accept-steer', 'manual-discard'].includes(config.proofLane ?? ''));
+  if (config.proofLane === 'manual-discard') {
+    await manual();
+    await discard();
+  } else {
+    await generate('Production chosen variant');
+    await accept();
+    if (!config.pickerSmoke) {
+      await steer();
+      if (config.proofLane !== 'accept-steer') {
+        await manual();
+        await discard();
+      }
+      await background();
+    }
   }
   await preview.screenshot({ path: config.screenshot });
   await writeFile(
@@ -564,12 +591,13 @@ try {
         separateBrowserNetwork: true,
         separateBrowserMountNamespace: true,
         openThroughMobileControls: true,
-        realPickerGenerateAccept: true,
+        realPickerGenerateAccept: actions.has('generate') && actions.has('accept'),
+        proofLane: config.proofLane || undefined,
         pickerSmoke: config.pickerSmoke === true,
-        realPickerSteer: !config.pickerSmoke,
-        realPickerManualApply: !config.pickerSmoke,
-        realPickerDiscard: !config.pickerSmoke,
-        actualTabHiddenBeyondEightSeconds: !config.pickerSmoke,
+        realPickerSteer: actions.has('steer'),
+        realPickerManualApply: actions.has('manual'),
+        realPickerDiscard: actions.has('discard'),
+        actualTabHiddenBeyondEightSeconds: actions.has('background'),
         playwrightFocusOverrideDisabled: true,
         hmrUpdates,
         extraPollOwnerDenied: true,

@@ -55,7 +55,8 @@ function replacementPatch(file, before, after) {
     .join('\n')}\n*** End Patch`;
 }
 
-export function createProductionEditProvider(appRoot, final, report) {
+export function createProductionEditProvider(appRoot, final, report, { lane = '' } = {}) {
+  assert.ok(['', 'accept-steer', 'manual-discard'].includes(lane), 'EDIT_PROVIDER_LANE_INVALID');
   const operations = new Map();
   let generations = 0;
   return (body, toolCall) => {
@@ -74,7 +75,9 @@ export function createProductionEditProvider(appRoot, final, report) {
         assert.equal(scaffold.file, 'index.html');
         assert.equal(event.count, 2);
         const label =
-          generations === 1 ? 'Production chosen variant' : 'Production discarded variant';
+          generations === 1 && lane !== 'manual-discard'
+            ? 'Production chosen variant'
+            : 'Production discarded variant';
         const marker = '<!-- Variants: insert below this line -->';
         assert.ok(scaffold.wrapperBlock.includes(marker));
         const block = scaffold.wrapperBlock.replace(
@@ -99,7 +102,9 @@ export function createProductionEditProvider(appRoot, final, report) {
         assert.ok(
           entries[0].ops.some((operation) => operation.newText === 'Production manual approved'),
         );
-        after = before.replace('Production chosen variant', 'Production manual approved');
+        const original = lane === 'manual-discard' ? 'Owning app' : 'Production chosen variant';
+        assert.equal(before.split(original).length, 2);
+        after = before.replace(original, 'Production manual approved');
         data = {
           status: 'done',
           appliedEntryIds: entries.map((entry) => entry.id),

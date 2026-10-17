@@ -40,6 +40,12 @@ import {
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
 import {
+  candidateIdentity,
+  openRecoveryHandoff,
+  birthCurrent,
+  productionLane,
+} from './live-production-proof-lanes.mjs';
+import {
   NativeContextCompletion,
   contextToolResultDiagnostic,
   pickerSmokeBaseline,
@@ -95,12 +101,17 @@ assert.equal(eventObservationBudgetMs, 300_000);
 assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
+const proofLane = productionLane(process.env.LIVE_PRODUCTION_PROOF_LANE);
+assert.ok(!proofLane || (!pickerSmoke && !preflightOnly));
+assert.ok(!proofLane || (proofLane === 'recovery' ? recoveryOnly : editFlow));
+assert.equal(Boolean(process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL), proofLane === 'recovery');
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
 );
 mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const report = {
   schemaVersion: 1,
+  productionLane: proofLane || undefined,
   passed: false,
   genuine: false,
   stage: 'installation',
@@ -139,6 +150,7 @@ if (recoveryOnly) {
     'Renewal diagnostic only; full real-picker and owning model-child proof remains mandatory.',
   );
 }
+if (proofLane) report.proofKind = `controlled-full-${proofLane}`;
 const admissionFailure = (error) => ({
   code: /^LIVE_[A-Z_]+$/.test(error?.message ?? '') ? error.message : 'UNCLASSIFIED',
   reason: error instanceof InstalledLiveAdmissionError ? error.diagnostic.reason : undefined,
@@ -271,7 +283,14 @@ LiveDispatchGuard.prototype.liveEvent = async function (fence, eventId, work) {
 };
 // Measure the real controller phases without supplying readiness or changing
 // their result. These fixed labels contain no arguments, paths or Native output.
-for (const phase of ['register', 'verifyGeneration', 'prepareOwner', 'authorize', 'expose']) {
+for (const phase of [
+  'register',
+  'verifyGeneration',
+  'prepareOwner',
+  'authorize',
+  'expose',
+  'renewGeneration',
+]) {
   const perform = ProductionLiveController.prototype[phase];
   assert.equal(typeof perform, 'function');
   ProductionLiveController.prototype[phase] = async function (...args) {
@@ -601,6 +620,13 @@ const checkpoint = setInterval(() => {
 }, 5000);
 checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
+let recoveryHandoff, mobileClose;
+async function closeMobileOnce() {
+  if (!mobile) return;
+  mobileClose ??= mobile.close();
+  await mobileClose;
+  mobile = undefined;
+}
 let probeTimer;
 let probeActive = false;
 let probeRefresh = Promise.resolve();
@@ -623,7 +649,9 @@ const roles = new Map();
 let firstPickerEventId;
 let firstPickerObservationStarted;
 let contextCompletion;
-const editResponse = createProductionEditProvider(appRoot, final, report);
+const editResponse = createProductionEditProvider(appRoot, final, report, {
+  lane: proofLane === 'recovery' ? '' : proofLane,
+});
 let seed = true,
   owningThread,
   owningNativeSession,
@@ -633,6 +661,7 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 async function until(check, stage, budget = 30000) {
   const deadline = Date.now() + budget;
   while (Date.now() < deadline) {
+    recoveryHandoff?.assertCurrent();
     if (providerFailure) throw new Error('CONTROLLED_PROVIDER_FAILED');
     if (await check()) return;
     await wait(50);
@@ -1296,6 +1325,7 @@ async function remote(
   });
 }
 async function api(method, path, payload) {
+  recoveryHandoff?.assertCurrent();
   const res = await mobile.inject({ method, url: path, payload, headers });
   if (res.statusCode >= 400) {
     report.apiFailure = { status: res.statusCode, code: res.json()?.code ?? 'UNCLASSIFIED' };
@@ -1317,6 +1347,16 @@ try {
     managerTree: 'dfdeabd2ffdbdb6c429a39c3e81286b611af7734',
     manager: LIVE_MANAGER_SHA256,
   };
+  if (proofLane === 'recovery')
+    recoveryHandoff = await openRecoveryHandoff({
+      directory: process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+      socketDirectory: privateRoot,
+      identity: candidateIdentity(),
+      onCancel: async () => {
+        stopPreviewProbe();
+        await closeMobileOnce();
+      },
+    });
   report.installationStage = 'vendor-copy';
   const vendor = join(installation, 'vendor');
   cpSync(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY)), join(vendor, 'bin'), {
@@ -1328,6 +1368,7 @@ try {
   const native = pin(join(vendor, 'bin/codex')),
     bwrap = pin(join(vendor, 'bin/codex-resources/bwrap'));
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
+  report.nativeBinarySha256 = native.sha256;
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
   metadataNativePath = native.path;
   report.installationStage = 'actual-original-interpreter';
@@ -1806,6 +1847,7 @@ try {
     ancestorsBeforeComposition: ancestorMetadata(),
   };
   report.stage = 'sole-production-composition';
+  recoveryHandoff?.assertCurrent();
   mobile = await composeRelayApp({
     root: appRoot,
     dataDir: join(privateRoot, 'relay'),
@@ -2239,7 +2281,8 @@ try {
       certificate: join(caddyRoot, 'tls.pem'),
       report,
       checkpoint: (stage) => {
-        if (stage === 'picker-generate') firstPickerObservationStarted ??= performance.now();
+        if (stage === 'picker-generate' || stage === 'picker-manual-apply')
+          firstPickerObservationStarted ??= performance.now();
         if (stage === 'helper-connected') {
           stopPreviewProbe();
           report.checks.previewProbeHandedToActualBrowserConnection = true;
@@ -2253,6 +2296,7 @@ try {
         generation: started.generation,
         helperTokenSha256: hash(token),
         pickerSmoke,
+        proofLane,
         eventObservationBudgetMs,
         sessionCookie: browserSession,
         uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
@@ -2293,10 +2337,57 @@ try {
       },
     });
     finishBrowserProfile();
+    if (proofLane) {
+      const required =
+        proofLane === 'accept-steer'
+          ? ['generate', 'accept', 'steer']
+          : ['manual_edit_apply', 'generate', 'discard'];
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        const records = db
+          .prepare('SELECT record FROM live_event_inbox')
+          .all()
+          .map((row) => JSON.parse(row.record));
+        report.laneCanonicalEvents = required.map((kind) => {
+          const matches = records.filter((record) => record.kind === kind);
+          assert.equal(matches.length, 1);
+          assert.equal(matches[0].stage, 'acknowledged');
+          assert.deepEqual(matches[0].history, [
+            'received',
+            'dispatched',
+            'applied',
+            'acknowledged',
+          ]);
+          return { kind, stage: matches[0].stage, history: matches[0].history };
+        });
+      } finally {
+        db.close();
+      }
+    }
     assert.equal(report.previewProbeFailure, undefined);
-    assert.equal(report.editBrowser.realPickerGenerateAccept, true);
-    if (pickerSmoke) report.checks.actualPickerGenerateAcceptWithCanonicalSourceEffect = true;
-    else {
+    if (proofLane !== 'manual-discard')
+      assert.equal(report.editBrowser.realPickerGenerateAccept, true);
+    if (pickerSmoke || proofLane === 'accept-steer') {
+      report.checks.actualPickerGenerateAcceptWithCanonicalSourceEffect = true;
+      if (proofLane) {
+        assert.equal(report.editBrowser.realPickerSteer, true);
+        assert.ok(report.editBrowser.hmrUpdates > 0);
+        assert.equal(report.editBrowser.actualTabHiddenBeyondEightSeconds, true);
+        assert.equal(report.background.noModelOrSourceEffect, true);
+        report.checks.actualPickerSteerWithCanonicalHmrEffect = true;
+        report.checks.actualBackgroundBeyondEightSecondsPreservesFencing = true;
+      }
+    } else if (proofLane === 'manual-discard') {
+      assert.equal(report.editBrowser.realPickerManualApply, true);
+      assert.equal(report.editBrowser.realPickerDiscard, true);
+      report.checks.actualPickerManualApplyGenerateDiscardWithExactSourceRestoration = true;
+    } else {
       report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
       report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
         report.editBrowser.actualTabHiddenBeyondEightSeconds &&
@@ -2383,11 +2474,18 @@ try {
       : 'sameOwningThreadModelThinkingAndDurableInbox'
   ] = true;
   let recovery;
-  if ((editFlow && !pickerSmoke) || recoveryOnly) {
+  if ((editFlow && !pickerSmoke && !proofLane) || recoveryOnly) {
+    if (recoveryHandoff) {
+      report.stage = 'recovery-phase-ready';
+      await recoveryHandoff.boundary();
+    }
     stopPreviewProbe();
     recovery = await productionRecoveryProof({
       api,
-      inject: (method, url, payload) => mobile.inject({ method, url, payload, headers }),
+      inject: (method, url, payload) => {
+        recoveryHandoff?.assertCurrent();
+        return mobile.inject({ method, url, payload, headers });
+      },
       remote,
       until,
       report,
@@ -2398,6 +2496,7 @@ try {
       privateRoot,
       signed,
       expectedSourceText: recoveryOnly ? 'Owning app' : 'Production manual approved',
+      eventObservationBudgetMs,
       // Manager's signed process identity omits bootId; bind its PID/birth to
       // the actual original launch's boot before using Mobile's exit observer.
       owningBirthExited: (identity) =>
@@ -2432,8 +2531,7 @@ try {
   }
   report.stage = 'revoke-and-production-shutdown';
   stopPreviewProbe();
-  await mobile.close();
-  mobile = undefined;
+  await closeMobileOnce();
   assert.equal(existsSync(join(controller, 'live-policy.key')), true);
   const fence = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
   assert.equal(fence.status, 'revoked');
@@ -2443,7 +2541,11 @@ try {
   if (editFlow) {
     const source = readFileSync(join(appRoot, 'index.html'), 'utf8');
     assert.ok(
-      source.includes(pickerSmoke ? 'Production chosen variant' : 'Production manual approved'),
+      source.includes(
+        pickerSmoke || proofLane === 'accept-steer'
+          ? 'Production chosen variant'
+          : 'Production manual approved',
+      ),
     );
     assert.ok(!source.includes('__IMPECCABLE_LIVE'));
   } else assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
@@ -2549,8 +2651,7 @@ try {
   await probeRefresh;
   if (mobile) {
     try {
-      await mobile.close();
-      mobile = undefined;
+      await closeMobileOnce();
       if (report.projectMetadata)
         report.projectMetadata.afterOwnerShutdown = ownedProjectMetadata();
     } catch (error) {
@@ -2627,6 +2728,27 @@ try {
           return { unavailable: true };
         }
       });
+  if (recoveryHandoff) {
+    const state = recoveryHandoff.snapshot();
+    report.recoveryHandoff = {
+      continuations: state.continuations,
+      cancelled: state.cancelled,
+      sameDriverBirth: birthCurrent(state.birth),
+      phaseTimings: state.phaseTimings,
+    };
+    if (state.cancelled) {
+      report.passed = false;
+      report.cleanupComplete = false;
+      process.exitCode = 1;
+    }
+    try {
+      await recoveryHandoff.close();
+    } catch {
+      report.passed = false;
+      report.cleanupComplete = false;
+      process.exitCode = 1;
+    }
+  }
   if (!report.shutdownFailure) {
     try {
       removeOwnedProofTree(root, rootIdentity, {

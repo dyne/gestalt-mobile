@@ -1,0 +1,694 @@
+/*
+ * Copyright (C) 2026 Dyne.org foundation
+ * Designed by Denis Roio <jaromil@dyne.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+// Test orchestration only. No receipt, configuration or product authority is
+// manufactured here. Every production lane owns a fresh authentic fixture.
+import assert from 'node:assert/strict';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createServer, createConnection } from 'node:net';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import { proofMode, validateSmokeEvidence } from './live-picker-smoke.mjs';
+
+export const fullLanes = Object.freeze([
+  'independent',
+  'accept-steer',
+  'manual-discard',
+  'recovery',
+]);
+export const proofPins = Object.freeze({
+  native: 'b2730ae901da317bcc5933d9b87de6dfbea3e46a46b64f806e4268fd9a095578',
+  manager: '8115c37344ef4a7a1b537e23ff069a90bbb188ec41c77ace8d5a41cc864118f9',
+  managerTree: 'dfdeabd2ffdbdb6c429a39c3e81286b611af7734',
+  agents: 'a6a2758c72220e4845d2735e9776caf8a7e8c43b',
+});
+export const independentChecks = Object.freeze({
+  native: [
+    'hostAdminSocketReachable',
+    'actualAcceptedManagedInputs',
+    'originalOwningBirthAndSourcesSealed',
+    'existingRuntimeInspected',
+    'nativeSpawnResponseObserved',
+    'nativeSpawnTaskReturned',
+    'actualChildRequestReconciled',
+    'modelFileEditPermitted',
+    'modelPrivateEditDenied',
+    'modelPrivateReadNeverReachedProvider',
+    'actualModelAndChildSocketAndDaemonDenials',
+    'permittedNativeChildInheritedConfinement',
+    'sameOwningThreadModelThinkingAndProcess',
+    'electedOwnerNativeUnloadAndExit',
+    'ownedRuntimeExited',
+  ],
+  project: [
+    'canonicalNativeHelperCommand',
+    'separateNamespaces',
+    'nativeFilesystemAndHostUnixDenials',
+    'knownBrowserTokenCannotCompeteForPoll',
+    'fixedPipeHttpRelay',
+    'preparedConnectionSingleUse',
+    'changedLaunchInputRefused',
+    'staleReceiptRevokedHelperSurvives',
+    'ownedNamespacesAndDescendantsExited',
+  ],
+  remote: [
+    'trustedTls',
+    'separateBrowserNetwork',
+    'helperLoopbackDenied',
+    'realSimpleWebAuthnEnrollment',
+    'launchPkceViaValidatedOpener',
+    'clearedGrantFragment',
+    'hostOnlyCookiesOnDistinctHosts',
+    'realPublishedHelperOverlay',
+    'helperSseConnectedAndErrorReply',
+    'helperSseClosedAfterRevocation',
+    'actualHelperAndViteManagedPolicy',
+    'controllerPrivate',
+  ],
+});
+export const commonChecks = Object.freeze([
+  'exactInstalledPreparedBytes',
+  'normalHomeRuntimeSeparateFromDeniedMobileAuth',
+  'soleProductionCompositionConstructed',
+  'ordinaryInstalledAuxiliaryModelDiscovery',
+  'ordinaryInstalledAuxiliarySkillsExcludeDisabledPackages',
+  'actualOwningStartupAdmitted',
+  'originalStartupMetadataRetainedWithoutDeletion',
+  'persistedBaselineWithoutPreAdmissionCommands',
+  'actualOriginalSnapshotConfigurationPreserved',
+  'actualBroadScratchScopeRemainsGloballyExclusive',
+  'policy_receipt.json',
+  'admission_receipt.json',
+  'disabledPluginMetadataRemainsInSignedOriginalConfig',
+  'installedExecutableSourceSeparatelySignedAndSealed',
+  'originalManagedOwnerRetainedWithSignedV2Sources',
+  'productionContextNativeAdmissionProbe',
+  'sameSessionReuseNoReplacement',
+  'authenticatedPrivatePipePreviewThroughRealTls',
+  'signedRevocationPrecedesOriginalOwnerExit',
+  'revokeCloseAndInjectionRestore',
+]);
+const modelChecks = [
+  'actualMobileUiStartWithProductionAuthentication',
+  'chatAutopilotOrgWritersRefusedDuringPickerFlow',
+  'previewProbeHandedToActualBrowserConnection',
+  'helperBearerAbsentFromActualProviderWire',
+  'actualContextMcpCompletedBeforeArtifactValidation',
+  'actualMobileUiOpenAuthenticatedRemoteOverlay',
+  'actualModelToolsAndChildInheritedConfinement',
+  'nativeModelContextToolConfined',
+  'futureControlDenialsAndArtifactCarveouts',
+  'sameOwningThreadModelThinkingAndDurableInbox',
+];
+export const laneChecks = Object.freeze({
+  'accept-steer': [
+    ...commonChecks,
+    ...modelChecks,
+    'actualPickerGenerateAcceptWithCanonicalSourceEffect',
+    'actualPickerSteerWithCanonicalHmrEffect',
+    'actualBackgroundBeyondEightSecondsPreservesFencing',
+  ],
+  'manual-discard': [
+    ...commonChecks,
+    ...modelChecks,
+    'actualPickerManualApplyGenerateDiscardWithExactSourceRestoration',
+  ],
+  recovery: [
+    ...commonChecks,
+    'sameOwningThreadModelThinkingWithoutModelTurn',
+    'productionSurvivorRenewalPreservesOriginalBirthAndSelections',
+    'oldCookiesAndStaleResumeCannotRegrant',
+    'concurrentProductionResumeHasOneGenerationAndOneOwner',
+    'productionReplacementRequiresActualExitAndFreshOwningObservation',
+    'concurrentProductionStopRevokesDrainsAndRestoresOriginalConfiguration',
+    'noModelTurnOrSourceEditAfterStop',
+    'realRegisteredExternalServerSurvivesWithoutAdoption',
+  ],
+});
+// Original full assertions are retained as explicit cross-lane claims. No lane
+// claims to have run another lane's actions in its own session.
+export const fullAssertionOwners = Object.freeze({
+  realPickerGenerateSteerManualApplyAcceptDiscard: ['accept-steer', 'manual-discard'],
+  canonicalJournalSourceEffectsAndDiscardRestoration: ['manual-discard'],
+  actualViteHmrThroughAuthenticatedGateway: ['accept-steer'],
+  actualBackgroundBeyondEightSecondsPreservesFencing: ['accept-steer'],
+  originalSurvivorReplacementLineageInOneLivingFixture: ['recovery'],
+});
+export function selectedLanes(selection) {
+  const mode = proofMode(selection);
+  return { mode, lanes: mode === 'full' ? [...fullLanes] : [mode] };
+}
+export function productionLane(value = '') {
+  assert.ok(
+    ['', 'accept-steer', 'manual-discard', 'recovery'].includes(value),
+    'PROOF_LANE_INVALID',
+  );
+  return value;
+}
+const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const writeJson = (path, value) => {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+};
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+export function candidateIdentity() {
+  const candidate = git('rev-parse', 'HEAD');
+  assert.equal(candidate, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  assert.match(process.env.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
+  return {
+    candidate,
+    tree: git('rev-parse', 'HEAD^{tree}'),
+    runId: process.env.GITHUB_RUN_ID,
+    ...proofPins,
+  };
+}
+function assertIdentity(actual, expected) {
+  assert.deepEqual(actual, expected, 'PROOF_IDENTITY_CHANGED');
+}
+export function validateProductionLane(lane, report, identity) {
+  assert.ok(laneChecks[lane], 'PROOF_LANE_INVALID');
+  assert.equal(report.passed, true);
+  assert.equal(report.cleanupComplete, true);
+  assert.equal(report.productionLane, lane);
+  assert.equal(report.provenance.head, identity.candidate);
+  assert.equal(report.provenance.tree, identity.tree);
+  for (const key of ['manager', 'managerTree', 'agents'])
+    assert.equal(report.provenance[key], identity[key]);
+  assert.equal(report.nativeBinarySha256, identity.native);
+  assert.equal(report.sourceInventory.signatureVerified, true);
+  assert.equal(report.sourceInventory.captureGenerationMatchesLiveGeneration, true);
+  for (const check of laneChecks[lane])
+    assert.equal(report.checks[check], true, `PROOF_CHECK_MISSING:${check}`);
+  assert.ok(Object.values(report.checks).every((value) => value === true));
+  if (lane !== 'recovery') {
+    const required =
+      lane === 'accept-steer'
+        ? ['generate', 'accept', 'steer']
+        : ['manual_edit_apply', 'generate', 'discard'];
+    assert.deepEqual(
+      report.laneCanonicalEvents,
+      required.map((kind) => ({
+        kind,
+        stage: 'acknowledged',
+        history: ['received', 'dispatched', 'applied', 'acknowledged'],
+      })),
+    );
+    const browser = report.editBrowser;
+    assert.equal(browser.proofLane, lane);
+    for (const check of [
+      'trustedTls',
+      'separateBrowserNetwork',
+      'separateBrowserMountNamespace',
+      'openThroughMobileControls',
+      'extraPollOwnerDenied',
+    ])
+      assert.equal(browser[check], true);
+    assert.equal(browser.ignoreHttpsErrors, false);
+    assert.equal(browser.genuineProvider, false);
+    if (lane === 'accept-steer') {
+      assert.equal(browser.realPickerGenerateAccept, true);
+      assert.equal(browser.realPickerSteer, true);
+      assert.equal(browser.actualTabHiddenBeyondEightSeconds, true);
+      assert.ok(browser.hmrUpdates > 0);
+      assert.equal(browser.realPickerManualApply, false);
+      assert.equal(browser.realPickerDiscard, false);
+    } else {
+      assert.equal(browser.realPickerManualApply, true);
+      assert.equal(browser.realPickerDiscard, true);
+      assert.equal(browser.realPickerGenerateAccept, false);
+      assert.equal(browser.realPickerSteer, false);
+    }
+  }
+  if (lane === 'recovery') {
+    const chain = report.recovery;
+    assert.equal(chain.originalBirthPreservedDuringSurvivor, true);
+    assert.equal(chain.replacementBirthAfterActualExit, true);
+    assert.equal(chain.originalManifestBytesPreserved, true);
+    assert.equal(chain.durableInboxRemainsSharedAcrossGenerations, true);
+    assert.equal(new Set(chain.captures).size, 3);
+    assert.equal(chain.generations.length, 5);
+    assert.ok(
+      chain.generations.every((g, i, all) => Number.isSafeInteger(g) && (!i || g > all[i - 1])),
+    );
+    assert.equal(report.recoveryHandoff.continuations, 1);
+    assert.equal(report.recoveryHandoff.cancelled, false);
+    assert.equal(report.recoveryHandoff.sameDriverBirth, true);
+  }
+}
+const independentFiles = [
+  'native-model-tools/native-model-tools-proof.json',
+  'remote-proof.json',
+  'vitest.json',
+  'cleanup-proof.json',
+  'project-isolation/project-isolation-proof.json',
+];
+const laneFiles = (lane) =>
+  lane === 'independent'
+    ? independentFiles
+    : [
+        'production-entrypoint/production-entrypoint-proof.json',
+        ...(lane === 'recovery' ? ['recovery-driver-cleanup.json'] : []),
+      ];
+function validateDriverCleanup(report, identity) {
+  assertIdentity(report.identity, identity);
+  assert.equal(report.driverExited, true);
+  assert.equal(report.cancelSent, false);
+  assert.equal(report.failure, undefined);
+}
+export function loadLanePacket(directory) {
+  const read = (file) => {
+    let path = directory;
+    const parts = file.split('/');
+    for (const [i, part] of parts.entries()) {
+      assert.ok(part !== '.' && part !== '..' && part !== '');
+      path = join(path, part);
+      const info = lstatSync(path);
+      assert.ok(!info.isSymbolicLink());
+      assert.ok(
+        i === parts.length - 1
+          ? info.isFile() && info.size <= 16 * 1024 * 1024
+          : info.isDirectory(),
+      );
+    }
+    return readFileSync(path);
+  };
+  const receipt = JSON.parse(read('lane-receipt.json'));
+  assert.ok(fullLanes.includes(receipt.lane));
+  assert.deepEqual(Object.keys(receipt.reports).sort(), [...laneFiles(receipt.lane)].sort());
+  return {
+    receipt,
+    reports: Object.fromEntries(laneFiles(receipt.lane).map((file) => [file, read(file)])),
+  };
+}
+export function writeLaneReceipt(lane, directory, identity = candidateIdentity()) {
+  assert.ok(fullLanes.includes(lane));
+  const files = laneFiles(lane);
+  const reports = Object.fromEntries(files.map((file) => [file, json(join(directory, file))]));
+  if (lane === 'independent') validateIndependent(reports, identity);
+  else {
+    validateProductionLane(lane, reports[files[0]], identity);
+    if (lane === 'recovery')
+      validateDriverCleanup(reports['recovery-driver-cleanup.json'], identity);
+  }
+  const receipt = {
+    schemaVersion: 1,
+    lane,
+    identity,
+    passed: true,
+    cleanupComplete: true,
+    reports: Object.fromEntries(
+      files.map((file) => [file, digest(readFileSync(join(directory, file)))]),
+    ),
+  };
+  writeJson(join(directory, 'lane-receipt.json'), receipt);
+  return receipt;
+}
+function validateIndependent(reports, identity) {
+  const [native, remote, tests, cleanup, project] = independentFiles.map((file) => reports[file]);
+  validateSmokeEvidence({ native, remote, tests, cleanup });
+  for (const key of independentChecks.native) assert.equal(native.checks[key], true);
+  for (const key of independentChecks.project) assert.equal(project.checks[key], true);
+  for (const key of independentChecks.remote) assert.equal(remote[key], true);
+  assert.equal(native.provenance.mobileHead, identity.candidate);
+  assert.equal(native.provenance.expectedHead, identity.candidate);
+  assert.equal(native.provenance.mobileTree, identity.tree);
+  assert.equal(native.provenance.binarySha256, identity.native);
+  assert.equal(project.provenance.head, identity.candidate);
+  assert.equal(project.provenance.tree, identity.tree);
+  assert.equal(project.provenance.native, identity.native);
+  assert.equal(project.passed, true);
+  assert.equal(project.cleanupComplete, true);
+  assert.ok(Object.values(project.checks).every((value) => value === true));
+}
+export function aggregateLanes(packets, identity) {
+  assert.deepEqual(Object.keys(packets).sort(), [...fullLanes].sort(), 'PROOF_LANES_INCOMPLETE');
+  for (const lane of fullLanes) {
+    const { receipt, reports } = packets[lane];
+    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.lane, lane);
+    assertIdentity(receipt.identity, identity);
+    assert.equal(receipt.passed, true);
+    assert.equal(receipt.cleanupComplete, true);
+    const files = laneFiles(lane);
+    assert.deepEqual(Object.keys(receipt.reports).sort(), [...files].sort());
+    assert.deepEqual(Object.keys(reports).sort(), [...files].sort());
+    for (const file of files) {
+      const bytes = reports[file];
+      assert.equal(digest(bytes), receipt.reports[file], 'PROOF_REPORT_CHANGED');
+    }
+    const parsed = Object.fromEntries(files.map((file) => [file, JSON.parse(reports[file])]));
+    if (lane === 'independent') validateIndependent(parsed, identity);
+    else {
+      validateProductionLane(lane, parsed[files[0]], identity);
+      if (lane === 'recovery')
+        validateDriverCleanup(parsed['recovery-driver-cleanup.json'], identity);
+    }
+  }
+  return {
+    schemaVersion: 1,
+    passed: true,
+    cleanupComplete: true,
+    identity,
+    proofKind: 'complete-controlled-integration-across-fresh-owning-lanes',
+    crossLaneEvidence: true,
+    genuineProvider: false,
+    originalHookedEnabledHomeProven: false,
+    fullAssertionOwners,
+    laneChecks,
+    independentChecks,
+    checks: Object.fromEntries(
+      [...new Set([...Object.keys(fullAssertionOwners), ...Object.values(laneChecks).flat()])].map(
+        (key) => [key, true],
+      ),
+    ),
+    limitations: [
+      'Controlled provider only.',
+      'Original unchanged hooks/enabled Gestalt and genuine provider remain unproven.',
+      'Actions span explicit fresh owning lanes; recovery lineage remains one living fixture.',
+    ],
+  };
+}
+
+// Recovery phase handoff: the fixture stays alive; only one test continuation
+// is released. Nothing in this protocol grants or reconstructs Live authority.
+export function processBirth(pid = process.pid) {
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, 'PROOF_BIRTH_INVALID');
+  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  assert.ok(fields[0] !== 'Z' && /^[0-9]+$/.test(fields[19]), 'PROOF_BIRTH_EXITED');
+  return {
+    pid,
+    start: fields[19],
+    boot: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+  };
+}
+export function birthCurrent(birth) {
+  try {
+    return isDeepStrictEqual(processBirth(birth.pid), birth);
+  } catch {
+    return false;
+  }
+}
+function privateDirectory(directory, create = false) {
+  if (create) mkdirSync(directory, { mode: 0o700 });
+  const info = lstatSync(directory);
+  assert.ok(
+    info.isDirectory() &&
+      !info.isSymbolicLink() &&
+      info.uid === process.getuid() &&
+      (info.mode & 0o077) === 0,
+    'PROOF_CHANNEL_UNSAFE',
+  );
+}
+function privateJson(path) {
+  const info = lstatSync(path);
+  assert.ok(
+    info.isFile() &&
+      !info.isSymbolicLink() &&
+      info.uid === process.getuid() &&
+      (info.mode & 0o077) === 0 &&
+      info.size <= 4096,
+    'PROOF_CHANNEL_UNSAFE',
+  );
+  return json(path);
+}
+export async function openRecoveryHandoff({
+  directory,
+  identity,
+  onCancel,
+  pauseMs = 1_800_000,
+  socketDirectory = directory,
+}) {
+  assert.ok(
+    Number.isFinite(pauseMs) && pauseMs > 0 && pauseMs <= 1_800_000,
+    'PROOF_PHASE_BUDGET_INVALID',
+  );
+  privateDirectory(directory);
+  privateDirectory(socketDirectory);
+  const birth = processBirth();
+  const began = performance.now();
+  let readyAt, continuedAt;
+  let phase = 'setup',
+    continuations = 0,
+    cancelled = false,
+    resume,
+    rejectPause;
+  let cancellation;
+  const snapshot = () => ({
+    schemaVersion: 1,
+    identity,
+    birth,
+    socketDirectory,
+    phase,
+    continuations,
+    cancelled,
+    phaseTimings: {
+      setupMs: Math.round((readyAt ?? performance.now()) - began),
+      pausedMs:
+        readyAt === undefined ? 0 : Math.round((continuedAt ?? performance.now()) - readyAt),
+      recoveryMs: continuedAt === undefined ? 0 : Math.round(performance.now() - continuedAt),
+    },
+  });
+  const cancel = () => {
+    if (!cancelled) {
+      cancelled = true;
+      phase = 'cancelled';
+      rejectPause?.(new Error('PROOF_CANCELLED'));
+      cancellation = Promise.resolve().then(onCancel);
+      cancellation.catch(() => {});
+    }
+    return cancellation;
+  };
+  const server = createServer((socket) => {
+    socket.setTimeout(2000, () => socket.destroy());
+    let text = '';
+    socket.on('error', () => {});
+    socket.on('data', (chunk) => {
+      text += chunk;
+      if (Buffer.byteLength(text) > 4096) return socket.destroy();
+      if (!text.endsWith('\n')) return;
+      try {
+        const request = JSON.parse(text);
+        assert.deepEqual(Object.keys(request).sort(), ['birth', 'command', 'identity']);
+        assertIdentity(request.identity, identity);
+        assert.deepEqual(request.birth, birth);
+        assert.ok(birthCurrent(birth));
+        if (request.command === 'continue') {
+          assert.ok(phase === 'ready' && continuations === 0 && !cancelled);
+          continuations++;
+          phase = 'recovery';
+          continuedAt = performance.now();
+          resume();
+        } else if (request.command === 'cancel') void cancel();
+        else assert.equal(request.command, 'status');
+        socket.end(JSON.stringify({ ok: true, ...snapshot() }) + '\n');
+      } catch {
+        socket.end(JSON.stringify({ ok: false, code: 'PROOF_HANDOFF_REFUSED' }) + '\n');
+      }
+    });
+  });
+  const path = join(socketDirectory, 'control.sock');
+  await new Promise((done, reject) => {
+    server.once('error', reject);
+    server.listen(path, done);
+  });
+  chmodSync(path, 0o600);
+  writeFileSync(join(directory, 'driver.json'), JSON.stringify(snapshot()) + '\n', {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  return {
+    snapshot,
+    assertCurrent() {
+      assert.ok(!cancelled && birthCurrent(birth), 'PROOF_CANCELLED');
+    },
+    async boundary() {
+      assert.ok(phase === 'setup' && !cancelled, 'PROOF_HANDOFF_PHASE_INVALID');
+      let timer;
+      try {
+        await new Promise((done, reject) => {
+          resume = done;
+          rejectPause = reject;
+          phase = 'ready';
+          readyAt = performance.now();
+          timer = setTimeout(() => {
+            void cancel();
+          }, pauseMs);
+        });
+      } finally {
+        clearTimeout(timer);
+        rejectPause = undefined;
+      }
+      assert.ok(
+        continuations === 1 && !cancelled && birthCurrent(birth),
+        'PROOF_HANDOFF_PHASE_INVALID',
+      );
+    },
+    async close() {
+      if (phase === 'ready') await cancel();
+      await cancellation;
+      phase = cancelled ? 'cancelled' : 'complete';
+      writeJson(join(directory, 'final-driver.json'), snapshot());
+      await new Promise((done) => server.close(done));
+    },
+  };
+}
+export function handoffRequest(directory, command, expected) {
+  privateDirectory(directory);
+  const socketDirectory = expected.socketDirectory ?? directory;
+  privateDirectory(socketDirectory);
+  const info = lstatSync(join(socketDirectory, 'control.sock'));
+  assert.ok(
+    info.isSocket() && info.uid === process.getuid() && (info.mode & 0o077) === 0,
+    'PROOF_CHANNEL_UNSAFE',
+  );
+  assert.ok(birthCurrent(expected.birth), 'PROOF_DRIVER_EXITED');
+  return new Promise((done, reject) => {
+    const socket = createConnection(join(socketDirectory, 'control.sock'));
+    let text = '';
+    const fail = () => {
+      socket.destroy();
+      reject(new Error('PROOF_HANDOFF_UNAVAILABLE'));
+    };
+    socket.setTimeout(2500, fail);
+    socket.on('error', fail);
+    socket.on('connect', () =>
+      socket.end(
+        JSON.stringify({ command, identity: expected.identity, birth: expected.birth }) + '\n',
+      ),
+    );
+    socket.on('data', (chunk) => {
+      text += chunk;
+      if (Buffer.byteLength(text) > 4096) fail();
+    });
+    socket.on('end', () => {
+      try {
+        const response = JSON.parse(text);
+        assert.equal(response.ok, true);
+        assertIdentity(response.identity, expected.identity);
+        assert.deepEqual(response.birth, expected.birth);
+        done(response);
+      } catch {
+        reject(new Error('PROOF_HANDOFF_REFUSED'));
+      }
+    });
+  });
+}
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+async function waitFor(directory, predicate, budgetMs, identity) {
+  const until = Date.now() + budgetMs;
+  while (Date.now() < until) {
+    const expected = existsSync(join(directory, 'driver.json'))
+      ? privateJson(join(directory, 'driver.json'))
+      : undefined;
+    if (expected) {
+      assertIdentity(expected.identity, identity);
+      const state = await handoffRequest(directory, 'status', expected);
+      if (predicate(state)) return state;
+    }
+    await sleep(250);
+  }
+  throw new Error('PROOF_DRIVER_PHASE_DEADLINE');
+}
+async function driver(command, directory) {
+  const identity = candidateIdentity();
+  if (command === 'start') {
+    privateDirectory(directory, true);
+    const child = spawn(process.execPath, ['scripts/live-production-entrypoint-proof.mjs'], {
+      env: { ...process.env, LIVE_PRODUCTION_RECOVERY_CHANNEL: directory },
+      stdio: 'ignore',
+      detached: true,
+    });
+    child.on('error', () => {});
+    child.unref();
+    writeJson(join(directory, 'launched.json'), { identity, birth: processBirth(child.pid) });
+    await waitFor(directory, (state) => state.phase === 'ready', 1_800_000, identity);
+  } else if (command === 'continue') {
+    const expected = privateJson(join(directory, 'driver.json'));
+    assertIdentity(expected.identity, identity);
+    const launched = privateJson(join(directory, 'launched.json'));
+    assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
+    await handoffRequest(directory, 'continue', expected);
+    const until = Date.now() + 1_800_000;
+    while (birthCurrent(expected.birth) && Date.now() < until) await sleep(250);
+    assert.equal(birthCurrent(expected.birth), false, 'PROOF_DRIVER_PHASE_DEADLINE');
+    const final = privateJson(join(directory, 'final-driver.json'));
+    assertIdentity(final.identity, identity);
+    assert.deepEqual(final.birth, expected.birth);
+    assert.equal(final.cancelled, false);
+    assert.equal(final.phase, 'complete');
+    assert.equal(final.continuations, 1);
+  } else {
+    assert.equal(command, 'cleanup');
+    privateDirectory(directory);
+    const cleanup = { identity, cancelSent: false, driverExited: false };
+    try {
+      const launched = privateJson(join(directory, 'launched.json'));
+      assertIdentity(launched.identity, identity);
+      if (birthCurrent(launched.birth)) {
+        const expected = privateJson(join(directory, 'driver.json'));
+        assert.deepEqual(expected.birth, launched.birth);
+        await handoffRequest(directory, 'cancel', expected);
+        cleanup.cancelSent = true;
+        const until = Date.now() + 180_000;
+        while (birthCurrent(launched.birth) && Date.now() < until) await sleep(250);
+      }
+      cleanup.driverExited = !birthCurrent(launched.birth);
+      assert.equal(cleanup.driverExited, true, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
+    } catch {
+      cleanup.failure = 'PROOF_DRIVER_CLEANUP_UNVERIFIED';
+      throw new Error(cleanup.failure);
+    } finally {
+      writeJson(join(directory, 'cleanup.json'), cleanup);
+    }
+  }
+}
+async function main() {
+  const [command, argument, output] = process.argv.slice(2);
+  if (['start', 'continue', 'cleanup'].includes(command)) return driver(command, resolve(argument));
+  if (command === 'receipt')
+    return writeLaneReceipt(process.env.LIVE_PRODUCTION_PROOF_LANE, resolve(argument));
+  assert.equal(command, 'aggregate');
+  const identity = candidateIdentity(),
+    packets = {};
+  try {
+    for (const entry of readdirSync(argument, { withFileTypes: true })) {
+      assert.ok(entry.isDirectory() && !entry.isSymbolicLink());
+      const packet = loadLanePacket(join(argument, entry.name));
+      assert.ok(!packets[packet.receipt.lane], 'PROOF_LANE_DUPLICATE');
+      packets[packet.receipt.lane] = packet;
+    }
+    writeJson(output, aggregateLanes(packets, identity));
+  } catch {
+    writeJson(output, {
+      schemaVersion: 1,
+      passed: false,
+      cleanupComplete: false,
+      identity,
+      failure: 'CONTROLLED_PROOF_EVIDENCE_INVALID',
+      crossLaneEvidence: true,
+    });
+    throw new Error('CONTROLLED_PROOF_EVIDENCE_INVALID');
+  }
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch(() => {
+    console.error('CONTROLLED_PROOF_ORCHESTRATION_FAILED');
+    process.exitCode = 1;
+  });
+}
