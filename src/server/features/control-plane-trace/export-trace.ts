@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { readTransportDiagnostics } from '../../platform/persistence/sqlite-transport-diagnostics.js';
 import { DatabaseSync } from 'node:sqlite';
 
 type TraceRow = Readonly<{
@@ -16,6 +17,7 @@ type TraceRow = Readonly<{
 
 export type ControlPlaneTrace = Readonly<{
   schemaVersion: 1;
+  transport?: ReturnType<typeof readTransportDiagnostics>;
   sessionId: string;
   generatedAt: string;
   events: readonly TraceRow[];
@@ -201,6 +203,7 @@ export function exportControlPlaneTrace(
       });
     return {
       schemaVersion: 1,
+      transport: readTransportDiagnostics(database, sessionId, Date.parse(generatedAt)),
       sessionId,
       generatedAt,
       events,
@@ -225,6 +228,7 @@ export function formatControlPlaneTrace(trace: ControlPlaneTrace): string {
     `Control-plane trace for ${trace.sessionId}`,
     `Generated: ${trace.generatedAt}`,
     `Omitted by export limits: ${trace.selection.omittedStatusEvents} status snapshots, ${trace.selection.omittedTransitionEvents} transitions.`,
+    `Transport: ${trace.transport?.records.length ?? 0} retained records; coverage is retained-only, not proof of absence.`,
     '',
   ];
   for (const event of trace.events) {

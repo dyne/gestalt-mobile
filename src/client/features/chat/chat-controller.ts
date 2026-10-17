@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { HistoryObservation } from '../../../shared/contracts/chat-transport-diagnostics.js';
 import type {
   ChatSnapshot,
   SafeInteractionOutcome,
@@ -34,7 +35,7 @@ export type ChatViewState = Readonly<
 >;
 export type ChatSelectionOptions = Readonly<{ history?: 'load' | 'empty' }>;
 export type ChatRelay = Readonly<{
-  getHistory(sessionId: string): Promise<unknown>;
+  getHistory(sessionId: string, observation?: HistoryObservation): Promise<unknown>;
   startTurn(sessionId: string, text: string, key?: string): Promise<{ activeTurnId?: string }>;
   interruptTurn(sessionId: string, turnId: string): Promise<void>;
   queueTurnInput?(
@@ -169,6 +170,11 @@ export const decodeChatSnapshot = (value: unknown): ChatSnapshot | null => {
 /** One selected-session transport owner. All async publications are generation scoped. */
 export class ChatController {
   #projection = createChatProjection();
+  #transport = { attempts: 0, coalesced: 0, resyncs: 0, socketOpens: 0 };
+  /** Current selection only; no payloads, URLs, or exception text. */
+  get transportDiagnostics() {
+    return { ...this.#transport };
+  }
   #sessionId: string | null = null;
   #generation = 0;
   #authoritativeGeneration = -1;
@@ -423,6 +429,7 @@ export class ChatController {
       );
       return;
     }
+    this.#transport.socketOpens++;
     this.#socket = socket;
     socket.onopen = () => {
       if (this.#current(id, generation) && this.#socket === socket) {
@@ -449,6 +456,7 @@ export class ChatController {
       return;
     }
     if (envelope.type === 'relay.resyncRequired') {
+      this.#transport.resyncs++;
       this.#resyncSocket = true;
       void this.#takeSnapshot(id, generation);
       return;
@@ -537,14 +545,17 @@ export class ChatController {
     return event.type === 'plan.updated' || event.type === 'plan.closed';
   }
   #takeSnapshot(id: string, generation: number): Promise<void> {
-    if (this.#snapshot?.id === id && this.#snapshot.generation === generation)
+    if (this.#snapshot?.id === id && this.#snapshot.generation === generation) {
+      this.#transport.coalesced++;
       return this.#snapshot.promise;
+    }
     if (!this.#current(id, generation)) return Promise.resolve();
     const recovering = this.#projection.snapshotting && this.#projection.buffered.size > 0;
     this.#projection = beginSnapshot(this.#projection);
     this.#publish();
+    this.#transport.attempts++;
     const promise = this.#options.relay
-      .getHistory(id)
+      .getHistory(id, { attempts: this.#transport.attempts, coalesced: this.#transport.coalesced })
       .then((history) => {
         const decoded = decodeChatSnapshot(history);
         if (!this.#current(id, generation)) return;
@@ -644,6 +655,7 @@ export class ChatController {
     return new Promise((resolve) => this.#options.setTimeout(resolve, milliseconds));
   }
   #stop(): void {
+    this.#transport = { attempts: 0, coalesced: 0, resyncs: 0, socketOpens: 0 };
     this.#resyncSocket = false;
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;

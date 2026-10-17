@@ -12,6 +12,7 @@ import { SessionModelConfig } from './platform/codex/session-model-config.js';
 import { basename, dirname, join, resolve } from 'node:path';
 import { debuglog } from 'node:util';
 
+import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transport-diagnostics.js';
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
@@ -1707,7 +1708,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   }
   let app;
   try {
+    const transportDiagnostics = new SqliteTransportDiagnostics(database);
     app = await buildApp({
+      transportDiagnostic: (id, event) => transportDiagnostics.record(id, event),
       upgrade: new ManagedUpgrade(options.root),
       ...(authorization
         ? {
@@ -2076,7 +2079,17 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       sessionEvents: {
         exists: (id) => sessions.find(id) !== null,
-        replay: (id, after) => journal.replay(id, after),
+        replay: (id, after) => {
+          const started = performance.now();
+          const result = journal.replay(id, after);
+          transportDiagnostics.record(id, {
+            kind: result.kind,
+            after,
+            durationMs: performance.now() - started,
+            ...(result.kind === 'replay' ? { count: result.events.length } : {}),
+          });
+          return result;
+        },
         subscribe: (id, listener) => events.subscribe(id, listener),
       },
       planRoutes: {

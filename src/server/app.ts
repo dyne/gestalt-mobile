@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { registerChatTransportDiagnostics } from './platform/http/chat-transport-diagnostics.js';
+import type { TransportDiagnostic } from '../shared/contracts/chat-transport-diagnostics.js';
+
 import fastifyStatic from '@fastify/static';
 import fastifyCookie from '@fastify/cookie';
 import fastify, { type FastifyInstance } from 'fastify';
@@ -67,6 +70,7 @@ import { registerPwaRoutes, type PwaIcon } from './features/pwa/register-routes.
 import { registerSelfDebug, type SelfDebugDependencies } from './features/self-debug/endpoint.js';
 
 export type AppDependencies = {
+  transportDiagnostic?(sessionId: string, event: TransportDiagnostic): void;
   upgrade?: import('./features/maintenance/upgrade/endpoint.js').UpgradePort;
   sessionDefaults?: SessionDefaultsStore;
   selfDebug?: SelfDebugDependencies;
@@ -261,6 +265,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     );
     return payload;
   });
+  if (deps.transportDiagnostic) registerChatTransportDiagnostics(app, deps.transportDiagnostic);
   await app.register(fastifyCookie);
   if (deps.pwaIcon) registerPwaRoutes(app, deps.pwaIcon);
   if (deps.staticDir) await app.register(fastifyStatic, { root: deps.staticDir });
