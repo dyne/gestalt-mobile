@@ -15,9 +15,15 @@ export async function productionEditBrowser(input) {
   assert.equal(process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF, '1');
   if (input.browser.startThroughControls)
     assert.equal(input.browser.startObservationBudgetMs, 815_000);
+  if (!input.browser.preflight && !input.browser.startThroughControls)
+    assert.equal(input.browser.eventObservationBudgetMs, 300_000);
+  // Six serial event observation windows at the measured120s authority allowance,
+  // plus180s for setup, manual draft, background and host-control exchanges.
   const browserDeadlineMs = input.browser.startThroughControls
     ? input.browser.startObservationBudgetMs + 60_000
-    : 480_000;
+    : input.browser.preflight
+      ? 480_000
+      : 6 * 120_000 + 180_000;
   const namespace = `l11edit-${process.pid}`;
   const hostInterface = `leh${process.pid}`;
   const peerInterface = `leb${process.pid}`;

@@ -33,11 +33,13 @@ const pageErrors = [];
 const helperResponses = [];
 const editRequests = [];
 const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
-// Real Native admission precedes every model effect. The measured generate took
-// 56s; steer was still durably dispatched at the old30s fixture deadline.
-// These observation waits do not change the helper lease or any product deadline.
-const modelEffectTimeout = 90000;
-const terminalEffectTimeout = 60000;
+// A measured source/selection/catalog/provenance/resource authority check takes
+//111s before turn/start. Observe both authority/helper windows without changing
+// the upstream595s lease, source checks, replay rules or any product deadline.
+if (!config.preflight && !config.startThroughControls)
+  assert.equal(config.eventObservationBudgetMs, 300_000);
+const modelEffectTimeout = config.eventObservationBudgetMs ?? 90_000;
+const terminalEffectTimeout = config.eventObservationBudgetMs ?? 60_000;
 let helperBridge;
 const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
@@ -493,7 +495,7 @@ try {
   await ui.clickEditCopy(preview);
   await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
   await ui.clickSaveEdit(preview);
-  await ui.assertApplyDockVisible(preview, 1, { timeout: terminalEffectTimeout });
+  await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
   await ui.clickApplyEdits(preview);
   await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
   await command('manual-applied');

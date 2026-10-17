@@ -49,6 +49,7 @@ import {
   InstalledLiveAdmissionError,
 } from '../dist/server/server/platform/live-design/installed-policy.js';
 import { ProductionLiveController } from '../dist/server/server/platform/live-design/production-controller.js';
+import { LiveDispatchGuard } from '../dist/server/server/platform/live-design/live-dispatch.js';
 import {
   LIVE_CODEX_SHA256,
   LIVE_CODEX_BWRAP_SHA256,
@@ -80,6 +81,10 @@ const startObservationBudgetMs =
   2 * 15_000 +
   5_000;
 assert.equal(startObservationBudgetMs, 815_000);
+// Two measured authority windows, two existing helper-command windows and
+// bounded result delivery; the upstream595s lease is never extended.
+const eventObservationBudgetMs = 2 * (LIVE_MANAGER_OBSERVATION_MS + 30_000) + 2 * 20_000 + 20_000;
+assert.equal(eventObservationBudgetMs, 300_000);
 assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
@@ -216,6 +221,31 @@ ProductionLiveController.prototype.renewGeneration = async function (...args) {
   } catch (error) {
     report.originalRenewalFailure = admissionFailure(error);
     throw error;
+  }
+};
+// Observe the actual authority boundary without supplying admission or model output.
+const actualLiveEvent = LiveDispatchGuard.prototype.liveEvent;
+LiveDispatchGuard.prototype.liveEvent = async function (fence, eventId, work) {
+  const began = performance.now();
+  const phase = /^[a-f0-9]{8}$/.test(eventId) ? 'event-turn' : 'canonical-poll';
+  let grantedAfterMs = null;
+  let completed = false;
+  try {
+    const result = await actualLiveEvent.call(this, fence, eventId, async () => {
+      grantedAfterMs = Math.round(performance.now() - began);
+      return work();
+    });
+    completed = true;
+    return result;
+  } finally {
+    const timings = (report.eventAuthorityTimings ??= []);
+    if (timings.length === 64) timings.shift();
+    timings.push({
+      phase,
+      grantedAfterMs,
+      elapsedMs: Math.round(performance.now() - began),
+      completed,
+    });
   }
 };
 // Measure the real controller phases without supplying readiness or changing
@@ -2173,6 +2203,7 @@ try {
         liveId: started.liveId,
         generation: started.generation,
         helperTokenSha256: hash(token),
+        eventObservationBudgetMs,
         sessionCookie: browserSession,
         uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
         resultFile: join(evidence, 'production-edit-browser.json'),
