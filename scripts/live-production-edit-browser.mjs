@@ -26,6 +26,8 @@ const chromeChecks = [];
 let baselineSandboxedLaunch;
 let launcherKernel;
 const networkErrors = [];
+const networkResourceFailures = [];
+let initialMobileAssetsChanged = false;
 const exchangeStatuses = [];
 const resourcePending = {};
 const resourceStatuses = {};
@@ -235,8 +237,17 @@ try {
   context.on('requestfailed', finished);
   context.on('requestfailed', (request) => {
     const code = request.failure()?.errorText;
-    if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
-      networkErrors.push(code);
+    if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '')) {
+      if (networkErrors.length < 16) networkErrors.push(code);
+      const resource = request.resourceType();
+      if (networkResourceFailures.length < 16) networkResourceFailures.push({ resource, code });
+      if (
+        stage === 'mobile-navigation' &&
+        code === 'net::ERR_NETWORK_CHANGED' &&
+        ['script', 'stylesheet'].includes(resource)
+      )
+        initialMobileAssetsChanged = true;
+    }
   });
   context.on('response', async (response) => {
     const resource = `${response.request().resourceType()}:${response.status()}`;
@@ -320,11 +331,13 @@ try {
   await mobile.setViewportSize({ width: 1440, height: 900 });
   checkpoint('mobile-navigation');
   let response;
+  let initialMobileGetRetried = false;
   try {
     response = await mobile.goto(config.mobileOrigin + '/');
   } catch (error) {
     if (!String(error?.message ?? '').startsWith('page.goto: net::ERR_NETWORK_CHANGED'))
       throw error;
+    initialMobileGetRetried = true;
     // The namespace notifier can settle after Chromium starts. Repeat only
     // this initial read-only GET; no grant, exchange or edit has happened yet.
     await mobile.waitForFunction(
@@ -333,6 +346,13 @@ try {
       { timeout: 5000 },
     );
     checkpoint('mobile-get-after-network-change');
+    response = await mobile.goto(config.mobileOrigin + '/');
+  }
+  // A successful document GET can still lose its initial JS/CSS to the same
+  // namespace notifier. Allow one read-only navigation recovery before any
+  // controls, grant, Start or edit action; never retry an ambiguous dispatch.
+  if (!initialMobileGetRetried && initialMobileAssetsChanged) {
+    checkpoint('mobile-get-after-asset-network-change');
     response = await mobile.goto(config.mobileOrigin + '/');
   }
   assert.ok(response.status() < 500);
@@ -596,6 +616,7 @@ try {
             launcherKernel,
           },
           networkErrors,
+          networkResourceFailures,
           exchangeStatuses,
           resourcePending,
           resourceStatuses,
