@@ -205,6 +205,25 @@ ProductionLiveController.prototype.renewGeneration = async function (...args) {
     throw error;
   }
 };
+// Measure the real controller phases without supplying readiness or changing
+// their result. These fixed labels contain no arguments, paths or Native output.
+for (const phase of ['register', 'verifyGeneration', 'prepareOwner', 'authorize', 'expose']) {
+  const perform = ProductionLiveController.prototype[phase];
+  assert.equal(typeof perform, 'function');
+  ProductionLiveController.prototype[phase] = async function (...args) {
+    const began = performance.now();
+    let completed = false;
+    try {
+      const result = await perform.apply(this, args);
+      completed = true;
+      return result;
+    } finally {
+      const timings = (report.startPhaseTimings ??= []);
+      if (timings.length === 64) timings.shift();
+      timings.push({ phase, elapsedMs: Math.round(performance.now() - began), completed });
+    }
+  };
+}
 const browserEventLoop = monitorEventLoopDelay({ resolution: 20 });
 function finishBrowserProfile() {
   if (!report.browserCpuWindowStartUs || report.browserCpuWindowEndUs) return;
@@ -1785,6 +1804,7 @@ try {
     operationId: 'production-admission',
   };
   report.stage = 'production-start-admission';
+  const startAdmissionBegan = performance.now();
   let started;
   if (editFlow) {
     await productionEditBrowser({
@@ -1810,6 +1830,7 @@ try {
     assert.equal(report.mobileControlsStart.startThroughMobileControls, true);
     report.checks.actualMobileUiStartWithProductionAuthentication = true;
   } else started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  report.startAdmissionElapsedMs = Math.round(performance.now() - startAdmissionBegan);
   assert.equal(started.state, 'active');
   preview = started.previewOrigin;
   generationDirectory = readdirSync(controller)
