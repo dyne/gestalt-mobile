@@ -795,8 +795,8 @@ describe('ChatController', () => {
     controller.select('a');
     controller.select('b');
     await Promise.resolve();
-    expect(history).toHaveBeenCalledWith('a');
-    expect(history).toHaveBeenCalledWith('b');
+    expect(history).toHaveBeenCalledWith('a', { attempts: 1, coalesced: 0 });
+    expect(history).toHaveBeenCalledWith('b', { attempts: 1, coalesced: 0 });
     b.resolve({ baseSequence: 0, items: [], turns: [], interactions: [], activeTurnId: null });
     await controller.send('one', 'same');
     await Promise.all([controller.send('two', 'same'), controller.send('two', 'same')]);
@@ -1663,4 +1663,35 @@ describe('ChatController', () => {
     });
     controller.dispose();
   });
+});
+
+it('preserves coalesced refresh evidence without sending duplicate history reads', async () => {
+  let finish!: (value: unknown) => void;
+  const getHistory = vi.fn().mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const controller = new ChatController({
+    ...environment(),
+    relay: { getHistory, startTurn: vi.fn(), interruptTurn: vi.fn(), respondInteraction: vi.fn() },
+    publish: vi.fn(),
+    websocket: () => new Socket() as unknown as WebSocket,
+  });
+  try {
+    controller.select('s');
+    controller.refresh();
+    controller.refresh();
+    expect(getHistory).toHaveBeenCalledOnce();
+    expect(controller.transportDiagnostics).toMatchObject({ attempts: 1, coalesced: 2 });
+    finish({ items: [], turns: [], interactions: [], activeTurnId: null, baseSequence: 0 });
+    await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+    controller.refresh();
+    expect(getHistory).toHaveBeenLastCalledWith('s', { attempts: 2, coalesced: 2 });
+    controller.select('other');
+    expect(controller.transportDiagnostics).toMatchObject({ attempts: 1, coalesced: 0 });
+  } finally {
+    controller.dispose();
+  }
 });

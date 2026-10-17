@@ -226,3 +226,40 @@ describe('control-plane trace export', () => {
     );
   });
 });
+
+it('exports persisted transport observations separately from conversation/control events', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gestalt-transport-trace-'));
+  directories.push(directory);
+  const path = join(directory, 'relay.sqlite');
+  const database = new DatabaseSync(path);
+  migrate(database);
+  database
+    .prepare(
+      "INSERT INTO relay_sessions(id, workspace_id, workspace_path, profile, state, desired_state, created_at, updated_at) VALUES ('s', 'w', '/w', 'default', 'idle', 'running', 'now', 'now')",
+    )
+    .run();
+  database
+    .prepare(
+      'INSERT INTO chat_transport_diagnostics(session_id, occurred_at, metadata_json) VALUES (?, ?, ?)',
+    )
+    .run(
+      's',
+      Date.parse('2026-10-17T08:00:00Z'),
+      JSON.stringify({
+        kind: 'history',
+        status: 200,
+        attempts: 3,
+        coalesced: 7,
+        prompt: 'secret-output',
+      }),
+    );
+  database.close();
+  const trace = exportControlPlaneTrace(path, 's', '2026-10-17T08:01:00Z');
+  expect(trace.transport).toMatchObject({
+    available: true,
+    coverage: 'retained-only',
+    records: [{ kind: 'history', status: 200, attempts: 3, coalesced: 7 }],
+  });
+  expect(trace.events).toEqual([]);
+  expect(JSON.stringify(trace)).not.toContain('secret-output');
+});

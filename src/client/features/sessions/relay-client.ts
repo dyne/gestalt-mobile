@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { HistoryObservation } from '../../../shared/contracts/chat-transport-diagnostics.js';
 import type { SupervisedPlan } from '../plans/contracts.js';
 import type { UpgradeStatus } from '../../../shared/contracts/upgrade.js';
 import type {
@@ -457,8 +458,21 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
           if (!response.ok) throw await failure(response);
         },
       ),
-    getHistory: (sessionId: string) =>
-      get<RelayHistory>(`/api/sessions/${encodeURIComponent(sessionId)}/history`),
+    getHistory: async (sessionId: string, observation?: HistoryObservation) => {
+      const response = await fetcher(
+        `/api/sessions/${encodeURIComponent(sessionId)}/history`,
+        observation
+          ? {
+              headers: {
+                'x-gestalt-history-attempts': String(observation.attempts),
+                'x-gestalt-history-coalesced': String(observation.coalesced),
+              },
+            }
+          : undefined,
+      );
+      if (!response.ok) throw await failure(response);
+      return response.json() as Promise<RelayHistory>;
+    },
     getPlan: (sessionId: string, signal: AbortSignal) =>
       getOptional<SupervisedPlan>(`/api/sessions/${encodeURIComponent(sessionId)}/plan`, signal),
     closePlan: (sessionId: string) => remove(`/api/sessions/${encodeURIComponent(sessionId)}/plan`),

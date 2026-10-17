@@ -35,6 +35,12 @@ function migrateWorkspaceGitDefaults(database: DatabaseSync): void {
 
 export function migrate(database: DatabaseSync): void {
   database.exec(schema);
+  database.exec(`CREATE TABLE IF NOT EXISTS chat_transport_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES relay_sessions(id) ON DELETE CASCADE,
+    occurred_at INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL
+  ); CREATE INDEX IF NOT EXISTS chat_transport_session ON chat_transport_diagnostics(session_id, id);`);
   database.exec(
     "CREATE INDEX IF NOT EXISTS session_events_chat_activity ON session_events(session_id, sequence) WHERE type = 'activity.updated'",
   );

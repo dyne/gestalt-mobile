@@ -360,3 +360,17 @@ describe('relay client', () => {
     ]);
   });
 });
+
+it('sends only optional numeric history observations without changing the response', async () => {
+  const requests: Array<RequestInit | undefined> = [];
+  const client = createRelayClient(async (_url, init) => {
+    requests.push(init);
+    return new Response(JSON.stringify({ items: [] }));
+  });
+  expect(await client.getHistory('s', { attempts: 3, coalesced: 8 })).toEqual({ items: [] });
+  expect(requests[0]).toEqual({
+    headers: { 'x-gestalt-history-attempts': '3', 'x-gestalt-history-coalesced': '8' },
+  });
+  await client.getHistory('s');
+  expect(requests[1]).toBeUndefined();
+});
