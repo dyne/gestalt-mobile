@@ -1170,9 +1170,11 @@ try {
   report.installationStage = 'agents-package-copy';
   const packages = ['context-mode', 'gestalt'].map((name) => {
     report.installationPackage = name;
-    const version = JSON.parse(
-      readFileSync(join(agentsRoot, 'plugins', name, 'package.json'), 'utf8'),
-    ).version;
+    const version =
+      name === 'context-mode'
+        ? JSON.parse(readFileSync(join(agentsRoot, 'plugins', name, 'package.json'), 'utf8'))
+            .version
+        : null;
     const target =
       name === 'context-mode'
         ? join(installation, 'cache/context-mode', version)
