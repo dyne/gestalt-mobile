@@ -2229,7 +2229,7 @@ try {
           }
         },
         'EDIT_CANONICAL_ACK_DEADLINE',
-        60000,
+        eventObservationBudgetMs,
       );
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);

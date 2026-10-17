@@ -297,8 +297,16 @@ export async function productionEditBrowser(input) {
           try {
             await input.command(value.command);
             browser.stdin.write(JSON.stringify({ ok: true }) + '\n');
-          } catch {
+          } catch (error) {
             commandFailure = true;
+            input.report.editBrowserCommandFailureCode =
+              error?.message === 'EDIT_CANONICAL_ACK_DEADLINE'
+                ? 'EDIT_CANONICAL_ACK_DEADLINE'
+                : error?.message === 'CONTROLLED_PROVIDER_FAILED'
+                  ? 'CONTROLLED_PROVIDER_FAILED'
+                  : error?.code === 'ERR_ASSERTION'
+                    ? 'ERR_ASSERTION'
+                    : 'EDIT_BROWSER_COMMAND_FAILED';
             browser.stdin.write(JSON.stringify({ ok: false }) + '\n');
           }
         });
