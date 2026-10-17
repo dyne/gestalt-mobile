@@ -1163,7 +1163,7 @@ export class ProductionLiveController {
   }
   private recordStartFailure(
     sessionId: string,
-    stage: 'start-operation' | 'start-lifecycle' | 'resume-lifecycle',
+    stage: 'start-operation' | 'start-lifecycle' | 'resume-lifecycle' | 'runtime-admission',
     lifecycleStage: string,
     error: unknown,
   ): void {
@@ -1514,6 +1514,7 @@ export class ProductionLiveController {
     const run = this.owners.assert(fence),
       g = this.generation(run),
       b = this.requireBindings();
+    let stage = 'host';
     try {
       this.verifyHost();
       const session = b.sessions.find(run.relayId);
@@ -1524,8 +1525,11 @@ export class ProductionLiveController {
         !g.resumed
       )
         throw new Error('LIVE_RUNTIME_UNAVAILABLE');
+      stage = 'owning-observation';
       const observed = await b.runtime.inspectLiveAdmission(session);
+      stage = 'source-inventory';
       assertProductionSourceObservation(g.policy, observed);
+      stage = 'owning-selection';
       for (const field of [
         'threadId',
         'model',
@@ -1540,14 +1544,18 @@ export class ProductionLiveController {
           throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
       if (!isDeepStrictEqual(observed.threadConfig, g.policy.modelConfig))
         throw new Error('LIVE_CONFIG_CHANGED');
+      stage = 'owning-catalog';
       assertAdmittedLiveMcp(observed.mcp);
+      stage = 'signed-provenance';
       const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
         g.policy.manifestPath,
         g.policy.bootstrapPath,
         g.policy.files,
       );
       if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
+      stage = 'project-resources';
       await this.verifyProjectResources(g);
+      stage = 'generation-fence';
       this.owners.assert(fence);
     } catch (error) {
       // Stop may revoke admission while its old poll is still verifying. Stop
@@ -1560,6 +1568,7 @@ export class ProductionLiveController {
         ['stopping', 'idle'].includes(current.state)
       )
         throw error;
+      this.recordStartFailure(run.relayId, 'runtime-admission', stage, error);
       // Flags are private Native RPC state: Manager cannot observe their change
       // itself. Revoke the exact old admission before retaining recovery ownership.
       let revoked = false;

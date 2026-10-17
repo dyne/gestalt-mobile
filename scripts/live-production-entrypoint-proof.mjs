@@ -65,6 +65,8 @@ import {
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
+const seededPreflight = process.env.LIVE_PRODUCTION_ADMISSION_SEED === '1';
+assert.ok(!seededPreflight || preflightOnly);
 assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
@@ -437,7 +439,9 @@ const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-
 const rootIdentity = lstatSync(root);
 const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
 if (preflightOnly)
-  report.proofKind = 'installed-bridge-owning-catalog-start-preflight-no-model-turn';
+  report.proofKind = seededPreflight
+    ? 'installed-bridge-owning-catalog-start-preflight-one-controlled-seed'
+    : 'installed-bridge-owning-catalog-start-preflight-no-model-turn';
 const constructionOnly = process.env.LIVE_PRODUCTION_CONSTRUCTION_ONLY === '1';
 assert.ok(!(installationOnly && constructionOnly));
 if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
@@ -1746,7 +1750,7 @@ try {
   assert.equal(session.state, 'ready');
   assert.equal(typeof session.threadId, 'string');
   report.checks.actualOwningStartupAdmitted = true;
-  if (preflightOnly) {
+  if (preflightOnly && !seededPreflight) {
     owningThread = session.threadId;
     report.projectMetadata.afterSeed = report.projectMetadata.afterSessionCreate;
     report.preflightSeedSkipped = true;
@@ -1924,7 +1928,7 @@ try {
   assert.equal(reused.generation, started.generation);
   report.checks.sameSessionReuseNoReplacement = true;
   if (preflightOnly) {
-    assert.equal(report.provider.requestCount, 0);
+    assert.equal(report.provider.requestCount, seededPreflight ? 1 : 0);
     const catalogs = report.nativeLaunchLifetimes.flatMap((launch) => launch.owningCatalogs ?? []);
     const sameThread = catalogs.filter((row) => row.threadIdDigest === hash(session.threadId));
     assert.ok(
@@ -1969,7 +1973,7 @@ try {
       actualPostsealCatalog7And12: true,
       currentSignedPostSpawnProbe: true,
       actualProductionStartActive: true,
-      modelRequests: 0,
+      modelRequests: report.provider.requestCount,
     };
     report.stage = 'preflight-revoke-and-shutdown';
     await mobile.close();

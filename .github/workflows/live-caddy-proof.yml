@@ -276,6 +276,7 @@ jobs:
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
           LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '1' || '0' }}
+          LIVE_PRODUCTION_ADMISSION_SEED: ${{ contains(github.event.head_commit.message, '[seeded-admission]') && '1' || '0' }}
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '0' || '1' }}
           LIVE_PRODUCTION_RECOVERY_ONLY: '0'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
