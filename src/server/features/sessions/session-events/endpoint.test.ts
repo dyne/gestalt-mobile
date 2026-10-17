@@ -22,6 +22,7 @@ import {
 } from '../../auth/domain/identifiers.js';
 import { deviceNickname } from '../../auth/domain/device-nickname.js';
 import { registerSessionEvents } from './endpoint.js';
+import { replayOrResync } from '../../../platform/events/replay.js';
 
 describe('session event WebSocket', () => {
   it('fails closed for malformed, duplicate, expired, and revoked shared-store cookies without consulting relay state', async () => {
@@ -69,7 +70,7 @@ describe('session event WebSocket', () => {
         exists++;
         return true;
       },
-      since: () => [],
+      replay: () => ({ kind: 'replay', events: [] }),
       subscribe: () => () => {},
       publicOrigin: rp.publicOrigin,
       authorized: (cookie) =>
@@ -144,7 +145,7 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(revalidationApp, {
       exists: () => true,
-      since: () => [],
+      replay: () => ({ kind: 'replay', events: [] }),
       subscribe: () => {
         subscriptions++;
         return () => {
@@ -211,7 +212,7 @@ describe('session event WebSocket', () => {
         existsCalls++;
         return true;
       },
-      since: () => [],
+      replay: () => ({ kind: 'replay', events: [] }),
       subscribe: () => () => {},
       publicOrigin: 'https://gestalt.example:8443',
       authorized: (cookie) => cookie === 'gestalt_mobile_session=live' && live,
@@ -265,9 +266,11 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: (id) => id === 'session-1',
-      since: () => [
-        { sessionId: 'session-1', sequence: 1, type: 'replayed', occurredAt: 't', payload: {} },
-      ],
+      replay: (_id, after) =>
+        replayOrResync(
+          [{ sessionId: 'session-1', sequence: 1, type: 'replayed', occurredAt: 't', payload: {} }],
+          after,
+        ),
       subscribe: (_id, listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -320,7 +323,7 @@ describe('session event WebSocket', () => {
           listener = undefined;
         };
       },
-      since: () => {
+      replay: (_id, after) => {
         listener?.({
           sessionId: 'session-1',
           sequence: 2,
@@ -328,10 +331,13 @@ describe('session event WebSocket', () => {
           occurredAt: 't',
           payload: {},
         });
-        return [
-          { sessionId: 'session-1', sequence: 1, type: 'replay', occurredAt: 't', payload: {} },
-          { sessionId: 'session-1', sequence: 2, type: 'handoff', occurredAt: 't', payload: {} },
-        ];
+        return replayOrResync(
+          [
+            { sessionId: 'session-1', sequence: 1, type: 'replay', occurredAt: 't', payload: {} },
+            { sessionId: 'session-1', sequence: 2, type: 'handoff', occurredAt: 't', payload: {} },
+          ],
+          after,
+        );
       },
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -362,9 +368,11 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [
-        { sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} },
-      ],
+      replay: (_id, after) =>
+        replayOrResync(
+          [{ sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} }],
+          after,
+        ),
       subscribe: () => () => {},
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -403,9 +411,11 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [
-        { sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} },
-      ],
+      replay: (_id, after) =>
+        replayOrResync(
+          [{ sessionId: 'session-1', sequence: 4, type: 'retained', occurredAt: 't', payload: {} }],
+          after,
+        ),
       subscribe: (_id, next) => {
         listener = next;
         return () => {
@@ -458,7 +468,7 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [],
+      replay: () => ({ kind: 'replay', events: [] }),
       subscribe: (_id, next) => {
         listener = next;
         return () => {};
@@ -506,7 +516,7 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => {
+      replay: () => {
         throw new Error('journal unavailable');
       },
       subscribe: () => () => {
@@ -546,7 +556,7 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: () => true,
-      since: () => [],
+      replay: () => ({ kind: 'replay', events: [] }),
       subscribe: (_id, next) => {
         listener = next;
         return () => {
@@ -612,8 +622,11 @@ describe('session event WebSocket', () => {
     });
     registerSessionEvents(app, {
       exists: (id) => id === 'session-a' || id === 'session-b',
-      since: (id, after) =>
-        events.filter((event) => event.sessionId === id && event.sequence > after),
+      replay: (id, after) =>
+        replayOrResync(
+          events.filter((event) => event.sessionId === id && event.sequence > after),
+          after,
+        ),
       subscribe: () => () => {},
     });
     await app.listen({ host: '127.0.0.1', port: 0 });

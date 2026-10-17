@@ -7,7 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import { WebSocketServer } from 'ws';
 
-import { replayOrResync } from '../../../platform/events/replay.js';
+import type { SessionReplay } from '../../../platform/events/replay.js';
 import { isSlowClient } from '../../../platform/events/slow-client.js';
 import { installWebSocketHeartbeat } from '../../../platform/events/websocket-heartbeat.js';
 import type { SessionEvent } from '../../../../shared/contracts/session-event.js';
@@ -16,7 +16,7 @@ export function registerSessionEvents(
   app: FastifyInstance,
   deps: {
     exists(id: string): boolean;
-    since(id: string, after: number): SessionEvent[];
+    replay(id: string, after: number): SessionReplay;
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
     /** Set only by the composition root when the authorization boundary is installed. */
     publicOrigin?: string;
@@ -77,9 +77,9 @@ export function registerSessionEvents(
           if (replaying) liveDuringReplay.push(event);
           else send(event);
         });
-        const replay = replayOrResync(deps.since(sessionId, after), after);
+        const replay = deps.replay(sessionId, after);
         if (replay.kind === 'resync') {
-          const currentSequence = deps.since(sessionId, 0).at(-1)?.sequence ?? after;
+          const currentSequence = replay.currentSequence;
           connection.send(JSON.stringify({ type: 'relay.resyncRequired', currentSequence }));
           cleanup();
           connection.close();

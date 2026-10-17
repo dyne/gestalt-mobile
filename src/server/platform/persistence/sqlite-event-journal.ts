@@ -9,6 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { SessionEvent } from '../../../shared/contracts/session-event.js';
 import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
 import { eventRetentionCutoff } from './retention.js';
+import { replayOrResync, type SessionReplay } from '../events/replay.js';
 
 export const autopilotAuditEventTypes = [
   'autopilot.turn-started',
@@ -117,6 +118,72 @@ export class SqliteEventJournal {
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  currentSequence(sessionId: string): number {
+    const row = this.db
+      .prepare(
+        'SELECT sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 1',
+      )
+      .get(sessionId) as { sequence: number } | undefined;
+    return row?.sequence ?? 0;
+  }
+
+  /** Snapshot activity excludes large agent projections and unrelated journal payloads. */
+  activityHistory(sessionId: string, throughSequence: number): SessionEvent[] {
+    const rows = this.db
+      .prepare(
+        "SELECT sequence,type,occurred_at,payload_json FROM session_events WHERE session_id = ? AND type = 'activity.updated' AND sequence <= ? ORDER BY sequence",
+      )
+      .all(sessionId, throughSequence) as Array<{
+      sequence: number;
+      type: string;
+      occurred_at: string;
+      payload_json: string;
+    }>;
+    return rows.map((row) => ({
+      sessionId,
+      sequence: row.sequence,
+      type: row.type,
+      occurredAt: row.occurred_at,
+      payload: JSON.parse(row.payload_json),
+    }));
+  }
+
+  /** Decide resync from bounded metadata before allocating or decoding replay payloads. */
+  replay(sessionId: string, after: number): SessionReplay {
+    const currentSequence = this.currentSequence(sessionId);
+    const rows = this.db
+      .prepare(
+        'SELECT sequence,length(CAST(payload_json AS BLOB)) AS bytes FROM session_events WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 201',
+      )
+      .all(sessionId, after, currentSequence) as Array<{ sequence: number; bytes: number }>;
+    if (
+      rows.length > 200 ||
+      rows.reduce((bytes, row) => bytes + row.bytes, 0) > 512 * 1024 ||
+      (rows.length > 0 && rows[0]!.sequence !== after + 1)
+    )
+      return { kind: 'resync', currentSequence };
+    const events = this.db
+      .prepare(
+        'SELECT sequence,type,occurred_at,payload_json FROM session_events WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 200',
+      )
+      .all(sessionId, after, currentSequence) as Array<{
+      sequence: number;
+      type: string;
+      occurred_at: string;
+      payload_json: string;
+    }>;
+    return replayOrResync(
+      events.map((row) => ({
+        sessionId,
+        sequence: row.sequence,
+        type: row.type,
+        occurredAt: row.occurred_at,
+        payload: JSON.parse(row.payload_json),
+      })),
+      after,
+    );
   }
 
   since(sessionId: string, after: number): SessionEvent[] {

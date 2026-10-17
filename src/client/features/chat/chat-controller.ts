@@ -173,6 +173,7 @@ export class ChatController {
   #generation = 0;
   #authoritativeGeneration = -1;
   #socket: WebSocket | null = null;
+  #resyncSocket = false;
   #snapshot: { id: string; generation: number; promise: Promise<void> } | null = null;
   #historyRetry: Timer | null = null;
   #historyFailures = 0;
@@ -397,7 +398,7 @@ export class ChatController {
   async #hydrate(id: string, generation: number): Promise<void> {
     const historyKnownEmpty = this.#historyKnownEmpty;
     if (!historyKnownEmpty) void this.#takeSnapshot(id, generation);
-    this.#open(id, generation);
+    this.#open(id, generation, false);
     if (historyKnownEmpty) return;
     const cached = await this.#options.cache.read(id).catch(() => null);
     if (!this.#current(id, generation) || this.#authoritativeGeneration === generation || !cached)
@@ -405,7 +406,7 @@ export class ChatController {
     this.#projection = hydrateCache(id, cached);
     this.#publish();
   }
-  #open(id: string, generation: number): void {
+  #open(id: string, generation: number, snapshotOnOpen = true): void {
     if (!this.#current(id, generation) || this.#socket) return;
     const scheme = this.#options.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let socket: WebSocket;
@@ -426,7 +427,7 @@ export class ChatController {
     socket.onopen = () => {
       if (this.#current(id, generation) && this.#socket === socket) {
         this.#attempt = 0;
-        if (!this.#historyKnownEmpty) void this.#takeSnapshot(id, generation);
+        if (snapshotOnOpen && !this.#historyKnownEmpty) void this.#takeSnapshot(id, generation);
       }
     };
     socket.onmessage = (event) => this.#receive(id, generation, String(event.data));
@@ -448,6 +449,7 @@ export class ChatController {
       return;
     }
     if (envelope.type === 'relay.resyncRequired') {
+      this.#resyncSocket = true;
       void this.#takeSnapshot(id, generation);
       return;
     }
@@ -559,7 +561,10 @@ export class ChatController {
         for (const item of decoded.items)
           if (item.kind === 'user' && typeof item.operationId === 'string')
             this.#options.onHistoryPromptAccepted?.(id, item.operationId);
-        if (recovering) this.#replaceSocket(id, generation);
+        if (recovering || this.#resyncSocket) {
+          this.#resyncSocket = false;
+          this.#replaceSocket(id, generation);
+        }
       })
       .catch((error: unknown) => {
         if (this.#current(id, generation)) {
@@ -597,7 +602,7 @@ export class ChatController {
     socket?.close();
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
-    this.#open(id, generation);
+    this.#open(id, generation, false);
   }
   #set(next: ChatProjection): void {
     if (this.#sessionId && hasConversationContent(next)) this.#conversationStarted(this.#sessionId);
@@ -639,6 +644,7 @@ export class ChatController {
     return new Promise((resolve) => this.#options.setTimeout(resolve, milliseconds));
   }
   #stop(): void {
+    this.#resyncSocket = false;
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
     if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);

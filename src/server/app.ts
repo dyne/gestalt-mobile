@@ -154,7 +154,7 @@ export type AppDependencies = {
   };
   sessionEvents?: {
     exists(id: string): boolean;
-    since(id: string, after: number): SessionEvent[];
+    replay(id: string, after: number): import('./platform/events/replay.js').SessionReplay;
     subscribe(id: string, listener: (event: SessionEvent) => void): () => void;
   };
   planRoutes?: {

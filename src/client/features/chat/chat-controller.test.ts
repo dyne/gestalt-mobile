@@ -94,6 +94,78 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('hydrates once and immediately replaces a resync socket even without buffered events', async () => {
+    const history = deferred<unknown>();
+    const getHistory = vi.fn().mockReturnValue(history.promise);
+    const sockets: Socket[] = [];
+    const urls: string[] = [];
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: (url) => {
+        urls.push(url);
+        const socket = new Socket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    try {
+      controller.select('s');
+      sockets[0]!.emit({ type: 'relay.resyncRequired', currentSequence: 1000 });
+      history.resolve({
+        baseSequence: 1000,
+        items: [],
+        turns: [],
+        interactions: [],
+        activeTurnId: null,
+      });
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      expect(sockets[0]!.close).toHaveBeenCalledOnce();
+      expect(urls[1]).toMatch(/after=1000$/);
+      sockets[1]!.onopen?.();
+      await Promise.resolve();
+      expect(getHistory).toHaveBeenCalledOnce();
+      expect(controller.view.status).toBe('Ready.');
+    } finally {
+      controller.dispose();
+    }
+  });
+  it('does not refetch history when the initial socket opens after hydration', async () => {
+    const getHistory = vi.fn().mockResolvedValue({
+      baseSequence: 3,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    });
+    const socket = new Socket();
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => socket as unknown as WebSocket,
+    });
+    try {
+      controller.select('s');
+      await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+      socket.onopen?.();
+      await Promise.resolve();
+      expect(getHistory).toHaveBeenCalledOnce();
+    } finally {
+      controller.dispose();
+    }
+  });
   it('does not read history for a newly created session whose timeline is known to be empty', async () => {
     const env = environment();
     const history = vi.fn();
