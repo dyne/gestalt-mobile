@@ -1537,6 +1537,16 @@ export class ProductionLiveController {
       await this.verifyProjectResources(g);
       this.owners.assert(fence);
     } catch (error) {
+      // Stop may revoke admission while its old poll is still verifying. Stop
+      // owns that exact generation's drain; never turn its expected refusal
+      // into a second recovery transition or grant the old poll authority.
+      const current = this.owners.current(run.liveId);
+      if (
+        current?.controllerEpoch === run.controllerEpoch &&
+        current.generation === run.generation &&
+        ['stopping', 'idle'].includes(current.state)
+      )
+        throw error;
       // Flags are private Native RPC state: Manager cannot observe their change
       // itself. Revoke the exact old admission before retaining recovery ownership.
       let revoked = false;

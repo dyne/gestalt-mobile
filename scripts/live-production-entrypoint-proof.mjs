@@ -150,7 +150,7 @@ function renewalManifestRelation(input) {
     return { unavailable: true };
   }
 }
-for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
+for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime', 'revokeRuntime']) {
   const original = InstalledLivePolicy.prototype[method];
   InstalledLivePolicy.prototype[method] = async function (...args) {
     const rows = (report.policyProtocol ??= []);
@@ -168,6 +168,17 @@ for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
     }
   };
 }
+const originalPolicyVerify = InstalledLivePolicy.prototype.verify;
+InstalledLivePolicy.prototype.verify = async function (...args) {
+  try {
+    return await originalPolicyVerify.apply(this, args);
+  } catch (error) {
+    const failures = (report.policyVerificationRefusals ??= []);
+    if (failures.length === 32) failures.shift();
+    failures.push(admissionFailure(error));
+    throw error;
+  }
+};
 const originalOwnerStarted = ProductionLiveController.prototype.observeOwnerStarted;
 ProductionLiveController.prototype.observeOwnerStarted = async function (...args) {
   try {
