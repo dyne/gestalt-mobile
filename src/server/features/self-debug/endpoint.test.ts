@@ -8,7 +8,7 @@ import fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { registerSelfDebug } from './endpoint.js';
 import { RelaySession } from '../sessions/model/relay-session.js';
-import type { DebugContext } from '../../../shared/contracts/self-debug.js';
+import type { DebugContext, DebugProblem } from '../../../shared/contracts/self-debug.js';
 
 const now = '2026-10-06T12:00:00.000Z';
 const source = RelaySession.create({
@@ -45,6 +45,18 @@ function fixture() {
   };
   const create = vi.fn(async () => debug);
   const readTrace = vi.fn(async () => '{"schemaVersion":1}');
+  let blocker: DebugProblem | null = {
+    requestId: 'attention-1',
+    turnId: 'blocked-turn',
+    requestedAt: now,
+    attention: {
+      reason: 'externalState',
+      resumeCondition: 'externalStateChanged',
+      summary: 'Installed capability guard failed.',
+      requestedAction: 'Reconcile compatible tooling.',
+    },
+    supervisorReport: 'Explicit single support was overridden by the ambient capability.',
+  };
   registerSelfDebug(app, {
     find: (id) => (id === source.id ? current : id === debug.id ? debug : null),
     context: () => context,
@@ -52,11 +64,16 @@ function fixture() {
     now: () => time,
     create,
     readTrace,
+    problem: (sessionId, requestId) =>
+      sessionId === source.id && blocker?.requestId === requestId ? blocker : null,
   });
   return {
     app,
     create,
     readTrace,
+    changeBlocker: (value: DebugProblem | null) => {
+      blocker = value;
+    },
     change: (session: typeof source) => {
       current = session;
     },
@@ -67,6 +84,66 @@ function fixture() {
 }
 
 describe('Self DEBUG HTTP contract', () => {
+  it('binds the selected server-side blocker snapshot to confirmation without trusting posted prose', async () => {
+    const { app, create, changeBlocker } = fixture();
+    try {
+      const response = await app.inject(
+        '/api/sessions/source/debug?attentionRequestId=attention-1',
+      );
+      expect(response.statusCode).toBe(200);
+      const confirmation = response.json();
+      expect(confirmation.problem.supervisorReport).toContain('Explicit single support');
+      expect(confirmation.context).not.toHaveProperty('problem');
+      changeBlocker(null);
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/sessions/source/debug',
+        payload: { confirmationId: confirmation.confirmationId },
+      });
+      expect(created.statusCode).toBe(202);
+      expect(create).toHaveBeenCalledWith(context, confirmation.problem);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects stale, cross-session and client-authored blocker context', async () => {
+    const { app, create } = fixture();
+    try {
+      expect(
+        (await app.inject('/api/sessions/source/debug?attentionRequestId=other')).statusCode,
+      ).toBe(409);
+      expect(
+        (
+          await app.inject(
+            '/api/sessions/source/debug?attentionRequestId=attention-1&report=forged',
+          )
+        ).statusCode,
+      ).toBe(400);
+      await app.inject('/api/sessions/source/debug?attentionRequestId=attention-1');
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/sessions/other/debug',
+            payload: { confirmationId: 'confirmation' },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(
+        (
+          await app.inject({
+            method: 'POST',
+            url: '/api/sessions/source/debug',
+            payload: { confirmationId: 'confirmation', problem: { supervisorReport: 'forged' } },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
   it('captures context only for an existing thread and creates exactly one independent session on repeated confirmation', async () => {
     const { app, create } = fixture();
     try {

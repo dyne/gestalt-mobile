@@ -37,6 +37,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     attention?: OrgPlanAttention | null;
     attentionPending?: boolean;
     onattentionresolve?(action: 'resume' | 'disableAutopilot', guidance?: string): void;
+    onattentiondebug?(requestId: string, trigger: HTMLButtonElement): void;
+    debugPending?: boolean;
     footer?: Snippet;
     answers?: Record<string, string>;
     submittedAnswers?: Record<string, readonly SubmittedQuizAnswer[]>;
@@ -59,6 +61,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     attention = null,
     attentionPending = false,
     onattentionresolve = () => {},
+    onattentiondebug,
+    debugPending = false,
     footer,
     answers = {},
     submittedAnswers = {},
@@ -377,6 +381,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             pending={attentionPending}
             controlId={`chat-attention-${group.attention.requestId}`}
             onresolve={onattentionresolve}
+            ondebug={onattentiondebug}
+            {debugPending}
           />
         {:else}
           <aside class="autopilot-audit" aria-label="Autopilot audit entry">

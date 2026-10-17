@@ -55,6 +55,8 @@ const relayMessages = {
     'Gestalt could not complete the upgrade and reconnect. Check update-restart.log and reload when Mobile is ready.',
   UPGRADE_UNAVAILABLE: 'Start Mobile with gestalt mobile to enable upgrades.',
   DEBUG_CONTEXT_FAILED: 'Session diagnostics could not be read. Reopen DEBUG to try again.',
+  DEBUG_ATTENTION_CHANGED: 'This blocker is no longer active. Refresh the session and try again.',
+  DEBUG_CONTEXT_INVALID: 'Select a valid blocker to debug.',
   DEBUG_START_FAILED:
     'Self DEBUG could not start. Check Sessions for a saved debug session before trying again.',
   DEBUG_TRACE_FAILED:

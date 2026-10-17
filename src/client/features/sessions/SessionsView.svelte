@@ -98,6 +98,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     advancedExpanded?: boolean;
     onsavedefaults?: () => void;
     ondebugtrace?: (session: RelaySession, trigger: HTMLButtonElement) => void;
+    onattentiondebug?: (sessionId: string, requestId: string, trigger: HTMLButtonElement) => void;
+    debugPending?: boolean;
   };
 
   let {
@@ -146,6 +148,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onautopilottoggle = () => {},
     onactivityopen = () => {},
     onautopilotresolve = () => {},
+    onattentiondebug,
+    debugPending = false,
     onopenrecent,
     onforget,
     oncopyresume,
@@ -331,6 +335,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 controlId={`session-attention-${session.id}`}
                 pending={autopilotPending.has(session.id)}
                 onresolve={(action, guidance) => onautopilotresolve(session.id, action, guidance)}
+                ondebug={session.threadId && onattentiondebug
+                  ? (requestId, trigger) => onattentiondebug?.(session.id, requestId, trigger)
+                  : undefined}
+                {debugPending}
               />
               <AutopilotSafetyStop
                 autopilot={autopilotSnapshots.get(session.id) ?? session.autopilot ?? null}

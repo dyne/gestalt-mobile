@@ -12,12 +12,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     pending = false,
     historical = false,
     onresolve = () => {},
+    ondebug,
+    debugPending = false,
   }: {
     attention: OrgPlanAttention | null;
     pending?: boolean;
     historical?: boolean;
     controlId?: string;
     onresolve?: (action: 'resume' | 'disableAutopilot', guidance?: string) => void;
+    ondebug?: (requestId: string, trigger: HTMLButtonElement) => void;
+    debugPending?: boolean;
   } = $props();
   let guidance = $state('');
   const reasons: Record<string, string> = {
@@ -129,6 +133,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <button type="button" disabled={pending} onclick={() => onresolve('disableAutopilot')}
           >Disable Autopilot</button
         >
+        {#if ondebug}
+          <button
+            type="button"
+            disabled={pending || debugPending}
+            onclick={(event) => ondebug?.(attention!.requestId, event.currentTarget)}
+            >{debugPending ? 'Preparing DEBUG…' : 'DEBUG'}</button
+          >
+        {/if}
       </div>
     {:else}
       <p>This request is no longer pending.</p>

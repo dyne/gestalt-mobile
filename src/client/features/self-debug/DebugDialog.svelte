@@ -49,6 +49,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     investigate and fix the error.
   </p>
   <DebugIdentifiers context={confirmation.context} />
+  {#if confirmation.problem}
+    <section class="problem" aria-labelledby="debug-problem-title">
+      <h3 id="debug-problem-title">Reported blocker</h3>
+      <p>{confirmation.problem.attention.summary}</p>
+      {#if confirmation.problem.supervisorReport}
+        <p class="report">{confirmation.problem.supervisorReport}</p>
+      {/if}
+      <p>
+        This explanation will be shared with the new debug session. The blocked session stays
+        paused.
+      </p>
+    </section>
+  {/if}
   <div class="dialog-actions">
     <button bind:this={cancel} type="button" disabled={pending} onclick={() => dialog.close()}
       >Cancel</button
@@ -88,6 +101,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     flex-wrap: wrap;
     gap: 0.75rem;
     margin-block-start: 1.5rem;
+  }
+  .problem {
+    margin-block-start: 1rem;
+    overflow-wrap: anywhere;
+  }
+  .problem h3 {
+    margin: 0 0 0.5rem;
+  }
+  .problem p + p {
+    margin-block-start: 0.75rem;
+  }
+  .report {
+    white-space: pre-wrap;
   }
   button {
     min-block-size: 2.75rem;

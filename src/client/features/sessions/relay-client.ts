@@ -297,8 +297,10 @@ export function createRelayClient(fetcher: typeof fetch = fetch) {
   }
 
   return {
-    debugConfirmation: (id: string) =>
-      get<DebugConfirmation>(`/api/sessions/${encodeURIComponent(id)}/debug`),
+    debugConfirmation: (id: string, attentionRequestId?: string) =>
+      get<DebugConfirmation>(
+        `/api/sessions/${encodeURIComponent(id)}/debug${attentionRequestId ? `?attentionRequestId=${encodeURIComponent(attentionRequestId)}` : ''}`,
+      ),
     startSelfDebug: (id: string, confirmationId: string) =>
       request<RelaySession>(`/api/sessions/${encodeURIComponent(id)}/debug`, { confirmationId }),
     readDebugTrace: (id: string, signal?: AbortSignal) =>
