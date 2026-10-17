@@ -1500,6 +1500,13 @@ export class ProductionLiveController {
       )
     )
       throw new Error('LIVE_AUTH_UNAVAILABLE');
+    // The resumed verifier already checks current Native sources, selection,
+    // catalogs, signed policy, project resources and the final generation fence.
+    // Keep each admission boundary fresh without repeating those checks inside it.
+    if (g.resumed) {
+      await this.verifyLiveRuntime(run);
+      return;
+    }
     const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
       g.policy.manifestPath,
       g.policy.bootstrapPath,
@@ -1508,7 +1515,6 @@ export class ProductionLiveController {
     if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
     await this.verifyProjectResources(g);
     this.owners.assert(run);
-    if (g.resumed) await this.verifyLiveRuntime(run);
   }
   verifyLiveRuntime = async (fence: LiveFence): Promise<void> => {
     const run = this.owners.assert(fence),

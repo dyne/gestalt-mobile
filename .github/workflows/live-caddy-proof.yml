@@ -27,6 +27,10 @@ on:
         description: 'Only installed owning Native catalog and production Start admission; no model turn'
         type: boolean
         default: true
+      picker_smoke:
+        description: 'Diagnostic actual controls Start, picker Generate/Accept and signed cleanup; full acceptance still required'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -42,6 +46,19 @@ jobs:
         with:
           node-version: 24.21.0
           cache: npm
+      - name: Select explicit proof mode
+        id: proof-mode
+        env:
+          REQUEST_PREFLIGHT: ${{ inputs.preflight }}
+          REQUEST_PICKER_SMOKE: ${{ inputs.picker_smoke }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          import {proofMode} from './scripts/live-picker-smoke.mjs';
+          const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
+          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true'});
+          appendFileSync(process.env.GITHUB_OUTPUT,`mode=${mode}\n`);
+          NODE
       - run: npm ci
       - name: Provision exact original interpreter on disposable hosted VM
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
@@ -184,7 +201,7 @@ jobs:
           path: ${{ runner.temp }}/live-proof-cache
           key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
       - name: Prepare disposable browser trust and network prerequisites
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode != 'preflight'
         run: |
           set -Eeuo pipefail
           sudo apt-get update --quiet
@@ -202,14 +219,28 @@ jobs:
           if [[ -n $current_apparmor && $current_apparmor != 0 ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: Validate pinned independent evidence for diagnostic picker smoke
+        if: steps.proof-mode.outputs.mode == 'picker-smoke'
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          smoke_root="$RUNNER_TEMP/live-picker-baseline"
+          mkdir -p "$smoke_root"
+          curl --fail --silent --show-error --location --max-time 120 \
+            https://nightly.link/dyne/gestalt-mobile/actions/artifacts/12113569089.zip \
+            --output "$smoke_root/artifact.zip"
+          printf '%s  %s\n' db42a0e830501a2c1af30f257d940dc2312a8d0cfb03ecbacfd9c8c3a4922157 "$smoke_root/artifact.zip" | sha256sum --check --status
+          unzip -q "$smoke_root/artifact.zip" -d "$smoke_root/evidence"
+          git -c credential.helper= fetch --no-tags --depth=1 https://github.com/dyne/gestalt-mobile.git 73764628d350e1c69af64b460502c2655cb6861f
+          node scripts/live-picker-smoke.mjs "$smoke_root/artifact.zip" "$smoke_root/evidence" test-results/live-caddy-proof/picker-smoke-baseline.json
       - name: Actual browser namespace and visibility preflight before Native
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode != 'preflight'
         timeout-minutes: 2
         env:
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
         run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode == 'full'
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
@@ -248,7 +279,7 @@ jobs:
       - name: Build Mobile server and current client for Native and controls proofs
         run: npm run build
       - name: Actual owning native model tools and permitted child with deterministic provider
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode == 'full'
         timeout-minutes: 3
         env:
           LIVE_NATIVE_MODEL_PROOF: '1'
@@ -261,7 +292,7 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode == 'full'
         timeout-minutes: 5
         env:
           LIVE_REMOTE_PROOF: '1'
@@ -275,9 +306,11 @@ jobs:
         timeout-minutes: 30
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
-          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '1' || '0' }}
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ steps.proof-mode.outputs.mode == 'preflight' && '1' || '0' }}
           LIVE_PRODUCTION_ADMISSION_SEED: ${{ contains(github.event.head_commit.message, '[seeded-admission]') && '1' || '0' }}
-          LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '0' || '1' }}
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ steps.proof-mode.outputs.mode == 'preflight' && '0' || '1' }}
+          LIVE_PRODUCTION_PICKER_SMOKE: ${{ steps.proof-mode.outputs.mode == 'picker-smoke' && '1' || '0' }}
+          LIVE_PICKER_SMOKE_RECEIPT: test-results/live-caddy-proof/picker-smoke-baseline.json
           LIVE_PRODUCTION_RECOVERY_ONLY: '0'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
           LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
@@ -287,11 +320,11 @@ jobs:
           set -Eeuo pipefail
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
-          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs
+          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs scripts/live-picker-smoke.test.mjs
           mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
           PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
       - name: Actual pinned helper and project process namespaces with native confinement
-        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
+        if: steps.proof-mode.outputs.mode != 'preflight'
         timeout-minutes: 3
         env:
           LIVE_PROJECT_ISOLATION_PROOF: '1'

@@ -23,6 +23,8 @@ import {
 import type { ProductionLiveConfiguration } from './production-configuration.js';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
 import type { OwningRuntimeCapture } from './owning-runtime-capture.js';
+import { ProductionLiveController } from './production-controller.js';
+import { SqliteLiveOwnership, liveAppIdentity } from './sqlite-live-ownership.js';
 
 const mock = vi.hoisted(() => ({
   permissions: vi.fn(),
@@ -40,10 +42,156 @@ vi.mock('./original-bridge-lifetime.js', () => ({
   assertOriginalBridgeDrained: mock.drained,
 }));
 const roots: string[] = [];
+const closeControllers: (() => void)[] = [];
 afterEach(() => {
+  closeControllers.splice(0).forEach((close) => close());
   vi.clearAllMocks();
   vi.restoreAllMocks();
   roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
+});
+
+async function verificationFixture() {
+  const f = fixture();
+  const policy = await prepareProductionPolicy(f.input);
+  const observation = await f.input.observe();
+  // This fixture's Native selection port is intentionally minimal; bind the
+  // controller to that same observed selection, not a second invented owner.
+  policy.selection = observation.threadSelection;
+  const owners = new SqliteLiveOwnership(join(f.input.directory, 'owners.sqlite'), 'controller', {
+    initialize: true,
+  });
+  let run = owners.claim({
+    relayId: f.input.session.id,
+    appId: 'app',
+    rootThreadId: f.input.session.threadId!,
+    provider: 'codex',
+    app: liveAppIdentity(f.input.app.appRoot),
+    targetId: 'target',
+    targetIdentity: 'socket',
+    operationId: 'start',
+    previewOrigin: 'https://preview.example.test:9443',
+    authSessionHash: 'hash',
+    deviceId: 'device',
+  }).run;
+  run = owners.mutate(run, { event: 'phase', phase: 'route:ack' });
+  run = owners.mutate(run, { event: 'ready' });
+  const controller = new ProductionLiveController(
+    owners,
+    {
+      ...f.input.configuration,
+      caddy: {
+        ...f.input.configuration.caddy,
+        hostname: 'preview.example.test',
+        previewPorts: [9443],
+      },
+    },
+    f.input.source,
+    async () => {},
+    {} as ConstructorParameters<typeof ProductionLiveController>[4],
+  );
+  closeControllers.push(() => {
+    Reflect.get(controller, 'origins').close();
+    owners.close();
+  });
+  const installed = vi
+    .spyOn(InstalledLivePolicy.prototype, 'verify')
+    .mockResolvedValue(policy.digests);
+  const inspect = vi.fn(async () => observation);
+  const resources = vi.fn(async () => {});
+  const authorized = vi.fn(() => true);
+  const revoke = vi.fn(async () => {});
+  const abort = vi.fn(async () => {});
+  const generation = { resumed: true, policy, session: f.input.session };
+  Reflect.set(controller, 'generation', () => generation);
+  Reflect.set(controller, 'verifyHost', vi.fn());
+  Reflect.set(controller, 'verifyProjectResources', resources);
+  Reflect.set(controller, 'preview', { authentication: { authorized }, now: () => new Date(0) });
+  Reflect.set(controller, 'revokeCapture', revoke);
+  Reflect.set(controller, 'connections', { revoke: vi.fn(async () => {}) });
+  Reflect.set(controller, 'requireBindings', () => ({
+    sessions: { find: () => f.input.session },
+    runtime: { inspectLiveAdmission: inspect, abortLiveOwner: abort },
+  }));
+  const verify = () =>
+    Reflect.get(controller, 'verifyGeneration').call(controller, run) as Promise<void>;
+  return {
+    ...f,
+    controller,
+    owners,
+    run,
+    generation,
+    observation,
+    installed,
+    inspect,
+    resources,
+    authorized,
+    revoke,
+    abort,
+    verify,
+  };
+}
+
+it('performs one complete policy/resource validation at each resumed admission boundary', async () => {
+  const f = await verificationFixture();
+  for (let boundary = 1; boundary <= 3; boundary++) {
+    await f.verify();
+    expect(f.inspect).toHaveBeenCalledTimes(boundary);
+    expect(f.installed).toHaveBeenCalledTimes(boundary);
+    expect(f.resources).toHaveBeenCalledTimes(boundary);
+    expect(f.authorized).toHaveBeenCalledTimes(boundary);
+  }
+  expect(f.owners.current(f.run.liveId)?.state).toBe('active');
+});
+
+it('retains policy/resource checks without a resumed Native owner', async () => {
+  const f = await verificationFixture();
+  f.generation.resumed = false;
+  await f.verify();
+  expect(f.inspect).not.toHaveBeenCalled();
+  expect(f.installed).toHaveBeenCalledOnce();
+  expect(f.resources).toHaveBeenCalledOnce();
+});
+
+it.each(['configuration', 'selection', 'catalog', 'policy', 'resources'] as const)(
+  'rejects changed %s through the complete resumed verifier',
+  async (mutation) => {
+    const f = await verificationFixture();
+    if (mutation === 'configuration') f.observation.threadConfig = { unsafe: true };
+    if (mutation === 'selection') f.generation.policy.selection = { model: 'changed' };
+    if (mutation === 'catalog') f.observation.mcp.data[0].tools.unsafe = {};
+    if (mutation === 'policy')
+      f.installed.mockResolvedValue({
+        ...f.generation.policy.digests,
+        policyDigest: 'b'.repeat(64),
+      });
+    if (mutation === 'resources') f.resources.mockRejectedValue(new Error('LIVE_RESOURCE_CHANGED'));
+    await expect(f.verify()).rejects.toThrow(/^LIVE_/);
+    expect(f.revoke).toHaveBeenCalledOnce();
+    expect(f.abort).toHaveBeenCalledOnce();
+    expect(f.owners.current(f.run.liveId)?.state).toBe('recoveryRequired');
+  },
+);
+
+it('rejects revoked auth before policy or Native work', async () => {
+  const f = await verificationFixture();
+  f.authorized.mockReturnValue(false);
+  await expect(f.verify()).rejects.toThrow('LIVE_AUTH_UNAVAILABLE');
+  expect(f.inspect).not.toHaveBeenCalled();
+  expect(f.installed).not.toHaveBeenCalled();
+});
+
+it('rejects a generation change during validation while leaving exact Stop in charge', async () => {
+  const f = await verificationFixture();
+  f.resources.mockImplementation(async () => {
+    f.owners.mutate(f.run, { event: 'stop' });
+  });
+  await expect(f.verify()).rejects.toThrow(/^LIVE_/);
+  expect(f.installed).toHaveBeenCalledOnce();
+  expect(f.resources).toHaveBeenCalledOnce();
+  expect(f.revoke).not.toHaveBeenCalled();
+  expect(f.abort).not.toHaveBeenCalled();
+  expect(f.owners.current(f.run.liveId)?.state).toBe('stopping');
+  expect(f.controller.preflightBlocked()).toBe(false);
 });
 
 function fixture(

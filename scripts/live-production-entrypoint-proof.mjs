@@ -39,6 +39,7 @@ import {
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
+import { pickerSmokeBaseline } from './live-picker-smoke.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -70,6 +71,8 @@ import {
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
+const pickerSmoke = process.env.LIVE_PRODUCTION_PICKER_SMOKE === '1';
+assert.ok(!pickerSmoke || (editFlow && !preflightOnly));
 const seededPreflight = process.env.LIVE_PRODUCTION_ADMISSION_SEED === '1';
 assert.ok(!seededPreflight || preflightOnly);
 // Four serial measured control stages, the accepted Native context probe,
@@ -112,6 +115,20 @@ const report = {
         ]),
   ],
 };
+if (pickerSmoke) {
+  const receipt = JSON.parse(readFileSync(process.env.LIVE_PICKER_SMOKE_RECEIPT, 'utf8'));
+  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.mode, 'picker-smoke');
+  assert.equal(receipt.diagnosticOnly, true);
+  assert.equal(receipt.fullExactCandidateStillRequired, true);
+  assert.equal(receipt.candidate, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  assert.deepEqual(receipt.baseline, pickerSmokeBaseline);
+  report.proofKind = 'actual-picker-smoke-diagnostic';
+  report.independentEvidenceReuse = receipt;
+  report.limitations.push(
+    'Diagnostic controls Start/Generate/Accept/cleanup only; full exact-candidate independent, steer/manual/discard/background/recovery proofs remain required.',
+  );
+}
 if (recoveryOnly) {
   report.proofKind = 'recovery-only-diagnostic-no-picker-or-model-child-claim';
   report.limitations.push(
@@ -2203,6 +2220,7 @@ try {
         liveId: started.liveId,
         generation: started.generation,
         helperTokenSha256: hash(token),
+        pickerSmoke,
         eventObservationBudgetMs,
         sessionCookie: browserSession,
         uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
@@ -2244,12 +2262,16 @@ try {
     });
     finishBrowserProfile();
     assert.equal(report.previewProbeFailure, undefined);
-    report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
-    report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
-      report.editBrowser.actualTabHiddenBeyondEightSeconds &&
-      report.background.noModelOrSourceEffect;
-    report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
-    report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+    assert.equal(report.editBrowser.realPickerGenerateAccept, true);
+    if (pickerSmoke) report.checks.actualPickerGenerateAcceptWithCanonicalSourceEffect = true;
+    else {
+      report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
+      report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
+        report.editBrowser.actualTabHiddenBeyondEightSeconds &&
+        report.background.noModelOrSourceEffect;
+      report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
+      report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+    }
     assert.equal(report.editBrowser.openThroughMobileControls, true);
     report.checks.actualMobileUiOpenAuthenticatedRemoteOverlay = true;
   } else if (!recoveryOnly) {
@@ -2328,7 +2350,7 @@ try {
       : 'sameOwningThreadModelThinkingAndDurableInbox'
   ] = true;
   let recovery;
-  if (editFlow || recoveryOnly) {
+  if ((editFlow && !pickerSmoke) || recoveryOnly) {
     stopPreviewProbe();
     recovery = await productionRecoveryProof({
       api,
@@ -2387,7 +2409,9 @@ try {
   report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
   if (editFlow) {
     const source = readFileSync(join(appRoot, 'index.html'), 'utf8');
-    assert.ok(source.includes('Production manual approved'));
+    assert.ok(
+      source.includes(pickerSmoke ? 'Production chosen variant' : 'Production manual approved'),
+    );
     assert.ok(!source.includes('__IMPECCABLE_LIVE'));
   } else assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
   assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);

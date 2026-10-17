@@ -502,54 +502,58 @@ try {
   await ui.clickAccept(preview, { expectedVariant: 1 });
   await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
   await command('accepted');
-  checkpoint('picker-steer');
-  await ui.submitSteer(preview, 'production steer: update the HMR marker');
-  await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
-    timeout: modelEffectTimeout,
-  });
-  await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
-  assert.ok(hmrUpdates > 0);
-  await command('steered');
-  checkpoint('picker-manual-apply');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.clickEditCopy(preview);
-  await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
-  await ui.clickSaveEdit(preview);
-  await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
-  await ui.clickApplyEdits(preview);
-  await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
-  await command('manual-applied');
-  checkpoint('picker-discard');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 2);
-  await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-  await preview
-    .getByRole('heading', { name: 'Production discarded variant', exact: true })
-    .waitFor();
-  await ui.clickDiscard(preview);
-  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
-  await command('discarded');
-  assert.equal(
-    await preview.getByRole('heading', { name: 'Production manual approved', exact: true }).count(),
-    1,
-  );
-  checkpoint('background-beyond-eight-seconds');
-  await command('background-begin');
-  const foreground = await context.newPage();
-  await foreground.bringToFront();
-  await preview.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
-    polling: 100,
-    timeout: 5000,
-  });
-  const hiddenAt = Date.now();
-  await new Promise((done) => setTimeout(done, 9200));
-  assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
-  assert.ok(Date.now() - hiddenAt > 8000);
-  await preview.bringToFront();
-  await preview.waitForFunction(() => document.visibilityState === 'visible');
-  await foreground.close();
-  await command('background-finished');
+  if (!config.pickerSmoke) {
+    checkpoint('picker-steer');
+    await ui.submitSteer(preview, 'production steer: update the HMR marker');
+    await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
+      timeout: modelEffectTimeout,
+    });
+    await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
+    assert.ok(hmrUpdates > 0);
+    await command('steered');
+    checkpoint('picker-manual-apply');
+    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+    await ui.clickEditCopy(preview);
+    await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
+    await ui.clickSaveEdit(preview);
+    await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
+    await ui.clickApplyEdits(preview);
+    await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
+    await command('manual-applied');
+    checkpoint('picker-discard');
+    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+    await ui.setCount(preview, 2);
+    await ui.clickGo(preview);
+    await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
+    await preview
+      .getByRole('heading', { name: 'Production discarded variant', exact: true })
+      .waitFor();
+    await ui.clickDiscard(preview);
+    await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
+    await command('discarded');
+    assert.equal(
+      await preview
+        .getByRole('heading', { name: 'Production manual approved', exact: true })
+        .count(),
+      1,
+    );
+    checkpoint('background-beyond-eight-seconds');
+    await command('background-begin');
+    const foreground = await context.newPage();
+    await foreground.bringToFront();
+    await preview.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
+      polling: 100,
+      timeout: 5000,
+    });
+    const hiddenAt = Date.now();
+    await new Promise((done) => setTimeout(done, 9200));
+    assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
+    assert.ok(Date.now() - hiddenAt > 8000);
+    await preview.bringToFront();
+    await preview.waitForFunction(() => document.visibilityState === 'visible');
+    await foreground.close();
+    await command('background-finished');
+  }
   await preview.screenshot({ path: config.screenshot });
   await writeFile(
     config.resultFile,
@@ -561,10 +565,11 @@ try {
         separateBrowserMountNamespace: true,
         openThroughMobileControls: true,
         realPickerGenerateAccept: true,
-        realPickerSteer: true,
-        realPickerManualApply: true,
-        realPickerDiscard: true,
-        actualTabHiddenBeyondEightSeconds: true,
+        pickerSmoke: config.pickerSmoke === true,
+        realPickerSteer: !config.pickerSmoke,
+        realPickerManualApply: !config.pickerSmoke,
+        realPickerDiscard: !config.pickerSmoke,
+        actualTabHiddenBeyondEightSeconds: !config.pickerSmoke,
         playwrightFocusOverrideDisabled: true,
         hmrUpdates,
         extraPollOwnerDenied: true,
