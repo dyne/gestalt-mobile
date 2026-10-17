@@ -5,4 +5,4 @@
  */
 
 /** Compiled host assertion; never supplied by config, request or ambient env. */
-export const ORG_PLAN_CAPABILITIES = 'suspension-v1';
+export const ORG_PLAN_CAPABILITIES = 'suspension-v1,nested-suspension-v1';

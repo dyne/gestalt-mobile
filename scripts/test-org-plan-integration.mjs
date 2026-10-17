@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 // CI checks out this immutable compatible revision; ordinary unit tests need no network.
-const revision = '4108e08a34d8642fb6ce89e4947102cdbf2a43cf';
+const revision = '3a7d87be1eb61c1ae7e9157292e2f13988b7dc29';
 const checkout = process.argv[2];
 if (!checkout) throw new Error('Pass the compatible gestalt-agents checkout directory');
 const directory = resolve(checkout);
@@ -37,7 +37,7 @@ try {
       'run',
       'src/server/features/autopilot/application/service.test.ts',
       '-t',
-      'hands accepted L10 to exactly one root turn',
+      'hands accepted L10 to exactly one root turn|hands accepted L9 through a nested stack',
       '--reporter=default',
       '--reporter=json',
       `--outputFile=${reportPath}`,
@@ -50,8 +50,8 @@ try {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error('Org Plan integration test process failed');
   const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-  if (report.numPassedTests !== 1 || report.numFailedTests !== 0)
-    throw new Error('Org Plan integration requires exactly one executed passing handoff case');
+  if (report.numPassedTests !== 2 || report.numFailedTests !== 0)
+    throw new Error('Org Plan integration requires both single and nested handoff cases to pass');
 } finally {
   rmSync(reportDirectory, { recursive: true, force: true });
 }
