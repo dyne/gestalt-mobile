@@ -107,7 +107,7 @@ function receiptFixture() {
     policy: {
       policyDigest: hash,
       manifestDigest: digest(readFileSync(manifestPath)),
-      generation: manifest.generation,
+      authority: { generation: manifest.generation },
       commands: manifest.commands,
     },
   };
@@ -200,7 +200,18 @@ describe('installed code before host execution', () => {
       { ...f.process, commandId: 'other' },
       {
         ...f.process,
-        policy: { ...f.process.policy, generation: { sessionId: 'owning', generation: 1 } },
+        policy: {
+          ...f.process.policy,
+          authority: { generation: { sessionId: 'owning', generation: 1 } },
+        },
+      },
+      {
+        ...f.process,
+        policy: {
+          ...f.process.policy,
+          authority: undefined,
+          generation: { sessionId: 'owning', generation: 2 },
+        },
       },
       { ...f.process, policy: { ...f.process.policy, manifestDigest: 'b'.repeat(64) } },
       { ...f.process, policy: { ...f.process.policy, commands: {} } },

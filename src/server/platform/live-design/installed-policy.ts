@@ -439,7 +439,7 @@ export class InstalledLivePolicy {
           body.termination === 'leader-exit' &&
           body.policy?.policyDigest === policyDigest &&
           body.policy?.manifestDigest === manifestPin.sha256 &&
-          isDeepStrictEqual(body.policy?.generation, manifest.generation) &&
+          isDeepStrictEqual(body.policy?.authority?.generation, manifest.generation) &&
           isDeepStrictEqual(
             body.policy?.commands?.['context-mode-call'],
             manifest.commands?.['context-mode-call'],
