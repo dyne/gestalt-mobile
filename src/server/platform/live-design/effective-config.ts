@@ -88,7 +88,21 @@ export function resolveLiveConfigFiles(input: {
       )
     )
       throw new Error();
-    const merged = mergeLiveConfig(observed.config, input.threadConfig);
+    const nativeConfig = structuredClone(observed.config);
+    // Native 0.161 serializes its local environment and an unset tool timeout.
+    // These defaults are readback metadata, never authority for source or thread
+    // overrides. Preserve every other field for the exact launch comparison.
+    const servers = nativeConfig.mcp_servers;
+    if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
+      for (const descriptor of Object.values(servers)) {
+        if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) continue;
+        if ('environment_id' in descriptor && descriptor.environment_id === 'local')
+          delete descriptor.environment_id;
+        if ('tool_timeout_sec' in descriptor && descriptor.tool_timeout_sec === null)
+          delete descriptor.tool_timeout_sec;
+      }
+    }
+    const merged = mergeLiveConfig(nativeConfig, input.threadConfig);
     launchInventory = Object.fromEntries(
       [
         ['mcp_servers', input.approved.mcpServers],

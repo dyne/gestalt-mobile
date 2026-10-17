@@ -33,6 +33,55 @@ function fixture() {
   return { root, path, bytes, layer, input };
 }
 describe('owning configuration inventory', () => {
+  it('compares exact Native local MCP defaults without ignoring source or thread fields', () => {
+    const { input, path } = fixture();
+    const descriptor = { command: 'node', args: ['/bound/bridge.mjs'], enabled: true };
+    const mcp = { bridge: descriptor };
+    const observed = {
+      ...input,
+      approved: { mcpServers: mcp, plugins: {} },
+      configuration: {
+        ...input.configuration,
+        config: {
+          mcp_servers: {
+            bridge: { ...descriptor, environment_id: 'local', tool_timeout_sec: null },
+          },
+        },
+      },
+    };
+    expect(resolveLiveConfigFiles(observed)).toHaveLength(1);
+    expect(observed.configuration.config.mcp_servers.bridge).toHaveProperty(
+      'environment_id',
+      'local',
+    );
+    expect(resolveLiveConfigFiles(observed)[0]!.path).toBe(path);
+    for (const override of [
+      { environment_id: 'remote' },
+      { tool_timeout_sec: 90 },
+      { env: null },
+      { unknown: null },
+    ]) {
+      expect(() =>
+        resolveLiveConfigFiles({
+          ...observed,
+          configuration: {
+            ...observed.configuration,
+            config: {
+              mcp_servers: {
+                bridge: { ...observed.configuration.config.mcp_servers.bridge, ...override },
+              },
+            },
+          },
+        }),
+      ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    }
+    expect(() =>
+      resolveLiveConfigFiles({
+        ...observed,
+        threadConfig: { mcp_servers: { bridge: { environment_id: 'local' } } },
+      }),
+    ).toThrow('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+  });
   it('pins the original supported snapshot-disabled source without exempting project or launch surfaces', () => {
     const { input, path, layer, root } = fixture();
     const bytes = '[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\n';
