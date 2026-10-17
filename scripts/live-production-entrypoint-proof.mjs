@@ -1709,7 +1709,7 @@ try {
   report.checks.ordinaryInstalledAuxiliaryModelDiscovery = true;
   const skills = await api(
     'GET',
-    `/api/skills?workspaceId=${workspaceId(appRoot)}&profile=default`,
+    `/api/skills?workspaceId=${workspaceId(appRoot)}&profile=default&refresh=true`,
   );
   assert.ok(Array.isArray(skills.skills));
   assert.deepEqual(skills.errors, []);
