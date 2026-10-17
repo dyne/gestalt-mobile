@@ -207,6 +207,8 @@ describe('SQLite relay persistence', () => {
     database.close();
   });
 
+  // More than 2,000 durable commits plus reopening can exceed the default 5s
+  // on shared CI disks. Keep the burst and assertions intact with a scoped budget.
   it('retains 48 hours across bursts, sessions, and database reopening', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-retention-'));
     directories.push(directory);
@@ -248,7 +250,7 @@ describe('SQLite relay persistence', () => {
     } finally {
       database.close();
     }
-  });
+  }, 30_000);
 
   it('orders events atomically and prunes the oldest entries', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-mobile-db-'));
