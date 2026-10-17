@@ -177,6 +177,7 @@ ProductionLiveController.prototype.observeOwnerStarted = async function (...args
       ...admissionFailure(error),
       configurationShape: error?.liveConfigDiagnostics,
       launchInventory: error?.liveLaunchInventory,
+      sourceInventory: error?.liveSourceDiagnostics,
     };
     throw error;
   }
