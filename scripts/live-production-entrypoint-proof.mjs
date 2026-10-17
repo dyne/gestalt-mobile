@@ -443,14 +443,17 @@ assert.ok(!(installationOnly && constructionOnly));
 if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
 if (installationOnly) report.proofKind = 'installation-only-no-native-launch';
 const appRoot = join(root, 'app'),
-  privateRoot = join(root, 'private'),
+  privateRoot = join(root, 'home/.codex-gestalt/gestalt-mobile'),
   installation = join(root, 'installed');
-for (const path of [appRoot, privateRoot, installation]) mkdirSync(path, { mode: 0o700 });
-const home = join(privateRoot, 'home'),
+for (const path of [appRoot, privateRoot, installation])
+  mkdirSync(path, { mode: 0o700, recursive: true });
+const home = join(root, 'home'),
   owningHome = join(privateRoot, 'owning'),
   controller = join(privateRoot, 'controller'),
   caddyRoot = join(privateRoot, 'caddy');
-for (const path of [home, owningHome, controller, caddyRoot]) mkdirSync(path, { mode: 0o700 });
+for (const path of [home, owningHome, controller, caddyRoot])
+  mkdirSync(path, { mode: 0o700, recursive: true });
+assert.equal(join(home, '.codex-gestalt/gestalt-mobile'), privateRoot);
 const proofStarted = Date.now();
 const checkpoint = setInterval(() => {
   try {
@@ -1279,6 +1282,9 @@ try {
     contextPackage.root,
     join(gestaltHome, 'runtime/context-mode'),
   );
+  // Normal HOME/.gestalt is separate from Mobile's denied private state. Keep
+  // the required read-only runtime executable while retaining that denial.
+  assert.equal(preparedRuntime.root.startsWith(`${privateRoot}/`), false);
   report.installationStage = 'package-immutability-and-inventory';
   for (const entry of packages) {
     protect(entry.root);
@@ -1583,6 +1589,8 @@ try {
     await until(() => existsSync(caddySocket), 'CADDY_START_DEADLINE');
   }
   const auth = new SqliteAuthorizationStore(home, rp);
+  assert.equal(auth.path, join(privateRoot, 'auth.sqlite'));
+  report.checks.normalHomeRuntimeSeparateFromDeniedMobileAuth = true;
   const owner = auth.initializeOwner(randomBytes(32));
   auth.claimFirstDevice(owner, {
     id: 'fixture-device',
