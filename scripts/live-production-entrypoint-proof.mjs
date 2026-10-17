@@ -58,6 +58,10 @@ import { observedBirthExited } from '../dist/server/server/platform/live-design/
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
 import {
+  LIVE_MANAGER_OBSERVATION_MS,
+  installedMcpBudgets,
+} from '../dist/server/server/platform/live-design/installed-launch-contract.js';
+import {
   helperEventIdDigest,
   helperProtocolSummary,
 } from './live-production-helper-diagnostics.mjs';
@@ -67,6 +71,15 @@ const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
 const seededPreflight = process.env.LIVE_PRODUCTION_ADMISSION_SEED === '1';
 assert.ok(!seededPreflight || preflightOnly);
+// Four serial measured control stages, the accepted Native context probe,
+// two existing project-readiness windows and a bounded response allowance.
+const startObservationBudgetMs =
+  4 * (LIVE_MANAGER_OBSERVATION_MS + 5_000) +
+  installedMcpBudgets('context-mode', true).tool_timeout_sec * 1000 +
+  5_000 +
+  2 * 15_000 +
+  5_000;
+assert.equal(startObservationBudgetMs, 815_000);
 assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
@@ -1813,6 +1826,7 @@ try {
       report,
       browser: {
         startThroughControls: true,
+        startObservationBudgetMs,
         mobileOrigin,
         sessionId: session.id,
         sessionCookie: browserSession,

@@ -13,6 +13,11 @@ import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
   assert.equal(process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF, '1');
+  if (input.browser.startThroughControls)
+    assert.equal(input.browser.startObservationBudgetMs, 815_000);
+  const browserDeadlineMs = input.browser.startThroughControls
+    ? input.browser.startObservationBudgetMs + 60_000
+    : 480_000;
   const namespace = `l11edit-${process.pid}`;
   const hostInterface = `leh${process.pid}`;
   const peerInterface = `leb${process.pid}`;
@@ -130,7 +135,7 @@ export async function productionEditBrowser(input) {
         if (
           Number.isSafeInteger(value.elapsedMs) &&
           value.elapsedMs >= 0 &&
-          value.elapsedMs < 480000
+          value.elapsedMs < browserDeadlineMs
         )
           (input.report.editBrowserStages ??= []).push({
             stage: value.checkpoint,
@@ -296,7 +301,7 @@ export async function productionEditBrowser(input) {
     const exit = await Promise.race([
       new Promise((done) => browser.once('close', (code) => done(code))),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('EDIT_BROWSER_DEADLINE')), 480000);
+        timer = setTimeout(() => reject(new Error('EDIT_BROWSER_DEADLINE')), browserDeadlineMs);
       }),
     ]).finally(() => clearTimeout(timer));
     await commands;

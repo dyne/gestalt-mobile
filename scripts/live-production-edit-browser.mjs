@@ -340,11 +340,12 @@ try {
   await mobile.getByRole('button', { name: 'Live controls', exact: true }).click();
   if (config.startThroughControls) {
     checkpoint('mobile-start');
+    assert.equal(config.startObservationBudgetMs, 815_000);
     const startResponse = mobile.waitForResponse(
       (response) =>
         new URL(response.url()).pathname === `/api/sessions/${config.sessionId}/live/start` &&
         response.request().method() === 'POST',
-      { timeout: 120000 },
+      { timeout: config.startObservationBudgetMs },
     );
     await mobile.getByRole('button', { name: 'Start Live', exact: true }).click();
     const result = await startResponse;
@@ -379,6 +380,7 @@ try {
           separateBrowserNetwork: true,
           separateBrowserMountNamespace: true,
           startThroughMobileControls: true,
+          startObservationBudgetMs: config.startObservationBudgetMs,
           startedRun: {
             liveId: started.liveId,
             generation: started.generation,
