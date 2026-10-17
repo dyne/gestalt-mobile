@@ -53,6 +53,91 @@ const plan = (reviewStatus: 'REVIEWED' | 'UNREVIEWED' = 'UNREVIEWED'): Supervise
 });
 
 describe('autopilot policy', () => {
+  it('continues a reopened milestone despite a completed later executor being unloaded', () => {
+    const base = createAgentActivitySnapshot('s', now);
+    const later = {
+      id: 'later',
+      taskPath: '/root/l2',
+      canonicalPosition: 'L2',
+      canonicalTaskName: 'l2',
+      state: 'disconnected' as const,
+      reason: 'processExited' as const,
+      observedAt: now,
+      lastActivityAt: now,
+    };
+    const input = {
+      state: { ...disabledAutopilot('s', now), requestedEnabled: true },
+      plan: {
+        ...plan(),
+        allDone: false,
+        executionComplete: false,
+        steps: [
+          { ...plan().steps[0]!, state: 'WIP' as const },
+          { ...plan('REVIEWED').steps[0]!, id: 'later' },
+        ],
+      },
+      activity: {
+        ...base,
+        confidence: 'fresh' as const,
+        root: { ...base.root, state: 'idle' as const },
+        subagents: [later],
+        aggregateSubagents: 'disconnected' as const,
+      },
+      hasPendingInteraction: false,
+      now,
+      policy: defaultAutopilotPolicy,
+    };
+    expect(decideAutopilot(input)).toMatchObject({ kind: 'scheduleContinuation' });
+    for (const state of ['running', 'detached-active', 'exited-awaiting-result'] as const) {
+      const ownedProcesses = [
+        {
+          processId: 'process',
+          itemId: 'item',
+          ownerThreadId: later.id,
+          ownerTaskPath: later.taskPath,
+          ownership: 'supervisor' as const,
+          state,
+          observedAt: now,
+          elapsedMs: 0,
+          cpuPercent: 0,
+          rssBytes: 0,
+        },
+      ];
+      expect(
+        decideAutopilot({
+          ...input,
+          activity: { ...input.activity, subagents: [{ ...later, ownedProcesses }] },
+        }),
+      ).toMatchObject({
+        kind: state === 'exited-awaiting-result' ? 'scheduleContinuation' : 'reconcile',
+      });
+    }
+    expect(
+      decideAutopilot({
+        ...input,
+        plan: {
+          ...input.plan,
+          steps: [input.plan.steps[0]!, { ...input.plan.steps[1]!, reviewStatus: 'UNREVIEWED' }],
+        },
+      }),
+    ).toEqual({ kind: 'reconcile' });
+    for (const state of ['working', 'awaitingHuman'] as const) {
+      expect(
+        decideAutopilot({
+          ...input,
+          activity: {
+            ...input.activity,
+            subagents: [{ ...later, state }],
+            aggregateSubagents: state,
+          },
+        }),
+      ).toEqual({ kind: 'observe' });
+    }
+    expect(decideAutopilot({ ...input, hasPendingInteraction: true })).toEqual({ kind: 'observe' });
+    expect(
+      decideAutopilot({ ...input, activity: { ...input.activity, confidence: 'stale' } }),
+    ).toEqual({ kind: 'reconcile' });
+  });
   it('continues an idle canonical executor despite an exited auxiliary helper', () => {
     const base = createAgentActivitySnapshot('s', now);
     const helper = {

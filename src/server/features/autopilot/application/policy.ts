@@ -146,9 +146,17 @@ function classifySupervisedActivity(
     const match = /^L([1-9]\d*)$/.exec(child.canonicalPosition ?? '');
     if (!match) return true;
     const historical = Number(match[1]) < position;
-    const suspended = plan.steps[Number(match[1]) - 1]?.state === 'SUSPENDED';
+    const assignedStep = plan.steps[Number(match[1]) - 1];
+    // Reopening a dependency can move execution behind an already accepted
+    // milestone. Its unloaded executor is terminal evidence, just like a
+    // completed earlier executor, unless it still owns live work.
+    const completedLater =
+      Number(match[1]) > position &&
+      assignedStep?.state === 'DONE' &&
+      assignedStep.reviewStatus === 'REVIEWED';
+    const suspended = assignedStep?.state === 'SUSPENDED';
     if (
-      suspended &&
+      (suspended || completedLater) &&
       ['idle', 'blocked', 'disconnected'].includes(child.state) &&
       !child.ownedProcesses?.some(
         (process) => process.state === 'running' || process.state === 'detached-active',

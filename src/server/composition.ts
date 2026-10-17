@@ -1961,9 +1961,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 return owner.readHistory(session);
               }
             : undefined,
-        currentSequence: (sessionId) => journal.since(sessionId, 0).at(-1)?.sequence ?? 0,
+        currentSequence: (sessionId) => journal.currentSequence(sessionId),
         activityHistory: (sessionId, throughSequence) =>
-          journal.since(sessionId, 0).filter((event) => event.sequence <= throughSequence),
+          journal.activityHistory(sessionId, throughSequence),
         interruptTurn:
           runtime || kimiRuntime
             ? (session, turnId) => {
@@ -2076,7 +2076,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
       },
       sessionEvents: {
         exists: (id) => sessions.find(id) !== null,
-        since: (id, after) => journal.since(id, after),
+        replay: (id, after) => journal.replay(id, after),
         subscribe: (id, listener) => events.subscribe(id, listener),
       },
       planRoutes: {

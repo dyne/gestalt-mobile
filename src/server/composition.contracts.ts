@@ -19,6 +19,7 @@ import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
 import { autopilotExecutorLaunchPrompt } from './features/autopilot/application/policy.js';
 import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
+import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import {
   authorizationSessionId,
   authorizedDeviceId,
@@ -5333,6 +5334,62 @@ describe('production composition', () => {
   });
 
   describeCompositionConcern('sessions', () => {
+    it('hydrates chat and resyncs a large replay without materializing the journal', async () => {
+      const fixture = await createProductionAutopilotFixture();
+      const { app, sessionId } = fixture;
+      onTestFinished(() => app.close());
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      const journal = new SqliteEventJournal(database);
+      for (let index = 0; index < 250; index++)
+        journal.append(
+          sessionId,
+          'agent.activity.updated',
+          { synthetic: 'x'.repeat(4096) },
+          new Date().toISOString(),
+        );
+      const activity = journal.append(
+        sessionId,
+        'activity.updated',
+        { id: 'command', label: 'Command', detail: 'completed' },
+        new Date().toISOString(),
+      );
+      database.close();
+      const fullRead = vi.spyOn(SqliteEventJournal.prototype, 'since').mockImplementation(() => {
+        throw new Error('Unbounded journal reads must not be used by Chat');
+      });
+      onTestFinished(() => fullRead.mockRestore());
+      const history = await app.inject(`/api/sessions/${sessionId}/history`);
+      expect(history.statusCode).toBe(200);
+      expect(history.json()).toMatchObject({
+        baseSequence: expect.any(Number),
+        activities: expect.arrayContaining([
+          expect.objectContaining({ id: 'command', detail: 'completed' }),
+        ]),
+      });
+      expect(history.json().baseSequence).toBeGreaterThanOrEqual(activity.sequence);
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${address.port}/api/sessions/${sessionId}/events?after=0`,
+        {
+          headers: {
+            origin: relyingParty.publicOrigin,
+            cookie: 'gestalt_mobile_session=test-session',
+          },
+        },
+      );
+      try {
+        const [data] = await once(socket, 'message');
+        expect(JSON.parse(String(data))).toMatchObject({
+          type: 'relay.resyncRequired',
+          currentSequence: expect.any(Number),
+        });
+        expect(fullRead).not.toHaveBeenCalled();
+      } finally {
+        socket.close();
+      }
+    });
     it('starts Self DEBUG with the source root model and exact skill profile instead of executor defaults', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-debug-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-debug-state-'));

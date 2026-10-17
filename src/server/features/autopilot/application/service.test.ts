@@ -48,6 +48,105 @@ const plan = {
 };
 
 describe('AutopilotCoordinator', () => {
+  it('starts the root after a wait deadline with a completed later executor unloaded', async () => {
+    const database = new DatabaseSync(':memory:');
+    migrate(database);
+    database
+      .prepare(
+        "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
+      )
+      .run();
+    const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+    let clock = now;
+    let activeTurnId: string | null = 'manual-resume';
+    const base = createAgentActivitySnapshot('s', now);
+    const activity = {
+      ...base,
+      confidence: 'fresh' as const,
+      root: { ...base.root, state: 'working' as 'working' | 'idle' },
+      subagents: [
+        {
+          id: 'later',
+          taskPath: '/root/l2',
+          canonicalTaskName: 'l2',
+          canonicalPosition: 'L2',
+          state: 'disconnected' as const,
+          reason: 'processExited' as const,
+          observedAt: now,
+          lastActivityAt: now,
+        },
+      ],
+      aggregateSubagents: 'disconnected' as const,
+    };
+    const starts = vi.fn(async () => {
+      activeTurnId = 'continued';
+    });
+    const reconcile = vi.fn(async () => ({ compatible: true }));
+    const published: string[] = [];
+    const coordinator = new AutopilotCoordinator({
+      store: new SqliteAutopilotStore(database),
+      now: () => clock,
+      policy: defaultAutopilotPolicy,
+      plan: () => ({
+        identity: 'p',
+        plan: {
+          ...plan,
+          steps: [
+            plan.steps[0]!,
+            { ...plan.steps[0]!, id: 'later', state: 'DONE', reviewStatus: 'REVIEWED' },
+          ],
+        },
+      }),
+      session: () => ({ state: 'ready', threadId: 'root', activeTurnId }),
+      activity: () => activity,
+      pendingInteraction: () => false,
+      reconcile,
+      schedule: (callback) => {
+        const timer = { callback, cancelled: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+      nextControlId: () => 'after-wait',
+      turnStarter: { start: starts },
+      publish: (_sessionId, type) => {
+        published.push(type);
+      },
+    });
+    try {
+      coordinator.enable('s');
+      expect(
+        coordinator.registerProactiveWait('s', {
+          id: 'report',
+          leaseId: 'wait',
+          maxWaitMs: 180_000,
+          wakeConditions: ['executorChanged'],
+        }),
+      ).toBe(true);
+      activeTurnId = null;
+      activity.root.state = 'idle';
+      clock = '2026-08-20T12:03:00.000Z';
+      activity.root.observedAt = clock;
+      const deadline = timers.find((timer) => !timer.cancelled)!;
+      expect(deadline).toBeDefined();
+      deadline.cancelled = true;
+      deadline.callback();
+      expect(published).toContain('autopilot.continuation-scheduled');
+      const continuation = timers.find((timer) => !timer.cancelled)!;
+      expect(continuation).toBeDefined();
+      continuation.cancelled = true;
+      clock = '2026-08-20T12:03:01.000Z';
+      activity.root.observedAt = clock;
+      continuation.callback();
+      await vi.waitFor(() => expect(starts).toHaveBeenCalledTimes(1));
+      expect(published).toContain('autopilot.turn-started');
+      expect(reconcile).not.toHaveBeenCalled();
+    } finally {
+      coordinator.dispose('s');
+      database.close();
+    }
+  });
   describe('supervision start', () => {
     function subject(options: Readonly<{ sessionState?: string; threadId?: string | null }> = {}) {
       let state: AutopilotSession | null = null;
