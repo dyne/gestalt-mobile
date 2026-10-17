@@ -168,6 +168,19 @@ for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
     }
   };
 }
+const originalOwnerStarted = ProductionLiveController.prototype.observeOwnerStarted;
+ProductionLiveController.prototype.observeOwnerStarted = async function (...args) {
+  try {
+    return await originalOwnerStarted.apply(this, args);
+  } catch (error) {
+    report.originalAdmissionRefusal = {
+      ...admissionFailure(error),
+      configurationShape: error?.liveConfigDiagnostics,
+      launchInventory: error?.liveLaunchInventory,
+    };
+    throw error;
+  }
+};
 const originalRenewGeneration = ProductionLiveController.prototype.renewGeneration;
 assert.equal(typeof originalRenewGeneration, 'function');
 ProductionLiveController.prototype.renewGeneration = async function (...args) {
@@ -266,6 +279,53 @@ ProductionLiveController.prototype.launchNative = function (input) {
     try {
       const value = await request(method, params);
       if (tracked) observation.requests.push({ method, completed: true });
+      if (method === 'config/read') {
+        const config = value?.config;
+        const descriptor = config?.mcp_servers?.['context-mode'];
+        const known = [
+          'command',
+          'args',
+          'env',
+          'env_vars',
+          'cwd',
+          'enabled',
+          'required',
+          'default_tools_approval_mode',
+          'startup_timeout_sec',
+          'startup_timeout_ms',
+          'tool_timeout_sec',
+          'url',
+          'http_headers',
+          'bearer_token_env_var',
+          'enabled_tools',
+          'disabled_tools',
+          'oauth',
+        ];
+        const shapes = (report.originalConfigShapes ??= []);
+        if (shapes.length === 64) shapes.shift();
+        shapes.push({
+          context: descriptor
+            ? {
+                keys: Object.keys(descriptor).map((key) =>
+                  known.includes(key) ? key : 'unrecognized',
+                ),
+                commandIsNode: descriptor.command === 'node',
+                argsCount: descriptor.args?.length,
+                enabled: descriptor.enabled === true,
+                required: descriptor.required === true,
+                approve: descriptor.default_tools_approval_mode === 'approve',
+                envType: descriptor.env === null ? 'null' : typeof descriptor.env,
+                cwdType: descriptor.cwd === null ? 'null' : typeof descriptor.cwd,
+              }
+            : null,
+          plugins: Object.keys(config?.plugins ?? {}).map((name) =>
+            ['context-mode@dyne-gestalt-agents', 'gestalt@dyne-gestalt-agents'].includes(name)
+              ? name
+              : 'unapproved',
+          ),
+          hooksExplicitlyFalse: config?.features?.hooks === false,
+        });
+      }
       if (method === 'mcpServerStatus/list' && params?.threadId && params?.serverName) {
         const rows = (observation.owningCatalogs ??= []);
         for (const server of value?.data ?? []) {
