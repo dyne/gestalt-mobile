@@ -16,6 +16,7 @@ import {
   type AppServerLaunchInput,
 } from '../codex/session-runtime.js';
 import { observeLiveProcess } from './process-identity.js';
+import { LIVE_OWNING_CATALOG_MS } from './installed-launch-contract.js';
 
 function session() {
   return RelaySession.create({
@@ -146,6 +147,45 @@ function fixture(
   };
 }
 describe('owning runtime admission observations', () => {
+  it.each(['completed', 'cancelled'] as const)(
+    'keeps the measured context phase bounded and immediately %s',
+    async (outcome) => {
+      const root = mkdtempSync(join(tmpdir(), 'live-context-budget-'));
+      const canary = join(root, 'canary');
+      writeFileSync(canary, Buffer.alloc(32), { mode: 0o600 });
+      const f = fixture();
+      const owner = await f.runtime.start(session(), 'time');
+      vi.useFakeTimers();
+      try {
+        let resolve!: (value: unknown) => void;
+        f.setMcpTool(
+          () =>
+            new Promise((done) => {
+              resolve = done;
+            }),
+        );
+        const pending = f.runtime.probeLiveContext(owner, canary);
+        if (outcome === 'cancelled') {
+          const refusal = expect(pending).rejects.toMatchObject({
+            stage: 'context-tool-cancelled',
+          });
+          f.runtime.stopAll();
+          await refusal;
+        } else {
+          await vi.advanceTimersByTimeAsync(82_183);
+          resolve({
+            content: [{ type: 'text', text: 'LIVE_ADMISSION_PROBE_V1:{"privateReadDenied":true}' }],
+          });
+          await expect(pending).resolves.toBeUndefined();
+        }
+        expect(f.launch).toHaveBeenCalledOnce();
+      } finally {
+        f.runtime.stopAll();
+        vi.useRealTimers();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
   it.each(['module', 'commonjs'])(
     'executes the denial probe in a %s app and refuses readable private state',
     async (type) => {
@@ -563,7 +603,9 @@ describe('owning runtime admission observations', () => {
       const rejected = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
         'LIVE_RUNTIME_UNAVAILABLE',
       );
-      await vi.advanceTimersByTimeAsync(125_000);
+      await vi.advanceTimersByTimeAsync(LIVE_OWNING_CATALOG_MS - 1);
+      expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+      await vi.advanceTimersByTimeAsync(1);
       await rejected;
       expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
       expect(f.launch).toHaveBeenCalledTimes(1);

@@ -12,6 +12,10 @@ import {
 } from '../../features/sessions/model/relay-session.js';
 import type { LiveDispatchPolicy } from '../../features/live-design/application/dispatch.js';
 import type { LiveProcessIdentity } from '../live-design/process-identity.js';
+import {
+  LIVE_OWNING_CATALOG_MS,
+  installedMcpBudgets,
+} from '../live-design/installed-launch-contract.js';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
@@ -395,9 +399,10 @@ export class CodexSessionRuntime {
     };
     // Native's broad query creates threadless clients. Only these supported
     // owning-thread queries inspect the existing two admitted connections.
-    // Cold full catalogs can take over thirty seconds; one shared deadline
-    // bounds both servers, and disposal cancels pending discovery immediately.
-    const mcpDeadline = Date.now() + 125_000;
+    // Installed-source startup includes independent observation and command
+    // phases. One accepted-contract deadline bounds both server catalogs;
+    // disposal cancels pending discovery immediately.
+    const mcpDeadline = Date.now() + LIVE_OWNING_CATALOG_MS;
     const servers: unknown[] = [];
     for (const serverName of ['context-mode', 'gestalt-org-plan']) {
       for (;;) {
@@ -2064,8 +2069,10 @@ export class CodexSessionRuntime {
     // Context executes app-local .js files, which inherit the app's module type.
     const code = `const fs = await import('node:fs'); let denied = false; try { fs.readFileSync(${JSON.stringify(privatePath)}); } catch (e) { denied = ['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code); } console.log('LIVE_ADMISSION_PROBE_V1:'+JSON.stringify({privateReadDenied:denied}));`;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
     let result: unknown;
     try {
+      resource.lifetime.signal.throwIfAborted();
       result = await Promise.race([
         resource.process.rpc.request('mcpServer/tool/call', {
           threadId: session.threadId,
@@ -2078,11 +2085,18 @@ export class CodexSessionRuntime {
           },
         }),
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(unavailable('context-tool-deadline')), 30000);
+          timer = setTimeout(
+            () => reject(unavailable('context-tool-deadline')),
+            installedMcpBudgets('context-mode', true).tool_timeout_sec! * 1000 + 5000,
+          );
+          abort = () => reject(unavailable('context-tool-cancelled'));
+          resource.lifetime.signal.addEventListener('abort', abort, { once: true });
+          if (resource.lifetime.signal.aborted) abort();
         }),
       ]);
     } finally {
       if (timer) clearTimeout(timer);
+      if (abort) resource.lifetime.signal.removeEventListener('abort', abort);
     }
     if (
       this.sessions.get(session.id) !== resource ||

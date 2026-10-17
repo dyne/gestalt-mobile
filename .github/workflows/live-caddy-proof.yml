@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - test/live-production-l11
+      - test/live-installed-source-l11
   pull_request:
     paths:
       - src/server/platform/live-design/**
@@ -21,12 +22,17 @@ on:
       - scripts/live-production-entrypoint-proof.mjs
       - scripts/live-production-edit-*.mjs
   workflow_dispatch:
+    inputs:
+      preflight:
+        description: 'Only installed owning Native catalog and production Start admission; no model turn'
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
   native-proof:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,25 +43,39 @@ jobs:
           node-version: 24.21.0
           cache: npm
       - run: npm ci
+      - name: Provision exact original interpreter on disposable hosted VM
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: |
+          set -Eeuo pipefail
+          proof_node=$(readlink -f -- "$(command -v node)")
+          proof_npm=$(readlink -f -- "$(command -v npm)")
+          proof_npx=$(readlink -f -- "$(command -v npx)")
+          test "$("$proof_node" -p 'process.versions.node')" = 24.21.0
+          # Same accepted L9/L10 fixture prerequisite; never changes a real home.
+          sudo install -m0755 "$proof_node" /usr/bin/node
+          cmp -- "$proof_node" /usr/bin/node
+          sudo ln -sfn -- "$proof_npm" /usr/bin/npm
+          sudo ln -sfn -- "$proof_npx" /usr/bin/npx
+          PATH=/usr/bin:/bin /usr/bin/node --version
       - name: Read-only accepted Manager input
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: dyne/gestalt
-          ref: dd46fb4d99780ca3d9df73480834aabc102db8a2 # accepted Manager tree 96632966
+          ref: 737f5f85f02ea60a26996afc2e17e176bfb2c6bc # accepted L9 tree dfdeabd2, canonical 5084cf2
           path: .host-manager-input
           persist-credentials: false
       - name: Read-only accepted Agents input
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: dyne/gestalt-agents
-          ref: 129d33bc6d6c58d280d9bcf5155fab6ed9b6e0bd # accepted Agents tree 414a8928; canonical 2c88bc0
+          ref: ba9a7f703b582688009a158cff7392f3f93b4b0e # accepted L10 tree a6a2758c, canonical 18f53c4
           path: .host-agents-input
           persist-credentials: false
       - name: Verify exact accepted dependency trees
         run: |
           set -Eeuo pipefail
-          test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = 966329668f6b967105a4b89b69875d73e54a08f9
-          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 414a89284efbb050188ca1802563b92667c50994
+          test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = dfdeabd2ffdbdb6c429a39c3e81286b611af7734
+          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = a6a2758c72220e4845d2735e9776caf8a7e8c43b
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: verified-archives
         with:
@@ -164,6 +184,7 @@ jobs:
           path: ${{ runner.temp }}/live-proof-cache
           key: live-l11-archives-native38645681271-host01610-impeccable1-sigstore0103-v1
       - name: Prepare disposable browser trust and network prerequisites
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         run: |
           set -Eeuo pipefail
           sudo apt-get update --quiet
@@ -182,11 +203,13 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
       - name: Actual browser namespace and visibility preflight before Native
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         timeout-minutes: 2
         env:
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
         run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
@@ -225,6 +248,7 @@ jobs:
       - name: Build Mobile server and current client for Native and controls proofs
         run: npm run build
       - name: Actual owning native model tools and permitted child with deterministic provider
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         timeout-minutes: 3
         env:
           LIVE_NATIVE_MODEL_PROOF: '1'
@@ -237,6 +261,7 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         timeout-minutes: 5
         env:
           LIVE_REMOTE_PROOF: '1'
@@ -245,10 +270,13 @@ jobs:
           set -Eeuo pipefail
           node scripts/live-remote-proof.mjs
       - name: Sole production admission and real picker editing through Native
-        timeout-minutes: 18
+        # Installed-source phase budgets are bounded in the adapter; this is a
+        # separate aggregate hosted-proof cap, not permission to retry phases.
+        timeout-minutes: 30
         env:
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
-          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '1' || '0' }}
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[full-native]')) || inputs.preflight) && '0' || '1' }}
           LIVE_PRODUCTION_RECOVERY_ONLY: '0'
           LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
           LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
@@ -260,8 +288,9 @@ jobs:
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs
           mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
-          LIVE_HOST_CODEX_BINARY="$native_binary" node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
+          PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
       - name: Actual pinned helper and project process namespaces with native confinement
+        if: (github.event_name != 'push' || contains(github.event.head_commit.message, '[full-native]')) && !inputs.preflight
         timeout-minutes: 3
         env:
           LIVE_PROJECT_ISOLATION_PROOF: '1'

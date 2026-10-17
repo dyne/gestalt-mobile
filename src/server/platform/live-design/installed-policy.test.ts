@@ -4,15 +4,126 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  readFileSync,
+} from 'node:fs';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   InstalledLiveAdmissionError,
   InstalledLivePolicy,
   measureInstalledLiveTree,
+  LIVE_MANAGER_SHA256,
 } from './installed-policy.js';
+import {
+  ORIGINAL_INSTALLED_SOURCE_EXTENSION,
+  type InstalledSourceObservation,
+} from './installed-launch-contract.js';
+
+const stable = (value: unknown): string =>
+  JSON.stringify(value, (_key, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)))
+      : v,
+  );
+const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+function receiptFixture() {
+  const f = fixture(),
+    hash = 'a'.repeat(64);
+  const policy = new InstalledLivePolicy({
+    manager: { path: '/accepted/gestalt', sha256: LIVE_MANAGER_SHA256 },
+    node: { path: '/usr/bin/node', sha256: hash },
+    packages: [
+      { name: 'gestalt', root: '/accepted/gestalt-package', sha256: hash },
+      { name: 'context-mode', root: '/accepted/context-package', sha256: hash },
+    ],
+    runtime: { root: '/accepted/runtime', sha256: hash },
+  });
+  const captureId = randomUUID(),
+    launchId = randomUUID(),
+    keyFile = join(f.root, 'key');
+  writeFileSync(keyFile, Buffer.alloc(32, 7), { mode: 0o600 });
+  const manifestPath = join(f.root, 'manifest.json');
+  const manifest = {
+    keyFile,
+    generation: { sessionId: 'owning', generation: 2 },
+    commands: {
+      'context-mode-call': {
+        executable: '/usr/bin/node',
+        sha256: hash,
+        args: ['fixed-worker'],
+        timeoutMs: 120000,
+      },
+    },
+  };
+  writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+  const observations: InstalledSourceObservation[] = [
+    {
+      kind: 'installed-launch-source',
+      descriptor: {
+        kind: 'context-mode-bridge-v1',
+        path: '/owner/bin/context-mode-mcp.mjs',
+        sha256: hash,
+        gestaltHome: '/gestalt',
+        interpreter: { path: '/usr/bin/node', sha256: hash },
+        package: { root: '/cache/context-mode/2.16.1', version: '2.16.1', treeDigest: hash },
+        runtime: { root: '/gestalt/runtime/context-mode', treeDigest: hash },
+      },
+      observation: { launcher: { sha256: hash, identity: { ino: 1 } } },
+    },
+  ];
+  const save = (path: string, body: unknown) =>
+    writeFileSync(
+      path,
+      JSON.stringify({
+        body,
+        mac: createHmac('sha256', readFileSync(keyFile)).update(stable(body)).digest('hex'),
+      }),
+      { mode: 0o600 },
+    );
+  const birthPath = join(f.root, `birth-${captureId}.json`);
+  const birth = {
+    schemaVersion: 2,
+    kind: 'before-runtime-birth',
+    captureId,
+    originalLaunchSources: observations,
+  };
+  const processPath = join(f.root, `process-${launchId}.json`);
+  const process = {
+    kind: 'process-launch',
+    launchId,
+    commandId: 'context-mode-call',
+    postSpawnValidated: true,
+    status: 'exited',
+    termination: 'leader-exit',
+    policy: {
+      policyDigest: hash,
+      manifestDigest: digest(readFileSync(manifestPath)),
+      generation: manifest.generation,
+      commands: manifest.commands,
+    },
+  };
+  return {
+    ...f,
+    policy,
+    observations,
+    save,
+    captureId,
+    manifestPath,
+    birthPath,
+    birth,
+    processPath,
+    process,
+  };
+}
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -24,6 +135,89 @@ function fixture() {
   return { root, file };
 }
 describe('installed code before host execution', () => {
+  it('requires capture/seal/current verify extension observations, never lineage stdout alone', () => {
+    const f = receiptFixture();
+    const reply = {
+      extensions: [ORIGINAL_INSTALLED_SOURCE_EXTENSION],
+      originalLaunchSources: f.observations,
+    };
+    expect(() => f.policy.assertOriginalSourceReply(reply, f.observations)).not.toThrow();
+    for (const changed of [
+      {},
+      { originalLaunchSources: f.observations },
+      { ...reply, originalLaunchSources: [] },
+    ])
+      expect(() => f.policy.assertOriginalSourceReply(changed, f.observations)).toThrow(
+        'LIVE_INSTALLED_SOURCE_UNVERIFIED',
+      );
+  });
+  it('authenticates renewal birth against immutable initial and fresh independent observation', async () => {
+    const f = receiptFixture();
+    const observe = vi.spyOn(f.policy, 'observeOriginalSources').mockResolvedValue(f.observations);
+    f.save(f.birthPath, f.birth);
+    await expect(
+      f.policy.assertOriginalSourceBirth(f.manifestPath, f.captureId, f.observations),
+    ).resolves.toBeUndefined();
+    observe.mockResolvedValue([]);
+    await expect(
+      f.policy.assertOriginalSourceBirth(f.manifestPath, f.captureId, f.observations),
+    ).rejects.toThrow('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+    observe.mockResolvedValue(f.observations);
+    for (const body of [
+      { ...f.birth, originalLaunchSources: [] },
+      { ...f.birth, captureId: randomUUID() },
+    ]) {
+      f.save(f.birthPath, body);
+      await expect(
+        f.policy.assertOriginalSourceBirth(f.manifestPath, f.captureId, f.observations),
+      ).rejects.toThrow('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+    }
+    f.save(f.birthPath, f.birth);
+    const record = JSON.parse(readFileSync(f.birthPath, 'utf8'));
+    record.body.originalLaunchSources = [];
+    writeFileSync(f.birthPath, JSON.stringify(record));
+    await expect(
+      f.policy.assertOriginalSourceBirth(f.manifestPath, f.captureId, f.observations),
+    ).rejects.toThrow('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+  });
+  it('requires a new signed post-spawn-validated completed launch of the current command and generation', () => {
+    const f = receiptFixture(),
+      hash = 'a'.repeat(64);
+    const before = f.policy.contextLaunchIds(f.manifestPath);
+    f.save(f.processPath, f.process);
+    expect(() => f.policy.assertCompletedContextLaunch(f.manifestPath, before, hash)).not.toThrow();
+    expect(() =>
+      f.policy.assertCompletedContextLaunch(
+        f.manifestPath,
+        f.policy.contextLaunchIds(f.manifestPath),
+        hash,
+      ),
+    ).toThrow('LIVE_CONTEXT_RECEIPT_UNVERIFIED');
+    for (const body of [
+      { ...f.process, postSpawnValidated: false },
+      { ...f.process, status: 'running' },
+      { ...f.process, termination: 'timeout' },
+      { ...f.process, commandId: 'other' },
+      {
+        ...f.process,
+        policy: { ...f.process.policy, generation: { sessionId: 'owning', generation: 1 } },
+      },
+      { ...f.process, policy: { ...f.process.policy, manifestDigest: 'b'.repeat(64) } },
+      { ...f.process, policy: { ...f.process.policy, commands: {} } },
+    ]) {
+      f.save(f.processPath, body);
+      expect(() => f.policy.assertCompletedContextLaunch(f.manifestPath, before, hash)).toThrow(
+        'LIVE_CONTEXT_RECEIPT_UNVERIFIED',
+      );
+    }
+    f.save(f.processPath, f.process);
+    const record = JSON.parse(readFileSync(f.processPath, 'utf8'));
+    record.body.postSpawnValidated = false;
+    writeFileSync(f.processPath, JSON.stringify(record));
+    expect(() => f.policy.assertCompletedContextLaunch(f.manifestPath, before, hash)).toThrow(
+      'LIVE_CONTEXT_RECEIPT_UNVERIFIED',
+    );
+  });
   it('retains only fixed protocol refusal reasons without command output or private data', () => {
     const privateValue = '/private/secret-credential';
     const failure = (reason: string) => ({

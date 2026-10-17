@@ -16,6 +16,7 @@ import {
 } from './effective-config.js';
 import type { LiveProcessIdentity } from './process-identity.js';
 import type { OwningNativeObservation } from './owning-observation.js';
+import type { InstalledSourceObservation } from './installed-launch-contract.js';
 
 const systemSources = [
   '/etc/codex/config.toml',
@@ -152,6 +153,7 @@ export function resolveLiveSourceInventory(input: {
   policyDigest: string;
   workerConfig: LiveConfigFile;
   approved: Parameters<typeof resolveLiveConfigFiles>[0]['approved'];
+  originalLaunchSources?: readonly InstalledSourceObservation[];
 }) {
   try {
     const observed = response.parse(input.configuration);
@@ -249,9 +251,17 @@ export function resolveLiveSourceInventory(input: {
         ...current,
       });
     }
+    const originalSources = input.originalLaunchSources ?? [];
+    sources.push(...originalSources.map((source) => structuredClone(source)));
     if (
       sources.length > 128 ||
-      new Set(sources.map((source) => source.path)).size !== sources.length
+      new Set(
+        sources.map((source) =>
+          source.kind === 'installed-launch-source'
+            ? (source.descriptor as { path: string }).path
+            : source.path,
+        ),
+      ).size !== sources.length
     )
       throw new Error();
     const { pid, birth, uid, namespaces } = input.runtime;

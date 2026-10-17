@@ -5,6 +5,7 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import type { RelaySessionSnapshot } from '../../features/sessions/model/relay-session.js';
@@ -19,6 +20,7 @@ import type { ManagedProjectSandboxState } from './caddy-admin-boundary.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
 import { liveControllerPrivateRoots, removeRedundantLiveDenials } from './owning-permissions.js';
+import type { InstalledSourceObservation } from './installed-launch-contract.js';
 
 type Election = Awaited<ReturnType<typeof electLiveController>>['election'];
 export type OwningRuntimeCapture = Readonly<{
@@ -34,6 +36,7 @@ export type OwningRuntimeCapture = Readonly<{
   baselineState: ManagedProjectSandboxState;
   projectState: ManagedProjectSandboxState;
   state: ManagedProjectSandboxState;
+  originalLaunchSources: readonly InstalledSourceObservation[];
 }>;
 const kernelIdentity = (identity: ReturnType<typeof observeLiveProcess>) => ({
   pid: identity.pid,
@@ -77,6 +80,7 @@ export async function captureOwningRuntime(input: {
     owningHome: cfg.nativeEnvironment.CODEX_HOME,
     files: app.owningPolicy.configFiles,
     threadConfig: input.threadConfig,
+    installedSource: app.owningPolicy.originalLaunchSources?.[0],
   });
   const previous = input.renewal?.previous;
   if (
@@ -204,6 +208,9 @@ export async function captureOwningRuntime(input: {
         home: cfg.nativeEnvironment.CODEX_HOME,
         instructionFiles: app.owningPolicy.instructionFiles,
       },
+      ...(app.owningPolicy.originalLaunchSources
+        ? { originalLaunchSources: app.owningPolicy.originalLaunchSources }
+        : {}),
       binary: { ...cfg.native, version: '0.161.0' },
       sandboxState: state,
       configFiles: [...app.owningPolicy.configFiles, readLiveConfigFile(workerConfig)],
@@ -234,31 +241,54 @@ export async function captureOwningRuntime(input: {
     }) + '\n',
     { mode: 0o600, flag: 'wx' },
   );
+  const observedSources = await policy.observeOriginalSources(manifestPath);
+  if (previous && !isDeepStrictEqual(observedSources, previous.originalLaunchSources))
+    throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
   await policy.bootstrapRuntime(manifestPath);
   const captureId = randomUUID();
-  const reply = previous
-    ? await policy.renewRuntime({
-        manifestPath,
-        captureId,
-        previousManifestPath: previous.manifestPath,
-        previousCaptureId: previous.captureId,
-        mode: input.renewal!.mode,
-      })
-    : await policy.captureRuntime(manifestPath, captureId);
-  if (typeof reply.policyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(reply.policyDigest))
-    throw new Error('LIVE_RUNTIME_CAPTURE_REPLY_INVALID');
-  return Object.freeze({
-    captureId,
-    sessionId: session.id,
-    generation: input.generation,
-    directory,
-    manifestPath,
-    runtimeHome,
-    keyPath,
-    policyDigest: reply.policyDigest,
-    captured,
-    baselineState,
-    projectState,
-    state,
-  });
+  try {
+    const reply = previous
+      ? await policy.renewRuntime({
+          manifestPath,
+          captureId,
+          previousManifestPath: previous.manifestPath,
+          previousCaptureId: previous.captureId,
+          mode: input.renewal!.mode,
+        })
+      : await policy.captureRuntime(manifestPath, captureId);
+    if (typeof reply.policyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(reply.policyDigest))
+      throw new Error('LIVE_RUNTIME_CAPTURE_REPLY_INVALID');
+    if (!previous) policy.assertOriginalSourceReply(reply, observedSources);
+    await policy.assertOriginalSourceBirth(
+      manifestPath,
+      captureId,
+      previous?.originalLaunchSources ?? observedSources,
+    );
+    return Object.freeze({
+      captureId,
+      sessionId: session.id,
+      generation: input.generation,
+      directory,
+      manifestPath,
+      runtimeHome,
+      keyPath,
+      policyDigest: reply.policyDigest,
+      captured,
+      baselineState,
+      projectState,
+      state,
+      originalLaunchSources: structuredClone(previous?.originalLaunchSources ?? observedSources),
+    });
+  } catch (error) {
+    // A lost reply or a rejected extension can follow a durable capture. Revoke
+    // its exact ID before allowing another admission attempt.
+    try {
+      await policy.revokeRuntime(manifestPath, captureId);
+    } catch {
+      throw Object.assign(new Error('LIVE_CLEANUP_REQUIRED'), {
+        code: 'LIVE_RUNTIME_CAPTURE_CLEANUP_REQUIRED',
+      });
+    }
+    throw error;
+  }
 }

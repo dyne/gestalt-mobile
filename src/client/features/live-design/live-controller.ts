@@ -17,6 +17,8 @@ export type LiveView = {
 };
 const setup =
   'Live needs a registered app, the managed runtime, and an operator-configured HTTPS preview with Caddy. Ask the operator to check Live setup.';
+const uncertainStart =
+  'Start may still be completing. Keep this app selected and retry Start to check safely.';
 const messages: Record<string, string> = {
   LIVE_SESSION_BUSY: 'This session is busy. Wait for its current work to finish, then retry Start.',
   LIVE_MODE_ACTIVE: 'Live already controls this session. Refresh its status before continuing.',
@@ -76,15 +78,17 @@ export class LiveController {
     if (acquired) this.operation = null;
     const available = targets.status === 'fulfilled' ? targets.value.targets : [];
     this.update({
-      targets: available,
+      targets: this.operation ? this.view.targets : available,
       run,
       checking: false,
       uncertainStart: acquired ? false : this.view.uncertainStart,
       guidance: acquired
         ? 'Live controls this session. Open the preview to design your app.'
-        : available.length
-          ? 'Live controls this session while you design. Choose an app to start.'
-          : setup,
+        : this.view.uncertainStart
+          ? uncertainStart
+          : available.length
+            ? 'Live controls this session while you design. Choose an app to start.'
+            : setup,
     });
     if (reportFailure && targets.status === 'rejected') this.notify(setup);
   }
@@ -129,7 +133,7 @@ export class LiveController {
         messages[code] ??
         (definitive
           ? 'Live could not start. Ask the operator to check Live setup, then retry Start.'
-          : 'Start may still be completing. Keep this app selected and retry Start to check safely.');
+          : uncertainStart);
       if (definitive) this.operation = null;
       this.update({ pending: false, uncertainStart: !definitive, guidance: message });
       this.notify(message);

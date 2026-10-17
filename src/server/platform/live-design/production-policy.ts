@@ -23,6 +23,13 @@ import { resolveLiveSourceInventory } from './owning-source-inventory.js';
 import type { ProductionLiveConfiguration } from './production-configuration.js';
 import { normalizedLivePermissions as normalize, owningPermissions } from './owning-permissions.js';
 import { observeOwningNative } from './owning-observation.js';
+import {
+  assertOriginalLiveMcp,
+  assertAdmittedLiveMcp,
+  originalLaunchSurfaces,
+  installedMcpBudgets,
+} from './installed-launch-contract.js';
+import { captureOriginalBridge, assertOriginalBridgeDrained } from './original-bridge-lifetime.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 
@@ -117,16 +124,13 @@ export async function prepareProductionPolicy(input: {
     throw Object.assign(new Error('LIVE_RUNTIME_PROVENANCE_UNAVAILABLE'), {
       code: 'LIVE_OWNING_CAPTURE_MISMATCH',
     });
-  const original = observation.configuration as { config?: Record<string, unknown> };
   const originalObservation = observeOwningNative({
     configuration: observation.configuration,
     selection: observation.threadSelection,
     account: observation.account,
   });
-  const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
-  if (!Array.isArray(mcp?.data) || mcp.data.length || mcp.nextCursor)
-    throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
-  const merged = mergeLiveConfig(original.config ?? {}, observation.threadConfig);
+  const originalSource = app.owningPolicy?.originalLaunchSources?.[0];
+  assertOriginalLiveMcp(observation.mcp, originalSource);
   // Original host delegates remain unsupported. The installed two Live packages
   // below are explicitly selected by the trusted host configuration, not claimed
   // to be the observed original inventory.
@@ -135,13 +139,8 @@ export async function prepareProductionPolicy(input: {
     appRoot: app.appRoot,
     capturedProjectSources: capture.captured.directories,
     threadConfig: observation.threadConfig,
-    approved: { mcpServers: {}, plugins: {} },
+    approved: originalLaunchSurfaces(originalSource),
   });
-  if (
-    !isDeepStrictEqual(merged.mcp_servers ?? {}, {}) ||
-    !isDeepStrictEqual(merged.plugins ?? {}, {})
-  )
-    throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
   const protectedPaths = [
     cfg.privateDirectory,
     input.authenticationDirectory,
@@ -215,6 +214,9 @@ export async function prepareProductionPolicy(input: {
         cwd: app.appRoot,
         env: {},
         default_tools_approval_mode: 'approve',
+        enabled: true,
+        required: false,
+        ...installedMcpBudgets(server, !!originalSource),
       },
     ]),
   );
@@ -316,7 +318,9 @@ export async function prepareProductionPolicy(input: {
   };
   if (!isDeepStrictEqual(prepared.mcpServers, expectedServers))
     throw new Error('LIVE_CONFIG_CHANGED');
+  const originalBridgeBirths = captureOriginalBridge(observation.launch, originalSource);
   await input.reconfigure(modelConfig);
+  await assertOriginalBridgeDrained(observation.launch, originalBridgeBirths, originalSource);
   const actual = await input.observe();
   assertUnadmittedLiveMcp(actual.mcp);
   const effective = owningPermissions({
@@ -355,11 +359,23 @@ export async function prepareProductionPolicy(input: {
     policyDigest: capture.policyDigest,
     workerConfig: readLiveConfigFile(workerConfig),
     approved: { mcpServers: expectedServers, plugins: {} },
+    originalLaunchSources: capture.originalLaunchSources,
   });
   if (!isDeepStrictEqual(actual.threadConfig, modelConfig)) throw new Error('LIVE_CONFIG_CHANGED');
   const sourcesPath = join(directory, 'owning-sources.json');
   json(sourcesPath, sourceInventory);
-  await policy.sealRuntime(manifestPath, capture.captureId, actual.launch.pid, sourcesPath);
+  await policy.assertOriginalSourceBirth(
+    manifestPath,
+    capture.captureId,
+    capture.originalLaunchSources,
+  );
+  const sealed = await policy.sealRuntime(
+    manifestPath,
+    capture.captureId,
+    actual.launch.pid,
+    sourcesPath,
+  );
+  policy.assertOriginalSourceReply(sealed, capture.originalLaunchSources);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
   manifest.runtimeProvenance = {
     captureId: capture.captureId,
@@ -374,8 +390,9 @@ export async function prepareProductionPolicy(input: {
   // Initial MCP startup preceded signed receipts and could not grant work.
   // Cold-resume the same idle thread to connect its now-admitted descriptors.
   await input.reconfigure(modelConfig);
-
-  return {
+  const admitted = await input.observe();
+  assertAdmittedLiveMcp(admitted.mcp);
+  const preparedPolicy: PreparedProductionPolicy = {
     directory,
     capture,
     sourceInventory,
@@ -392,6 +409,8 @@ export async function prepareProductionPolicy(input: {
     skillsConfig: structuredClone(observation.skillsConfig),
     digests,
   };
+  assertProductionSourceObservation(preparedPolicy, admitted);
+  return preparedPolicy;
 }
 
 /** Re-resolve actual owning RPC state at every Live model admission. Stored
@@ -423,6 +442,7 @@ export function assertProductionSourceObservation(
     policyDigest: policy.capture.policyDigest,
     workerConfig: readLiveConfigFile(join(policy.capture.runtimeHome, 'config.toml')),
     approved: { mcpServers: policy.expectedServers, plugins: {} },
+    originalLaunchSources: policy.capture.originalLaunchSources,
   });
   if (!isDeepStrictEqual(current, policy.sourceInventory)) throw new Error('LIVE_CONFIG_CHANGED');
 }

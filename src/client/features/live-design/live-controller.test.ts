@@ -61,6 +61,8 @@ describe('Live acquisition', () => {
     expect(controller.view.uncertainStart).toBe(true);
     controller.select(1);
     expect(controller.view.selection).toBe(0);
+    await controller.refresh();
+    expect(controller.view.guidance).toContain('Keep this app selected');
     await controller.start();
     expect(vi.mocked(client.liveStart).mock.calls[0]?.[1].operationId).toEqual(
       vi.mocked(client.liveStart).mock.calls[1]?.[1].operationId,

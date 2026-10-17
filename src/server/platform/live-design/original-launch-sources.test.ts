@@ -10,6 +10,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readLiveConfigFile } from './effective-config.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
+import {
+  originalInstalledSourceSchema,
+  originalLaunchSurfaces,
+} from './installed-launch-contract.js';
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -21,6 +25,45 @@ function fixture(content = 'model = "selected-model"\n[features]\nhooks = false\
   return { owningHome, files: [readLiveConfigFile(path)], threadConfig: {} };
 }
 describe('original launch source validation before signing authority', () => {
+  it('accepts only the exact separately declared bridge in a hook-free original without hiding settings', () => {
+    const input = fixture();
+    const source = originalInstalledSourceSchema.parse({
+      kind: 'context-mode-bridge-v1',
+      path: join(input.owningHome, 'bin/context-mode-mcp.mjs'),
+      sha256: 'a'.repeat(64),
+      gestaltHome: '/protected/gestalt',
+      interpreter: { path: '/usr/bin/node', sha256: 'b'.repeat(64) },
+      package: {
+        root: '/cache/context-mode/2.16.1',
+        version: '2.16.1',
+        treeDigest: 'c'.repeat(64),
+      },
+      runtime: { root: '/protected/gestalt/runtime/context-mode', treeDigest: 'd'.repeat(64) },
+    });
+    const content = `[features]\nhooks = false\n[mcp_servers.context-mode]\ncommand = "node"\nargs = [${JSON.stringify(source.path)}]\nenabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n[plugins."context-mode@dyne-gestalt-agents"]\nenabled = false\n`;
+    const set = (text: string) => {
+      writeFileSync(input.files[0]!.path, text);
+      input.files[0] = readLiveConfigFile(input.files[0]!.path);
+    };
+    set(content);
+    expect(validateOriginalLaunchSources({ ...input, installedSource: source })).toMatchObject({
+      mcp_servers: originalLaunchSurfaces(source).mcpServers,
+      plugins: originalLaunchSurfaces(source).plugins,
+    });
+    expect(() => validateOriginalLaunchSources(input)).toThrow('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    for (const changed of [
+      content.replace('hooks = false', 'hooks = true'),
+      content.replace('required = true', 'required = false'),
+      content.replace('enabled = false', 'enabled = true'),
+      content + '[plugins."gestalt@dyne-gestalt-agents"]\nenabled = true\n',
+      content + '[mcp_servers.context-mode.env]\nNODE_OPTIONS = "unapproved"\n',
+    ]) {
+      set(changed);
+      expect(() => validateOriginalLaunchSources({ ...input, installedSource: source })).toThrow(
+        'LIVE_ORIGINAL_LAUNCH_UNVERIFIED',
+      );
+    }
+  });
   it.each(['mcp_servers = {}\nplugins = {}\n', '[mcp_servers]\n[plugins]\n'])(
     'accepts explicitly empty TOML launch inventories (%s)',
     (inventory) => {

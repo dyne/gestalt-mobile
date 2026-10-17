@@ -93,6 +93,11 @@ import { SqliteLiveEventInbox } from './sqlite-event-inbox.js';
 import { captureOwningRuntime, type OwningRuntimeCapture } from './owning-runtime-capture.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
+import {
+  assertOriginalLiveMcp,
+  assertAdmittedLiveMcp,
+  originalLaunchSurfaces,
+} from './installed-launch-contract.js';
 import { observeOwningNative } from './owning-observation.js';
 import { currentOwningSession, recoveredSession } from './recovered-session.js';
 import {
@@ -296,6 +301,12 @@ export class ProductionLiveController {
       this.owners.assertCaptureWriters(session.id, peers);
       return await this.construction.run(authority, () => b.guard.livePreparation(session, work));
     } catch (error) {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'LIVE_RUNTIME_CAPTURE_CLEANUP_REQUIRED'
+      )
+        this.failedPreparations.add(session.id);
       const capture = this.captures.get(session.id);
       if (capture)
         try {
@@ -328,6 +339,7 @@ export class ProductionLiveController {
         validateOriginalLaunchSources({
           owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
           files: app.owningPolicy.configFiles,
+          installedSource: app.owningPolicy.originalLaunchSources?.[0],
           threadConfig: {},
         });
     const capture = input.liveCaptureId ? this.pendingLaunches.get(input.liveCaptureId) : undefined;
@@ -424,6 +436,7 @@ export class ProductionLiveController {
     validateOriginalLaunchSources({
       owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
       files: app.owningPolicy.configFiles,
+      installedSource: app.owningPolicy.originalLaunchSources?.[0],
       threadConfig: modelConfig,
     });
   };
@@ -466,11 +479,9 @@ export class ProductionLiveController {
         appRoot: app.appRoot,
         capturedProjectSources: this.captures.get(session.id)?.captured.directories,
         threadConfig: observation.threadConfig,
-        approved: { mcpServers: {}, plugins: {} },
+        approved: originalLaunchSurfaces(app.owningPolicy?.originalLaunchSources?.[0]),
       });
-      const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
-      if (!Array.isArray(mcp.data) || mcp.data.length || mcp.nextCursor)
-        throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
+      assertOriginalLiveMcp(observation.mcp, app.owningPolicy?.originalLaunchSources?.[0]);
       const { state } = owningPermissions({
         session,
         observation,
@@ -563,19 +574,7 @@ export class ProductionLiveController {
               }))
             : [],
         };
-        if (
-          !Array.isArray(tools.data) ||
-          tools.data.length !== 2 ||
-          tools.nextCursor ||
-          !isDeepStrictEqual(tools.data.map((tool) => tool.name).sort(), [
-            'context-mode',
-            'gestalt-org-plan',
-          ]) ||
-          tools.data.some(
-            (tool) => tool.runtimeStatus !== 'connected' || tool.toolsError || tool.httpOrigin,
-          )
-        )
-          throw new Error('LIVE_MCP_UNAVAILABLE');
+        assertAdmittedLiveMcp(current.mcp);
         this.preparedOwners.set(session.id, policy);
         this.originalObservations.set(session.id, observation);
       }
@@ -1232,7 +1231,7 @@ export class ProductionLiveController {
           appRoot: app.appRoot,
           capturedProjectSources: capture.captured.directories,
           threadConfig: observation.threadConfig,
-          approved: { mcpServers: {}, plugins: {} },
+          approved: originalLaunchSurfaces(app.owningPolicy?.originalLaunchSources?.[0]),
         });
         stage = 'original-permissions';
         owningPermissions({
@@ -1528,29 +1527,7 @@ export class ProductionLiveController {
           throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
       if (!isDeepStrictEqual(observed.threadConfig, g.policy.modelConfig))
         throw new Error('LIVE_CONFIG_CHANGED');
-      const mcp = observed.mcp as {
-        data?: {
-          name: string;
-          runtimeStatus?: string;
-          toolsError?: unknown;
-          httpOrigin?: unknown;
-        }[];
-        nextCursor?: unknown;
-      };
-      if (
-        !Array.isArray(mcp.data) ||
-        mcp.data.length !== 2 ||
-        mcp.nextCursor ||
-        !isDeepStrictEqual(mcp.data.map((server) => server.name).sort(), [
-          'context-mode',
-          'gestalt-org-plan',
-        ]) ||
-        mcp.data.some(
-          (server) =>
-            server.runtimeStatus !== 'connected' || server.toolsError || server.httpOrigin,
-        )
-      )
-        throw new Error('LIVE_MCP_UNAVAILABLE');
+      assertAdmittedLiveMcp(observed.mcp);
       const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
         g.policy.manifestPath,
         g.policy.bootstrapPath,
@@ -1615,7 +1592,14 @@ export class ProductionLiveController {
     prepareHelperOutputRoots(g.app.appRoot, g.policy.capture.projectState);
     await b.guard.liveMaintenance(run, async () => {
       g.resumed = true;
+      const admission = new InstalledLivePolicy(this.cfg.installation);
+      const prior = admission.contextLaunchIds(g.policy.manifestPath);
       await b.runtime.probeLiveContext(g.session, g.policy.probePath);
+      admission.assertCompletedContextLaunch(
+        g.policy.manifestPath,
+        prior,
+        g.policy.digests.policyDigest,
+      );
     });
   }
   private async authorize(run: LiveRun): Promise<void> {
@@ -1790,6 +1774,7 @@ export class ProductionLiveController {
       if (b.runtime.liveOwnerIds().includes(g.session.id)) {
         await b.runtime.reconfigureLiveOwner(g.session, configuration);
         const current = await b.runtime.inspectLiveAdmission(g.session);
+        assertOriginalLiveMcp(current.mcp, g.app.owningPolicy?.originalLaunchSources?.[0]);
         if (
           !isDeepStrictEqual(current.launch, g.observation.launch) ||
           !isDeepStrictEqual(current.configuration, g.observation.configuration) ||
@@ -1806,9 +1791,7 @@ export class ProductionLiveController {
               selection: g.observation.threadSelection,
               account: g.observation.account,
             }),
-          ) ||
-          !Array.isArray((current.mcp as { data?: unknown[] }).data) ||
-          (current.mcp as { data: unknown[] }).data.length
+          )
         )
           throw new Error('LIVE_ORIGINAL_CONFIGURATION_UNVERIFIED');
         g.resumed = false;

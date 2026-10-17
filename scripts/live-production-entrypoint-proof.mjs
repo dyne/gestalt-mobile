@@ -64,6 +64,8 @@ import {
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
+const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
+assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
 const evidence = resolve(
@@ -80,6 +82,7 @@ const report = {
   cleanupComplete: false,
   limitations: [
     'Controlled provider, not genuine credential-dependent proof.',
+    'Explicit already-hook-free installed bridge fixture; unchanged ordinary hooked homes and enabled Gestalt metadata remain unsupported.',
     ...(editFlow
       ? [
           'Browser uses a temporary pre-provisioned authorized device; WebAuthn enrollment is separately proven.',
@@ -263,6 +266,25 @@ ProductionLiveController.prototype.launchNative = function (input) {
     try {
       const value = await request(method, params);
       if (tracked) observation.requests.push({ method, completed: true });
+      if (method === 'mcpServerStatus/list' && params?.threadId && params?.serverName) {
+        const rows = (observation.owningCatalogs ??= []);
+        for (const server of value?.data ?? []) {
+          if (rows.length === 64) rows.shift();
+          rows.push({
+            name: ['context-mode', 'gestalt-org-plan'].includes(server.name)
+              ? server.name
+              : 'unapproved',
+            status: ['connected', 'failed', 'starting', 'notStarted'].includes(server.runtimeStatus)
+              ? server.runtimeStatus
+              : 'unrecognized',
+            toolCount:
+              server.tools && typeof server.tools === 'object'
+                ? Object.keys(server.tools).length
+                : null,
+            threadIdDigest: hash(params.threadId),
+          });
+        }
+      }
       return value;
     } catch (error) {
       if (tracked) observation.requests.push({ method, completed: false });
@@ -342,6 +364,8 @@ const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(pat
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
 const rootIdentity = lstatSync(root);
 const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
+if (preflightOnly)
+  report.proofKind = 'installed-bridge-owning-catalog-start-preflight-no-model-turn';
 const constructionOnly = process.env.LIVE_PRODUCTION_CONSTRUCTION_ONLY === '1';
 assert.ok(!(installationOnly && constructionOnly));
 if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
@@ -1097,9 +1121,11 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: '414a89284efbb050188ca1802563b92667c50994',
-    agentsAcceptedCommit: '2c88bc0694d8386bf3f1716fddce3082b7e6486f',
-    agentsProofSnapshot: '129d33bc6d6c58d280d9bcf5155fab6ed9b6e0bd',
+    agents: 'a6a2758c72220e4845d2735e9776caf8a7e8c43b',
+    agentsAcceptedCommit: '18f53c466abcf254f83c9ba83af9f3b1ba5f7882',
+    agentsProofSnapshot: 'ba9a7f703b582688009a158cff7392f3f93b4b0e',
+    managerAcceptedCommit: '5084cf219163dcf153af1be6f63496dec1bd3d40',
+    managerTree: 'dfdeabd2ffdbdb6c429a39c3e81286b611af7734',
     manager: LIVE_MANAGER_SHA256,
   };
   report.installationStage = 'vendor-copy';
@@ -1115,10 +1141,11 @@ try {
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
   metadataNativePath = native.path;
-  report.installationStage = 'node-copy';
-  const nodeRoot = join(installation, 'node-bin');
-  mkdirSync(nodeRoot, { mode: 0o700 });
-  const node = copyFile(process.execPath, join(nodeRoot, 'node'), true);
+  report.installationStage = 'actual-original-interpreter';
+  // The supported original PATH resolves this exact interpreter identity. A
+  // byte-identical private copy is not the original executable source.
+  const node = pin(realpathSync(process.execPath));
+  assert.equal(node.path, '/usr/bin/node');
   report.installationStage = 'manager-copy';
   const manager = copyFile(
     process.env.LIVE_HOST_MANAGER_BINARY,
@@ -1143,7 +1170,14 @@ try {
   report.installationStage = 'agents-package-copy';
   const packages = ['context-mode', 'gestalt'].map((name) => {
     report.installationPackage = name;
-    const target = join(installation, name);
+    const version = JSON.parse(
+      readFileSync(join(agentsRoot, 'plugins', name, 'package.json'), 'utf8'),
+    ).version;
+    const target =
+      name === 'context-mode'
+        ? join(installation, 'cache/context-mode', version)
+        : join(installation, name);
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     cpSync(join(agentsRoot, 'plugins', name), target, {
       recursive: true,
       filter: (path) =>
@@ -1163,9 +1197,12 @@ try {
     pathToFileURL(join(installation, 'gestalt/scripts/prepare-live-runtime.mjs')).href
   );
   report.installationStage = 'runtime-preparation';
+  const contextPackage = packages.find((entry) => entry.name === 'context-mode');
+  const gestaltHome = join(installation, 'gestalt-home');
+  mkdirSync(join(gestaltHome, 'runtime'), { recursive: true, mode: 0o700 });
   const preparedRuntime = await prepareLiveRuntime(
-    join(installation, 'context-mode'),
-    join(installation, 'context-runtime'),
+    contextPackage.root,
+    join(gestaltHome, 'runtime/context-mode'),
   );
   report.installationStage = 'package-immutability-and-inventory';
   for (const entry of packages) {
@@ -1276,13 +1313,68 @@ try {
   await new Promise((done) => provider.listen(0, '127.0.0.1', done));
   const providerPort = provider.address().port;
   const originalConfig =
-    `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n` +
+    `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n` +
     `[projects.${JSON.stringify(appRoot)}]\ntrust_level = "trusted"\n`;
   // Configure optional shell snapshot caching OFF in the original source before
   // any Native owner starts. Actual shell/model tools and their sandbox remain
   // mandatory below. Live never overrides an existing owner's snapshot setting
   // or accepts/deletes unproven metadata to make admission pass.
-  writeFileSync(join(owningHome, 'config.toml'), originalConfig, { mode: 0o600 });
+  // Obtain exact generated bridge bytes from the accepted configurator in a
+  // separate unused template home. Its hooks remain true and unmodified. The
+  // owning fixture below is explicitly hook-free from birth, never a relabeled
+  // ordinary installed home or a runtime hooks rewrite.
+  const templateHome = join(root, 'configurator-template');
+  mkdirSync(templateHome, { mode: 0o700 });
+  const { configureCodexIntegration } = await import(
+    pathToFileURL(join(contextPackage.root, 'scripts/configure-codex.mjs')).href
+  );
+  const configured = configureCodexIntegration({
+    codexHome: templateHome,
+    gestaltHome,
+    pluginRoot: contextPackage.root,
+    pluginId: 'context-mode@dyne-gestalt-agents',
+  });
+  const templateConfig = readFileSync(configured.configPath),
+    templateHooks = readFileSync(configured.hooksPath);
+  assert.match(templateConfig.toString(), /hooks = true/);
+  mkdirSync(join(owningHome, 'bin'), { mode: 0o700 });
+  const originalBridgePath = join(owningHome, 'bin/context-mode-mcp.mjs');
+  writeFileSync(originalBridgePath, readFileSync(configured.launcherPath), {
+    mode: 0o755,
+    flag: 'wx',
+  });
+  const installedOriginalConfig =
+    originalConfig +
+    `\n[mcp_servers.context-mode]\ncommand = "node"\nargs = [${JSON.stringify(originalBridgePath)}]\nenabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n[plugins."context-mode@dyne-gestalt-agents"]\nenabled = false\n`;
+  writeFileSync(join(owningHome, 'config.toml'), installedOriginalConfig, { mode: 0o600 });
+  const originalLaunchSource = {
+    kind: 'context-mode-bridge-v1',
+    path: originalBridgePath,
+    sha256: hash(readFileSync(originalBridgePath)),
+    gestaltHome,
+    interpreter: node,
+    package: {
+      root: contextPackage.root,
+      version: JSON.parse(readFileSync(join(contextPackage.root, 'package.json'), 'utf8')).version,
+      treeDigest: contextPackage.sha256,
+    },
+    runtime: { root: runtime.root, treeDigest: runtime.sha256 },
+  };
+  assert.equal(lstatSync(originalBridgePath).mode & 0o7777, 0o755);
+  assert.deepEqual(readFileSync(configured.configPath), templateConfig);
+  assert.deepEqual(readFileSync(configured.hooksPath), templateHooks);
+  report.originalInstalledSurface = {
+    authenticConfiguratorBridgeBytes: true,
+    authenticPreparedRuntime: true,
+    explicitHookFreeOwningFixture: true,
+    ordinaryInstalledHomeEligible: false,
+    originalMode: '0755',
+    originalEnabled: true,
+    originalRequired: true,
+    packageExplicitlyDisabled: true,
+    templateHooksPreserved: true,
+  };
+
   execFileSync(
     'openssl',
     [
@@ -1391,7 +1483,7 @@ try {
       providerCredentialEnvironment: [],
       project: { bwrap, node, worker, helper },
       components: {
-        manager: '19114b2389501c0a511b8a77ace4161b0dae2f0e',
+        manager: report.provenance.managerAcceptedCommit,
         mobile: report.provenance.tree,
         agents: report.provenance.agents,
       },
@@ -1413,6 +1505,7 @@ try {
             profileId: 'workspace-git',
             configFiles: [pin(join(owningHome, 'config.toml'))],
             instructionFiles: [],
+            originalLaunchSources: [originalLaunchSource],
             sandboxState: {
               permissionProfile: {
                 type: 'managed',
@@ -1493,14 +1586,20 @@ try {
   assert.equal(session.state, 'ready');
   assert.equal(typeof session.threadId, 'string');
   report.checks.actualOwningStartupAdmitted = true;
-  await api('POST', `/api/sessions/${session.id}/turns`, {
-    text: 'Seed owning thread persistence.',
-  });
-  await until(async () => {
-    const current = await api('GET', `/api/sessions/${session.id}`);
-    return !current.activeTurnId && report.provider.requestCount === 1;
-  }, 'OWNING_SEED_DEADLINE');
-  report.projectMetadata.afterSeed = ownedProjectMetadata();
+  if (preflightOnly) {
+    owningThread = session.threadId;
+    report.projectMetadata.afterSeed = report.projectMetadata.afterSessionCreate;
+    report.preflightSeedSkipped = true;
+  } else {
+    await api('POST', `/api/sessions/${session.id}/turns`, {
+      text: 'Seed owning thread persistence.',
+    });
+    await until(async () => {
+      const current = await api('GET', `/api/sessions/${session.id}`);
+      return !current.activeTurnId && report.provider.requestCount === 1;
+    }, 'OWNING_SEED_DEADLINE');
+    report.projectMetadata.afterSeed = ownedProjectMetadata();
+  }
   report.stage = 'compatible-original-startup';
   for (const facts of [
     report.projectMetadata.afterSessionCreate,
@@ -1581,7 +1680,7 @@ try {
   }
   baselineBirth = observed.launch;
   assert.equal(observedBirthExited(baselineBirth), false);
-  assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), originalConfig);
+  assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
   for (const name of ['policy-receipt.json', 'admission-receipt.json'])
     report.checks[name.replaceAll('-', '_')] = existsSync(join(generationDirectory, name));
   const stable = (value) =>
@@ -1635,12 +1734,81 @@ try {
     sourceKinds: sealed.inventory.sources.map((source) => source.kind),
     captureGenerationMatchesLiveGeneration: true,
   };
+  assert.deepEqual(manifest.originalLaunchSources, [originalLaunchSource]);
+  assert.deepEqual(before.originalLaunchSources[0].descriptor, originalLaunchSource);
+  assert.deepEqual(
+    sealed.inventory.sources.find((source) => source.kind === 'installed-launch-source'),
+    before.originalLaunchSources[0],
+  );
+  report.checks.installedExecutableSourceSeparatelySignedAndSealed = true;
   report.checks.originalManagedOwnerRetainedWithSignedV2Sources = true;
   report.checks.productionContextNativeAdmissionProbe = true; // active follows the actual fixed context probe, never a fixture callback.
   const reused = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
   assert.equal(reused.liveId, started.liveId);
   assert.equal(reused.generation, started.generation);
   report.checks.sameSessionReuseNoReplacement = true;
+  if (preflightOnly) {
+    assert.equal(report.provider.requestCount, 0);
+    const catalogs = report.nativeLaunchLifetimes.flatMap((launch) => launch.owningCatalogs ?? []);
+    const sameThread = catalogs.filter((row) => row.threadIdDigest === hash(session.threadId));
+    assert.ok(
+      sameThread.some(
+        (row) => row.name === 'context-mode' && row.status === 'connected' && row.toolCount === 11,
+      ),
+    );
+    for (const [name, count] of [
+      ['context-mode', 7],
+      ['gestalt-org-plan', 12],
+    ]) {
+      assert.ok(
+        sameThread.some(
+          (row) => row.name === name && row.status === 'failed' && row.toolCount === 0,
+        ),
+      );
+      assert.ok(
+        sameThread.some(
+          (row) => row.name === name && row.status === 'connected' && row.toolCount === count,
+        ),
+      );
+    }
+    const processes = readdirSync(generationDirectory)
+      .filter((name) => /^process-[a-f0-9-]{36}\.json$/.test(name))
+      .map((name) => signed(join(generationDirectory, name)));
+    assert.ok(
+      processes.some(
+        (receipt) =>
+          receipt.commandId === 'context-mode-call' &&
+          receipt.postSpawnValidated === true &&
+          receipt.status === 'exited' &&
+          receipt.termination === 'leader-exit' &&
+          receipt.policy.manifestDigest ===
+            hash(readFileSync(join(generationDirectory, 'manifest.json'))),
+      ),
+    );
+    report.preflight = {
+      sameOwningNativeBirth: true,
+      originalCatalog11: true,
+      originalRetiredBeforeSeal: true,
+      terminalPresealZeroTools: true,
+      actualPostsealCatalog7And12: true,
+      currentSignedPostSpawnProbe: true,
+      actualProductionStartActive: true,
+      modelRequests: 0,
+    };
+    report.stage = 'preflight-revoke-and-shutdown';
+    await mobile.close();
+    mobile = undefined;
+    assert.equal(
+      signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
+      'revoked',
+    );
+    assert.equal(observedBirthExited(baselineBirth), true);
+    assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
+    assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+    report.checks.preflightRevokeCloseAndOriginalConfigurationPreserved = true;
+    report.cleanupComplete = true;
+    throw new Error('ADMISSION_PREFLIGHT_COMPLETE');
+  }
   report.stage = 'authenticated-preview-exchange';
   const verifier = previewSecrets.token();
   const grant = await api('POST', `/api/sessions/${session.id}/live/launch-grants`, {
@@ -1986,11 +2154,16 @@ try {
 } catch (error) {
   finishBrowserProfile();
   if (
+    (preflightOnly && error?.message === 'ADMISSION_PREFLIGHT_COMPLETE') ||
     (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') ||
     (constructionOnly && error?.message === 'CONSTRUCTION_ONLY_COMPLETE')
   ) {
     report.passed = true;
-    report.stage = installationOnly ? 'installation-only-complete' : 'construction-only-complete';
+    report.stage = preflightOnly
+      ? 'admission-preflight-complete'
+      : installationOnly
+        ? 'installation-only-complete'
+        : 'construction-only-complete';
   } else {
     try {
       report.nativeActivity = nativeActivity();

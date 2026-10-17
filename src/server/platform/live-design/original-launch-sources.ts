@@ -8,6 +8,11 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { parse } from 'smol-toml';
 import { mergeLiveConfig, readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
+import {
+  originalLaunchSurfaces,
+  type OriginalInstalledSource,
+} from './installed-launch-contract.js';
+import { isDeepStrictEqual } from 'node:util';
 
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -26,6 +31,7 @@ export function validateOriginalLaunchSources(input: {
   owningHome: string;
   files: readonly LiveConfigFile[];
   threadConfig: Readonly<Record<string, unknown>>;
+  installedSource?: OriginalInstalledSource;
 }): Readonly<Record<string, unknown>> {
   try {
     const paths = new Map(input.files.map((file) => [file.path, file.sha256]));
@@ -39,11 +45,10 @@ export function validateOriginalLaunchSources(input: {
       parsed.set(file.path, config);
     }
     const roles = new Set<string>();
+    const approved = originalLaunchSurfaces(input.installedSource);
     const inspect = (config: Readonly<Record<string, unknown>>, depth = 0) => {
       if (depth > 4 || config.project_doc_max_bytes === 0) throw new Error();
       for (const key of [
-        'mcp_servers',
-        'plugins',
         'hooks',
         'remote_mcp',
         'executables',
@@ -54,6 +59,12 @@ export function validateOriginalLaunchSources(input: {
         'apps',
       ])
         if (!empty(config[key])) throw new Error();
+      for (const [key, expected] of [
+        ['mcp_servers', approved.mcpServers],
+        ['plugins', approved.plugins],
+      ] as const)
+        if (!empty(config[key]) && !isDeepStrictEqual(structuredClone(config[key]), expected))
+          throw new Error();
       if (object(config.features) && config.features.hooks === true) throw new Error();
       if (object(config.profiles))
         for (const value of Object.values(config.profiles)) {
@@ -105,6 +116,11 @@ export function validateOriginalLaunchSources(input: {
       if (!roles.has(path)) configuration = mergeLiveConfig(configuration, config);
     const merged = mergeLiveConfig(configuration, input.threadConfig);
     if (!object(merged.features) || merged.features.hooks !== false) throw new Error();
+    if (
+      !isDeepStrictEqual(merged.mcp_servers ?? {}, approved.mcpServers) ||
+      !isDeepStrictEqual(merged.plugins ?? {}, approved.plugins)
+    )
+      throw new Error();
     return merged;
   } catch {
     // Parser exceptions contain source lines and config values. Never relay them.
