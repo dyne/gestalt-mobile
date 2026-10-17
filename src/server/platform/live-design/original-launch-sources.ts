@@ -45,9 +45,12 @@ export function validateOriginalLaunchSources(input: {
       parsed.set(file.path, config);
     }
     const roles = new Set<string>();
-    const approved = originalLaunchSurfaces(input.installedSource);
     const inspect = (config: Readonly<Record<string, unknown>>, depth = 0) => {
       if (depth > 4 || config.project_doc_max_bytes === 0) throw new Error();
+      const approved = originalLaunchSurfaces(
+        input.installedSource,
+        empty(config.plugins) ? undefined : structuredClone(config.plugins),
+      );
       for (const key of [
         'hooks',
         'remote_mcp',
@@ -115,6 +118,7 @@ export function validateOriginalLaunchSources(input: {
     for (const [path, config] of parsed)
       if (!roles.has(path)) configuration = mergeLiveConfig(configuration, config);
     const merged = mergeLiveConfig(configuration, input.threadConfig);
+    const approved = originalLaunchSurfaces(input.installedSource, merged.plugins);
     if (!object(merged.features) || merged.features.hooks !== false) throw new Error();
     if (
       !isDeepStrictEqual(merged.mcp_servers ?? {}, approved.mcpServers) ||

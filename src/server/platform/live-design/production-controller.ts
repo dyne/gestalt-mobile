@@ -458,6 +458,19 @@ export class ProductionLiveController {
       );
     return app;
   }
+  private originalSurfaces(app: App, threadConfig: Readonly<Record<string, unknown>>) {
+    if (!app.owningPolicy) throw new Error('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    const source = app.owningPolicy.originalLaunchSources?.[0];
+    return originalLaunchSurfaces(
+      source,
+      validateOriginalLaunchSources({
+        owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
+        files: app.owningPolicy.configFiles,
+        installedSource: source,
+        threadConfig,
+      }).plugins,
+    );
+  }
   /** Called after actual native start/resume, before exposing ordinary writer readiness. */
   async observeOwnerStarted(session: RelaySessionSnapshot): Promise<void> {
     if (this.generations.has(session.id) || this.preparedOwners.has(session.id)) return;
@@ -479,7 +492,7 @@ export class ProductionLiveController {
         appRoot: app.appRoot,
         capturedProjectSources: this.captures.get(session.id)?.captured.directories,
         threadConfig: observation.threadConfig,
-        approved: originalLaunchSurfaces(app.owningPolicy?.originalLaunchSources?.[0]),
+        approved: this.originalSurfaces(app, observation.threadConfig),
       });
       assertOriginalLiveMcp(observation.mcp, app.owningPolicy?.originalLaunchSources?.[0]);
       const { state } = owningPermissions({
@@ -1231,7 +1244,7 @@ export class ProductionLiveController {
           appRoot: app.appRoot,
           capturedProjectSources: capture.captured.directories,
           threadConfig: observation.threadConfig,
-          approved: originalLaunchSurfaces(app.owningPolicy?.originalLaunchSources?.[0]),
+          approved: this.originalSurfaces(app, observation.threadConfig),
         });
         stage = 'original-permissions';
         owningPermissions({

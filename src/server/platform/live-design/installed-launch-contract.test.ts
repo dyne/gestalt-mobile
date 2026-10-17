@@ -90,3 +90,30 @@ it('uses the accepted observation, command and startup phase budgets only for in
   });
   expect(installedMcpBudgets('context-mode', false)).toEqual({});
 });
+
+it('preserves only the optional exact disabled Gestalt inventory without granting capabilities', () => {
+  const original = originalLaunchSurfaces(source);
+  const plugins = { ...original.plugins, 'gestalt@dyne-gestalt-agents': { enabled: false } };
+  expect(originalLaunchSurfaces(source, plugins)).toEqual({ ...original, plugins });
+  expect(originalLaunchSurfaces(source).plugins).not.toHaveProperty('gestalt@dyne-gestalt-agents');
+  for (const descriptor of [
+    { enabled: true },
+    { enabled: false, command: 'node' },
+    { enabled: false, mcp_servers: {} },
+    { enabled: false, skills: [] },
+    { enabled: false, hooks: {} },
+    { enabled: false, unknown: false },
+    {},
+    null,
+  ])
+    expect(() =>
+      originalLaunchSurfaces(source, {
+        ...original.plugins,
+        'gestalt@dyne-gestalt-agents': descriptor,
+      }),
+    ).toThrow('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+  expect(() => originalLaunchSurfaces(undefined, plugins)).toThrow();
+  expect(() =>
+    originalLaunchSurfaces(source, { ...plugins, unknown: { enabled: false } }),
+  ).toThrow();
+});

@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { stringify } from 'smol-toml';
 import { prepareProductionPolicy } from './production-policy.js';
 import { InstalledLivePolicy, LIVE_MANAGER_SHA256 } from './installed-policy.js';
 import { readLiveConfigFile } from './effective-config.js';
@@ -40,6 +41,7 @@ vi.mock('./original-bridge-lifetime.js', () => ({
 }));
 const roots: string[] = [];
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
 });
@@ -50,6 +52,7 @@ function fixture(
     presealStarting?: boolean;
     postsealExtraTool?: boolean;
     missingExtension?: boolean;
+    disabledGestalt?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), 'live-production-installed-'));
@@ -82,6 +85,24 @@ function fixture(
       observation: { launcher: { sha256: hash } },
     },
   ];
+  const original = originalLaunchSurfaces(
+    installedSource,
+    options.disabledGestalt
+      ? {
+          'context-mode@dyne-gestalt-agents': { enabled: false },
+          'gestalt@dyne-gestalt-agents': { enabled: false },
+        }
+      : undefined,
+  );
+  writeFileSync(
+    configPath,
+    stringify({
+      features: { hooks: false },
+      mcp_servers: original.mcpServers,
+      plugins: original.plugins,
+    }),
+    { mode: 0o600 },
+  );
   const state = {
     permissionProfile: {
       type: 'managed' as const,
@@ -155,7 +176,6 @@ function fixture(
     }).snapshot,
     threadId: 'same-thread',
   };
-  const original = originalLaunchSurfaces(installedSource);
   const catalogServer = (name: string, names: readonly string[], runtimeStatus = 'connected') => ({
     name,
     runtimeStatus,
@@ -298,30 +318,33 @@ function fixture(
   };
 }
 
-it('seals separate executable provenance only after original retirement and terminal preseal refusal, then checks exact owning catalog', async () => {
-  const f = fixture();
-  const policy = await prepareProductionPolicy(f.input);
-  expect(f.events).toEqual(['stage', 'reconfigure', 'birth', 'seal', 'prepare', 'reconfigure']);
-  expect(mock.bridge).toHaveBeenCalledWith(
-    f.input.observation.launch,
-    f.input.app.owningPolicy!.originalLaunchSources![0],
-  );
-  expect(mock.drained).toHaveBeenCalledOnce();
-  expect(
-    policy.sourceInventory.sources.some((source) => source.kind === 'installed-launch-source'),
-  ).toBe(true);
-  expect(
-    policy.sourceInventory.sources
-      .filter((source) => source.kind === 'file')
-      .every((source) => !String(source.path).endsWith('.mjs')),
-  ).toBe(true);
-  expect(f.input.observe).toHaveBeenCalledTimes(2);
-  expect(policy.modelConfig.plugins).toEqual(f.input.observation.configuration.config.plugins);
-  expect(f.input.observation.configuration.config.mcp_servers['context-mode']).toMatchObject({
-    enabled: true,
-    required: true,
-  });
-});
+it.each([false, true])(
+  'seals separate executable provenance after retirement and preserves disabled inventory (Gestalt:%s)',
+  async (disabledGestalt) => {
+    const f = fixture({ disabledGestalt });
+    const policy = await prepareProductionPolicy(f.input);
+    expect(f.events).toEqual(['stage', 'reconfigure', 'birth', 'seal', 'prepare', 'reconfigure']);
+    expect(mock.bridge).toHaveBeenCalledWith(
+      f.input.observation.launch,
+      f.input.app.owningPolicy!.originalLaunchSources![0],
+    );
+    expect(mock.drained).toHaveBeenCalledOnce();
+    expect(
+      policy.sourceInventory.sources.some((source) => source.kind === 'installed-launch-source'),
+    ).toBe(true);
+    expect(
+      policy.sourceInventory.sources
+        .filter((source) => source.kind === 'file')
+        .every((source) => !String(source.path).endsWith('.mjs')),
+    ).toBe(true);
+    expect(f.input.observe).toHaveBeenCalledTimes(2);
+    expect(policy.modelConfig.plugins).toEqual(f.input.observation.configuration.config.plugins);
+    expect(f.input.observation.configuration.config.mcp_servers['context-mode']).toMatchObject({
+      enabled: true,
+      required: true,
+    });
+  },
+);
 
 it.each([
   { stageRequired: true },

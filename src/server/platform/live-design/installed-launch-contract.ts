@@ -55,7 +55,22 @@ export const LIVE_OWNING_CATALOG_MS =
  * package hooks/other plugin surfaces remain unavailable, never silently disabled. */
 export function originalLaunchSurfaces(
   source?: OriginalInstalledSource,
+  originalPlugins?: unknown,
 ): LiveApprovedLaunchSurfaces {
+  const plugins = source ? { 'context-mode@dyne-gestalt-agents': { enabled: false } } : {};
+  const disabledInstalled = {
+    ...plugins,
+    'gestalt@dyne-gestalt-agents': { enabled: false },
+  };
+  // Native 9790114 returns disabled plugins before loading any capability or
+  // manifest. This exact inert metadata still belongs to the signed original
+  // config; never introduce it, enable it, or accept custom plugin fields.
+  if (
+    originalPlugins !== undefined &&
+    !isDeepStrictEqual(originalPlugins, plugins) &&
+    !(source && isDeepStrictEqual(originalPlugins, disabledInstalled))
+  )
+    throw new Error('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
   return source
     ? {
         mcpServers: {
@@ -67,7 +82,7 @@ export function originalLaunchSurfaces(
             default_tools_approval_mode: 'approve',
           },
         },
-        plugins: { 'context-mode@dyne-gestalt-agents': { enabled: false } },
+        plugins: structuredClone(originalPlugins ?? plugins) as Record<string, unknown>,
       }
     : { mcpServers: {}, plugins: {} };
 }

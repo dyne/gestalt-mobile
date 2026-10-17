@@ -30,6 +30,7 @@ import {
   installedMcpBudgets,
 } from './installed-launch-contract.js';
 import { captureOriginalBridge, assertOriginalBridgeDrained } from './original-bridge-lifetime.js';
+import { validateOriginalLaunchSources } from './original-launch-sources.js';
 
 type Observation = Awaited<ReturnType<CodexSessionRuntime['inspectLiveAdmission']>>;
 
@@ -130,7 +131,16 @@ export async function prepareProductionPolicy(input: {
     account: observation.account,
   });
   const originalSource = app.owningPolicy?.originalLaunchSources?.[0];
-  const expectedPlugins = originalLaunchSurfaces(originalSource).plugins;
+  const approvedOriginal = originalLaunchSurfaces(
+    originalSource,
+    validateOriginalLaunchSources({
+      owningHome: cfg.nativeEnvironment.CODEX_HOME,
+      files: app.owningPolicy!.configFiles,
+      installedSource: originalSource,
+      threadConfig: observation.threadConfig,
+    }).plugins,
+  );
+  const expectedPlugins = approvedOriginal.plugins;
   assertOriginalLiveMcp(observation.mcp, originalSource);
   // Original host delegates remain unsupported. The installed two Live packages
   // below are explicitly selected by the trusted host configuration, not claimed
@@ -140,7 +150,7 @@ export async function prepareProductionPolicy(input: {
     appRoot: app.appRoot,
     capturedProjectSources: capture.captured.directories,
     threadConfig: observation.threadConfig,
-    approved: originalLaunchSurfaces(originalSource),
+    approved: approvedOriginal,
   });
   const protectedPaths = [
     cfg.privateDirectory,
@@ -444,7 +454,10 @@ export function assertProductionSourceObservation(
     workerConfig: readLiveConfigFile(join(policy.capture.runtimeHome, 'config.toml')),
     approved: {
       mcpServers: policy.expectedServers,
-      plugins: originalLaunchSurfaces(policy.capture.originalLaunchSources[0]?.descriptor).plugins,
+      plugins: originalLaunchSurfaces(
+        policy.capture.originalLaunchSources[0]?.descriptor,
+        policy.modelConfig.plugins,
+      ).plugins,
     },
     originalLaunchSources: policy.capture.originalLaunchSources,
   });

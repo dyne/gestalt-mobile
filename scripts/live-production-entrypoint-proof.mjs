@@ -1272,7 +1272,8 @@ try {
   );
   report.installationStage = 'runtime-preparation';
   const contextPackage = packages.find((entry) => entry.name === 'context-mode');
-  const gestaltHome = join(installation, 'gestalt-home');
+  // Ordinary Manager discovery derives this same home without additional env.
+  const gestaltHome = join(home, '.gestalt');
   mkdirSync(join(gestaltHome, 'runtime'), { recursive: true, mode: 0o700 });
   const preparedRuntime = await prepareLiveRuntime(
     contextPackage.root,
@@ -1419,8 +1420,70 @@ try {
   });
   const installedOriginalConfig =
     originalConfig +
-    `\n[mcp_servers.context-mode]\ncommand = "node"\nargs = [${JSON.stringify(originalBridgePath)}]\nenabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n[plugins."context-mode@dyne-gestalt-agents"]\nenabled = false\n`;
+    `\n[marketplaces.dyne-gestalt-agents]\nsource_type = "local"\nsource = ${JSON.stringify(agentsRoot)}\n` +
+    `\n[mcp_servers.context-mode]\ncommand = "node"\nargs = [${JSON.stringify(originalBridgePath)}]\nenabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n[plugins."context-mode@dyne-gestalt-agents"]\nenabled = false\n[plugins."gestalt@dyne-gestalt-agents"]\nenabled = false\n`;
+  // Let pinned Native construct its genuine registry/cache in an unused staging
+  // home. Keep its generated enabled config separate; the intended owning home
+  // is explicitly disabled from birth and is never repaired by changing settings.
+  report.installationStage = 'native-authentic-plugin-registry';
+  const registryHome = join(root, 'registry-template');
+  mkdirSync(registryHome, { mode: 0o700 });
+  const registryEnvironment = {
+    PATH: '/usr/bin:/bin',
+    HOME: home,
+    CODEX_HOME: registryHome,
+    TMPDIR: '/tmp',
+    LANG: 'C.UTF-8',
+  };
+  const registryCommand = (args) =>
+    JSON.parse(
+      execFileSync(native.path, args, {
+        env: registryEnvironment,
+        cwd: appRoot,
+        encoding: 'utf8',
+        timeout: 90_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  registryCommand(['plugin', 'marketplace', 'add', agentsRoot, '--json']);
+  for (const name of ['gestalt', 'context-mode'])
+    registryCommand(['plugin', 'add', `${name}@dyne-gestalt-agents`, '--json']);
+  const generatedRegistryConfig = readFileSync(join(registryHome, 'config.toml'));
+  assert.equal((generatedRegistryConfig.toString().match(/enabled = true/g) ?? []).length, 2);
+  cpSync(join(registryHome, 'plugins'), join(owningHome, 'plugins'), { recursive: true });
   writeFileSync(join(owningHome, 'config.toml'), installedOriginalConfig, { mode: 0o600 });
+  const installedPlugins = JSON.parse(
+    execFileSync(
+      native.path,
+      ['plugin', 'list', '--marketplace', 'dyne-gestalt-agents', '--json'],
+      {
+        env: { ...registryEnvironment, CODEX_HOME: owningHome },
+        cwd: appRoot,
+        encoding: 'utf8',
+        timeout: 90_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ),
+  );
+  const registryEntries = Array.isArray(installedPlugins)
+    ? installedPlugins
+    : installedPlugins.installed;
+  assert.equal(registryEntries.length, 2);
+  assert.deepEqual(registryEntries.map((entry) => entry.name).sort(), ['context-mode', 'gestalt']);
+  for (const entry of registryEntries) {
+    assert.notEqual(entry.installed, false);
+    assert.equal(entry.enabled, false);
+    assert.equal(entry.version, originalLaunchSourceVersion());
+  }
+  function originalLaunchSourceVersion() {
+    return JSON.parse(readFileSync(join(contextPackage.root, 'package.json'), 'utf8')).version;
+  }
+  report.nativeInstalledRegistry = registryEntries.map(({ name, version, enabled }) => ({
+    name,
+    version,
+    enabled,
+  }));
+  assert.deepEqual(readFileSync(join(registryHome, 'config.toml')), generatedRegistryConfig);
   const originalLaunchSource = {
     kind: 'context-mode-bridge-v1',
     path: originalBridgePath,
@@ -1640,6 +1703,21 @@ try {
   if (editFlow) await mobile.listen({ host: '127.0.0.1', port: mobileHttpPort });
   report.projectMetadata.afterComposition = ownedProjectMetadata();
   if (constructionOnly) throw new Error('CONSTRUCTION_ONLY_COMPLETE');
+  report.stage = 'ordinary-installed-auxiliary-discovery';
+  const models = await api('POST', '/api/session-models/codex', {});
+  assert.ok(Array.isArray(models.models) && models.models.length > 0);
+  report.checks.ordinaryInstalledAuxiliaryModelDiscovery = true;
+  const skills = await api(
+    'GET',
+    `/api/skills?workspaceId=${workspaceId(appRoot)}&profile=default`,
+  );
+  assert.ok(Array.isArray(skills.skills));
+  assert.deepEqual(skills.errors, []);
+  assert.equal(
+    skills.skills.some((skill) => /\/plugins\/cache\/dyne-gestalt-agents\//.test(skill.path)),
+    false,
+  );
+  report.checks.ordinaryInstalledAuxiliarySkillsExcludeDisabledPackages = true;
   report.stage = 'actual-owning-session';
   const stopMetadataSampling = sampleNativeStartupMetadata();
   let session;
@@ -1781,6 +1859,22 @@ try {
   const image = signed(join(generationDirectory, `image-${captureId}.json`));
   const sealed = signed(join(generationDirectory, `runtime-${captureId}.json`));
   assert.equal(before.kind, 'before-runtime-birth');
+  assert.ok(
+    before.configs.some(
+      (entry) =>
+        entry.path === join(owningHome, 'config.toml') &&
+        entry.sha256 === hash(Buffer.from(installedOriginalConfig)),
+    ),
+  );
+  assert.ok(
+    sealed.inventory.sources.some(
+      (entry) =>
+        entry.kind === 'file' &&
+        entry.path === join(owningHome, 'config.toml') &&
+        entry.sha256 === hash(Buffer.from(installedOriginalConfig)),
+    ),
+  );
+  report.checks.disabledPluginMetadataRemainsInSignedOriginalConfig = true;
   assert.equal(image.process.pid, baselineBirth.pid);
   assert.equal(sealed.runtime.process.pid, baselineBirth.pid);
   assert.equal(sealed.runtime.process.birth, baselineBirth.birth);

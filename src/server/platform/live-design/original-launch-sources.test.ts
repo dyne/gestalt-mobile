@@ -51,6 +51,18 @@ describe('original launch source validation before signing authority', () => {
       plugins: originalLaunchSurfaces(source).plugins,
     });
     expect(() => validateOriginalLaunchSources(input)).toThrow('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    const disabled = content + '[plugins."gestalt@dyne-gestalt-agents"]\nenabled = false\n';
+    set(disabled);
+    expect(validateOriginalLaunchSources({ ...input, installedSource: source }).plugins).toEqual({
+      ...originalLaunchSurfaces(source).plugins,
+      'gestalt@dyne-gestalt-agents': { enabled: false },
+    });
+    for (const extension of ['command = "node"', 'hooks = {}', 'unknown = false']) {
+      set(disabled + extension + '\n');
+      expect(() => validateOriginalLaunchSources({ ...input, installedSource: source })).toThrow(
+        'LIVE_ORIGINAL_LAUNCH_UNVERIFIED',
+      );
+    }
     for (const changed of [
       content.replace('hooks = false', 'hooks = true'),
       content.replace('required = true', 'required = false'),
