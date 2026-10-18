@@ -647,7 +647,10 @@ export class AutopilotCoordinator {
       case 'observe':
         break;
       case 'reconcile':
-        next = { ...prior, state: 'monitoring', nextEvaluationAt: null, updatedAt: now };
+        // Refreshing evidence does not start a new backoff episode. Retain the
+        // durable deadline so frequent reconciling/fresh observations cannot
+        // continually postpone the same scheduled control.
+        next = { ...prior, state: 'monitoring', updatedAt: now };
         if (!this.reconciling.has(sessionId)) {
           this.reconciling.add(sessionId);
           this.enqueue(sessionId, async () => {
@@ -1464,10 +1467,22 @@ export class AutopilotCoordinator {
       return;
     }
     const session = this.deps.session(sessionId);
+    const decision = this.decision(sessionId, current);
+    if (
+      !session?.activeTurnId &&
+      !this.deps.pendingInteraction(sessionId) &&
+      decision.kind === 'reconcile'
+    ) {
+      // The deadline can coincide with a roster refresh. Reconcile before
+      // dispatch, preserving this control and its elapsed backoff. A fresh
+      // result re-arms it; unavailable evidence uses the bounded watchdog.
+      this.evaluate(sessionId);
+      return;
+    }
     if (
       session?.activeTurnId ||
       this.deps.pendingInteraction(sessionId) ||
-      this.decision(sessionId, current).kind !== 'scheduleContinuation'
+      decision.kind !== 'scheduleContinuation'
     ) {
       const now = this.deps.now();
       const cancelled = this.cancelScheduledControl(current, now);
