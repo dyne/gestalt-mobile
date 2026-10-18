@@ -3868,6 +3868,102 @@ ${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Wh
       expect(fixture.resume).not.toHaveBeenCalled();
     });
 
+    function terminalReviewSubject() {
+      const fixture = subject([], 'partial', 'DONE');
+      fixture.plan = {
+        ...fixture.plan,
+        executionComplete: true,
+        allDone: true,
+        doneSteps: 1,
+        steps: [{ ...fixture.plan.steps[0]!, state: 'DONE', reviewStatus: 'REVIEWED' }],
+      } as never;
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          protocolVersion: 1,
+          planIdentity: 'p',
+          reportedL1Ids: ['l1'],
+          reportedL2Ids: ['["l1","l1-1"]'],
+          acceptedKeys: ['accepted'],
+          pendingTurnId: null,
+          terminalReviewAccepted: false,
+        },
+      };
+      return fixture;
+    }
+
+    it('continues terminal review at root after the final L1 was already reported', async () => {
+      const fixture = terminalReviewSubject();
+      expect(fixture.coordinator.turnCompleted('s')).toBe(false);
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.rootStart).toHaveBeenCalledOnce();
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('resumes root after a terminal-review wait wakes before the root final', async () => {
+      const fixture = terminalReviewSubject();
+      fixture.session = { state: 'turnActive', threadId: 'root', activeTurnId: 'review-turn' };
+      expect(
+        fixture.coordinator.registerProactiveWait('s', {
+          id: 'terminal-correction',
+          leaseId: 'terminal-wait',
+          wakeConditions: ['agentActivityChanged'],
+          maxWaitMs: 60_000,
+        }),
+      ).toBe(true);
+      fixture.activity = {
+        ...fixture.activity,
+        subagents: [
+          ...fixture.activity.subagents,
+          {
+            id: 'reviewer',
+            threadId: 'reviewer',
+            taskPath: '/root/final_review',
+            state: 'idle',
+            reason: 'turnCompleted',
+            observedAt: now,
+            lastActivityAt: now,
+          },
+        ],
+      };
+      expect(fixture.coordinator.semanticEvent('s', 'agentActivityChanged')).toBe(true);
+      expect(fixture.rootStart).not.toHaveBeenCalled();
+      fixture.session = { state: 'ready', threadId: 'root', activeTurnId: null };
+      expect(fixture.coordinator.turnCompleted('s', 'review-turn')).toBe(false);
+      await fixture.runNext();
+      await fixture.runNext();
+      expect(fixture.rootStart).toHaveBeenCalledOnce();
+      expect(fixture.resume).not.toHaveBeenCalled();
+    });
+
+    it('permits explicit re-enable for pending terminal review but preserves manual Off on signals', () => {
+      const fixture = terminalReviewSubject();
+      fixture.coordinator.disable('s');
+      fixture.coordinator.supervisionStarted('s');
+      expect(fixture.state?.requestedEnabled).toBe(false);
+      expect(fixture.coordinator.enable('s')).not.toHaveProperty('code');
+      expect(fixture.state?.requestedEnabled).toBe(true);
+    });
+
+    it('does not reuse terminal-review authority for a replacement plan or accepted review', () => {
+      const fixture = terminalReviewSubject();
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: { ...fixture.state!.checkpoints!, terminalReviewAccepted: true },
+      };
+      expect(fixture.coordinator.enable('s')).toEqual({ code: 'AUTOPILOT_PLAN_COMPLETE' });
+      fixture.state = {
+        ...fixture.state!,
+        checkpoints: {
+          ...fixture.state!.checkpoints!,
+          terminalReviewAccepted: false,
+          planIdentity: 'other',
+        },
+      };
+      expect(fixture.coordinator.enable('s')).toEqual({ code: 'AUTOPILOT_PLAN_COMPLETE' });
+    });
+
     it('hands a reopened and recompleted L2 epoch back to root', async () => {
       const fixture = subject([], 'partial', 'DONE');
       fixture.state = {
