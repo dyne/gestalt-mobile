@@ -33,9 +33,9 @@ export const fullLanes = Object.freeze([
 export const diagnosticLanes = Object.freeze(['independent', 'picker-diagnostic']);
 export const proofPins = Object.freeze({
   native: 'b2730ae901da317bcc5933d9b87de6dfbea3e46a46b64f806e4268fd9a095578',
-  manager: '8115c37344ef4a7a1b537e23ff069a90bbb188ec41c77ace8d5a41cc864118f9',
-  managerTree: 'dfdeabd2ffdbdb6c429a39c3e81286b611af7734',
-  agents: 'a6a2758c72220e4845d2735e9776caf8a7e8c43b',
+  manager: 'b95df8ed30a5d3355502a85fabe8e5aa2d75fe415f8ebc68979e2847028dda42',
+  managerTree: '349182948619bbbeab892c9884cfb06badf13997',
+  agents: '88f8d4c825d5c6fd862ccff2070865a510f1268b',
 });
 export const independentChecks = Object.freeze({
   native: [

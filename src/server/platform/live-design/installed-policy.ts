@@ -175,7 +175,7 @@ export class InstalledLiveAdmissionError extends Error {
   }
 }
 export const LIVE_MANAGER_SHA256 =
-  '8115c37344ef4a7a1b537e23ff069a90bbb188ec41c77ace8d5a41cc864118f9';
+  'b95df8ed30a5d3355502a85fabe8e5aa2d75fe415f8ebc68979e2847028dda42';
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const pin = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const packagePin = z

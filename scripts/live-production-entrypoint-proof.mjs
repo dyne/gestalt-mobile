@@ -40,6 +40,8 @@ import {
   observeCanonicalPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
+  observeManualAcknowledgement,
+  retainManualCanonicalObservation,
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
@@ -716,6 +718,7 @@ const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browse
 const roles = new Map();
 let firstPickerEventId;
 let firstPickerObservationStarted;
+let retainManualFailureEvidence;
 let contextCompletion;
 const editResponse = createProductionEditProvider(appRoot, final, report, {
   lane: proofLane === 'recovery' ? '' : proofLane,
@@ -1426,11 +1429,11 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: 'a6a2758c72220e4845d2735e9776caf8a7e8c43b',
-    agentsAcceptedCommit: '18f53c466abcf254f83c9ba83af9f3b1ba5f7882',
-    agentsProofSnapshot: 'ba9a7f703b582688009a158cff7392f3f93b4b0e',
-    managerAcceptedCommit: '5084cf219163dcf153af1be6f63496dec1bd3d40',
-    managerTree: 'dfdeabd2ffdbdb6c429a39c3e81286b611af7734',
+    agents: '88f8d4c825d5c6fd862ccff2070865a510f1268b',
+    agentsAcceptedCommit: '73b109603c89db31ff472b453fe6cbe8c6157b52',
+    agentsProofSnapshot: '6d9750e1b27972541ee6e10050a8e4f9a040a7a1',
+    managerAcceptedCommit: '4515cf31c4d00d8ecbdfa363085315f7cb13f78c',
+    managerTree: '349182948619bbbeab892c9884cfb06badf13997',
     manager: LIVE_MANAGER_SHA256,
   };
   if (proofLane === 'recovery')
@@ -2333,6 +2336,42 @@ try {
     let manualSource, observedManualPoll;
     let manualWaitDeadline;
     let backgroundSourceDigest, backgroundRequestCount;
+    const manualHistorySnapshot = () => {
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        const events = db
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+          .all()
+          .filter((row) => row.liveId === started.liveId && row.generation === started.generation)
+          .map((row) => JSON.parse(row.record))
+          .filter((item) => item.kind === 'manual_edit_apply')
+          .map((item) => ({
+            stage: item.stage,
+            history: item.history,
+            eventDigest: hash(item.upstreamId),
+          }));
+        return {
+          generation: started.generation,
+          entryDigest: report.manualCanonicalCorrelation?.entryDigest,
+          events,
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const manualCanonicalObservations = (report.manualCanonicalObservations = []);
+    retainManualFailureEvidence = (boundary) =>
+      retainManualCanonicalObservation(
+        manualCanonicalObservations,
+        boundary,
+        manualHistorySnapshot,
+      );
     const acknowledged = async (kind, budget = eventObservationBudgetMs, absoluteDeadline) =>
       until(
         () => {
@@ -2431,10 +2470,15 @@ try {
           await acknowledged('steer');
           assert.ok(readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"));
         } else if (command === 'manual-applied') {
-          await acknowledged(
-            'manual_edit_apply',
-            proofObservationRemaining(observation.deadline),
-            observation.deadline,
+          await observeManualAcknowledgement(
+            () =>
+              acknowledged(
+                'manual_edit_apply',
+                proofObservationRemaining(observation.deadline),
+                observation.deadline,
+              ),
+            manualCanonicalObservations,
+            manualHistorySnapshot,
           );
           const db = new DatabaseSync(
             join(
@@ -2710,6 +2754,7 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
+  retainManualFailureEvidence?.('production-failure');
   finishBrowserProfile();
   if (
     (preflightOnly && error?.message === 'ADMISSION_PREFLIGHT_COMPLETE') ||
@@ -2799,6 +2844,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  if (report.manualPollObservation) retainManualFailureEvidence?.('before-close');
   report.cleanupStage = 'mobile';
   stopPreviewProbe();
   await probeRefresh;

@@ -19,6 +19,7 @@ import {
   withinProofObservation,
   manualObservationDeadline,
   proofObservationRemaining,
+  boundedManualCommitObservation,
 } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
@@ -41,7 +42,16 @@ const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
 const editRequests = [];
-let manualEntryDigest, manualCommit;
+let manualEntryDigest, manualCommit, manualCommitDeadline;
+const emitManualCommitObservation = (boundary) => {
+  if (!manualCommit) return;
+  const observed = boundedManualCommitObservation({
+    boundary,
+    ...manualCommit,
+    deadline: manualCommitDeadline,
+  });
+  if (observed) process.stdout.write(JSON.stringify({ manualCommitObservation: observed }) + '\n');
+};
 let manualCommitCount = 0;
 const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
 // A measured source/selection/catalog/provenance/resource authority check takes
@@ -244,6 +254,7 @@ try {
     if (request.method() === 'POST' && path === '/__gestalt_live/manual-edit-commit') {
       manualCommitCount++;
       manualCommit = { requestStartedAt: Date.now(), entryDigest: manualEntryDigest };
+      emitManualCommitObservation('commit-requested');
     }
     if (
       request.method() === 'POST' &&
@@ -290,6 +301,7 @@ try {
     ) {
       manualCommit.acceptedAt = Date.now();
       manualCommit.status = response.status();
+      emitManualCommitObservation('commit-response');
     }
     const resource = `${response.request().resourceType()}:${response.status()}`;
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
@@ -636,6 +648,7 @@ try {
     await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
     await command('manual-commit-observed', pollDeadline, manualObservation);
     const manualDeadline = Date.now() + 120_000;
+    manualCommitDeadline = manualDeadline;
     await withinProofObservation(() => ui.clickApplyEdits(preview), manualDeadline);
     await withinProofObservation(async () => {
       while (manualCommit?.acceptedAt === undefined)
@@ -651,9 +664,11 @@ try {
       manualDeadline,
     );
     const { requestStartedAt, acceptedAt, entryDigest } = manualCommit;
+    emitManualCommitObservation('before-canonical-ack');
     await command('manual-applied', manualDeadline, {
       manual: { requestStartedAt, acceptedAt, entryDigest },
     });
+    emitManualCommitObservation('canonical-acknowledged');
     actions.add('manual');
   };
   const discard = async () => {
@@ -789,6 +804,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  emitManualCommitObservation('browser-finally');
   await browser?.close();
   if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
     browserProcess.kill('SIGTERM');

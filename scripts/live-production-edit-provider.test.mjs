@@ -25,6 +25,9 @@ import {
   observeCanonicalPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
+  boundedManualCommitObservation,
+  retainManualCanonicalObservation,
+  observeManualAcknowledgement,
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
@@ -1152,4 +1155,143 @@ test('manual conservative enqueue bound requires exact real entry/event and dura
     mutate(current);
     assert.throws(() => verifyManualAcknowledgement(current), /PROOF_MANUAL_ACK_INVALID/);
   }
+});
+
+test('manual failure timing retains only observed timestamps and real202 with no inferred missing historical values', () => {
+  const request = {
+    boundary: 'commit-requested',
+    requestStartedAt: 1000,
+    deadline: 121000,
+    entryDigest: 'a'.repeat(64),
+    private: 'canary-private',
+    status: undefined,
+  };
+  const first = boundedManualCommitObservation(request);
+  assert.equal(first.acceptedAt, null);
+  assert.equal(first.status, null);
+  assert.equal(first.deadline, 121000);
+  const accepted = boundedManualCommitObservation({
+    ...request,
+    boundary: 'commit-response',
+    acceptedAt: 1100,
+    status: 202,
+  });
+  assert.equal(accepted.requestStartedAt, 1000);
+  assert.equal(accepted.acceptedAt, 1100);
+  assert.equal(accepted.status, 202);
+  const final = boundedManualCommitObservation({ ...request, boundary: 'browser-finally' });
+  assert.equal(final.acceptedAt, null);
+  assert.equal(final.deadline, 121000);
+  assert.ok(!JSON.stringify(first).includes('canary'));
+  assert.equal(boundedManualCommitObservation({ boundary: 'private-canary' }), null);
+  const invalid = boundedManualCommitObservation({
+    boundary: 'browser-finally',
+    requestStartedAt: NaN,
+    acceptedAt: -1,
+    entryDigest: 'raw-private-id',
+    status: 900,
+  });
+  assert.deepEqual(invalid, {
+    boundary: 'browser-finally',
+    requestStartedAt: null,
+    acceptedAt: null,
+    deadline: null,
+    status: null,
+    entryDigest: null,
+  });
+});
+test('manual acknowledgement failure emits before and finally history with exact original error and no false ack', async () => {
+  const records = [],
+    state = {
+      generation: 1,
+      entryDigest: 'a'.repeat(64),
+      events: [
+        {
+          stage: 'dispatched',
+          history: ['received', 'dispatched'],
+          eventDigest: 'b'.repeat(64),
+          secret: 'private-canary',
+        },
+      ],
+    };
+  const sentinel = new Error('credential-canary');
+  let calls = 0;
+  await assert.rejects(
+    observeManualAcknowledgement(
+      async () => {
+        calls++;
+        assert.equal(records[0].boundary, 'before-ack');
+        throw sentinel;
+      },
+      records,
+      () => state,
+    ),
+    (e) => e === sentinel,
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(
+    records.map((v) => v.boundary),
+    ['before-ack', 'ack-failed'],
+  );
+  assert.deepEqual(records[1].events[0].history, ['received', 'dispatched']);
+  state.events[0].history.push('applied');
+  assert.deepEqual(records[1].events[0].history, ['received', 'dispatched']);
+  assert.ok(!JSON.stringify(records).includes('canary'));
+  const result = await observeManualAcknowledgement(
+    async () => {
+      state.events[0].stage = 'acknowledged';
+      state.events[0].history = ['received', 'dispatched', 'applied', 'acknowledged'];
+      return 'actual-result';
+    },
+    records,
+    () => state,
+  );
+  assert.equal(result, 'actual-result');
+  assert.equal(records.at(-1).boundary, 'ack-completed');
+  assert.equal(records.at(-1).events[0].stage, 'acknowledged');
+});
+test('manual failure and preclose retention stay bounded and cannot replace failure when canonical snapshot unavailable', async () => {
+  const rows = [];
+  const error = new Error('original-error');
+  const unavailable = () => {
+    throw new Error('private-path-canary');
+  };
+  await assert.rejects(
+    observeManualAcknowledgement(() => Promise.reject(error), rows, unavailable),
+    (e) => e === error,
+  );
+  assert.deepEqual(rows, [
+    { boundary: 'before-ack', available: false },
+    { boundary: 'ack-failed', available: false },
+  ]);
+  for (let i = 0; i < 20; i++)
+    retainManualCanonicalObservation(
+      rows,
+      i % 2 ? 'production-failure' : 'before-close',
+      unavailable,
+    );
+  assert.equal(rows.length, 16);
+  assert.ok(rows.every((v) => v.available === false));
+  assert.ok(!JSON.stringify(rows).includes('canary'));
+});
+test('actual browser emits bracket before canonical ack and in finally while preserving original120s deadline', () => {
+  const script = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  const requested = script.indexOf("emitManualCommitObservation('commit-requested')"),
+    response = script.indexOf("emitManualCommitObservation('commit-response')");
+  const beforeAck = script.indexOf("emitManualCommitObservation('before-canonical-ack')"),
+    ack = script.indexOf("await command('manual-applied'", beforeAck),
+    final = script.lastIndexOf("emitManualCommitObservation('browser-finally')"),
+    close = script.indexOf('await browser?.close()', final);
+  assert.ok(
+    requested > 0 &&
+      response > requested &&
+      beforeAck > response &&
+      ack > beforeAck &&
+      final > ack &&
+      close > final,
+  );
+  assert.equal((script.match(/manualCommitDeadline = manualDeadline/g) || []).length, 1);
 });

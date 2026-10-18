@@ -12,6 +12,7 @@ import { createInterface } from 'node:readline';
 import {
   safeBrowserFailure,
   boundedPickerObservation,
+  boundedManualCommitObservation,
 } from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
@@ -303,6 +304,14 @@ export async function productionEditBrowser(input) {
           const rows = (input.report.pickerObservations ??= []);
           if (rows.length === 8) rows.shift();
           rows.push(observed);
+        }
+      }
+      if (value.manualCommitObservation) {
+        const observation = boundedManualCommitObservation(value.manualCommitObservation);
+        if (observation) {
+          const rows = (input.report.manualCommitObservations ??= []);
+          if (rows.length === 16) rows.shift();
+          rows.push(observation);
         }
       }
       if (value.command)

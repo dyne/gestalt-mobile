@@ -120,21 +120,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: dyne/gestalt
-          ref: 737f5f85f02ea60a26996afc2e17e176bfb2c6bc # accepted L9 tree dfdeabd2, canonical 5084cf2
+          ref: 9b11e9305eb35de32569025df2a281ed28d1bce2 # accepted L9 tree 34918294, canonical 4515cf3
           path: .host-manager-input
           persist-credentials: false
       - name: Read-only accepted Agents input
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: dyne/gestalt-agents
-          ref: ba9a7f703b582688009a158cff7392f3f93b4b0e # accepted L10 tree a6a2758c, canonical 18f53c4
+          ref: 6d9750e1b27972541ee6e10050a8e4f9a040a7a1 # accepted L10 tree 88f8d4c8, canonical 73b1096
           path: .host-agents-input
           persist-credentials: false
       - name: Verify exact accepted dependency trees
         run: |
           set -Eeuo pipefail
-          test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = dfdeabd2ffdbdb6c429a39c3e81286b611af7734
-          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = a6a2758c72220e4845d2735e9776caf8a7e8c43b
+          test "$(git -C .host-manager-input rev-parse HEAD^{tree})" = 349182948619bbbeab892c9884cfb06badf13997
+          test "$(git -C .host-agents-input rev-parse HEAD^{tree})" = 88f8d4c825d5c6fd862ccff2070865a510f1268b
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         id: verified-archives
         with:

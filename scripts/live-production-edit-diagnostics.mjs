@@ -818,3 +818,75 @@ export function verifyManualAcknowledgement({
     within120sMargin: true,
   };
 }
+
+/** Retain only actually observed browser timestamps/status, never infer missing values. */
+export function boundedManualCommitObservation(value) {
+  const boundaries = [
+    'commit-requested',
+    'commit-response',
+    'before-canonical-ack',
+    'canonical-acknowledged',
+    'browser-finally',
+  ];
+  if (!value || !boundaries.includes(value.boundary)) return null;
+  const time = (v) => (Number.isSafeInteger(v) && v > 0 ? v : null);
+  return {
+    boundary: value.boundary,
+    requestStartedAt: time(value.requestStartedAt),
+    acceptedAt: time(value.acceptedAt),
+    deadline: time(value.deadline),
+    status:
+      Number.isSafeInteger(value.status) && value.status >= 100 && value.status <= 599
+        ? value.status
+        : null,
+    entryDigest: /^[a-f0-9]{64}$/.test(value.entryDigest ?? '') ? value.entryDigest : null,
+  };
+}
+/** Captures a fixed controller-private history snapshot; never changes original acknowledgement work. */
+export function retainManualCanonicalObservation(records, boundary, snapshot) {
+  if (
+    !['before-ack', 'ack-completed', 'ack-failed', 'production-failure', 'before-close'].includes(
+      boundary,
+    )
+  )
+    throw new Error('PROOF_MANUAL_OBSERVATION_INVALID');
+  let record = { boundary, available: false };
+  try {
+    const value = snapshot(),
+      stages = ['received', 'dispatched', 'applied', 'acknowledged'];
+    const digest = (v) => (/^[a-f0-9]{64}$/.test(v ?? '') ? v : null);
+    record = {
+      boundary,
+      available: true,
+      generation:
+        Number.isSafeInteger(value.generation) && value.generation > 0 ? value.generation : null,
+      entryDigest: digest(value.entryDigest),
+      events: (Array.isArray(value.events) ? value.events : []).slice(0, 4).map((event) => ({
+        kind: 'manual_edit_apply',
+        stage: stages.includes(event.stage) ? event.stage : 'unavailable',
+        history: Array.isArray(event.history)
+          ? event.history
+              .slice(0, 4)
+              .map((stage) => (stages.includes(stage) ? stage : 'unavailable'))
+          : [],
+        eventDigest: digest(event.eventDigest),
+      })),
+    };
+  } catch {
+    /* Observations never replace the original result or error. */
+  }
+  if (records.length === 16) records.shift();
+  records.push(record);
+  return record;
+}
+export async function observeManualAcknowledgement(work, records, snapshot) {
+  retainManualCanonicalObservation(records, 'before-ack', snapshot);
+  let completed = false;
+  try {
+    const result = await work();
+    completed = true;
+    return result;
+  } finally {
+    retainManualCanonicalObservation(records, completed ? 'ack-completed' : 'ack-failed', snapshot);
+  }
+}

@@ -233,7 +233,7 @@ test('workflow mode conditions may differ, but dependency pins and independent c
   assert.throws(() =>
     validateSmokeWorkflow(
       workflow,
-      workflow.replace('dfdeabd2ffdbdb6c429a39c3e81286b611af7734', '0'.repeat(40)),
+      workflow.replace('349182948619bbbeab892c9884cfb06badf13997', '0'.repeat(40)),
     ),
   );
   assert.throws(() =>

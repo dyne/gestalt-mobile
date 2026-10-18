@@ -218,7 +218,7 @@ async function prepareManagedInputs(env) {
     cwd: agentsRoot,
     encoding: 'utf8',
   }).trim();
-  assert.equal(agentsTree, 'a6a2758c72220e4845d2735e9776caf8a7e8c43b');
+  assert.equal(agentsTree, '88f8d4c825d5c6fd862ccff2070865a510f1268b');
   const packages = ['context-mode', 'gestalt'].map((name) => {
     const target = join(installation, name);
     cpSync(join(agentsRoot, 'plugins', name), target, {
@@ -273,7 +273,7 @@ async function prepareManagedInputs(env) {
     providerCredentialEnvironment: [],
     privateDirectory: controller,
     components: {
-      manager: '5084cf219163dcf153af1be6f63496dec1bd3d40',
+      manager: '4515cf31c4d00d8ecbdfa363085315f7cb13f78c',
       mobile: report.provenance.mobileTree,
       agents: agentsTree,
     },
