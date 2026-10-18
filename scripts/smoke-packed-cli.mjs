@@ -53,6 +53,9 @@ try {
     cleanNpmEnvironment,
   );
   const filename = packedFilename(JSON.parse(pack.stdout), packageManifest.name);
+  const packReport = join(temporaryRoot, 'package-contents.json');
+  await writeFile(packReport, pack.stdout);
+  run(process.execPath, ['scripts/check-package-contents.mjs', packReport], root);
   const tarball = join(temporaryRoot, filename);
   const installation = join(temporaryRoot, 'installation');
   const workspace = join(temporaryRoot, 'workspace');
