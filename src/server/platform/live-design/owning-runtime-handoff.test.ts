@@ -293,6 +293,7 @@ describe('discovery on the captured original before readiness', () => {
           : actual;
       },
       observeLiveDescendants: () => {},
+      waitForLiveImage: async () => ({ elapsedMs: 0, budgetMs: 90_000 }),
       rpc: {
         request: async (method, params) => {
           calls.push(method);

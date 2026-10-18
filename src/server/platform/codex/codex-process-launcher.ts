@@ -6,13 +6,19 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, lstatSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
+import { LIVE_MANAGER_OBSERVATION_MS } from '../live-design/installed-launch-contract.js';
 import { JsonRpcClient } from './json-rpc-client.js';
 import { profileAppServerCommand } from '../catalog/profile-command.js';
 import {
   observeLiveProcess,
   observeOwnedDescendants,
   observedBirthExited,
+  observeControllerIsolation,
+  assertObservedProcessMetadata,
   type OwnedProcessBirth,
   type LiveProcessIdentity,
 } from '../live-design/process-identity.js';
@@ -24,6 +30,7 @@ export type CodexProcess = {
   close(): void;
   onExit(listener: () => void): () => void;
   waitForExit(): Promise<void>;
+  waitForLiveImage?(signal: AbortSignal, deadline?: number): Promise<NativeImageTransition>;
   observeLiveLaunch(): LiveProcessIdentity;
   observeLiveEnvironment(): Readonly<{ tmpdir: string; home: string; codexHome: string }>;
   observeLiveDescendants(): void;
@@ -34,6 +41,7 @@ export function launchCodexAppServer(
     profile: string;
     cwd: string;
     environment?: Readonly<Record<string, string>>;
+    liveCaptureId?: string;
   },
   trusted?: {
     /** Controller-only installed native input; never a session/browser command parameter. */
@@ -60,6 +68,7 @@ export function launchCodexAppServer(
     }
   }
   const environment = codexChildEnvironment(input.environment, trusted?.environment);
+  const spawnedAt = performance.now();
   const child = spawn(
     trusted?.managedLaunch?.command ?? trusted?.executable ?? launch.command,
     trusted?.managedLaunch ? [...trusted.managedLaunch.args] : launch.args,
@@ -70,6 +79,19 @@ export function launchCodexAppServer(
       stdio: 'pipe',
     },
   );
+  const waitForLiveImage =
+    input.liveCaptureId && trusted?.managedLaunch
+      ? capturedNativeImageFence(
+          child,
+          {
+            executable: trusted.executable,
+            sha256: trusted.sha256,
+            args: launch.args,
+            cwd: input.cwd,
+          },
+          spawnedAt,
+        )
+      : undefined;
   const rpc = new JsonRpcClient(child.stdout, child.stdin);
   child.once('error', (error) => rpc.fail(error));
   // Positive lifetime evidence from this exact ChildProcess; a missing PID is not an exit receipt.
@@ -92,6 +114,7 @@ export function launchCodexAppServer(
   return {
     child,
     rpc,
+    ...(waitForLiveImage ? { waitForLiveImage } : {}),
     waitForExit: async () => {
       await exited;
       if (!treeObserved || treeFailed) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
@@ -174,4 +197,107 @@ export function codexChildEnvironment(
   delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_URL;
   delete inherited.GESTALT_MOBILE_ORG_PLAN_MEASUREMENT_TOKEN;
   return { ...inherited, ...environment };
+}
+
+export type NativeImageTransition = Readonly<{ elapsedMs: number; budgetMs: number }>;
+/** Exact owned-child exec observation only. No config/tool/model readiness or authority.
+ * One original spawn deadline; retries cannot restart the managed handoff clock. */
+export function capturedNativeImageFence(
+  child: ChildProcessWithoutNullStreams,
+  input: Readonly<{ executable: string; sha256: string; args: readonly string[]; cwd: string }>,
+  spawnedAt: number,
+): (signal: AbortSignal, deadline?: number) => Promise<NativeImageTransition> {
+  const expected = structuredClone(input);
+  let controller: ReturnType<typeof observeControllerIsolation> | undefined;
+  const sourcePin = () => {
+    const info = lstatSync(expected.executable, { bigint: true });
+    if (!info.isFile() || realpathSync(expected.executable) !== expected.executable)
+      throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+    return ['dev', 'ino', 'uid', 'gid', 'mode', 'size', 'nlink', 'mtimeNs', 'ctimeNs'].map((key) =>
+      String(info[key as keyof typeof info]),
+    );
+  };
+  let source: readonly string[] | undefined;
+  let original: LiveProcessIdentity | undefined,
+    used = false;
+  let wrappers = new Set<string>();
+  // Observation failure remains attached to this owned ChildProcess; never throw
+  // after spawning and lose the caller's physical cleanup handle.
+  try {
+    controller = observeControllerIsolation();
+    source = sourcePin();
+    wrappers = new Set(
+      ['/usr/bin/bash', '/usr/bin/env', process.execPath].map((path) => realpathSync(path)),
+    );
+    if (child.pid) original = observeLiveProcess(child.pid);
+  } catch {
+    /* refused by the asynchronous fence below */
+  }
+  return async (signal, deadline) => {
+    if (
+      used ||
+      !controller ||
+      !source ||
+      !Number.isFinite(spawnedAt) ||
+      spawnedAt > performance.now() ||
+      (deadline !== undefined && !Number.isFinite(deadline))
+    )
+      throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+    used = true;
+    const end = Math.min(
+      spawnedAt + LIVE_MANAGER_OBSERVATION_MS,
+      deadline === undefined ? Infinity : performance.now() + Math.max(0, deadline - Date.now()),
+    );
+    const expired = () =>
+      performance.now() >= end || (deadline !== undefined && Date.now() >= deadline);
+    for (;;) {
+      signal.throwIfAborted();
+      if (expired()) throw new Error('LIVE_NATIVE_HANDOFF_TIMEOUT');
+      if (
+        !original ||
+        !child.pid ||
+        child.pid !== original.pid ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      )
+        throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+      try {
+        const executable = realpathSync(`/proc/${child.pid}/exe`);
+        assertObservedProcessMetadata({ ...original, executable });
+        if (
+          original.uid !== controller.uid ||
+          !isDeepStrictEqual(original.namespaces, controller.namespaces) ||
+          original.cwd !== expected.cwd ||
+          !isDeepStrictEqual(sourcePin(), source) ||
+          Number(
+            readFileSync(`/proc/${child.pid}/status`, 'utf8').match(/^PPid:\s+(\d+)/m)?.[1],
+          ) !== process.pid
+        )
+          throw new Error();
+        if (executable === expected.executable) {
+          const current = observeLiveProcess(child.pid);
+          const argv = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').split('\0').slice(0, -1);
+          if (
+            current.executableDigest !== expected.sha256 ||
+            !isDeepStrictEqual(argv, [expected.executable, ...expected.args])
+          )
+            throw new Error();
+          assertObservedProcessMetadata({ ...original, executable: expected.executable });
+          assertObservedProcessMetadata(current);
+          signal.throwIfAborted();
+          if (expired() || !isDeepStrictEqual(sourcePin(), source)) throw new Error();
+          return {
+            elapsedMs: Math.round(performance.now() - spawnedAt),
+            budgetMs: LIVE_MANAGER_OBSERVATION_MS,
+          };
+        }
+        if (!wrappers.has(executable)) throw new Error();
+      } catch {
+        signal.throwIfAborted();
+        if (expired()) throw new Error('LIVE_NATIVE_HANDOFF_TIMEOUT');
+        throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+      }
+      await delay(Math.min(25, Math.max(1, end - performance.now())), undefined, { signal });
+    }
+  };
 }

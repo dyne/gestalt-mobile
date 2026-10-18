@@ -245,10 +245,29 @@ export class ProductionLiveController {
     if (!this.supportsOwningStartup(session)) return;
     const b = this.requireBindings();
     const capture = this.captures.get(session.id);
+    let assertReleased = () => {};
     try {
       if (capture) {
-        await this.revokeCapture(capture);
+        const captured = structuredClone(capture);
         const child = this.capturedProcesses.get(capture.captureId);
+        const assertRevoked = () => {
+          if (
+            this.captures.get(session.id) !== capture ||
+            !isDeepStrictEqual(capture, captured) ||
+            capture.sessionId !== session.id ||
+            this.capturedProcesses.get(capture.captureId) !== child ||
+            !this.revokedCaptures.has(capture.captureId) ||
+            this.generations.has(session.id) ||
+            this.preparedOwners.has(session.id)
+          )
+            throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+        };
+        assertReleased = assertRevoked;
+        // Manager revoke retains its existing separate bounded phase. Only the
+        // subsequent physical exit AND raw RPC drain share the existing 10s.
+        await this.revokeCapture(capture);
+        assertRevoked();
+        const deadline = performance.now() + 10000;
         if (child) {
           child.close();
           if (!child.waitForExit) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
@@ -257,15 +276,22 @@ export class ProductionLiveController {
             await Promise.race([
               child.waitForExit(),
               new Promise<never>((_, reject) => {
-                timer = setTimeout(() => reject(new Error('LIVE_PROCESS_TREE_UNVERIFIED')), 10000);
+                timer = setTimeout(
+                  () => reject(new Error('LIVE_PROCESS_TREE_UNVERIFIED')),
+                  Math.max(0, deadline - performance.now()),
+                );
               }),
             ]);
           } finally {
             if (timer) clearTimeout(timer);
           }
+          assertRevoked();
         }
+        await b.runtime.settleFailedStartup(session, capture.captureId, assertRevoked, deadline);
+        assertRevoked();
       }
       await b.settleAuxiliary();
+      assertReleased();
       if (this.failedPreparations.has(session.id)) throw new Error('LIVE_CLEANUP_REQUIRED');
       b.guard.settle(session.id, {
         roots: 0,

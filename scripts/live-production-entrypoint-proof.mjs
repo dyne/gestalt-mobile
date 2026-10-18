@@ -413,6 +413,33 @@ ProductionLiveController.prototype.launchNative = function (input) {
         observation.stderrMarkers.push(marker);
     }
   });
+  if (child.waitForLiveImage) {
+    const waitForImage = child.waitForLiveImage.bind(child);
+    child.waitForLiveImage = async (...args) => {
+      const began = performance.now();
+      const row = (observation.imageTransition = { outcome: 'pending', budgetMs: 90_000 });
+      try {
+        const result = await waitForImage(...args);
+        Object.assign(row, { outcome: 'completed', elapsedFromSpawnMs: result.elapsedMs });
+        return result;
+      } catch (error) {
+        Object.assign(row, {
+          outcome: 'failed',
+          code: [
+            'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+            'LIVE_NATIVE_HANDOFF_TIMEOUT',
+            'CODEX_STARTUP_CANCELLED',
+            'LIVE_RUNTIME_UNAVAILABLE',
+          ].includes(error?.message)
+            ? error.message
+            : 'UNCLASSIFIED',
+        });
+        throw error;
+      } finally {
+        row.elapsedMs = Math.round(performance.now() - began);
+      }
+    };
+  }
   const observe = child.observeLiveDescendants.bind(child);
   child.observeLiveDescendants = () => {
     observation.treeObservations++;

@@ -506,3 +506,128 @@ it.each([
   if (options.presealStarting) expect(f.events).not.toContain('seal');
   if (options.missingExtension) expect(f.events).not.toContain('prepare');
 });
+
+async function failedStartupReleaseFixture() {
+  const f = await verificationFixture();
+  const capture = f.input.capture;
+  const events: string[] = [];
+  const settle = vi.fn(async (_session, _capture, assertRevoked: () => void, deadline: number) => {
+    assertRevoked();
+    expect(deadline - performance.now()).toBeLessThanOrEqual(10000);
+    events.push('drain');
+  });
+  const guard = vi.fn();
+  Reflect.set(f.controller, 'supportsOwningStartup', () => true);
+  Reflect.get(f.controller, 'captures').set(f.input.session.id, capture);
+  Reflect.get(f.controller, 'capturedProcesses').set(capture.captureId, {
+    close: () => events.push('close'),
+    waitForExit: async () => {
+      events.push('exit');
+    },
+  });
+  Reflect.set(f.controller, 'revokeCapture', async () => {
+    events.push('revoke');
+    Reflect.get(f.controller, 'revokedCaptures').add(capture.captureId);
+  });
+  Reflect.set(f.controller, 'requireBindings', () => ({
+    runtime: { settleFailedStartup: settle },
+    settleAuxiliary: async () => {
+      events.push('auxiliary');
+    },
+    guard: { settle: guard },
+  }));
+  return { ...f, capture, events, settle, guard };
+}
+it('reconciles failed startup only after authenticated revoke and exact physical exit', async () => {
+  const f = await failedStartupReleaseFixture();
+  await f.controller.releaseFailedStartup(f.input.session);
+  expect(f.events).toEqual(['revoke', 'close', 'exit', 'drain', 'auxiliary']);
+  expect(f.guard).toHaveBeenCalledOnce();
+});
+it('does not clear failed preparation when physical and RPC cleanup succeed', async () => {
+  const f = await failedStartupReleaseFixture();
+  Reflect.get(f.controller, 'failedPreparations').add(f.input.session.id);
+  await expect(f.controller.releaseFailedStartup(f.input.session)).rejects.toThrow(
+    'LIVE_CLEANUP_REQUIRED',
+  );
+  expect(f.guard).not.toHaveBeenCalled();
+});
+it('refuses changed capture before physical cleanup or private runtime settlement', async () => {
+  const f = await failedStartupReleaseFixture();
+  Reflect.set(f.controller, 'revokeCapture', async () => {
+    Reflect.get(f.controller, 'revokedCaptures').add(f.capture.captureId);
+    Reflect.get(f.controller, 'captures').set(f.input.session.id, { ...f.capture });
+  });
+  await expect(f.controller.releaseFailedStartup(f.input.session)).rejects.toThrow(
+    'LIVE_RUNTIME_IDENTITY_CHANGED',
+  );
+  expect(f.settle).not.toHaveBeenCalled();
+  expect(f.guard).not.toHaveBeenCalled();
+});
+it('preserves ordinary no-capture release without runtime reconciliation', async () => {
+  const f = await failedStartupReleaseFixture();
+  Reflect.get(f.controller, 'captures').clear();
+  await f.controller.releaseFailedStartup(f.input.session);
+  expect(f.events).toEqual(['auxiliary']);
+  expect(f.settle).not.toHaveBeenCalled();
+});
+
+it('starts the shared physical/drain window after slow revoke without resetting it between waits', async () => {
+  const f = await failedStartupReleaseFixture();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  try {
+    Reflect.set(f.controller, 'revokeCapture', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20000));
+      Reflect.get(f.controller, 'revokedCaptures').add(f.capture.captureId);
+    });
+    Reflect.get(f.controller, 'capturedProcesses').set(f.capture.captureId, {
+      close: () => {},
+      waitForExit: () => new Promise((resolve) => setTimeout(resolve, 9000)),
+    });
+    f.settle.mockImplementation(async (_session, _capture, assertRevoked, deadline) => {
+      assertRevoked();
+      expect(deadline - performance.now()).toBe(1000);
+    });
+    const release = f.controller.releaseFailedStartup(f.input.session);
+    await vi.advanceTimersByTimeAsync(29000);
+    await release;
+    expect(f.settle).toHaveBeenCalledOnce();
+    expect(f.guard).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it.each(['revoke', 'physical', 'drain'] as const)(
+  'retains failed cleanup when %s fails',
+  async (phase) => {
+    const f = await failedStartupReleaseFixture();
+    if (phase === 'revoke')
+      Reflect.set(f.controller, 'revokeCapture', async () => {
+        throw new Error('refused');
+      });
+    if (phase === 'physical')
+      Reflect.get(f.controller, 'capturedProcesses').set(f.capture.captureId, {
+        close: () => {},
+        waitForExit: async () => {
+          throw new Error('refused');
+        },
+      });
+    if (phase === 'drain') f.settle.mockRejectedValue(new Error('refused'));
+    await expect(f.controller.releaseFailedStartup(f.input.session)).rejects.toThrow('refused');
+    expect(f.guard).not.toHaveBeenCalled();
+    expect(Reflect.get(f.controller, 'failedPreparations').has(f.input.session.id)).toBe(true);
+  },
+);
+
+it('refuses in-place signed capture mutation before any physical or raw settlement', async () => {
+  const f = await failedStartupReleaseFixture();
+  Reflect.set(f.controller, 'revokeCapture', async () => {
+    Reflect.get(f.controller, 'revokedCaptures').add(f.capture.captureId);
+    Reflect.set(f.capture, 'sessionId', 'changed-session');
+  });
+  await expect(f.controller.releaseFailedStartup(f.input.session)).rejects.toThrow(
+    'LIVE_RUNTIME_IDENTITY_CHANGED',
+  );
+  expect(f.settle).not.toHaveBeenCalled();
+  expect(f.guard).not.toHaveBeenCalled();
+});

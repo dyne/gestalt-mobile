@@ -105,6 +105,7 @@ function fixture(
       onServerRequest: () => () => {},
     },
     close: vi.fn(),
+    waitForLiveImage: async () => ({ elapsedMs: 0, budgetMs: 90_000 }),
     ...(hooks.lifetime
       ? {
           onExit: (listener: () => void) => {
@@ -124,6 +125,7 @@ function fixture(
   const runtime = new CodexSessionRuntime(...arguments_);
   return {
     runtime,
+    process,
     launch,
     calls,
     exit: () => {
@@ -1344,5 +1346,320 @@ it('shares successful physical and raw retirement across concurrent waiters with
     await Promise.allSettled(flights);
     f.runtime.stopAll();
     a.close();
+  }
+});
+
+describe('captured image transition before Native startup RPC', () => {
+  it('separates a six-second handoff from the unchanged five-second Native RPC clock', async () => {
+    vi.useFakeTimers();
+    const f = fixture(true, {
+      beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'captured' }),
+    });
+    Reflect.set(f.runtime, 'owningAdmission', {
+      run: (_session: unknown, work: () => Promise<unknown>) => work(),
+    });
+    Reflect.set(f.process, 'observeLiveEnvironment', () => ({
+      home: '/tmp',
+      codexHome: '/tmp',
+      tmpdir: '/tmp',
+    }));
+    let imageReady = false;
+    const phase = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 6000));
+      imageReady = true;
+      return { elapsedMs: 6000, budgetMs: 90000 };
+    });
+    Reflect.set(f.process, 'waitForLiveImage', phase);
+    const request = f.process.rpc.request;
+    f.process.rpc.request = vi.fn((method, params) =>
+      method === 'initialize' && !imageReady ? new Promise(() => {}) : request(method, params),
+    );
+    try {
+      const pending = f.runtime.startWithDiscovery(session(), 'time', async () => session());
+      const result = pending.then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(f.process.rpc.request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await result).not.toHaveProperty('error');
+      expect(phase).toHaveBeenCalledOnce();
+      expect(f.calls.filter((x) => x.method === 'initialize')).toHaveLength(1);
+    } finally {
+      f.runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('captured startup failure ownership', () => {
+  const captured = () =>
+    fixture(true, {
+      beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'capture' }),
+    });
+  const discover = (f: ReturnType<typeof fixture>, signal?: AbortSignal) => {
+    Reflect.set(f.runtime, 'owningAdmission', {
+      run: (_session: unknown, work: () => Promise<unknown>) => work(),
+    });
+    Reflect.set(f.process, 'observeLiveEnvironment', () => ({
+      home: '/tmp',
+      codexHome: '/tmp',
+      tmpdir: '/tmp',
+    }));
+    return f.runtime.startWithDiscovery(session(), 'time', async () => session(), signal);
+  };
+  it('requires the image fence only for captured owners and refuses successors after a missing fence', async () => {
+    const f = captured();
+    Reflect.deleteProperty(f.process, 'waitForLiveImage');
+    try {
+      await expect(discover(f)).rejects.toThrow('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+      expect(f.calls).toEqual([]);
+      expect(f.process.close).toHaveBeenCalledOnce();
+      await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      expect(f.launch).toHaveBeenCalledOnce();
+    } finally {
+      f.runtime.stopAll();
+    }
+    const ordinary = fixture();
+    Reflect.deleteProperty(ordinary.process, 'waitForLiveImage');
+    try {
+      await expect(ordinary.runtime.start(session(), 'time')).resolves.toMatchObject({
+        threadId: 'same-thread',
+      });
+    } finally {
+      ordinary.runtime.stopAll();
+    }
+  });
+  it('cancels an in-flight handoff without dispatch and keeps its cleanup obligation after map removal', async () => {
+    const f = captured(),
+      abort = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    Reflect.set(
+      f.process,
+      'waitForLiveImage',
+      (signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          entered();
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    );
+    try {
+      const result = discover(f, abort.signal);
+      const refused = expect(result).rejects.toThrow('CODEX_STARTUP_CANCELLED');
+      await started;
+      expect(f.calls).toEqual([]);
+      abort.abort();
+      await refused;
+      expect(f.process.close).toHaveBeenCalledOnce();
+      await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      expect(f.launch).toHaveBeenCalledOnce();
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
+  it('keeps the five-second Native RPC bound and retains late raw replies without successor dispatch', async () => {
+    vi.useFakeTimers();
+    const f = captured();
+    let complete!: (value: unknown) => void;
+    const request = f.process.rpc.request,
+      raw = new Promise((resolve) => {
+        complete = resolve;
+      });
+    f.process.rpc.request = vi.fn((method, params) =>
+      method === 'initialize' ? raw : request(method, params),
+    );
+    try {
+      const result = discover(f).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(await result).toMatchObject({ error: new Error('CODEX_STARTUP_DISCOVERY_TIMEOUT') });
+      expect(f.process.rpc.request).toHaveBeenCalledTimes(1);
+      await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      complete({});
+      await Promise.resolve();
+      await Promise.resolve();
+      await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      expect(f.launch).toHaveBeenCalledOnce();
+      expect(f.calls).toEqual([]);
+    } finally {
+      f.runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
+});
+
+it('settles captured startup RPC ownership before the production owner callback inspects quiescence', async () => {
+  const f = fixture(true, {
+    lifetime: true,
+    beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'captured' }),
+  });
+  const observed = vi.fn(async (owner: ReturnType<typeof session>) => {
+    await f.runtime.inspectLiveQuiescence(owner);
+  });
+  Reflect.set(f.runtime, 'onOwnerStarted', observed);
+  try {
+    await expect(f.runtime.start(session(), 'time')).resolves.toMatchObject({
+      threadId: 'same-thread',
+    });
+    expect(observed).toHaveBeenCalledOnce();
+  } finally {
+    f.exit();
+    f.runtime.stopAll();
+  }
+});
+
+describe('private failed captured-startup settlement', () => {
+  async function failed() {
+    const f = fixture(true, {
+      lifetime: true,
+      beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'failed-capture' }),
+    });
+    Reflect.deleteProperty(f.process, 'waitForLiveImage');
+    await expect(f.runtime.start(session(), 'time')).rejects.toThrow();
+    return f;
+  }
+  it('retains the exact failed resource until positive physical closure, then settles idempotently', async () => {
+    const f = await failed();
+    const revoked = vi.fn();
+    const pending = f.runtime.settleFailedStartup(
+      session(),
+      'failed-capture',
+      revoked,
+      performance.now() + 1000,
+    );
+    await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+    f.exit();
+    await pending;
+    await f.runtime.settleFailedStartup(
+      session(),
+      'failed-capture',
+      revoked,
+      performance.now() + 1000,
+    );
+    expect(revoked.mock.calls.length).toBeGreaterThan(2);
+    await expect(
+      f.runtime.settleFailedStartup(session(), 'wrong', revoked, performance.now() + 1000),
+    ).rejects.toThrow();
+  });
+  it.each(['capture', 'revocation', 'closure'] as const)(
+    'retains failed startup on %s refusal',
+    async (failure) => {
+      const f = await failed();
+      await expect(
+        f.runtime.settleFailedStartup(
+          session(),
+          failure === 'capture' ? 'wrong' : 'failed-capture',
+          () => {
+            if (failure === 'revocation') throw new Error('capture changed');
+          },
+          performance.now() + 20,
+        ),
+      ).rejects.toThrow();
+      await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      f.exit();
+      await Promise.resolve();
+      await expect(f.runtime.start(session(), 'after-late-close')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+    },
+  );
+  it('rejects revocation mutation while physical closure is pending without late clearing', async () => {
+    const f = await failed();
+    let current = true;
+    const pending = f.runtime.settleFailedStartup(
+      session(),
+      'failed-capture',
+      () => {
+        if (!current) throw new Error('capture changed');
+      },
+      performance.now() + 1000,
+    );
+    current = false;
+    f.exit();
+    await expect(pending).rejects.toThrow('capture changed');
+    await expect(f.runtime.start(session(), 'time')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+  });
+});
+
+it('keeps an actual startup JsonRpcClient request and exact child locked until physical close settles both', async () => {
+  const f = fixture(true, {
+    beforeLaunch: async (_session, input) => ({ ...input, liveCaptureId: 'raw-capture' }),
+  });
+  const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  const rpc = new JsonRpcClient(child.stdout, child.stdin);
+  let dispatched!: () => void;
+  const sent = new Promise<void>((resolve) => {
+    dispatched = resolve;
+  });
+  const raw = rpc.request.bind(rpc);
+  vi.spyOn(rpc, 'request').mockImplementation((method, params) => {
+    const result = raw(method, params);
+    if (method === 'initialize') dispatched();
+    return result;
+  });
+  f.launch.mockImplementation(() => ({
+    rpc,
+    close: vi.fn(), // Deliberately retain the actual pipe until authenticated host cleanup.
+    waitForLiveImage: async () => ({ elapsedMs: 0, budgetMs: 90000 }),
+    observeLiveLaunch: () => observeLiveProcess(child.pid!),
+    waitForExit: () => exited,
+  }));
+  Reflect.set(f.runtime, 'owningAdmission', {
+    run: async (_session: unknown, work: () => Promise<unknown>) => work(),
+  });
+  const cancel = new AbortController();
+  const startup = f.runtime.startWithDiscovery(
+    session(),
+    'time',
+    async () => session(),
+    cancel.signal,
+  );
+  const rejected = expect(startup).rejects.toThrow();
+  try {
+    await sent;
+    cancel.abort();
+    await rejected;
+    let settled = false;
+    const cleanup = f.runtime
+      .settleFailedStartup(session(), 'raw-capture', () => {}, performance.now() + 2000)
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+    child.kill('SIGTERM');
+    await cleanup;
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(f.launch).toHaveBeenCalledOnce();
+  } finally {
+    child.kill('SIGKILL');
+    await exited;
+    f.runtime.stopAll();
   }
 });

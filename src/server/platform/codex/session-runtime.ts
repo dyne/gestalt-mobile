@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { NativeImageTransition } from './codex-process-launcher.js';
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 
 import {
@@ -82,6 +83,7 @@ export type AppServer = {
   /** Positive completion from the exact owned ChildProcess, not a PID disappearance. */
   waitForExit?(): Promise<void>;
   /** Trusted controller observation only; no raw host RPC crosses this port. */
+  waitForLiveImage?(signal: AbortSignal, deadline?: number): Promise<NativeImageTransition>;
   observeLiveLaunch?(): LiveProcessIdentity;
   observeLiveEnvironment?(): Readonly<{ tmpdir: string; home: string; codexHome: string }>;
   observeLiveDescendants?(): void;
@@ -169,6 +171,8 @@ class SessionResource {
   admissionObservers = 0;
   readonly admissionObserverSettlements = new Set<() => void>();
   admissionRetirementRequired = false;
+  startupAdmissionPending = false;
+  startupSettlement: Promise<void> | undefined;
   admissionRetirement: { flight: Promise<void>; waiters: number } | undefined;
   admissionBirth: LiveProcessIdentity | undefined;
   readonly lifetime = new AbortController();
@@ -326,9 +330,12 @@ export class CodexSessionRuntime {
   // Strong references survive disposal/removal from sessions until raw observations
   // settle and failed owners have positively completed fenced physical retirement.
   private readonly admissionResources = new Set<SessionResource>();
+  private readonly settledStartupCaptures = new Map<string, string>();
   private pruneAdmissionResource(resource: SessionResource): void {
     if (
       !resource.admissionRetirementRequired &&
+      !resource.startupAdmissionPending &&
+      !resource.startupSettlement &&
       !resource.admissionObservers &&
       !resource.admissionRequests.size &&
       !resource.admissionRetirement
@@ -571,6 +578,45 @@ export class CodexSessionRuntime {
       this.startingResources.delete(session.id);
     }
   }
+  private startupRequest(
+    resource: SessionResource,
+    method: string,
+    params: unknown,
+  ): Promise<unknown> {
+    if (resource.liveCaptureId) {
+      resource.lifetime.signal.throwIfAborted();
+      if (resource.admissionRetirementRequired || !resource.active)
+        throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    }
+    const raw = resource.process.rpc.request(method, params);
+    if (resource.liveCaptureId) {
+      this.admissionResources.add(resource);
+      resource.admissionRequests.add(raw);
+      const settled = () => {
+        resource.admissionRequests.delete(raw);
+        this.pruneAdmissionResource(resource);
+      };
+      raw.then(settled, settled);
+    }
+    return raw;
+  }
+  private async awaitCapturedImage(resource: SessionResource, signal?: AbortSignal): Promise<void> {
+    if (!resource.liveCaptureId) return;
+    this.admissionResources.add(resource);
+    if (!resource.process.waitForLiveImage) throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+    const cancellation = signal
+      ? AbortSignal.any([signal, resource.lifetime.signal])
+      : resource.lifetime.signal;
+    await resource.process.waitForLiveImage(cancellation);
+    cancellation.throwIfAborted();
+    if (!resource.active) throw new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED');
+    this.pruneAdmissionResource(resource);
+  }
+  private retainFailedStartup(resource: SessionResource): void {
+    if (!resource.liveCaptureId) return;
+    resource.admissionRetirementRequired = true;
+    this.admissionResources.add(resource);
+  }
   private async startOwned(
     session: RelaySessionSnapshot,
     now: string,
@@ -580,7 +626,11 @@ export class CodexSessionRuntime {
     signal?.throwIfAborted();
     this.assertAdmissionDrained(session.id);
     const resource = await this.createResource(session, !!select, signal);
-    if (select) this.startingResources.set(session.id, resource);
+    if (select || resource.liveCaptureId) this.startingResources.set(session.id, resource);
+    if (resource.liveCaptureId) {
+      resource.startupAdmissionPending = true;
+      this.admissionResources.add(resource);
+    }
     const abort = () => resource.dispose();
     signal?.addEventListener('abort', abort, { once: true });
     const query = async (method: string, params: unknown) => {
@@ -594,20 +644,22 @@ export class CodexSessionRuntime {
           signal?.addEventListener('abort', cancelled, { once: true });
         });
         signal?.throwIfAborted();
-        return await Promise.race([resource.process.rpc.request(method, params), interrupted]);
+        return await Promise.race([this.startupRequest(resource, method, params), interrupted]);
       } finally {
         if (timer) clearTimeout(timer);
         if (cancelled) signal?.removeEventListener('abort', cancelled);
       }
     };
     try {
-      await (select ? query : resource.process.rpc.request.bind(resource.process.rpc))(
-        'initialize',
-        {
-          clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
-          capabilities: { experimentalApi: true },
-        },
-      );
+      await this.awaitCapturedImage(resource, signal);
+      await (
+        select
+          ? query
+          : (method: string, params: unknown) => this.startupRequest(resource, method, params)
+      )('initialize', {
+        clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      });
       if (select) {
         if (!resource.liveCaptureId) throw new Error('LIVE_RUNTIME_CAPTURE_TOKEN_MISSING');
         if (!resource.process.observeLiveLaunch || !resource.process.observeLiveEnvironment)
@@ -706,13 +758,20 @@ export class CodexSessionRuntime {
           .supportsAttentionTool(now).snapshot,
         resource,
       );
+      resource.startupAdmissionPending = false;
+      this.pruneAdmissionResource(resource);
       await this.onOwnerStarted?.(started);
       signal?.throwIfAborted();
       return started;
     } catch (error) {
+      this.retainFailedStartup(resource);
       resource.dispose();
       throw error;
     } finally {
+      resource.startupAdmissionPending = false;
+      if (this.startingResources.get(session.id) === resource)
+        this.startingResources.delete(session.id);
+      this.pruneAdmissionResource(resource);
       signal?.removeEventListener('abort', abort);
     }
   }
@@ -819,7 +878,11 @@ export class CodexSessionRuntime {
     );
     if (candidates.size !== 1) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
     const resource = [...candidates][0];
-    if (!resource.process.waitForExit || !resource.process.observeLiveLaunch)
+    if (
+      resource.startupSettlement ||
+      !resource.process.waitForExit ||
+      !resource.process.observeLiveLaunch
+    )
       throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
     if (resource.active) {
       const birth = resource.process.observeLiveLaunch();
@@ -843,6 +906,88 @@ export class CodexSessionRuntime {
     resource.admissionRetirementRequired = true;
     this.admissionResources.add(resource);
     resource.lifetime.abort(new Error('LIVE_RUNTIME_UNAVAILABLE'));
+  }
+  // Private host cleanup only: the callback must prove authenticated revocation
+  // of this exact capture. The deadline is the controller's existing physical
+  // closure window, started AFTER the separately bounded Manager revoke.
+  async settleFailedStartup(
+    session: RelaySessionSnapshot,
+    captureId: string,
+    assertRevoked: () => void,
+    deadline: number,
+  ): Promise<void> {
+    const assertCurrent = () => {
+      assertRevoked();
+      if (
+        !captureId ||
+        this.sessions.has(session.id) ||
+        this.startingResources.has(session.id) ||
+        this.startupAttempts.has(session.id)
+      )
+        throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+    };
+    assertCurrent();
+    const peers = [...this.admissionResources].filter((r) => r.sessionId === session.id);
+    if (!peers.length) {
+      if (
+        this.capturedLiveSessions.has(session.id) &&
+        this.settledStartupCaptures.get(session.id) !== captureId
+      )
+        throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+      return;
+    }
+    const resource = peers[0];
+    const assertResource = () => {
+      assertCurrent();
+      if (
+        peers.length !== 1 ||
+        !this.admissionResources.has(resource) ||
+        resource.liveCaptureId !== captureId ||
+        resource.active ||
+        !resource.admissionRetirementRequired ||
+        resource.startupAdmissionPending ||
+        resource.admissionRetirement ||
+        !resource.process.waitForExit
+      )
+        throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    };
+    assertResource();
+    // A concurrent caller cannot replace a still-running physical/drain proof.
+    if (resource.startupSettlement) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const remaining = deadline - performance.now();
+    if (!Number.isFinite(remaining) || remaining <= 0)
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    const flight = Promise.race([
+      (async () => {
+        await resource.process.waitForExit!();
+        assertResource();
+        await Promise.allSettled([...resource.admissionRequests]);
+        assertResource();
+        if (resource.admissionRequests.size || resource.admissionObservers)
+          throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')), remaining);
+      }),
+    ]);
+    resource.startupSettlement = flight;
+    try {
+      await flight;
+      assertResource();
+      if (
+        performance.now() >= deadline ||
+        resource.admissionRequests.size ||
+        resource.admissionObservers
+      )
+        throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+      resource.admissionRetirementRequired = false;
+      this.settledStartupCaptures.set(session.id, captureId);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (resource.startupSettlement === flight) resource.startupSettlement = undefined;
+      this.pruneAdmissionResource(resource);
+    }
   }
   async abortLiveOwner(
     session: RelaySessionSnapshot,
@@ -870,7 +1015,11 @@ export class CodexSessionRuntime {
                 await new Promise<void>((resolve) =>
                   resource.admissionObserverSettlements.add(resolve),
                 );
-              if (resource.admissionRequests.size || resource.admissionObservers)
+              if (
+                resource.admissionRequests.size ||
+                resource.admissionObservers ||
+                resource.startupAdmissionPending
+              )
                 throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
             })(),
             new Promise<never>((_resolve, reject) => {
@@ -2281,13 +2430,18 @@ export class CodexSessionRuntime {
     if (!session.threadId) throw new Error('CODEX_THREAD_ID_MISSING');
     this.assertAdmissionDrained(session.id);
     const resource = await this.createResource(session);
+    if (resource.liveCaptureId) this.startingResources.set(session.id, resource);
+    if (resource.liveCaptureId) {
+      resource.startupAdmissionPending = true;
+      this.admissionResources.add(resource);
+    }
     const request = async (method: string, params: unknown): Promise<unknown> => {
       if (!this.renewedLiveCaptures.has(session.id))
-        return resource.process.rpc.request(method, params);
+        return this.startupRequest(resource, method, params);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
-          resource.process.rpc.request(method, params),
+          this.startupRequest(resource, method, params),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error('LIVE_RENEWAL_DISCOVERY_TIMEOUT')), 5000);
           }),
@@ -2297,6 +2451,7 @@ export class CodexSessionRuntime {
       }
     };
     try {
+      await this.awaitCapturedImage(resource);
       await request('initialize', {
         clientInfo: { name: 'gestalt-mobile', version: '0.1.0' },
         capabilities: { experimentalApi: true },
@@ -2380,11 +2535,19 @@ export class CodexSessionRuntime {
       this.sessions.set(session.id, resource);
       await this.writePendingThreadName(session.id);
       const restored = this.withEffectiveRetrieval(result.session, resource);
+      resource.startupAdmissionPending = false;
+      this.pruneAdmissionResource(resource);
       await this.onOwnerStarted?.(restored);
       return { ...result, session: restored };
     } catch (error) {
+      this.retainFailedStartup(resource);
       resource.dispose();
       throw error;
+    } finally {
+      resource.startupAdmissionPending = false;
+      if (this.startingResources.get(session.id) === resource)
+        this.startingResources.delete(session.id);
+      this.pruneAdmissionResource(resource);
     }
   }
 
@@ -2532,6 +2695,9 @@ export class CodexSessionRuntime {
       close: () => process.close(),
       ...(process.onExit ? { onExit: process.onExit.bind(process) } : {}),
       ...(process.waitForExit ? { waitForExit: process.waitForExit.bind(process) } : {}),
+      ...(process.waitForLiveImage
+        ? { waitForLiveImage: process.waitForLiveImage.bind(process) }
+        : {}),
       ...(process.observeLiveLaunch
         ? { observeLiveLaunch: process.observeLiveLaunch.bind(process) }
         : {}),
