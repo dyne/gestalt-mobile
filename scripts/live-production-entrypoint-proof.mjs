@@ -35,6 +35,11 @@ import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import {
   observeProofMethod,
+  observeEventAuthority,
+  proofObservationRemaining,
+  observeCanonicalPollDispatch,
+  manualObservationDeadline,
+  verifyManualAcknowledgement,
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
@@ -76,7 +81,10 @@ import {
   LIVE_CODEX_BWRAP_SHA256,
 } from '../dist/server/server/platform/live-design/native-contract.js';
 import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
-import { observedBirthExited } from '../dist/server/server/platform/live-design/process-identity.js';
+import {
+  observedBirthExited,
+  assertObservedProcessMetadata,
+} from '../dist/server/server/platform/live-design/process-identity.js';
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
 import {
@@ -280,30 +288,12 @@ ProductionLiveController.prototype.renewGeneration = async function (...args) {
   }
 };
 // Observe the actual authority boundary without supplying admission or model output.
-const actualLiveEvent = LiveDispatchGuard.prototype.liveEvent;
-LiveDispatchGuard.prototype.liveEvent = async function (fence, eventId, work) {
-  const began = performance.now();
-  const phase = /^[a-f0-9]{8}$/.test(eventId) ? 'event-turn' : 'canonical-poll';
-  let grantedAfterMs = null;
-  let completed = false;
-  try {
-    const result = await actualLiveEvent.call(this, fence, eventId, async () => {
-      grantedAfterMs = Math.round(performance.now() - began);
-      return work();
-    });
-    completed = true;
-    return result;
-  } finally {
-    const timings = (report.eventAuthorityTimings ??= []);
-    if (timings.length === 64) timings.shift();
-    timings.push({
-      phase,
-      grantedAfterMs,
-      elapsedMs: Math.round(performance.now() - began),
-      completed,
-    });
-  }
-};
+let closureBoundary = 'open';
+observeEventAuthority(
+  LiveDispatchGuard.prototype,
+  (report.eventAuthorityTimings = []),
+  () => closureBoundary,
+);
 // Measure the real controller phases without supplying readiness or changing
 // their result. These fixed labels contain no arguments, paths or Native output.
 for (const phase of [
@@ -504,6 +494,10 @@ IsolatedProjectProcess.prototype.helperCommand = async function (receipt, args, 
   }
   return result;
 };
+const pendingCanonicalPoll = observeCanonicalPollDispatch(
+  IsolatedProjectProcess.prototype,
+  assertObservedProcessMetadata,
+);
 const originalProjectVerify = IsolatedProjectProcess.prototype.verify;
 IsolatedProjectProcess.prototype.verify = function (receipt) {
   const started = performance.now();
@@ -599,8 +593,14 @@ observeProofMethod(
   'controller-close',
   cleanupOperations,
   {
-    before: (owner) => lifecycle('before-close', owner),
-    after: (owner) => lifecycle('after-close', owner),
+    before: (owner) => {
+      closureBoundary = 'closing';
+      lifecycle('before-close', owner);
+    },
+    after: (owner, record) => {
+      closureBoundary = record.result === 'completed' ? 'closed' : 'close-failed';
+      lifecycle('after-close', owner);
+    },
   },
 );
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -726,13 +726,18 @@ let seed = true,
   childThread,
   providerFailure;
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(check, stage, budget = 30000) {
-  const deadline = Date.now() + budget;
+async function until(check, stage, budget = 30000, absoluteDeadline) {
+  const deadline = Math.min(Date.now() + budget, absoluteDeadline ?? Infinity);
   while (Date.now() < deadline) {
     recoveryHandoff?.assertCurrent();
     if (providerFailure) throw new Error('CONTROLLED_PROVIDER_FAILED');
-    if (await check()) return;
-    await wait(50);
+    if (await check()) {
+      if (absoluteDeadline !== undefined && Date.now() >= deadline) throw new Error(stage);
+      return;
+    }
+    await wait(
+      absoluteDeadline === undefined ? 50 : Math.max(0, Math.min(50, deadline - Date.now())),
+    );
   }
   throw new Error(stage);
 }
@@ -970,7 +975,20 @@ async function eventFor(body) {
   }
   assert.equal(metadata.session_id, owningNativeSession);
   const role = metadata.thread_id === owningThread ? 'root' : 'child';
-  if (editFlow && role === 'root') firstPickerEventId ??= liveEventFromRequest(body).id;
+  if (editFlow && role === 'root') {
+    const event = liveEventFromRequest(body);
+    firstPickerEventId ??= event.id;
+    if (event.type === 'manual_edit_apply') {
+      assert.equal(event.batch?.entries?.length, 1);
+      const correlation = {
+        eventDigest: hash(event.id),
+        entryDigest: hash(event.batch.entries[0].id),
+      };
+      if (report.manualCanonicalCorrelation)
+        assert.deepEqual(report.manualCanonicalCorrelation, correlation);
+      else report.manualCanonicalCorrelation = correlation;
+    }
+  }
   if (role === 'child') {
     assert.ok(!childThread || childThread === metadata.thread_id);
     childThread = metadata.thread_id;
@@ -2312,9 +2330,10 @@ try {
     }
     assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
     report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
-    let manualSource;
+    let manualSource, observedManualPoll;
+    let manualWaitDeadline;
     let backgroundSourceDigest, backgroundRequestCount;
-    const acknowledged = async (kind) =>
+    const acknowledged = async (kind, budget = eventObservationBudgetMs, absoluteDeadline) =>
       until(
         () => {
           const db = new DatabaseSync(
@@ -2339,7 +2358,8 @@ try {
           }
         },
         'EDIT_CANONICAL_ACK_DEADLINE',
-        eventObservationBudgetMs,
+        budget,
+        absoluteDeadline,
       );
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);
@@ -2371,17 +2391,81 @@ try {
         resultFile: join(evidence, 'production-edit-browser.json'),
         screenshot: join(evidence, 'production-picker-edit.png'),
       },
-      command: async (command) => {
+      command: async (command, observation) => {
         const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
-        if (command === 'accepted') {
-          await acknowledged('accept');
+        if (command === 'manual-poll-observed') {
+          manualWaitDeadline = manualObservationDeadline(observation);
+          assert.equal(manualWaitDeadline, observation.deadline);
+          await until(
+            () => {
+              observedManualPoll = pendingCanonicalPoll(session.id, started.generation);
+              return !!observedManualPoll;
+            },
+            'PROOF_CANONICAL_POLL_OBSERVATION_DEADLINE',
+            proofObservationRemaining(manualWaitDeadline),
+            manualWaitDeadline,
+          );
+          report.manualPollObservation = observedManualPoll;
+          return observedManualPoll;
+        } else if (command === 'manual-commit-observed') {
+          const current = pendingCanonicalPoll(session.id, started.generation);
+          assert.ok(
+            current && current.sequence === observedManualPoll?.sequence,
+            'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
+          );
+          // The original480s reservation still covers manual150s + chain/UI/cleanup.
+          assert.ok(observation.hostDeadline - Date.now() >= 420_000, 'PROOF_MANUAL_CHAIN_BUDGET');
+          report.manualPollCommitObservation = current;
+          return current;
+        } else if (command === 'accepted') {
+          await acknowledged(
+            'accept',
+            observation
+              ? proofObservationRemaining(observation.deadline)
+              : eventObservationBudgetMs,
+            observation?.deadline,
+          );
           assert.ok(source().includes('Production chosen variant'));
           assert.ok(!source().includes('impeccable-variants-start'));
         } else if (command === 'steered') {
           await acknowledged('steer');
           assert.ok(readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"));
         } else if (command === 'manual-applied') {
-          await acknowledged('manual_edit_apply');
+          await acknowledged(
+            'manual_edit_apply',
+            proofObservationRemaining(observation.deadline),
+            observation.deadline,
+          );
+          const db = new DatabaseSync(
+            join(
+              controller,
+              `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+            ),
+            { readOnly: true },
+          );
+          try {
+            const items = db
+              .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+              .all()
+              .map((row) => ({
+                ...JSON.parse(row.record),
+                liveId: row.liveId,
+                generation: row.generation,
+              }))
+              .filter((item) => item.kind === 'manual_edit_apply');
+            assert.equal(items.length, 1);
+            const item = items[0];
+            assert.equal(item.liveId, started.liveId);
+            assert.equal(item.generation, started.generation);
+            report.manualAcknowledgementObservation = verifyManualAcknowledgement({
+              ...observation.manual,
+              acknowledgedAt: Date.now(),
+              correlation: report.manualCanonicalCorrelation,
+              canonical: { ...item, eventDigest: hash(item.upstreamId) },
+            });
+          } finally {
+            db.close();
+          }
           manualSource = source();
           assert.ok(manualSource.includes('Production manual approved'));
           assert.ok(

@@ -237,6 +237,13 @@ export function validateProductionLane(lane, report, identity) {
     if (lane === 'accept-steer') {
       assert.equal(browser.realPickerGenerateAccept, true);
       assert.equal(browser.realPickerSteer, true);
+      for (const key of ['freshDocumentHelperConnected', 'visibleChrome', 'acceptedHeading'])
+        assert.equal(browser.acceptContinuity[key], true);
+      assert.ok(
+        Number.isSafeInteger(browser.acceptContinuity.elapsedMs) &&
+          browser.acceptContinuity.elapsedMs >= 0 &&
+          browser.acceptContinuity.elapsedMs < 300_000,
+      );
       assert.equal(browser.actualTabHiddenBeyondEightSeconds, true);
       assert.ok(browser.hmrUpdates > 0);
       assert.equal(browser.realPickerManualApply, false);
@@ -244,6 +251,43 @@ export function validateProductionLane(lane, report, identity) {
     } else {
       assert.equal(browser.realPickerManualApply, true);
       assert.equal(browser.realPickerDiscard, true);
+      for (const observation of [
+        report.manualPollObservation,
+        report.manualPollCommitObservation,
+      ]) {
+        for (const key of [
+          'commandIpcDispatched',
+          'workerBirthsCurrent',
+          'postAuthority',
+          'pending',
+          'generationMatches',
+        ])
+          assert.equal(observation[key], true);
+        assert.equal(observation.foregroundChildBirthObserved, false);
+        assert.ok(Number.isSafeInteger(observation.sequence) && observation.sequence > 0);
+      }
+      assert.equal(
+        report.manualPollObservation.sequence,
+        report.manualPollCommitObservation.sequence,
+      );
+      const timing = report.manualAcknowledgementObservation;
+      for (const key of [
+        'commitAccepted',
+        'canonicalAcknowledged',
+        'entryAndEventCorrelated',
+        'within120sMargin',
+      ])
+        assert.equal(timing[key], true);
+      assert.ok(
+        Number.isSafeInteger(timing.enqueueToAckUpperBoundMs) &&
+          timing.enqueueToAckUpperBoundMs >= 0 &&
+          timing.enqueueToAckUpperBoundMs <= 120_000,
+      );
+      assert.ok(
+        Number.isSafeInteger(timing.requestStartToAcceptedMs) &&
+          timing.requestStartToAcceptedMs >= 0 &&
+          timing.requestStartToAcceptedMs <= timing.enqueueToAckUpperBoundMs,
+      );
       assert.equal(browser.realPickerGenerateAccept, false);
       assert.equal(browser.realPickerSteer, false);
     }
@@ -330,12 +374,54 @@ export function validateDiagnosticPicker(report, identity) {
   assert.ok(
     Number.isSafeInteger(report.startAdmissionElapsedMs) && report.startAdmissionElapsedMs > 0,
   );
-  assert.ok(report.eventAuthorityTimings.some((v) => v.phase === 'event-turn'));
-  for (const row of report.eventAuthorityTimings) {
+  const authorityRows = report.eventAuthorityTimings;
+  assert.ok(Array.isArray(authorityRows) && authorityRows.length > 0 && authorityRows.length <= 64);
+  for (const phase of ['event-turn', 'canonical-poll'])
+    assert.ok(authorityRows.some((row) => row.phase === phase && row.completed === true));
+  let authorityObservation = 'all-observed-boundaries-completed';
+  for (const [index, row] of authorityRows.entries()) {
     assert.ok(['canonical-poll', 'event-turn'].includes(row.phase));
-    assert.equal(row.completed, true);
-    assert.ok(Number.isSafeInteger(row.grantedAfterMs) && row.grantedAfterMs >= 0);
-    assert.ok(Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= row.grantedAfterMs);
+    assert.ok(Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= 0);
+    if (row.completed === true) {
+      assert.ok(Number.isSafeInteger(row.grantedAfterMs) && row.grantedAfterMs >= 0);
+      assert.ok(row.elapsedMs >= row.grantedAfterMs);
+      continue;
+    }
+    // This is an observation of nonauthorization, never proof of its cause or
+    // of drainage. Independent signed and physical closure evidence is required.
+    assert.equal(row.completed, false);
+    assert.equal(index, authorityRows.length - 1);
+    assert.equal(row.phase, 'canonical-poll');
+    assert.equal(row.grantedAfterMs, null);
+    assert.equal(report.cleanupStage, 'settled');
+    assert.equal(report.shutdownFailure, undefined);
+    assert.equal(report.disposableCleanupFailure, undefined);
+    assert.ok(Array.isArray(report.cleanupOperations) && report.cleanupOperations.length <= 64);
+    assert.ok(report.cleanupOperations.every((v) => v.result === 'completed'));
+    for (const operation of [
+      'controller-close',
+      'signed-revoke',
+      'poll-drain',
+      'poll-settle',
+      'owning-abort',
+    ])
+      assert.ok(
+        report.cleanupOperations.some((v) => v.operation === operation && v.result === 'completed'),
+      );
+    const owners = report.nativeLaunchLifetimes.filter((v) => v.capturedOwner === true);
+    assert.equal(owners.length, 1);
+    assert.equal(owners[0].exitCode, 0);
+    assert.equal(owners[0].signal, null);
+    assert.equal(owners[0].exitVerified, true);
+    assert.equal(owners[0].treeFailures, 0);
+    assert.equal(report.cleanupProjectClosure.length, 2);
+    for (const role of ['helper', 'devserver']) {
+      const processes = report.cleanupProjectClosure.filter((v) => v.role === role);
+      assert.equal(processes.length, 1);
+      assert.equal(processes[0].namespaceExited, true);
+      assert.equal(processes[0].pipeDescriptorsClosed, true);
+    }
+    authorityObservation = 'terminal-nonauthorizing-interruption';
   }
   for (const [field, labels] of [
     [
@@ -379,6 +465,7 @@ export function validateDiagnosticPicker(report, identity) {
       assert.equal(counter.started, counter.completed + counter.failed);
     }
   }
+  return authorityObservation;
 }
 const independentFiles = [
   'native-model-tools/native-model-tools-proof.json',
@@ -548,6 +635,7 @@ export function aggregateDiagnostic(packets, identity) {
     [...diagnosticLanes].sort(),
     'DIAGNOSTIC_LANES_INCOMPLETE',
   );
+  let authorityObservation;
   for (const lane of diagnosticLanes) {
     const { receipt, reports } = packets[lane];
     assert.equal(receipt.schemaVersion, 1);
@@ -565,7 +653,7 @@ export function aggregateDiagnostic(packets, identity) {
       assert.equal(digest(reports[file]), receipt.reports[file], 'PROOF_REPORT_CHANGED');
     const parsed = Object.fromEntries(files.map((file) => [file, JSON.parse(reports[file])]));
     if (lane === 'independent') validateIndependent(parsed, identity);
-    else validateDiagnosticPicker(parsed[files[0]], identity);
+    else authorityObservation = validateDiagnosticPicker(parsed[files[0]], identity);
   }
   return {
     schemaVersion: 1,
@@ -573,6 +661,7 @@ export function aggregateDiagnostic(packets, identity) {
     cleanupComplete: true,
     identity,
     proofKind: 'exact-candidate-picker-diagnostic-with-independent-proofs',
+    authorityObservation,
     diagnosticOnly: true,
     fullAcceptance: false,
     fullExactCandidateStillRequired: true,

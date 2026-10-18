@@ -24,6 +24,7 @@ import {
   aggregateDiagnostic,
   diagnosticLanes,
   diagnosticPickerChecks,
+  validateDiagnosticPicker,
   birthCurrent,
   fullLanes,
   fullAssertionOwners,
@@ -43,7 +44,7 @@ import {
 
 const identity = { candidate: 'a'.repeat(40), tree: 'b'.repeat(40), runId: '123', ...proofPins };
 function production(lane) {
-  return {
+  const report = {
     passed: true,
     cleanupComplete: true,
     productionLane: lane,
@@ -63,6 +64,12 @@ function production(lane) {
       hmrUpdates: 1,
       realPickerGenerateAccept: lane === 'accept-steer',
       realPickerSteer: lane === 'accept-steer',
+      acceptContinuity: {
+        freshDocumentHelperConnected: true,
+        visibleChrome: true,
+        acceptedHeading: true,
+        elapsedMs: 1,
+      },
       actualTabHiddenBeyondEightSeconds: lane === 'accept-steer',
       realPickerManualApply: lane === 'manual-discard',
       realPickerDiscard: lane === 'manual-discard',
@@ -85,6 +92,27 @@ function production(lane) {
     },
     recoveryHandoff: { continuations: 1, cancelled: false, sameDriverBirth: true },
   };
+  if (lane === 'manual-discard') {
+    report.manualPollObservation = {
+      sequence: 1,
+      commandIpcDispatched: true,
+      workerBirthsCurrent: true,
+      foregroundChildBirthObserved: false,
+      postAuthority: true,
+      pending: true,
+      generationMatches: true,
+    };
+    report.manualPollCommitObservation = structuredClone(report.manualPollObservation);
+    report.manualAcknowledgementObservation = {
+      commitAccepted: true,
+      canonicalAcknowledged: true,
+      entryAndEventCorrelated: true,
+      within120sMargin: true,
+      enqueueToAckUpperBoundMs: 100000,
+      requestStartToAcceptedMs: 100,
+    };
+  }
+  return report;
 }
 function independent() {
   return {
@@ -632,6 +660,7 @@ function diagnosticPicker() {
   report.startAdmissionElapsedMs = 100;
   report.eventAuthorityTimings = [
     { phase: 'event-turn', grantedAfterMs: 1, elapsedMs: 2, completed: true },
+    { phase: 'canonical-poll', grantedAfterMs: 1, elapsedMs: 2, completed: true },
   ];
   for (const [field, labels] of [
     [
@@ -917,5 +946,244 @@ test('diagnostic CLI aggregates both exact-candidate receipts and emits only dia
     assert.equal(failed.fullAcceptance, false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function terminalInterruptedPicker() {
+  const report = diagnosticPicker();
+  // Exact real run39090977856 authority rows, including the final observation.
+  report.eventAuthorityTimings = [
+    { phase: 'canonical-poll', grantedAfterMs: 69179, elapsedMs: 71078, completed: true },
+    { phase: 'event-turn', grantedAfterMs: 48041, elapsedMs: 97972, completed: true },
+    { phase: 'canonical-poll', grantedAfterMs: 45425, elapsedMs: 47709, completed: true },
+    { phase: 'canonical-poll', grantedAfterMs: null, elapsedMs: 3490, completed: false },
+  ];
+  report.cleanupStage = 'settled';
+  report.cleanupOperations = [
+    'controller-close',
+    'signed-revoke',
+    'poll-drain',
+    'poll-settle',
+    'owning-abort',
+  ].map((operation) => ({ operation, result: 'completed' }));
+  report.nativeLaunchLifetimes = [
+    { capturedOwner: true, exitCode: 0, signal: null, exitVerified: true, treeFailures: 0 },
+  ];
+  report.cleanupProjectClosure = ['helper', 'devserver'].map((role) => ({
+    role,
+    namespaceExited: true,
+    pipeDescriptorsClosed: true,
+  }));
+  return report;
+}
+test('real terminal nonauthorizing poll shape is preserved and classified without claiming its cause', () => {
+  const report = terminalInterruptedPicker();
+  const original = structuredClone(report);
+  assert.equal(validateDiagnosticPicker(report, identity), 'terminal-nonauthorizing-interruption');
+  assert.deepEqual(report, original);
+  const packets = diagnosticPackets();
+  mutateReport(packets['picker-diagnostic'], (value) => Object.assign(value, report));
+  const aggregate = aggregateDiagnostic(packets, identity);
+  assert.equal(aggregate.authorityObservation, 'terminal-nonauthorizing-interruption');
+  assert.equal(aggregate.fullAcceptance, false);
+  assert.equal(
+    aggregateDiagnostic(diagnosticPackets(), identity).authorityObservation,
+    'all-observed-boundaries-completed',
+  );
+});
+test('terminal poll exception refuses event failures, granted authority, early or multiple failures and missing positive closure', () => {
+  const mutations = [
+    (r) => {
+      r.eventAuthorityTimings[3].phase = 'event-turn';
+    },
+    (r) => {
+      r.eventAuthorityTimings[3].grantedAfterMs = 0;
+    },
+    (r) => {
+      r.eventAuthorityTimings[3].elapsedMs = -1;
+    },
+    (r) => {
+      r.eventAuthorityTimings[3].completed = undefined;
+    },
+    (r) => {
+      r.eventAuthorityTimings[1].completed = false;
+      r.eventAuthorityTimings[1].grantedAfterMs = null;
+    },
+    (r) => {
+      r.eventAuthorityTimings.unshift(structuredClone(r.eventAuthorityTimings[3]));
+    },
+    (r) => {
+      r.eventAuthorityTimings.push(structuredClone(r.eventAuthorityTimings[3]));
+    },
+    (r) => {
+      r.eventAuthorityTimings = r.eventAuthorityTimings.filter((v) => v.phase !== 'event-turn');
+    },
+    (r) => {
+      r.eventAuthorityTimings = r.eventAuthorityTimings.filter(
+        (v) => !(v.phase === 'canonical-poll' && v.completed),
+      );
+    },
+    (r) => {
+      r.cleanupComplete = false;
+    },
+    (r) => {
+      r.disposableTreeRemoved = false;
+    },
+    (r) => {
+      r.cleanupStage = 'mobile';
+    },
+    (r) => {
+      r.shutdownFailure = 'LIVE_CLEANUP_REQUIRED';
+    },
+    (r) => {
+      r.disposableCleanupFailure = 'OWNED_PROOF_CLEANUP_FAILED';
+    },
+    (r) => {
+      r.cleanupOperations[0].result = 'failed';
+    },
+    (r) => {
+      r.cleanupOperations.push({ operation: 'poll-settle', result: 'started' });
+    },
+    (r) => {
+      r.nativeLaunchLifetimes[0].exitVerified = false;
+    },
+    (r) => {
+      r.nativeLaunchLifetimes[0].exitCode = null;
+    },
+    (r) => {
+      r.nativeLaunchLifetimes[0].signal = 'SIGTERM';
+    },
+    (r) => {
+      r.nativeLaunchLifetimes[0].treeFailures = 1;
+    },
+    (r) => {
+      r.nativeLaunchLifetimes = [];
+    },
+    (r) => {
+      r.nativeLaunchLifetimes.push(structuredClone(r.nativeLaunchLifetimes[0]));
+    },
+    (r) => {
+      r.cleanupProjectClosure.pop();
+    },
+    (r) => {
+      r.cleanupProjectClosure[1].role = 'helper';
+    },
+    (r) => {
+      r.provenance.tree = 'changed';
+    },
+    (r) => {
+      r.sourceInventory.signatureVerified = false;
+    },
+    (r) => {
+      r.laneCanonicalEvents[1].stage = 'applied';
+    },
+    (r) => {
+      r.pickerDiagnostic.identity.manager = 'changed';
+    },
+    ...['controller-close', 'signed-revoke', 'poll-drain', 'poll-settle', 'owning-abort'].map(
+      (op) => (r) => {
+        r.cleanupOperations = r.cleanupOperations.filter((v) => v.operation !== op);
+      },
+    ),
+    ...['helper', 'devserver'].flatMap((role) =>
+      ['namespaceExited', 'pipeDescriptorsClosed'].map((key) => (r) => {
+        r.cleanupProjectClosure.find((v) => v.role === role)[key] = false;
+      }),
+    ),
+    ...diagnosticPickerChecks.map((key) => (r) => {
+      r.checks[key] = false;
+    }),
+  ];
+  for (const mutate of mutations) {
+    const report = terminalInterruptedPicker();
+    mutate(report);
+    assert.throws(() => validateDiagnosticPicker(report, identity));
+  }
+  const packets = diagnosticPackets();
+  mutateReport(packets['picker-diagnostic'], (r) => Object.assign(r, terminalInterruptedPicker()));
+  packets['picker-diagnostic'].reports['production-entrypoint/production-entrypoint-proof.json'] +=
+    ' ';
+  assert.throws(() => aggregateDiagnostic(packets, identity), /PROOF_REPORT_CHANGED/);
+});
+
+test('full lanes retain real continuity and exact dispatched-poll/manual120s observations as mandatory evidence', () => {
+  const mutations = [
+    [
+      'accept-steer',
+      (r) => {
+        r.editBrowser.acceptContinuity.visibleChrome = false;
+      },
+    ],
+    [
+      'accept-steer',
+      (r) => {
+        r.editBrowser.acceptContinuity.freshDocumentHelperConnected = false;
+      },
+    ],
+    [
+      'accept-steer',
+      (r) => {
+        r.editBrowser.acceptContinuity.acceptedHeading = false;
+      },
+    ],
+    [
+      'accept-steer',
+      (r) => {
+        r.editBrowser.acceptContinuity.elapsedMs = 300000;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualPollObservation.commandIpcDispatched = false;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualPollObservation.workerBirthsCurrent = false;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualPollCommitObservation.pending = false;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualPollCommitObservation.sequence++;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualPollObservation.foregroundChildBirthObserved = true;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualAcknowledgementObservation.entryAndEventCorrelated = false;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualAcknowledgementObservation.enqueueToAckUpperBoundMs = 120001;
+      },
+    ],
+    [
+      'manual-discard',
+      (r) => {
+        r.manualAcknowledgementObservation.requestStartToAcceptedMs = 100001;
+      },
+    ],
+  ];
+  for (const [lane, mutate] of mutations) {
+    const p = packets();
+    mutateReport(p[lane], mutate);
+    assert.throws(() => aggregateLanes(p, identity));
   }
 });

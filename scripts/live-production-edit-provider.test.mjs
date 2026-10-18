@@ -6,7 +6,7 @@
 
 // Fixture contract tests; these do not claim actual Native model execution.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,11 +17,20 @@ import {
   pickerChromeSnapshot,
   boundedPickerObservation,
   observeProofMethod,
+  observeEventAuthority,
+  proofObservationRemaining,
+  withinProofObservation,
+  pickerContinuityProbe,
+  observePickerContinuity,
+  observeCanonicalPollDispatch,
+  manualObservationDeadline,
+  verifyManualAcknowledgement,
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
 } from './live-production-edit-diagnostics.mjs';
 import { JSDOM } from 'jsdom';
+import { processBirth, birthCurrent } from './live-production-proof-lanes.mjs';
 import {
   createProductionEditProvider,
   liveEventFromRequest,
@@ -772,7 +781,7 @@ test('post-Accept acknowledgement observation is allowlisted and follows acknowl
     'utf8',
   );
   const immediate = script.indexOf("await observePicker('after-accept')");
-  const acknowledgement = script.indexOf("await command('accepted')", immediate);
+  const acknowledgement = script.indexOf("await command('accepted', acceptDeadline)", immediate);
   const afterAck = script.indexOf("await observePicker('after-accept-ack')", acknowledgement);
   const steer = script.indexOf("await observePicker('before-steer')", afterAck);
   assert.ok(
@@ -782,4 +791,365 @@ test('post-Accept acknowledgement observation is allowlisted and follows acknowl
     boundedPickerObservation({ boundary: 'after-accept-ack', available: false }).boundary,
     'after-accept-ack',
   );
+});
+
+test('authority diagnostics preserve actual success and exact rejection with fixed closure boundaries and redaction', async () => {
+  let closure = 'open',
+    calls = 0,
+    callbackCalls = 0;
+  const records = [],
+    sentinel = new Error('private https://credential.test/secret bearer-canary');
+  let reject;
+  const target = {
+    async liveEvent(fence, event, work) {
+      calls++;
+      assert.equal(fence, 'exact-fence');
+      if (event === 'poll')
+        return await new Promise((_, r) => {
+          reject = r;
+        });
+      return await work();
+    },
+  };
+  observeEventAuthority(target, records, () => closure);
+  assert.equal(
+    await target.liveEvent('exact-fence', 'abcdef12', async () => {
+      callbackCalls++;
+      return 'exact-result';
+    }),
+    'exact-result',
+  );
+  const pending = target.liveEvent('exact-fence', 'poll', async () => {
+    callbackCalls++;
+  });
+  closure = 'closing';
+  reject(sentinel);
+  await assert.rejects(pending, (error) => error === sentinel);
+  assert.equal(calls, 2);
+  assert.equal(callbackCalls, 1);
+  assert.equal(records[0].completed, true);
+  assert.equal(records[0].phase, 'event-turn');
+  assert.equal(records[1].completed, false);
+  assert.equal(records[1].phase, 'canonical-poll');
+  assert.equal(records[1].grantedAfterMs, null);
+  assert.equal(records[1].closureAtStart, 'open');
+  assert.equal(records[1].closureAtFinish, 'closing');
+  assert.equal(records[1].failure, 'UNCLASSIFIED');
+  assert.ok(!JSON.stringify(records).includes('credential'));
+  assert.ok(!JSON.stringify(records).includes('bearer-canary'));
+});
+test('authority diagnostic instrumentation handles failed work, hostile errors, unavailable boundaries and bounded rows', async () => {
+  const records = [];
+  const error = {
+    get message() {
+      throw new Error('private-canary');
+    },
+  };
+  const target = {
+    liveEvent(_f, _e, work) {
+      return work();
+    },
+  };
+  observeEventAuthority(target, records, () => {
+    throw new Error('private-boundary');
+  });
+  await assert.rejects(
+    target.liveEvent(null, 'abcdef12', () => Promise.reject(error)),
+    (v) => v === error,
+  );
+  assert.equal(records[0].completed, false);
+  assert.ok(Number.isSafeInteger(records[0].grantedAfterMs) && records[0].grantedAfterMs >= 0);
+  assert.equal(records[0].failure, 'UNCLASSIFIED');
+  assert.equal(records[0].closureAtFinish, 'unavailable');
+  for (let i = 0; i < 66; i++) await target.liveEvent(null, 'poll', () => i);
+  assert.equal(records.length, 64);
+  assert.ok(records.every((v) => v.completed));
+  assert.ok(!JSON.stringify(records).includes('private'));
+  const fixed = [];
+  const rejected = {
+    liveEvent() {
+      throw new Error('LIVE_GENERATION_STALE');
+    },
+  };
+  observeEventAuthority(rejected, fixed, () => 'private-boundary');
+  await assert.rejects(
+    rejected.liveEvent(null, 'poll', () => {}),
+    /LIVE_GENERATION_STALE/,
+  );
+  assert.equal(fixed[0].failure, 'LIVE_GENERATION_STALE');
+  assert.equal(fixed[0].closureAtStart, 'unavailable');
+});
+
+test('continuity observation binds actual current-document SSE and visible chrome/heading, refusing stale flags', () => {
+  const dom = new JSDOM(
+    '<h1 class="hero-title">Production chosen variant</h1><div id="impeccable-live-global-bar"></div><div id="impeccable-live-page-chat"></div>',
+    { runScripts: 'outside-only' },
+  );
+  const w = dom.window;
+  const probe = w.eval('(' + pickerContinuityProbe.toString() + ')');
+  Object.defineProperty(w.document, 'readyState', { value: 'complete', configurable: true });
+  for (const node of w.document.querySelectorAll('h1,div'))
+    node.getBoundingClientRect = () => ({ width: 100, height: 30 });
+  w.__productionHelperConnected = true;
+  w.__productionHelperConnectedDocument = w.performance.timeOrigin;
+  const args = { heading: 'Production chosen variant' };
+  assert.equal(probe(args).documentBirth, w.performance.timeOrigin);
+  w.__productionHelperConnectedDocument -= 1;
+  assert.equal(probe(args), false);
+  w.__productionHelperConnectedDocument = w.performance.timeOrigin;
+  assert.equal(probe({ ...args, documentBirth: w.performance.timeOrigin - 1 }), false);
+  w.document.querySelector('#impeccable-live-page-chat').style.display = 'none';
+  assert.equal(probe(args), false);
+  w.document.querySelector('#impeccable-live-page-chat').style.display = '';
+  w.document.querySelector('h1').textContent = 'wrong';
+  assert.equal(probe(args), false);
+  w.document.querySelector('h1').textContent = args.heading;
+  Object.defineProperty(w.document, 'readyState', { value: 'loading' });
+  assert.equal(probe(args), false);
+  dom.window.close();
+});
+test('continuity retries changed document only under original remaining deadline and performs no actions', async () => {
+  let now = 10,
+    reads = 0,
+    disposed = 0;
+  const seen = [];
+  const page = {
+    async waitForFunction(_fn, _args, options) {
+      seen.push(options.timeout);
+      now += 10;
+      const birth = ++reads;
+      return {
+        async jsonValue() {
+          return { documentBirth: birth };
+        },
+        async dispose() {
+          disposed++;
+        },
+      };
+    },
+    async evaluate(_fn, args) {
+      now += 10;
+      return reads === 1 ? false : { documentBirth: args.documentBirth };
+    },
+  };
+  const result = await observePickerContinuity(page, {
+    deadline: 100,
+    heading: 'chosen',
+    now: () => now,
+  });
+  assert.equal(result.freshDocumentHelperConnected, true);
+  assert.deepEqual(seen, [90, 70]);
+  assert.equal(disposed, 2);
+  const expired = {
+    async waitForFunction() {
+      now = 100;
+      return {
+        async jsonValue() {
+          throw new Error('must not read after expiry');
+        },
+        async dispose() {},
+      };
+    },
+  };
+  now = 99;
+  await assert.rejects(
+    observePickerContinuity(expired, { deadline: 100, heading: 'chosen', now: () => now }),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+  assert.throws(() => proofObservationRemaining(100, 100), /PROOF_OBSERVATION_DEADLINE/);
+  assert.throws(() => proofObservationRemaining(300001, 0), /PROOF_OBSERVATION_DEADLINE/);
+  let lateWork;
+  await assert.rejects(
+    withinProofObservation(
+      () =>
+        new Promise((resolve) => {
+          lateWork = resolve;
+        }),
+      Date.now() + 10,
+    ),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+  lateWork('late nonauthorizing read');
+});
+
+test('manual observation sees one original post-authority IPC dispatch and current owned birth, not callback alone', async () => {
+  const child = spawn(
+    process.execPath,
+    ['-e', "process.stdin.on('data',()=>process.stdout.write('dispatched\\n'));"],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  );
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  const birth = processBirth(child.pid);
+  let sent = 0,
+    resolveCommand,
+    mutateDuringBirth = false,
+    birthAllowed = true;
+  const receipt = {
+    sessionId: 'session',
+    generation: 1,
+    role: 'helper',
+    owner: birth,
+    relay: birth,
+    target: birth,
+  };
+  class Process {
+    commands = new Map();
+    receipt = receipt;
+    revoked = false;
+    send() {
+      sent++;
+      child.stdin.write('poll');
+    }
+    helperCommand(_receipt, args) {
+      const result = new Promise((resolve) => {
+        resolveCommand = resolve;
+      });
+      this.commands.set(7, {});
+      this.send({ op: 'helper-command', requestId: 7, args });
+      return result;
+    }
+  }
+  const sample = observeCanonicalPollDispatch(Process.prototype, (b) => {
+    assert.equal(birthCurrent(b), true);
+    if (mutateDuringBirth) run = { ...run, generation: 2 };
+    return birthAllowed;
+  });
+  const ownedProcess = new Process();
+  let run = { state: 'active', relayId: 'session', generation: 1 };
+  const guard = {
+    input: {
+      owners: {
+        assert() {
+          return run;
+        },
+      },
+    },
+    async liveEvent(_f, _e, work) {
+      return work();
+    },
+  };
+  observeEventAuthority(guard, [], () => 'open');
+  let flight;
+  try {
+    assert.equal(sample('session', 1), null);
+    const dispatched = new Promise((resolve) => child.stdout.once('data', resolve));
+    flight = guard.liveEvent({ generation: 1 }, 'poll-token', () =>
+      ownedProcess.helperCommand(receipt, ['live-poll', '--timeout=600000']),
+    );
+    await dispatched;
+    const observed = sample('session', 1);
+    assert.equal(observed.commandIpcDispatched, true);
+    assert.equal(observed.pending, true);
+    assert.equal(observed.foregroundChildBirthObserved, false);
+    assert.equal(sent, 1);
+    assert.equal(sample('session', 2), null);
+    run = { ...run, generation: 2 };
+    assert.equal(sample('session', 1), null);
+    run = { ...run, generation: 1 };
+    mutateDuringBirth = true;
+    assert.equal(sample('session', 1), null);
+    mutateDuringBirth = false;
+    run = { ...run, generation: 1 };
+    birthAllowed = false;
+    assert.equal(sample('session', 1), null);
+    birthAllowed = true;
+    ownedProcess.revoked = true;
+    assert.equal(sample('session', 1), null);
+    ownedProcess.revoked = false;
+    const entry = ownedProcess.commands.get(7);
+    ownedProcess.commands.set(7, {});
+    assert.equal(sample('session', 1), null);
+    ownedProcess.commands.set(7, entry);
+    ownedProcess.commands.delete(7);
+    assert.equal(sample('session', 1), null);
+    resolveCommand('actual-result');
+    await flight;
+    assert.equal(sample('session', 1), null);
+    assert.equal(sent, 1);
+  } finally {
+    resolveCommand?.();
+    await flight;
+    child.stdin.end();
+    await new Promise((resolve) => child.once('close', resolve));
+  }
+  assert.equal(birthCurrent(birth), false);
+  assert.equal(sample('session', 1), null);
+});
+test('canonical poll callback without a real worker dispatch never releases observation', async () => {
+  const prototype = {
+    helperCommand() {
+      return Promise.resolve('no dispatch');
+    },
+    send() {
+      throw new Error('must not send');
+    },
+  };
+  const sample = observeCanonicalPollDispatch(prototype, () => {
+    throw new Error('no positive birth');
+  });
+  const guard = {
+    async liveEvent(_f, _id, work) {
+      return work();
+    },
+  };
+  observeEventAuthority(guard, [], () => 'open');
+  await guard.liveEvent({}, 'poll-token', () =>
+    prototype.helperCommand({ sessionId: 's', generation: 1 }, ['live-poll', '--timeout=600000']),
+  );
+  assert.equal(sample('s', 1), null);
+});
+test('manual observations reserve original event/host/lease composition and reject insufficient remaining budget', () => {
+  assert.equal(
+    manualObservationDeadline({ startedAt: 1000, hostDeadline: 901000, now: 1000 }),
+    116000,
+  );
+  assert.equal(
+    manualObservationDeadline({ startedAt: 1000, hostDeadline: 550000, now: 1000 }),
+    70000,
+  );
+  assert.throws(
+    () => manualObservationDeadline({ startedAt: 1000, hostDeadline: 480001, now: 1000 }),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+  assert.throws(
+    () => manualObservationDeadline({ startedAt: 1000, hostDeadline: 901000, now: 116000 }),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+});
+test('manual conservative enqueue bound requires exact real entry/event and durable ack correlation within original lease', () => {
+  const sample = {
+    requestStartedAt: 1000,
+    acceptedAt: 1100,
+    acknowledgedAt: 101000,
+    entryDigest: 'a'.repeat(64),
+    correlation: { entryDigest: 'a'.repeat(64), eventDigest: 'b'.repeat(64) },
+    canonical: {
+      eventDigest: 'b'.repeat(64),
+      kind: 'manual_edit_apply',
+      stage: 'acknowledged',
+      history: ['received', 'dispatched', 'applied', 'acknowledged'],
+      leaseUntil: 600000,
+    },
+  };
+  const result = verifyManualAcknowledgement(sample);
+  assert.equal(result.enqueueToAckUpperBoundMs, 100000);
+  assert.equal(result.requestStartToAcceptedMs, 100);
+  for (const mutate of [
+    (s) => (s.entryDigest = 'c'.repeat(64)),
+    (s) => (s.correlation.eventDigest = 'c'.repeat(64)),
+    (s) => (s.canonical.kind = 'generate'),
+    (s) => (s.canonical.stage = 'applied'),
+    (s) => s.canonical.history.pop(),
+    (s) => (s.acknowledgedAt = 121001),
+    (s) => (s.acceptedAt = 999),
+    (s) => (s.canonical.leaseUntil = s.acknowledgedAt),
+    (s) => (s.requestStartedAt = NaN),
+  ]) {
+    const current = structuredClone(sample);
+    mutate(current);
+    assert.throws(() => verifyManualAcknowledgement(current), /PROOF_MANUAL_ACK_INVALID/);
+  }
 });

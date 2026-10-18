@@ -152,6 +152,65 @@ const failures = new Set([
   'LIVE_RELAY_AUTHORIZATION_CHANGED',
   'ERR_INVALID_STATE',
 ]);
+const proofAuthorityContext = new AsyncLocalStorage();
+const closureBoundaries = new Set(['open', 'closing', 'closed', 'close-failed']);
+const proofFailure = (error) => {
+  try {
+    return failures.has(error?.message)
+      ? error.message
+      : failures.has(error?.code)
+        ? error.code
+        : 'UNCLASSIFIED';
+  } catch {
+    return 'UNCLASSIFIED';
+  }
+};
+/** Fixed observation only: does not cancel, retry, authorize or reinterpret errors. */
+export function observeEventAuthority(target, records, closureBoundary) {
+  const original = target.liveEvent;
+  if (typeof original !== 'function') throw new Error('PROOF_DIAGNOSTIC_METHOD_INVALID');
+  const boundary = () => {
+    try {
+      const value = closureBoundary();
+      return closureBoundaries.has(value) ? value : 'unavailable';
+    } catch {
+      return 'unavailable';
+    }
+  };
+  target.liveEvent = async function (fence, eventId, work) {
+    const began = performance.now();
+    const row = {
+      phase: /^[a-f0-9]{8}$/.test(eventId) ? 'event-turn' : 'canonical-poll',
+      grantedAfterMs: null,
+      elapsedMs: 0,
+      completed: false,
+      closureAtStart: boundary(),
+    };
+    try {
+      const result = await original.call(this, fence, eventId, async () => {
+        row.grantedAfterMs = Math.round(performance.now() - began);
+        const observation = { guard: this, fence, phase: row.phase, active: true };
+        return proofAuthorityContext.run(observation, async () => {
+          try {
+            return await work();
+          } finally {
+            observation.active = false;
+          }
+        });
+      });
+      row.completed = true;
+      return result;
+    } catch (error) {
+      row.failure = proofFailure(error);
+      throw error;
+    } finally {
+      row.elapsedMs = Math.round(performance.now() - began);
+      row.closureAtFinish = boundary();
+      if (records.length === 64) records.shift();
+      records.push(row);
+    }
+  };
+}
 const admissionReasons = new Set([
   'contract-refused',
   'command-unavailable',
@@ -498,5 +557,264 @@ export function observeAdmissionTimings(runtimePrototype, controllerPrototype) {
           options(label, (_owner, args) => selected(args)),
         );
     },
+  };
+}
+
+/** One original deadline; callers must never create a new one after navigation. */
+export function proofObservationRemaining(deadline, now = Date.now()) {
+  const remaining = Math.floor(deadline - now);
+  if (!Number.isFinite(deadline) || remaining <= 0 || remaining > 300_000)
+    throw new Error('PROOF_OBSERVATION_DEADLINE');
+  return remaining;
+}
+export async function withinProofObservation(work, deadline, now = Date.now) {
+  const remaining = proofObservationRemaining(deadline, now());
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(work),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('PROOF_OBSERVATION_DEADLINE')), remaining);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+/** Executes only in the actual current preview document. Never supplies UI/SSE state. */
+export function pickerContinuityProbe({ heading, documentBirth = null }) {
+  const birth = performance.timeOrigin;
+  if (!Number.isFinite(birth) || birth <= 0 || (documentBirth !== null && birth !== documentBirth))
+    return false;
+  if (
+    document.readyState === 'loading' ||
+    window.__productionHelperConnected !== true ||
+    window.__productionHelperConnectedDocument !== birth
+  )
+    return false;
+  const core = window.__IMPECCABLE_LIVE_CHROME_CORE__;
+  const root = core?.root?.() ?? window.__IMPECCABLE_LIVE_UI_ROOT__ ?? document;
+  const visible = (node) => {
+    if (!node?.isConnected) return false;
+    const style = getComputedStyle(node),
+      rect = node.getBoundingClientRect();
+    return (
+      style.display !== 'none' &&
+      !['hidden', 'collapse'].includes(style.visibility) &&
+      style.opacity !== '0' &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const title = document.querySelector('h1.hero-title');
+  if (
+    title?.textContent !== heading ||
+    !visible(title) ||
+    !visible(root.querySelector('#impeccable-live-global-bar')) ||
+    !visible(root.querySelector('#impeccable-live-page-chat'))
+  )
+    return false;
+  return { documentBirth: birth };
+}
+export async function observePickerContinuity(page, { deadline, heading, now = Date.now }) {
+  const started = now();
+  for (;;) {
+    const handle = await withinProofObservation(
+      () =>
+        page.waitForFunction(
+          pickerContinuityProbe,
+          { heading },
+          { polling: 100, timeout: proofObservationRemaining(deadline, now()) },
+        ),
+      deadline,
+      now,
+    );
+    let observed;
+    try {
+      observed = await withinProofObservation(() => handle.jsonValue(), deadline, now);
+      const current = await withinProofObservation(
+        () =>
+          page.evaluate(pickerContinuityProbe, { heading, documentBirth: observed.documentBirth }),
+        deadline,
+        now,
+      );
+      if (current && current.documentBirth === observed.documentBirth) {
+        proofObservationRemaining(deadline, now());
+        return {
+          freshDocumentHelperConnected: true,
+          visibleChrome: true,
+          acceptedHeading: true,
+          elapsedMs: Math.max(0, Math.round(now() - started)),
+        };
+      }
+    } catch (error) {
+      if (!/Execution context was destroyed|Cannot find context/.test(error?.message ?? ''))
+        throw error;
+      // Navigation invalidates observations; retry reads under the SAME deadline.
+    } finally {
+      await handle.dispose?.();
+    }
+  }
+}
+
+/** Observe the existing IPC dispatch; never sends commands or claims foreground child birth. */
+export function observeCanonicalPollDispatch(prototype, assertBirthCurrent) {
+  const calls = new Map();
+  let sequence = 0;
+  const originalCommand = prototype.helperCommand,
+    originalSend = prototype.send;
+  if (typeof originalCommand !== 'function' || typeof originalSend !== 'function')
+    throw new Error('PROOF_POLL_DISPATCH_SEAM_UNAVAILABLE');
+  prototype.helperCommand = function (receipt, args, ...rest) {
+    const authority = proofAuthorityContext.getStore();
+    if (
+      args?.length !== 2 ||
+      args[0] !== 'live-poll' ||
+      args[1] !== '--timeout=600000' ||
+      authority?.phase !== 'canonical-poll' ||
+      !authority.active
+    )
+      return originalCommand.call(this, receipt, args, ...rest);
+    const state = { receipt, authority, settled: false, sequence: ++sequence };
+    calls.set(this, state);
+    try {
+      const result = originalCommand.call(this, receipt, args, ...rest);
+      result.then(
+        () => {
+          state.settled = true;
+        },
+        () => {
+          state.settled = true;
+        },
+      );
+      return result;
+    } catch (error) {
+      state.settled = true;
+      throw error;
+    }
+  };
+  prototype.send = function (message) {
+    const result = originalSend.call(this, message);
+    const state = calls.get(this);
+    if (
+      state &&
+      !state.settled &&
+      message?.op === 'helper-command' &&
+      message.args?.length === 2 &&
+      message.args[0] === 'live-poll' &&
+      message.args[1] === '--timeout=600000'
+    ) {
+      state.requestId = message.requestId;
+      state.request = this.commands?.get(message.requestId);
+      state.sent = true;
+    }
+    return result;
+  };
+  return (sessionId, generation) => {
+    for (const [process, state] of calls) {
+      const { receipt, authority } = state;
+      if (
+        receipt.role !== 'helper' ||
+        receipt.sessionId !== sessionId ||
+        receipt.generation !== generation
+      )
+        continue;
+      try {
+        if (
+          !state.sent ||
+          !state.request ||
+          state.settled ||
+          !authority.active ||
+          process.revoked ||
+          process.commands?.get(state.requestId) !== state.request
+        )
+          continue;
+        const run = authority.guard.input.owners.assert(authority.fence);
+        if (
+          run.state !== 'active' ||
+          run.relayId !== sessionId ||
+          run.generation !== generation ||
+          JSON.stringify(process.receipt) !== JSON.stringify(receipt)
+        )
+          continue;
+        for (const birth of [receipt.owner, receipt.relay, receipt.target])
+          if (assertBirthCurrent(birth) === false) throw new Error('PROOF_POLL_BIRTH_CHANGED');
+        // Fence again after observing births; none of these observations grants authority.
+        if (
+          state.settled ||
+          !authority.active ||
+          process.commands.get(state.requestId) !== state.request ||
+          process.revoked
+        )
+          continue;
+        const current = authority.guard.input.owners.assert(authority.fence);
+        if (
+          current.state !== 'active' ||
+          current.generation !== generation ||
+          current.relayId !== sessionId
+        )
+          continue;
+        return {
+          sequence: state.sequence,
+          commandIpcDispatched: true,
+          workerBirthsCurrent: true,
+          foregroundChildBirthObserved: false,
+          postAuthority: true,
+          pending: true,
+          generationMatches: true,
+        };
+      } catch {
+        /* A refused or retired observation never releases the test driver. */
+      }
+    }
+    return null;
+  };
+}
+export function manualObservationDeadline({ startedAt, hostDeadline, now = Date.now() }) {
+  // Pre-enqueue observation only. The event's actual595s inbox lease starts at receipt.
+  // Reserve150s manual +120s Generate +120s Discard +60s UI +30s cleanup.
+  const reserve = 480_000;
+  const deadline = Math.min(
+    startedAt + 300_000,
+    hostDeadline - reserve,
+    startedAt + 595_000 - reserve,
+  );
+  proofObservationRemaining(deadline, now);
+  return deadline;
+}
+export function verifyManualAcknowledgement({
+  requestStartedAt,
+  acceptedAt,
+  acknowledgedAt,
+  entryDigest,
+  correlation,
+  canonical,
+}) {
+  const check = (value) => {
+    if (!value) throw new Error('PROOF_MANUAL_ACK_INVALID');
+  };
+  check([requestStartedAt, acceptedAt, acknowledgedAt].every(Number.isSafeInteger));
+  check(requestStartedAt <= acceptedAt && acceptedAt <= acknowledgedAt);
+  check(/^[a-f0-9]{64}$/.test(entryDigest ?? '') && correlation?.entryDigest === entryDigest);
+  check(
+    correlation.eventDigest === canonical?.eventDigest &&
+      /^[a-f0-9]{64}$/.test(canonical.eventDigest),
+  );
+  check(
+    canonical.kind === 'manual_edit_apply' &&
+      canonical.stage === 'acknowledged' &&
+      JSON.stringify(canonical.history) ===
+        JSON.stringify(['received', 'dispatched', 'applied', 'acknowledged']),
+  );
+  check(Number.isSafeInteger(canonical.leaseUntil) && acknowledgedAt < canonical.leaseUntil);
+  const upperBoundMs = acknowledgedAt - requestStartedAt;
+  check(upperBoundMs <= 120_000);
+  return {
+    commitAccepted: true,
+    canonicalAcknowledged: true,
+    entryAndEventCorrelated: true,
+    requestStartToAcceptedMs: acceptedAt - requestStartedAt,
+    enqueueToAckUpperBoundMs: upperBoundMs,
+    within120sMargin: true,
   };
 }

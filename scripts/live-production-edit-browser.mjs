@@ -12,7 +12,14 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { safeBrowserFailure, pickerChromeSnapshot } from './live-production-edit-diagnostics.mjs';
+import {
+  safeBrowserFailure,
+  pickerChromeSnapshot,
+  observePickerContinuity,
+  withinProofObservation,
+  manualObservationDeadline,
+  proofObservationRemaining,
+} from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
@@ -34,6 +41,8 @@ const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
 const editRequests = [];
+let manualEntryDigest, manualCommit;
+let manualCommitCount = 0;
 const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
 // A measured source/selection/catalog/provenance/resource authority check takes
 //111s before turn/start. Observe both authority/helper windows without changing
@@ -53,10 +62,19 @@ const checkpoint = (value) => {
   );
 };
 const replies = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
-async function command(value) {
-  process.stdout.write(JSON.stringify({ command: value }) + '\n');
-  const reply = await replies.next();
-  assert.equal(JSON.parse(reply.value).ok, true);
+async function command(value, deadline, details) {
+  process.stdout.write(
+    JSON.stringify({
+      command: value,
+      observation: deadline ? { deadline, ...details } : undefined,
+    }) + '\n',
+  );
+  const reply = deadline
+    ? await withinProofObservation(() => replies.next(), deadline)
+    : await replies.next();
+  const result = JSON.parse(reply.value);
+  assert.equal(result.ok, true);
+  return result.observation;
 }
 try {
   checkpoint('namespace');
@@ -213,6 +231,20 @@ try {
     });
   });
   context.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path === '/__gestalt_live/manual-edit-stash') {
+      try {
+        const id = request.postDataJSON()?.id;
+        if (/^[a-f0-9]{8}$/.test(id ?? ''))
+          manualEntryDigest = createHash('sha256').update(id).digest('hex');
+      } catch {
+        /* No raw body retained. */
+      }
+    }
+    if (request.method() === 'POST' && path === '/__gestalt_live/manual-edit-commit') {
+      manualCommitCount++;
+      manualCommit = { requestStartedAt: Date.now(), entryDigest: manualEntryDigest };
+    }
     if (
       request.method() === 'POST' &&
       new URL(request.url()).pathname === '/__gestalt_live/events'
@@ -251,6 +283,14 @@ try {
     }
   });
   context.on('response', async (response) => {
+    if (
+      new URL(response.url()).pathname === '/__gestalt_live/manual-edit-commit' &&
+      response.request().method() === 'POST' &&
+      manualCommit
+    ) {
+      manualCommit.acceptedAt = Date.now();
+      manualCommit.status = response.status();
+    }
     const resource = `${response.request().resourceType()}:${response.status()}`;
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
@@ -297,6 +337,7 @@ try {
   });
   await context.addInitScript(() => {
     window.__productionHelperConnected = false;
+    window.__productionHelperConnectedDocument = null;
     window.__productionHelperHideLiveBar = null;
     const OriginalEventSource = window.EventSource;
     window.EventSource = class extends OriginalEventSource {
@@ -310,6 +351,7 @@ try {
             const value = JSON.parse(event.data);
             if (value.type === 'connected') {
               window.__productionHelperConnected = true;
+              window.__productionHelperConnectedDocument = performance.timeOrigin;
               window.__productionHelperHideLiveBar = value.hideLiveBar === true;
             } else if (value.type === 'live_bar' && typeof value.hidden === 'boolean') {
               window.__productionHelperHideLiveBar = value.hidden;
@@ -537,13 +579,30 @@ try {
     await preview.getByRole('heading', { name: label, exact: true }).waitFor();
     actions.add('generate');
   };
+  let acceptContinuity;
   const accept = async () => {
+    // Starts BEFORE the first Accept observation/click, never reset by acknowledgement/navigation.
+    const acceptDeadline = Math.min(
+      Date.now() + terminalEffectTimeout,
+      config.observationHostDeadline,
+    );
     await observePicker('before-accept');
-    await ui.clickAccept(preview, { expectedVariant: 1 });
-    await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
+    await withinProofObservation(
+      () => ui.clickAccept(preview, { expectedVariant: 1 }),
+      acceptDeadline,
+    );
+    await withinProofObservation(
+      () => ui.waitForBarHidden(preview, { timeout: Math.max(1, acceptDeadline - Date.now()) }),
+      acceptDeadline,
+    );
     await observePicker('after-accept');
-    await command('accepted');
+    await command('accepted', acceptDeadline);
     await observePicker('after-accept-ack');
+    if (!config.pickerSmoke)
+      acceptContinuity = await observePickerContinuity(preview, {
+        deadline: acceptDeadline,
+        heading: 'Production chosen variant',
+      });
     actions.add('accept');
   };
   const steer = async () => {
@@ -560,14 +619,41 @@ try {
   };
   const manual = async () => {
     checkpoint('picker-manual-apply');
+    const manualObservationStartedAt = Date.now();
+    const manualObservation = {
+      startedAt: manualObservationStartedAt,
+      hostDeadline: config.observationHostDeadline,
+    };
+    const pollDeadline = manualObservationDeadline(manualObservation);
+    const dispatched = await command('manual-poll-observed', pollDeadline, manualObservation);
+    assert.equal(dispatched.commandIpcDispatched, true);
+    assert.equal(dispatched.workerBirthsCurrent, true);
+    assert.equal(dispatched.pending, true);
     await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
     await ui.clickEditCopy(preview);
     await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
     await ui.clickSaveEdit(preview);
     await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
-    await ui.clickApplyEdits(preview);
-    await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
-    await command('manual-applied');
+    await command('manual-commit-observed', pollDeadline, manualObservation);
+    const manualDeadline = Date.now() + 120_000;
+    await withinProofObservation(() => ui.clickApplyEdits(preview), manualDeadline);
+    await withinProofObservation(async () => {
+      while (manualCommit?.acceptedAt === undefined)
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(25, proofObservationRemaining(manualDeadline))),
+        );
+    }, manualDeadline);
+    assert.equal(manualCommitCount, 1);
+    assert.equal(manualCommit?.status, 202);
+    await withinProofObservation(
+      () =>
+        ui.waitForApplyDockHidden(preview, { timeout: Math.max(1, manualDeadline - Date.now()) }),
+      manualDeadline,
+    );
+    const { requestStartedAt, acceptedAt, entryDigest } = manualCommit;
+    await command('manual-applied', manualDeadline, {
+      manual: { requestStartedAt, acceptedAt, entryDigest },
+    });
     actions.add('manual');
   };
   const discard = async () => {
@@ -630,6 +716,7 @@ try {
         separateBrowserMountNamespace: true,
         openThroughMobileControls: true,
         realPickerGenerateAccept: actions.has('generate') && actions.has('accept'),
+        acceptContinuity,
         proofLane: config.proofLane || undefined,
         pickerSmoke: config.pickerSmoke === true,
         realPickerSteer: actions.has('steer'),

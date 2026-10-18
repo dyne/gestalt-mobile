@@ -88,11 +88,13 @@ export async function productionEditBrowser(input) {
       .toString()
       .trim();
     assert.notEqual(serverNetwork, browserNetwork);
+    const observationHostDeadline = Date.now() + browserDeadlineMs;
     const configPath = join(home, 'browser.json');
     writeFileSync(
       configPath,
       JSON.stringify({
         ...input.browser,
+        observationHostDeadline,
         browserHome: home,
         hostAddress,
         serverNetwork,
@@ -306,12 +308,45 @@ export async function productionEditBrowser(input) {
       if (value.command)
         commands = commands.then(async () => {
           try {
-            await input.command(value.command);
-            browser.stdin.write(JSON.stringify({ ok: true }) + '\n');
+            const observation = value.observation;
+            if (observation !== undefined) {
+              assert.ok(
+                [
+                  'accepted',
+                  'manual-poll-observed',
+                  'manual-commit-observed',
+                  'manual-applied',
+                ].includes(value.command),
+              );
+              assert.ok(
+                Number.isSafeInteger(observation.deadline) &&
+                  observation.deadline > Date.now() &&
+                  observation.deadline <= Date.now() + 300_000,
+              );
+              if (value.command.startsWith('manual-') && value.command !== 'manual-applied') {
+                assert.equal(observation.hostDeadline, observationHostDeadline);
+                assert.ok(
+                  Number.isSafeInteger(observation.startedAt) &&
+                    observation.startedAt <= Date.now(),
+                );
+              }
+            }
+            const result = await input.command(value.command, observation);
+            browser.stdin.write(JSON.stringify({ ok: true, observation: result }) + '\n');
           } catch (error) {
             commandFailure = true;
-            input.report.editBrowserCommandFailureCode =
-              error?.message === 'EDIT_CANONICAL_ACK_DEADLINE'
+            const observationFailures = [
+              'PROOF_OBSERVATION_DEADLINE',
+              'PROOF_CANONICAL_POLL_OBSERVATION_DEADLINE',
+              'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
+              'PROOF_MANUAL_CHAIN_BUDGET',
+              'PROOF_MANUAL_ACK_INVALID',
+            ];
+            input.report.editBrowserCommandFailureCode = observationFailures.includes(
+              error?.message,
+            )
+              ? error.message
+              : error?.message === 'EDIT_CANONICAL_ACK_DEADLINE'
                 ? 'EDIT_CANONICAL_ACK_DEADLINE'
                 : error?.message === 'CONTROLLED_PROVIDER_FAILED'
                   ? 'CONTROLLED_PROVIDER_FAILED'
@@ -326,7 +361,10 @@ export async function productionEditBrowser(input) {
     const exit = await Promise.race([
       new Promise((done) => browser.once('close', (code) => done(code))),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('EDIT_BROWSER_DEADLINE')), browserDeadlineMs);
+        timer = setTimeout(
+          () => reject(new Error('EDIT_BROWSER_DEADLINE')),
+          Math.max(1, observationHostDeadline - Date.now()),
+        );
       }),
     ]).finally(() => clearTimeout(timer));
     await commands;
