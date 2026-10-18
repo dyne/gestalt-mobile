@@ -296,3 +296,21 @@ test('missing or failed independent evidence refuses smoke eligibility', () => {
     assert.throws(() => validateSmokeEvidence(changed));
   }
 });
+
+test('approved proof diagnostics path is eligible while unrelated product and dependency changes still refuse', () => {
+  assert.deepEqual(validateSmokeDelta(['scripts/live-production-edit-diagnostics.mjs']), [
+    'scripts/live-production-edit-diagnostics.mjs',
+  ]);
+  for (const path of [
+    'src/server/platform/live-design/installed-policy.ts',
+    'src/server/platform/live-design/process-identity.ts',
+    'package.json',
+    'package-lock.json',
+    'src/client/RelayApp.svelte',
+    'scripts/unreviewed-diagnostics.mjs',
+  ])
+    assert.throws(
+      () => validateSmokeDelta(['scripts/live-production-edit-diagnostics.mjs', path]),
+      /independent proof inputs changed/,
+    );
+});

@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
+import { safeBrowserFailure, pickerChromeSnapshot } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
@@ -43,6 +43,7 @@ if (!config.preflight && !config.startThroughControls)
 const modelEffectTimeout = config.eventObservationBudgetMs ?? 90_000;
 const terminalEffectTimeout = config.eventObservationBudgetMs ?? 60_000;
 let helperBridge;
+let previewNavigationCount = 0;
 const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
@@ -296,6 +297,7 @@ try {
   });
   await context.addInitScript(() => {
     window.__productionHelperConnected = false;
+    window.__productionHelperHideLiveBar = null;
     const OriginalEventSource = window.EventSource;
     window.EventSource = class extends OriginalEventSource {
       constructor(...args) {
@@ -305,8 +307,13 @@ try {
           return;
         this.addEventListener('message', (event) => {
           try {
-            if (JSON.parse(event.data).type === 'connected')
+            const value = JSON.parse(event.data);
+            if (value.type === 'connected') {
               window.__productionHelperConnected = true;
+              window.__productionHelperHideLiveBar = value.hideLiveBar === true;
+            } else if (value.type === 'live_bar' && typeof value.hidden === 'boolean') {
+              window.__productionHelperHideLiveBar = value.hidden;
+            }
           } catch {
             // Ignore non-JSON heartbeat frames.
           }
@@ -493,6 +500,33 @@ try {
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
     403,
   );
+  preview.on('framenavigated', (frame) => {
+    if (frame === preview.mainFrame()) previewNavigationCount++;
+  });
+  const observePicker = async (boundary) => {
+    let snapshot, timer;
+    try {
+      snapshot = await Promise.race([
+        preview.evaluate(pickerChromeSnapshot),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ available: false }), 1000);
+        }),
+      ]);
+    } catch {
+      snapshot = { available: false };
+    } finally {
+      clearTimeout(timer);
+    }
+    process.stdout.write(
+      JSON.stringify({
+        pickerObservation: {
+          boundary,
+          navigationCount: Math.min(100000, previewNavigationCount),
+          ...snapshot,
+        },
+      }) + '\n',
+    );
+  };
   const actions = new Set();
   const generate = async (label) => {
     checkpoint('picker-generate');
@@ -504,13 +538,16 @@ try {
     actions.add('generate');
   };
   const accept = async () => {
+    await observePicker('before-accept');
     await ui.clickAccept(preview, { expectedVariant: 1 });
     await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
+    await observePicker('after-accept');
     await command('accepted');
     actions.add('accept');
   };
   const steer = async () => {
     checkpoint('picker-steer');
+    await observePicker('before-steer');
     await ui.submitSteer(preview, 'production steer: update the HMR marker');
     await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
       timeout: modelEffectTimeout,

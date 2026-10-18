@@ -12,7 +12,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
+import {
+  safeBrowserFailure,
+  pickerChromeSnapshot,
+  boundedPickerObservation,
+  observeProofMethod,
+  observeInstalledPolicyTimings,
+  cleanupControllerSnapshot,
+} from './live-production-edit-diagnostics.mjs';
+import { JSDOM } from 'jsdom';
 import {
   createProductionEditProvider,
   liveEventFromRequest,
@@ -229,4 +237,393 @@ test('manual-first lane plans a real source patch then actual helper Generate/Di
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('picker snapshots distinguish absent, hidden and separate chrome roots without retaining DOM text or helper secrets', () => {
+  const dom = new JSDOM(
+    '<div id="impeccable-live-global-bar" style="display:none"><div id="impeccable-live-page-chat">canary-private-DOM</div></div>',
+    { runScripts: 'outside-only' },
+  );
+  try {
+    dom.window.__IMPECCABLE_LIVE_CHROME_CORE__ = {
+      debugState: () => ({ state: 'PICKING', savedSession: 'canary-private-session' }),
+    };
+    dom.window.__productionHelperHideLiveBar = true;
+    const snapshot = () => dom.window.eval('(' + pickerChromeSnapshot.toString() + ')()');
+    const hidden = snapshot();
+    assert.equal(hidden.globalBar.displayNone, true);
+    assert.equal(hidden.pageChat.present, true);
+    assert.equal(hidden.hideLiveBar, true);
+    const fragment = dom.window.document.createDocumentFragment();
+    fragment.append(dom.window.document.querySelector('#impeccable-live-page-chat'));
+    dom.window.__IMPECCABLE_LIVE_UI_ROOT__ = fragment;
+    const separate = snapshot();
+    assert.equal(separate.pageChat.present, true);
+    assert.equal(separate.pageChatInDocument, false);
+    fragment.firstChild.getBoundingClientRect = () => ({
+      width: 104,
+      height: 28,
+      left: 2,
+      top: 2,
+      right: 106,
+      bottom: 30,
+    });
+    assert.equal(snapshot().pageChat.intersectsViewport, true);
+    fragment.firstChild.remove();
+    assert.equal(snapshot().pageChat.present, false);
+    dom.window.__IMPECCABLE_LIVE_CHROME_CORE__.debugState = () => ({
+      state: 'canary-private-state',
+    });
+    assert.equal(snapshot().helperState, 'unknown');
+    assert.ok(!JSON.stringify([hidden, separate, snapshot()]).includes('canary-private'));
+  } finally {
+    dom.window.close();
+  }
+});
+test('host picker observations accept only fixed boundaries and bounded facts from untrusted browser data', () => {
+  const value = boundedPickerObservation({
+    boundary: 'before-steer',
+    navigationCount: 9,
+    available: true,
+    helperState: 'canary-private',
+    hideLiveBar: 'canary-private',
+    globalBar: { present: true, width: 1e99, text: 'canary-private' },
+    pageChat: { width: 104, height: 28 },
+    url: 'canary-private',
+  });
+  assert.equal(value.helperState, 'unknown');
+  assert.equal(value.hideLiveBar, null);
+  assert.equal(value.globalBar.width, null);
+  assert.equal(value.pageChat.width, 104);
+  assert.ok(!JSON.stringify(value).includes('canary-private'));
+  assert.equal(boundedPickerObservation({ boundary: 'canary-private' }), null);
+});
+test('cleanup observations preserve receiver, arguments, synchronous values, exact promise identity and one original cancellation', async () => {
+  const records = [],
+    token = {},
+    result = {};
+  let called = 0,
+    cancelled = 0,
+    complete;
+  const promise = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const target = {
+    sync(arg) {
+      assert.equal(this, target);
+      assert.equal(arg, token);
+      called++;
+      return result;
+    },
+    stop(signal) {
+      called++;
+      signal.addEventListener(
+        'abort',
+        () => {
+          cancelled++;
+          complete(result);
+        },
+        { once: true },
+      );
+      return promise;
+    },
+  };
+  observeProofMethod(target, 'sync', 'helper-forget-record', records);
+  assert.equal(target.sync(token), result);
+  observeProofMethod(target, 'stop', 'project-stop', records, {
+    role: () => 'helper',
+    after() {
+      throw new Error('canary-private');
+    },
+  });
+  const abort = new AbortController();
+  const actual = target.stop(abort.signal);
+  assert.equal(actual, promise);
+  assert.equal(records[1].result, 'started');
+  abort.abort();
+  assert.equal(await actual, result);
+  assert.equal(called, 2);
+  assert.equal(cancelled, 1);
+  assert.equal(records[1].result, 'completed');
+  assert.equal(records[1].snapshotUnavailable, true);
+  assert.equal(records[1].role, 'helper');
+  assert.ok(!JSON.stringify(records).includes('canary-private'));
+});
+test('cleanup observations preserve original failure and closed-fence refusal without raw errors or retries', async () => {
+  for (const error of [
+    new Error('LIVE_SETTLEMENT_REQUIRED'),
+    new Error('canary-private-raw-error'),
+    null,
+    {
+      get message() {
+        throw new Error('canary-private-getter');
+      },
+    },
+  ]) {
+    const records = [];
+    let calls = 0;
+    const original = Promise.reject(error);
+    original.catch(() => {});
+    const target = {
+      drain() {
+        calls++;
+        return original;
+      },
+    };
+    observeProofMethod(target, 'drain', 'poll-drain', records);
+    assert.equal(target.drain(), original);
+    await assert.rejects(original, (e) => e === error);
+    assert.equal(calls, 1);
+    assert.equal(records[0].result, 'failed');
+    assert.equal(
+      records[0].failure,
+      error instanceof Error && error.message === 'LIVE_SETTLEMENT_REQUIRED'
+        ? 'LIVE_SETTLEMENT_REQUIRED'
+        : 'UNCLASSIFIED',
+    );
+    assert.ok(!JSON.stringify(records).includes('canary-private'));
+  }
+  const records = [];
+  const target = {
+    stop() {
+      throw Object.assign(new Error('LIVE_HELPER_COMMAND_AMBIGUOUS'), {
+        stage: 'native-command-exit',
+        stdout: 'canary-private',
+      });
+    },
+  };
+  observeProofMethod(target, 'stop', 'project-stop', records);
+  assert.throws(() => target.stop(), /LIVE_HELPER_COMMAND_AMBIGUOUS/);
+  assert.equal(records[0].failureStage, 'native-command-exit');
+  assert.ok(!JSON.stringify(records).includes('canary-private'));
+});
+test('cleanup observations are bounded and lifecycle snapshots cannot expose identity or change durable recovery state', () => {
+  const records = [],
+    target = {
+      stop() {
+        return 1;
+      },
+    };
+  observeProofMethod(target, 'stop', 'project-stop', records);
+  for (let i = 0; i < 80; i++) target.stop();
+  assert.equal(records.length, 64);
+  assert.equal(records.at(-1).truncatedBefore, true);
+  const run = {
+    state: 'recoveryRequired',
+    phase: 'ready',
+    generation: 2,
+    controllerEpoch: 1,
+    rootThreadId: 'canary-private-thread',
+  };
+  const g = {
+    run: { liveId: 'canary-private-id', controllerEpoch: 1 },
+    session: { threadId: 'canary-private-thread' },
+    plannedGeneration: 1,
+    retired: true,
+    helper: {
+      diagnostics: () => ({
+        namespaceExited: true,
+        pipeDescriptorsClosed: false,
+        path: 'canary-private',
+      }),
+    },
+  };
+  const controller = {
+    generations: new Map([['canary-private', g]]),
+    owners: { current: () => run },
+  };
+  const value = cleanupControllerSnapshot(controller);
+  assert.equal(value.generations[0].generation, 2);
+  assert.equal(value.generations[0].plannedGeneration, 1);
+  assert.equal(value.generations[0].sameRootThread, true);
+  assert.equal(value.generations[0].children[0].namespaceExited, true);
+  assert.equal(run.state, 'recoveryRequired');
+  assert.ok(!JSON.stringify(value).includes('canary-private'));
+  assert.equal(
+    cleanupControllerSnapshot({
+      generations: {
+        get values() {
+          throw new Error('canary-private');
+        },
+      },
+    }).available,
+    false,
+  );
+});
+
+test('cleanup admission refusals retain only fixed reason codes across nested causes', () => {
+  for (const reason of ['stale-controller', 'canary-private-reason']) {
+    const records = [];
+    const error = Object.assign(new Error('LIVE_ADMISSION_UNAVAILABLE'), {
+      cause: { diagnostic: { reason, raw: 'canary-private-token' } },
+    });
+    const target = {
+      revoke() {
+        throw error;
+      },
+    };
+    observeProofMethod(target, 'revoke', 'signed-revoke', records);
+    assert.throws(
+      () => target.revoke(),
+      (value) => value === error,
+    );
+    assert.equal(records[0].failure, 'LIVE_ADMISSION_UNAVAILABLE');
+    assert.equal(records[0].admissionReason, reason === 'stale-controller' ? reason : undefined);
+    assert.ok(!JSON.stringify(records).includes('canary-private'));
+  }
+});
+
+test('policy phase observations preserve serial calls, exact promises and six local validations without logging inputs', async () => {
+  const order = [],
+    secret = 'canary-private-argument';
+  const installation = {
+    manager: { path: 'manager' },
+    node: { path: 'node' },
+    packages: [{ name: 'gestalt', root: 'package' }],
+  };
+  class Policy {
+    installation = installation;
+    verifyInstallation() {
+      order.push('local');
+    }
+    async command(binary, args) {
+      assert.equal(args.at(-1), secret);
+      order.push(binary === 'manager' ? 'manager' : 'agents');
+      await new Promise((done) => setTimeout(done, 5));
+      this.verifyInstallation();
+      return { secret };
+    }
+    async observeOriginalSources() {
+      this.verifyInstallation();
+      order.push('observer');
+      await new Promise((done) => setTimeout(done, 5));
+      this.verifyInstallation();
+      return { secret };
+    }
+    verify() {
+      this.actual = (async () => {
+        this.verifyInstallation();
+        await this.command('manager', ['live-policy', 'verify', '--manifest', secret]);
+        await this.observeOriginalSources(secret);
+        await this.command('node', [
+          'package/scripts/live-admission.mjs',
+          'verify',
+          '--bootstrap',
+          secret,
+        ]);
+        this.verifyInstallation();
+        return { secret };
+      })();
+      return this.actual;
+    }
+  }
+  const report = observeInstalledPolicyTimings(Policy.prototype),
+    owner = new Policy();
+  const actual = owner.verify(secret);
+  assert.equal(actual, owner.actual);
+  assert.deepEqual(await actual, { secret });
+  assert.deepEqual(order, [
+    'local',
+    'manager',
+    'local',
+    'local',
+    'observer',
+    'local',
+    'agents',
+    'local',
+    'local',
+  ]);
+  assert.equal(report.counters['policy-local-installation'].started, 6);
+  for (const label of [
+    'policy-total',
+    'policy-manager-verify',
+    'policy-source-observer',
+    'policy-agents-verify',
+  ])
+    assert.equal(report.counters[label].completed, 1);
+  assert.ok(report.calls.every((call) => call.groupId === 1));
+  assert.ok(!JSON.stringify(report).includes(secret));
+  const before = report.calls.length;
+  await owner.command('manager', ['live-policy', 'seal-runtime', '--manifest', secret]);
+  assert.equal(
+    report.calls.slice(before).some((call) => call.operation === 'policy-manager-verify'),
+    false,
+  );
+});
+test('policy phase timing drains only original work and preserves refusal without dispatching later phases', async () => {
+  const error = new Error('LIVE_ADMISSION_UNAVAILABLE');
+  let managerCalls = 0,
+    observerCalls = 0,
+    agentCalls = 0;
+  class Policy {
+    installation = { manager: { path: 'manager' }, node: { path: 'node' }, packages: [] };
+    verifyInstallation() {}
+    command(binary) {
+      if (binary === 'manager') {
+        managerCalls++;
+        return Promise.reject(error);
+      }
+      agentCalls++;
+      return Promise.resolve();
+    }
+    observeOriginalSources() {
+      observerCalls++;
+      return Promise.resolve();
+    }
+    verify() {
+      this.actual = (async () => {
+        await this.command('manager', ['live-policy', 'verify', '--manifest', 'canary-private']);
+        await this.observeOriginalSources();
+        return this.command('node', []);
+      })();
+      return this.actual;
+    }
+  }
+  const report = observeInstalledPolicyTimings(Policy.prototype),
+    owner = new Policy();
+  const actual = owner.verify();
+  assert.equal(actual, owner.actual);
+  await assert.rejects(actual, (value) => value === error);
+  assert.equal(managerCalls, 1);
+  assert.equal(observerCalls, 0);
+  assert.equal(agentCalls, 0);
+  assert.equal(report.counters['policy-total'].failed, 1);
+  assert.equal(report.counters['policy-manager-verify'].failed, 1);
+  assert.ok(!JSON.stringify(report).includes('canary-private'));
+});
+
+test('concurrent independent verification observations correlate groups without sharing readiness or results', async () => {
+  class Policy {
+    installation = { manager: { path: 'manager' }, node: { path: 'node' }, packages: [] };
+    verifyInstallation() {}
+    async command() {
+      await new Promise((done) => setTimeout(done, 5));
+      return this.value;
+    }
+    observeOriginalSources() {
+      return Promise.resolve(this.value);
+    }
+    verify() {
+      this.actual = this.command('manager', ['live-policy', 'verify', '--manifest', 'private']);
+      return this.actual;
+    }
+  }
+  const report = observeInstalledPolicyTimings(Policy.prototype);
+  const a = new Policy(),
+    b = new Policy();
+  a.value = 1;
+  b.value = 2;
+  const pa = a.verify(),
+    pb = b.verify();
+  assert.equal(pa, a.actual);
+  assert.equal(pb, b.actual);
+  assert.deepEqual(await Promise.all([pa, pb]), [1, 2]);
+  for (const group of [1, 2])
+    assert.deepEqual(
+      report.calls.filter((row) => row.groupId === group).map((row) => row.operation),
+      ['policy-total', 'policy-manager-verify'],
+    );
+  b.value = 3;
+  assert.equal(await b.verify(), 3);
+  assert.equal(report.counters['policy-total'].completed, 3);
 });

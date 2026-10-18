@@ -9,7 +9,10 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
+import {
+  safeBrowserFailure,
+  boundedPickerObservation,
+} from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
   assert.equal(process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF, '1');
@@ -292,6 +295,14 @@ export async function productionEditBrowser(input) {
             cookiePresent: item.cookiePresent === true,
           })),
         };
+      if (value.pickerObservation) {
+        const observed = boundedPickerObservation(value.pickerObservation);
+        if (observed) {
+          const rows = (input.report.pickerObservations ??= []);
+          if (rows.length === 8) rows.shift();
+          rows.push(observed);
+        }
+      }
       if (value.command)
         commands = commands.then(async () => {
           try {

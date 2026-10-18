@@ -218,6 +218,7 @@ const permittedDelta = new Set([
   'scripts/live-production-proof-lanes.mjs',
   'scripts/live-production-proof-lanes.test.mjs',
   'scripts/live-production-edit-provider.mjs',
+  'scripts/live-production-edit-diagnostics.mjs',
   'scripts/live-production-edit-provider.test.mjs',
   'scripts/live-production-recovery-proof.mjs',
   'scripts/live-production-entrypoint-proof.mjs',

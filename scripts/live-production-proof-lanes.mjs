@@ -268,6 +268,7 @@ function validateDriverCleanup(report, identity) {
   assertIdentity(report.identity, identity);
   assert.equal(report.driverExited, true);
   assert.equal(report.cancelSent, false);
+  assert.notEqual(report.cancelAttempted, true);
   assert.equal(report.failure, undefined);
 }
 export function loadLanePacket(directory) {
@@ -548,7 +549,11 @@ export async function openRecoveryHandoff({
     },
   };
 }
-export function handoffRequest(directory, command, expected) {
+export function handoffRequest(directory, command, expected, timeoutMs = 2500) {
+  assert.ok(
+    Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2500,
+    'PROOF_RPC_BUDGET_INVALID',
+  );
   privateDirectory(directory);
   const socketDirectory = expected.socketDirectory ?? directory;
   privateDirectory(socketDirectory);
@@ -560,13 +565,27 @@ export function handoffRequest(directory, command, expected) {
   assert.ok(birthCurrent(expected.birth), 'PROOF_DRIVER_EXITED');
   return new Promise((done, reject) => {
     const socket = createConnection(join(socketDirectory, 'control.sock'));
-    let text = '';
-    const fail = () => {
-      socket.destroy();
-      reject(new Error('PROOF_HANDOFF_UNAVAILABLE'));
+    let text = '',
+      settled = false;
+    const finish = (error, response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        socket.destroy();
+        reject(new Error(error));
+      } else done(response);
     };
-    socket.setTimeout(2500, fail);
-    socket.on('error', fail);
+    const fail = () => finish('PROOF_HANDOFF_UNAVAILABLE');
+    const refuse = () => finish('PROOF_HANDOFF_REFUSED');
+    const timer = setTimeout(fail, timeoutMs);
+    socket.on('close', () => {
+      if (!settled) fail();
+    });
+    socket.on('error', (error) => {
+      if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT'].includes(error.code)) fail();
+      else refuse();
+    });
     socket.on('connect', () =>
       socket.end(
         JSON.stringify({ command, identity: expected.identity, birth: expected.birth }) + '\n',
@@ -574,7 +593,7 @@ export function handoffRequest(directory, command, expected) {
     );
     socket.on('data', (chunk) => {
       text += chunk;
-      if (Buffer.byteLength(text) > 4096) fail();
+      if (Buffer.byteLength(text) > 4096) refuse();
     });
     socket.on('end', () => {
       try {
@@ -582,28 +601,267 @@ export function handoffRequest(directory, command, expected) {
         assert.equal(response.ok, true);
         assertIdentity(response.identity, expected.identity);
         assert.deepEqual(response.birth, expected.birth);
-        done(response);
+        assert.deepEqual(
+          Object.keys(response).sort(),
+          [
+            'ok',
+            'schemaVersion',
+            'identity',
+            'birth',
+            'socketDirectory',
+            'phase',
+            'continuations',
+            'cancelled',
+            'phaseTimings',
+          ].sort(),
+        );
+        assert.equal(response.schemaVersion, 1);
+        assert.equal(response.socketDirectory, expected.socketDirectory ?? directory);
+        assert.ok(['setup', 'ready', 'recovery', 'cancelled', 'complete'].includes(response.phase));
+        assert.ok([0, 1].includes(response.continuations));
+        assert.equal(typeof response.cancelled, 'boolean');
+        assert.deepEqual(
+          Object.keys(response.phaseTimings).sort(),
+          ['setupMs', 'pausedMs', 'recoveryMs'].sort(),
+        );
+        assert.ok(
+          Object.values(response.phaseTimings).every(
+            (value) => Number.isSafeInteger(value) && value >= 0,
+          ),
+        );
+        finish(undefined, response);
       } catch {
-        reject(new Error('PROOF_HANDOFF_REFUSED'));
+        refuse();
       }
     });
   });
 }
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-async function waitFor(directory, predicate, budgetMs, identity) {
-  const until = Date.now() + budgetMs;
-  while (Date.now() < until) {
-    const expected = existsSync(join(directory, 'driver.json'))
-      ? privateJson(join(directory, 'driver.json'))
-      : undefined;
-    if (expected) {
-      assertIdentity(expected.identity, identity);
-      const state = await handoffRequest(directory, 'status', expected);
-      if (predicate(state)) return state;
-    }
-    await sleep(250);
+const safeFailure = (error) => {
+  const reason = error instanceof Error ? error.message.split('\n', 1)[0] : '';
+  return new Set([
+    'PROOF_HANDOFF_UNAVAILABLE',
+    'PROOF_HANDOFF_REFUSED',
+    'PROOF_DRIVER_EXITED',
+    'PROOF_DRIVER_PHASE_DEADLINE',
+    'PROOF_CHANNEL_UNSAFE',
+    'PROOF_BIRTH_CHANGED',
+    'PROOF_IDENTITY_CHANGED',
+    'PROOF_DRIVER_METADATA_CHANGED',
+    'PROOF_DRIVER_CLEANUP_UNVERIFIED',
+  ]).has(reason)
+    ? reason
+    : 'PROOF_EVIDENCE_INVALID';
+};
+function boundDriver(directory, identity, originalLaunch, originalMetadata) {
+  privateDirectory(directory);
+  const launched = privateJson(join(directory, 'launched.json'));
+  assert.deepEqual(
+    Object.keys(launched).sort(),
+    ['birth', 'identity'],
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  assertIdentity(launched.identity, identity);
+  assert.deepEqual(
+    Object.keys(launched.birth).sort(),
+    ['boot', 'pid', 'start'],
+    'PROOF_BIRTH_CHANGED',
+  );
+  assert.ok(
+    Number.isSafeInteger(launched.birth.pid) &&
+      launched.birth.pid > 0 &&
+      /^[0-9]+$/.test(launched.birth.start) &&
+      /^[a-f0-9-]{36}$/.test(launched.birth.boot),
+    'PROOF_BIRTH_CHANGED',
+  );
+  if (originalLaunch) assert.deepEqual(launched, originalLaunch, 'PROOF_DRIVER_METADATA_CHANGED');
+  const exists = existsSync(join(directory, 'driver.json'));
+  assert.ok(exists || !originalMetadata, 'PROOF_DRIVER_METADATA_CHANGED');
+  const expected = exists ? privateJson(join(directory, 'driver.json')) : undefined;
+  if (expected) {
+    assert.deepEqual(
+      Object.keys(expected).sort(),
+      [
+        'schemaVersion',
+        'identity',
+        'birth',
+        'socketDirectory',
+        'phase',
+        'continuations',
+        'cancelled',
+        'phaseTimings',
+      ].sort(),
+      'PROOF_DRIVER_METADATA_CHANGED',
+    );
+    assert.equal(typeof expected.socketDirectory, 'string', 'PROOF_DRIVER_METADATA_CHANGED');
+    assertIdentity(expected.identity, identity);
+    assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
+    assert.equal(expected.schemaVersion, 1, 'PROOF_DRIVER_METADATA_CHANGED');
+    assert.equal(expected.phase, 'setup', 'PROOF_DRIVER_METADATA_CHANGED');
+    assert.equal(expected.continuations, 0, 'PROOF_DRIVER_METADATA_CHANGED');
+    assert.equal(expected.cancelled, false, 'PROOF_DRIVER_METADATA_CHANGED');
+    assert.deepEqual(
+      Object.keys(expected.phaseTimings).sort(),
+      ['setupMs', 'pausedMs', 'recoveryMs'].sort(),
+      'PROOF_DRIVER_METADATA_CHANGED',
+    );
+    assert.ok(
+      Object.values(expected.phaseTimings).every(
+        (value) => Number.isSafeInteger(value) && value >= 0,
+      ),
+      'PROOF_DRIVER_METADATA_CHANGED',
+    );
+    if (originalMetadata)
+      assert.deepEqual(expected, originalMetadata, 'PROOF_DRIVER_METADATA_CHANGED');
   }
-  throw new Error('PROOF_DRIVER_PHASE_DEADLINE');
+  return { launched, expected };
+}
+const phases = ['unobserved', 'setup', 'ready', 'recovery', 'cancelled', 'complete'];
+const rpcBudget = (deadline, code) => {
+  const budget = Math.min(2500, remaining(deadline));
+  assert.ok(budget > 0, code);
+  return budget;
+};
+const remaining = (deadline) => Math.max(0, Math.floor(deadline - performance.now()));
+const boundedSleep = (deadline) => sleep(Math.min(250, remaining(deadline)));
+const phaseBudget = (budget, maximum) =>
+  assert.ok(
+    Number.isInteger(budget) && budget > 0 && budget <= maximum,
+    'PROOF_PHASE_BUDGET_INVALID',
+  );
+
+/** Read-only observation retries do not redispatch any Live work. Every retry
+ * rereads protected metadata and retains the originally launched exact birth. */
+export async function observeRecoveryPhase(directory, predicate, budgetMs, identity) {
+  phaseBudget(budgetMs, 1_800_000);
+  const began = performance.now(),
+    deadline = began + budgetMs;
+  const diagnostic = { identity, phase: 'unobserved', transientFailures: 0, driverExited: false };
+  let launch, metadata;
+  try {
+    while (remaining(deadline) > 0) {
+      const bound = boundDriver(directory, identity, launch, metadata);
+      launch ??= bound.launched;
+      diagnostic.birth = launch.birth;
+      assert.ok(birthCurrent(launch.birth), 'PROOF_DRIVER_EXITED');
+      if (bound.expected) {
+        metadata ??= bound.expected;
+        try {
+          const state = await handoffRequest(
+            directory,
+            'status',
+            metadata,
+            rpcBudget(deadline, 'PROOF_DRIVER_PHASE_DEADLINE'),
+          );
+          boundDriver(directory, identity, launch, metadata);
+          assert.ok(birthCurrent(launch.birth), 'PROOF_DRIVER_EXITED');
+          diagnostic.phase = state.phase;
+          if (predicate(state)) return state;
+        } catch (error) {
+          if (error.message !== 'PROOF_HANDOFF_UNAVAILABLE') throw error;
+          boundDriver(directory, identity, launch, metadata);
+          assert.ok(birthCurrent(launch.birth), 'PROOF_DRIVER_EXITED');
+          diagnostic.transientFailures++;
+          diagnostic.lastTransient = 'PROOF_HANDOFF_UNAVAILABLE';
+        }
+      }
+      await boundedSleep(deadline);
+    }
+    throw new Error('PROOF_DRIVER_PHASE_DEADLINE');
+  } catch (error) {
+    diagnostic.failure = safeFailure(error);
+    throw new Error(diagnostic.failure);
+  } finally {
+    diagnostic.elapsedMs = Math.round(performance.now() - began);
+    if (launch) diagnostic.driverExited = !birthCurrent(launch.birth);
+    writeJson(join(directory, 'observation.json'), diagnostic);
+  }
+}
+
+/** Idempotent cancel may have arrived despite a lost response. Observe/drain
+ * the same birth within one existing total budget; never retry continuation. */
+export async function settleRecoveryDriver(directory, identity, budgetMs = 180_000) {
+  phaseBudget(budgetMs, 180_000);
+  const began = performance.now(),
+    deadline = began + budgetMs;
+  privateDirectory(directory);
+  const cleanup = {
+    identity,
+    cancelSent: false,
+    cancelAttempted: false,
+    driverExited: false,
+    phase: 'unobserved',
+    transientFailures: 0,
+  };
+  let launch, metadata;
+  try {
+    for (;;) {
+      const bound = boundDriver(directory, identity, launch, metadata);
+      launch ??= bound.launched;
+      cleanup.birth = launch.birth;
+      cleanup.driverAliveAtCleanupStart ??= birthCurrent(launch.birth);
+      if (!birthCurrent(launch.birth)) break;
+      assert.ok(remaining(deadline) > 0, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
+      if (bound.expected && !cleanup.cancelSent) {
+        metadata ??= bound.expected;
+        cleanup.cancelAttempted = true;
+        try {
+          const state = await handoffRequest(
+            directory,
+            'cancel',
+            metadata,
+            rpcBudget(deadline, 'PROOF_DRIVER_CLEANUP_UNVERIFIED'),
+          );
+          boundDriver(directory, identity, launch, metadata);
+          cleanup.cancelSent = true;
+          cleanup.phase = state.phase;
+        } catch (error) {
+          if (error.message !== 'PROOF_HANDOFF_UNAVAILABLE') throw error;
+          boundDriver(directory, identity, launch, metadata);
+          cleanup.transientFailures++;
+          cleanup.lastTransient = 'PROOF_HANDOFF_UNAVAILABLE';
+        }
+      }
+      await boundedSleep(deadline);
+    }
+    cleanup.driverExited = true;
+    return cleanup;
+  } catch (error) {
+    cleanup.failure = safeFailure(error);
+    throw new Error(cleanup.failure);
+  } finally {
+    cleanup.elapsedMs = Math.round(performance.now() - began);
+    if (launch) cleanup.driverExited = !birthCurrent(launch.birth);
+    // observation.json contains only fixed phase/codes and the exact launched
+    // birth, never the socket path, environment or raw transport exception.
+    try {
+      if (existsSync(join(directory, 'observation.json'))) {
+        const observed = privateJson(join(directory, 'observation.json'));
+        assertIdentity(observed.identity, identity);
+        assert.deepEqual(observed.birth, launch?.birth, 'PROOF_BIRTH_CHANGED');
+        assert.ok(phases.includes(observed.phase));
+        assert.ok(
+          Number.isSafeInteger(observed.transientFailures) && observed.transientFailures >= 0,
+        );
+        assert.ok(Number.isSafeInteger(observed.elapsedMs) && observed.elapsedMs >= 0);
+        for (const key of ['failure', 'lastTransient'])
+          assert.ok(
+            observed[key] === undefined || safeFailure(new Error(observed[key])) === observed[key],
+          );
+        cleanup.setupObservation = {
+          phase: observed.phase,
+          transientFailures: observed.transientFailures,
+          lastTransient: observed.lastTransient,
+          failure: observed.failure,
+          elapsedMs: observed.elapsedMs,
+        };
+      }
+    } catch (error) {
+      cleanup.failure ??= safeFailure(error);
+    }
+    writeJson(join(directory, 'cleanup.json'), cleanup);
+    if (cleanup.failure) throw new Error(cleanup.failure);
+  }
 }
 async function driver(command, directory) {
   const identity = candidateIdentity();
@@ -617,15 +875,15 @@ async function driver(command, directory) {
     child.on('error', () => {});
     child.unref();
     writeJson(join(directory, 'launched.json'), { identity, birth: processBirth(child.pid) });
-    await waitFor(directory, (state) => state.phase === 'ready', 1_800_000, identity);
+    await observeRecoveryPhase(directory, (state) => state.phase === 'ready', 1_800_000, identity);
   } else if (command === 'continue') {
     const expected = privateJson(join(directory, 'driver.json'));
     assertIdentity(expected.identity, identity);
     const launched = privateJson(join(directory, 'launched.json'));
     assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
-    await handoffRequest(directory, 'continue', expected);
-    const until = Date.now() + 1_800_000;
-    while (birthCurrent(expected.birth) && Date.now() < until) await sleep(250);
+    const until = performance.now() + 1_800_000;
+    await handoffRequest(directory, 'continue', expected, Math.min(2500, remaining(until)));
+    while (birthCurrent(expected.birth) && remaining(until) > 0) await boundedSleep(until);
     assert.equal(birthCurrent(expected.birth), false, 'PROOF_DRIVER_PHASE_DEADLINE');
     const final = privateJson(join(directory, 'final-driver.json'));
     assertIdentity(final.identity, identity);
@@ -635,27 +893,7 @@ async function driver(command, directory) {
     assert.equal(final.continuations, 1);
   } else {
     assert.equal(command, 'cleanup');
-    privateDirectory(directory);
-    const cleanup = { identity, cancelSent: false, driverExited: false };
-    try {
-      const launched = privateJson(join(directory, 'launched.json'));
-      assertIdentity(launched.identity, identity);
-      if (birthCurrent(launched.birth)) {
-        const expected = privateJson(join(directory, 'driver.json'));
-        assert.deepEqual(expected.birth, launched.birth);
-        await handoffRequest(directory, 'cancel', expected);
-        cleanup.cancelSent = true;
-        const until = Date.now() + 180_000;
-        while (birthCurrent(launched.birth) && Date.now() < until) await sleep(250);
-      }
-      cleanup.driverExited = !birthCurrent(launched.birth);
-      assert.equal(cleanup.driverExited, true, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
-    } catch {
-      cleanup.failure = 'PROOF_DRIVER_CLEANUP_UNVERIFIED';
-      throw new Error(cleanup.failure);
-    } finally {
-      writeJson(join(directory, 'cleanup.json'), cleanup);
-    }
+    await settleRecoveryDriver(directory, identity);
   }
 }
 async function main() {

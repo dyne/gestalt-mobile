@@ -34,6 +34,15 @@ import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import {
+  observeProofMethod,
+  observeInstalledPolicyTimings,
+  cleanupControllerSnapshot,
+} from './live-production-edit-diagnostics.mjs';
+import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
+import { PollLiveEvents } from '../dist/server/server/features/live-design/application/poll-events.js';
+import { IsolatedLiveHelper } from '../dist/server/server/platform/live-design/isolated-live-helper.js';
+import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
+import {
   createProductionEditProvider,
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
@@ -535,6 +544,45 @@ IsolatedProjectProcess.prototype.verifyForConnection = async function (
     }
   }
 };
+report.policyVerificationTimings = observeInstalledPolicyTimings(InstalledLivePolicy.prototype);
+const cleanupOperations = (report.cleanupOperations = []);
+const lifecycle = (boundary, owner) => {
+  const rows = (report.cleanupLifecycle ??= []);
+  if (rows.length === 8) rows.shift();
+  rows.push({ boundary, ...cleanupControllerSnapshot(owner) });
+  report.cleanupProjectClosure = [...projectProcesses].slice(0, 8).map(([process, metrics]) => {
+    const proof = process.diagnostics();
+    return {
+      role: metrics.role,
+      namespaceExited: proof.namespaceExited === true,
+      pipeDescriptorsClosed: proof.pipeDescriptorsClosed === true,
+    };
+  });
+};
+for (const [target, key, operation] of [
+  [InstalledLivePolicy.prototype, 'revokeRuntime', 'signed-revoke'],
+  [LivePollLoop.prototype, 'drain', 'poll-drain'],
+  [PollLiveEvents.prototype, 'settle', 'poll-settle'],
+  [IsolatedLiveHelper.prototype, 'settle', 'helper-settle'],
+  [IsolatedLiveHelper.prototype, 'removeInjection', 'helper-remove-injection'],
+  [IsolatedLiveHelper.prototype, 'forgetExitedServerRecord', 'helper-forget-record'],
+  [CodexSessionRuntime.prototype, 'settleLiveWork', 'owning-settle'],
+  [CodexSessionRuntime.prototype, 'abortLiveOwner', 'owning-abort'],
+])
+  observeProofMethod(target, key, operation, cleanupOperations);
+observeProofMethod(IsolatedProjectProcess.prototype, 'stop', 'project-stop', cleanupOperations, {
+  role: (owner) => projectProcesses.get(owner)?.role,
+});
+observeProofMethod(
+  ProductionLiveController.prototype,
+  'close',
+  'controller-close',
+  cleanupOperations,
+  {
+    before: (owner) => lifecycle('before-close', owner),
+    after: (owner) => lifecycle('after-close', owner),
+  },
+);
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));

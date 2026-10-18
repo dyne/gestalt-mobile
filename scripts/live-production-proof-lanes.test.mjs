@@ -29,6 +29,8 @@ import {
   openRecoveryHandoff,
   handoffRequest,
   processBirth,
+  observeRecoveryPhase,
+  settleRecoveryDriver,
   productionLane,
   proofPins,
   selectedLanes,
@@ -439,4 +441,155 @@ test('actual child cancellation drains once and records cancelled exit; private 
     rmSync(directory, { recursive: true, force: true });
     rmSync(socketDirectory, { recursive: true, force: true });
   }
+});
+
+// Exercise the actual start/cleanup observers with a distinct blocked event loop.
+async function blockedDriver(blockMs, callback, mode = 'handoff') {
+  const directory = temporary();
+  const url = new URL('./live-production-proof-lanes.mjs', import.meta.url).href;
+  const code =
+    mode === 'handoff'
+      ? `
+    import {openRecoveryHandoff} from ${JSON.stringify(url)};
+    import {appendFileSync} from 'node:fs';
+    const h=await openRecoveryHandoff({directory:${JSON.stringify(directory)},identity:${JSON.stringify(identity)},onCancel(){appendFileSync(${JSON.stringify(join(directory, 'cancel-count'))},'1');}});
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${blockMs});
+    try {await h.boundary();} finally {await h.close();}`
+      : `
+    import {createServer} from 'node:net';
+    import {writeFileSync,chmodSync} from 'node:fs';
+    import {processBirth} from ${JSON.stringify(url)};
+    const directory=${JSON.stringify(directory)};
+    const server=createServer(s=>s.on('data',()=>s.end('canary-private-raw-response\\n')));
+    await new Promise(done=>server.listen(directory+'/control.sock',done));
+    chmodSync(directory+'/control.sock',0o600);
+    writeFileSync(directory+'/driver.json',JSON.stringify({schemaVersion:1,identity:${JSON.stringify(identity)},birth:processBirth(),socketDirectory:directory,phase:'setup',continuations:0,cancelled:false,phaseTimings:{setupMs:0,pausedMs:0,recoveryMs:0}}),{mode:0o600});`;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', code], {
+    stdio: 'ignore',
+  });
+  const exited = new Promise((done) => child.once('close', done));
+  const birth = processBirth(child.pid);
+  writeFileSync(join(directory, 'launched.json'), JSON.stringify({ identity, birth }), {
+    mode: 0o600,
+  });
+  try {
+    const until = Date.now() + 5000;
+    while (!existsSync(join(directory, 'driver.json')) && Date.now() < until)
+      await new Promise((done) => setTimeout(done, 10));
+    assert.ok(existsSync(join(directory, 'driver.json')));
+    await callback({ directory, birth, exited });
+  } finally {
+    if (birthCurrent(birth)) child.kill('SIGTERM');
+    await exited;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+test('top-level setup observer retries transient status beyond 2.5s without continuation and cleanup drains once', async () => {
+  await blockedDriver(3300, async ({ directory, birth, exited }) => {
+    const state = await observeRecoveryPhase(directory, (s) => s.phase === 'ready', 6000, identity);
+    assert.equal(state.continuations, 0);
+    assert.deepEqual(state.birth, birth);
+    const observed = JSON.parse(readFileSync(join(directory, 'observation.json')));
+    assert.ok(observed.transientFailures >= 1);
+    assert.ok(observed.elapsedMs >= 2500 && observed.elapsedMs < 6000);
+    const cleanup = await settleRecoveryDriver(directory, identity, 5000);
+    await exited;
+    assert.equal(cleanup.driverExited, true);
+    assert.equal(readFileSync(join(directory, 'cancel-count'), 'utf8'), '1');
+    const final = JSON.parse(readFileSync(join(directory, 'final-driver.json')));
+    assert.equal(final.continuations, 0);
+    assert.equal(final.cancelled, true);
+    assert.ok(!JSON.stringify(cleanup).includes(directory));
+  });
+});
+test('top-level cleanup retries ambiguous idempotent cancel after a real blocked child and never continues', async () => {
+  await blockedDriver(3300, async ({ directory, exited }) => {
+    const cleanup = await settleRecoveryDriver(directory, identity, 6000);
+    await exited;
+    assert.equal(cleanup.driverExited, true);
+    assert.ok(cleanup.transientFailures >= 1);
+    assert.equal(cleanup.cancelAttempted, true);
+    assert.equal(readFileSync(join(directory, 'cancel-count'), 'utf8'), '1');
+    assert.equal(JSON.parse(readFileSync(join(directory, 'final-driver.json'))).continuations, 0);
+  });
+});
+test('observation and cleanup each retain their original total deadline despite blocked RPC', async () => {
+  for (const operation of ['observe', 'cleanup'])
+    await blockedDriver(3300, async ({ directory }) => {
+      const began = performance.now();
+      await assert.rejects(
+        operation === 'observe'
+          ? observeRecoveryPhase(directory, (s) => s.phase === 'ready', 150, identity)
+          : settleRecoveryDriver(directory, identity, 150),
+        operation === 'observe' ? /PROOF_DRIVER_PHASE_DEADLINE/ : /PROOF_DRIVER_CLEANUP_UNVERIFIED/,
+      );
+      assert.ok(performance.now() - began < 700);
+      const diagnostic = JSON.parse(
+        readFileSync(
+          join(directory, operation === 'observe' ? 'observation.json' : 'cleanup.json'),
+        ),
+      );
+      assert.equal(diagnostic.driverExited, false);
+      assert.ok(diagnostic.failure);
+    });
+});
+test('fresh metadata mutation during transient observation refuses before another RPC; malformed response is never retried', async () => {
+  await blockedDriver(3300, async ({ directory }) => {
+    const timer = setTimeout(() => {
+      const path = join(directory, 'driver.json'),
+        data = JSON.parse(readFileSync(path));
+      data.identity.candidate = 'canary-private-mutation';
+      writeFileSync(path, JSON.stringify(data), { mode: 0o600 });
+    }, 50);
+    try {
+      await assert.rejects(observeRecoveryPhase(directory, () => false, 6000, identity));
+      const diagnostic = JSON.parse(readFileSync(join(directory, 'observation.json')));
+      assert.equal(diagnostic.transientFailures, 0);
+      assert.ok(!JSON.stringify(diagnostic).includes('canary-private'));
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+  await blockedDriver(
+    0,
+    async ({ directory }) => {
+      await assert.rejects(
+        observeRecoveryPhase(directory, () => false, 3000, identity),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      const diagnostic = JSON.parse(readFileSync(join(directory, 'observation.json')));
+      assert.equal(diagnostic.transientFailures, 0);
+      assert.ok(!JSON.stringify(diagnostic).includes('canary-private'));
+      await assert.rejects(
+        settleRecoveryDriver(directory, identity, 3000),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      assert.ok(!readFileSync(join(directory, 'cleanup.json'), 'utf8').includes('canary-private'));
+    },
+    'malformed',
+  );
+});
+
+test('top-level cleanup rejects changed launched birth and malformed retained observation without leaking private content', async () => {
+  await blockedDriver(3300, async ({ directory }) => {
+    const path = join(directory, 'launched.json'),
+      launched = JSON.parse(readFileSync(path));
+    launched.birth.start = '0';
+    writeFileSync(path, JSON.stringify(launched), { mode: 0o600 });
+    await assert.rejects(settleRecoveryDriver(directory, identity, 500), /PROOF_BIRTH_CHANGED/);
+    const diagnostic = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+    assert.equal(diagnostic.cancelAttempted, false);
+  });
+  await blockedDriver(0, async ({ directory, exited }) => {
+    await observeRecoveryPhase(directory, (s) => s.phase === 'ready', 2000, identity);
+    const path = join(directory, 'observation.json'),
+      observed = JSON.parse(readFileSync(path));
+    observed.phase = 'canary-private-observation';
+    writeFileSync(path, JSON.stringify(observed), { mode: 0o600 });
+    await assert.rejects(settleRecoveryDriver(directory, identity, 3000), /PROOF_EVIDENCE_INVALID/);
+    await exited;
+    const cleanup = readFileSync(join(directory, 'cleanup.json'), 'utf8');
+    assert.equal(JSON.parse(cleanup).driverExited, true);
+    assert.ok(!cleanup.includes('canary-private'));
+  });
 });
