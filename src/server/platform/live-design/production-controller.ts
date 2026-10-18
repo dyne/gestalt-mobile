@@ -384,6 +384,17 @@ export class ProductionLiveController {
       environment,
       managedLaunch: {
         command: this.cfg.installation.manager.path,
+        ...(capture
+          ? {
+              cwdTransition: {
+                intermediate: dirname(capture.manifestPath),
+                final: new InstalledLivePolicy(this.cfg.installation).owningRuntimeCwd(
+                  capture.manifestPath,
+                  capture.captureId,
+                ),
+              },
+            }
+          : {}),
         args: capture
           ? [
               'cli',

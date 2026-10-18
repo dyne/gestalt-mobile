@@ -433,6 +433,17 @@ ProductionLiveController.prototype.launchNative = function (input) {
           ].includes(error?.message)
             ? error.message
             : 'UNCLASSIFIED',
+          phase: [
+            'construction',
+            'identity',
+            'cwd',
+            'source',
+            'image',
+            'wrapper',
+            'deadline',
+          ].includes(error?.handoffPhase)
+            ? error.handoffPhase
+            : 'unclassified',
         });
         throw error;
       } finally {

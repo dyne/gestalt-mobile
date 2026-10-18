@@ -903,6 +903,9 @@ export function retainOwningStartupFailure(
   const boundaries = ['captured-initialize', 'owning-admission-work', 'owning-admission-rejection'];
   if (!boundaries.includes(boundary)) return;
   const codes = [
+    'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+    'LIVE_NATIVE_HANDOFF_TIMEOUT',
+    'LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED',
     'CODEX_STARTUP_DISCOVERY_TIMEOUT',
     'CODEX_STARTUP_CANCELLED',
     'CODEX_RPC_TRANSPORT_CLOSED',

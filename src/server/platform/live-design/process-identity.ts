@@ -165,6 +165,55 @@ export async function liveFileDigest(
   return digest.digest('hex');
 }
 
+export type LiveKernelIdentity = Readonly<
+  Pick<LiveProcessIdentity, 'pid' | 'birth' | 'bootId' | 'uid' | 'namespaces'> & {
+    parentPid: number;
+  }
+>;
+/** Stable birth/isolation only across an owned exec, never image/readiness or
+ * process adoption authority. Existing full-image observers stay unchanged. */
+export function observeLiveKernel(pid: number): LiveKernelIdentity {
+  try {
+    const read = () => {
+      if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) throw new Error();
+      const root = `/proc/${pid}`;
+      const text = readFileSync(`${root}/stat`, 'utf8');
+      const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
+      const birth = fields[19],
+        parentPid = Number(fields[1]);
+      const uid = Number(readFileSync(`${root}/status`, 'utf8').match(/^Uid:\s+(\d+)/m)?.[1]);
+      if (
+        !birth ||
+        !/^\d+$/.test(birth) ||
+        fields[0] === 'Z' ||
+        !Number.isSafeInteger(uid) ||
+        !Number.isSafeInteger(parentPid) ||
+        parentPid < 1
+      )
+        throw new Error();
+      return {
+        pid,
+        birth,
+        parentPid,
+        uid,
+        bootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+        namespaces: {
+          mnt: readlinkSync(`${root}/ns/mnt`),
+          user: readlinkSync(`${root}/ns/user`),
+          pid: readlinkSync(`${root}/ns/pid`),
+          net: readlinkSync(`${root}/ns/net`),
+        },
+      };
+    };
+    const before = read(),
+      after = read();
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error();
+    return Object.freeze({ ...after, namespaces: Object.freeze(after.namespaces) });
+  } catch {
+    throw new Error('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+  }
+}
+
 function liveProcessMetadata(pid: number) {
   if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) throw new Error();
   const root = `/proc/${pid}`;

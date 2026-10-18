@@ -311,3 +311,102 @@ describe('installed code before host execution', () => {
     ).toThrow('LIVE_INSTALLATION_UNVERIFIED');
   });
 });
+
+function cwdLineageFixture() {
+  const f = receiptFixture();
+  const firstBirth = { ...f.birth, basisDigest: 'a'.repeat(64) };
+  f.save(f.birthPath, firstBirth);
+  const initial = { path: f.manifestPath, id: f.captureId, birth: firstBirth };
+  const next = (parent: typeof initial, generation: number) => {
+    const directory = join(f.root, `generation-${generation}`);
+    mkdirSync(directory, { mode: 0o700 });
+    const id = randomUUID(),
+      path = join(directory, 'manifest.json');
+    const manifest = {
+      ...JSON.parse(readFileSync(parent.path, 'utf8')),
+      generation: { sessionId: 'owning', generation },
+    };
+    writeFileSync(path, JSON.stringify(manifest), { mode: 0o600 });
+    const sealed = {
+      schemaVersion: 2,
+      kind: 'owning-runtime-provenance',
+      captureId: parent.id,
+      basisDigest: parent.birth.basisDigest,
+      beforeDigest: digest(stable(parent.birth)),
+      runtime: { cwd: f.root },
+    };
+    const sealPath = join(
+      parent.path.slice(0, parent.path.lastIndexOf('/')),
+      `runtime-${parent.id}.json`,
+    );
+    f.save(sealPath, sealed);
+    const birth = {
+      ...firstBirth,
+      captureId: id,
+      renewal: {
+        mode: 'replacement',
+        previousManifest: parent.path,
+        previousCaptureId: parent.id,
+        manifestDigest: digest(readFileSync(parent.path)),
+        sealDigest: digest(stable(sealed)),
+        beforeDigest: sealed.beforeDigest,
+      },
+    };
+    const birthPath = join(directory, `birth-${id}.json`);
+    f.save(birthPath, birth);
+    return { path, id, birth, birthPath, sealPath, sealed };
+  };
+  const replacement = next(initial, 3),
+    later = next(replacement, 4);
+  return { ...f, initial, replacement, later };
+}
+describe('authenticated original owning cwd', () => {
+  it('derives initial cwd and retains original sealed cwd across two replacement manifests', () => {
+    const f = cwdLineageFixture();
+    for (const capture of [f.initial, f.replacement, f.later])
+      expect(f.policy.owningRuntimeCwd(capture.path, capture.id)).toBe(f.root);
+  });
+  it.each([
+    'unsigned',
+    'seal-digest',
+    'capture',
+    'generation',
+    'final-cwd',
+    'manifest-digest',
+  ] as const)('refuses %s lineage mutation', (change) => {
+    const f = cwdLineageFixture();
+    if (change === 'unsigned')
+      writeFileSync(
+        f.later.birthPath,
+        JSON.stringify({ body: f.later.birth, mac: '0'.repeat(64) }),
+      );
+    if (change === 'seal-digest')
+      f.save(f.later.birthPath, {
+        ...f.later.birth,
+        renewal: { ...f.later.birth.renewal, sealDigest: '0'.repeat(64) },
+      });
+    if (change === 'capture')
+      f.save(f.later.birthPath, { ...f.later.birth, captureId: randomUUID() });
+    if (change === 'manifest-digest')
+      f.save(f.later.birthPath, {
+        ...f.later.birth,
+        renewal: { ...f.later.birth.renewal, manifestDigest: '0'.repeat(64) },
+      });
+    if (change === 'generation') {
+      const m = JSON.parse(readFileSync(f.later.path, 'utf8'));
+      m.generation.generation = 1;
+      writeFileSync(f.later.path, JSON.stringify(m));
+    }
+    if (change === 'final-cwd') {
+      const sealed = { ...f.later.sealed, runtime: { cwd: f.root + '/generation-4' } };
+      f.save(f.later.sealPath, sealed);
+      f.save(f.later.birthPath, {
+        ...f.later.birth,
+        renewal: { ...f.later.birth.renewal, sealDigest: digest(stable(sealed)) },
+      });
+    }
+    expect(() => f.policy.owningRuntimeCwd(f.later.path, f.later.id)).toThrow(
+      'LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED',
+    );
+  });
+});

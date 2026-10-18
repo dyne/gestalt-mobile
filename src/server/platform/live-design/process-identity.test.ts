@@ -9,13 +9,18 @@ import { once } from 'node:events';
 import { realpathSync, mkdtempSync, writeFileSync, rmSync, linkSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as fileSystem from 'node:fs';
 import {
   ConnectionFileVerification,
   liveFileDigest,
   observeLiveProcess,
   observeLiveProcessAsync,
 } from './process-identity.js';
+
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
+}));
 
 describe('actual Linux process birth observation', () => {
   it('hashes actual inode aliases once in one connection, independently reads copies and refuses reuse or mutation', async () => {
@@ -137,3 +142,84 @@ describe('actual Linux process birth observation', () => {
     expect(() => observeLiveProcess(pid)).toThrow('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
   });
 });
+
+it('keeps only stable kernel birth/isolation across actual unsynchronized exec and refuses exit', async () => {
+  const child = spawn(
+    '/usr/bin/bash',
+    [
+      '--noprofile',
+      '--norc',
+      '-c',
+      'IFS= read -r -t 0.05 line || :; exec "$@"',
+      'fixed-wrapper',
+      process.execPath,
+      '-e',
+      'process.stdin.resume()',
+    ],
+    { stdio: 'pipe' },
+  );
+  await once(child, 'spawn');
+  const { observeLiveKernel } = await import('./process-identity.js');
+  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  try {
+    const before = observeLiveKernel(child.pid!);
+    expect(before.parentPid).toBe(process.pid);
+    expect(Object.keys(before).sort()).toEqual([
+      'birth',
+      'bootId',
+      'namespaces',
+      'parentPid',
+      'pid',
+      'uid',
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(observeLiveKernel(child.pid!)).toEqual(before);
+    expect(observeLiveProcess(child.pid!).executable).toBe(realpathSync(process.execPath));
+  } finally {
+    child.kill('SIGTERM');
+    await closed;
+  }
+  expect(() => observeLiveKernel(child.pid!)).toThrow('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+  for (const pid of [0, -1, NaN, 1.5])
+    expect(() => observeLiveKernel(pid)).toThrow('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+});
+
+it.each(['uid', 'birth', 'parent', 'namespace', 'boot'] as const)(
+  'rejects a changing %s during the kernel snapshot itself without a third read',
+  async (field) => {
+    const { observeLiveKernel } = await import('./process-identity.js');
+    const actualRead = fileSystem.readFileSync,
+      actualLink = fileSystem.readlinkSync;
+    const target =
+      field === 'uid'
+        ? `/proc/${process.pid}/status`
+        : field === 'boot'
+          ? '/proc/sys/kernel/random/boot_id'
+          : `/proc/${process.pid}/stat`;
+    let reads = 0;
+    vi.spyOn(fileSystem, 'readFileSync').mockImplementation(((...args: unknown[]) => {
+      const result = Reflect.apply(actualRead, fileSystem, args);
+      if (field !== 'namespace' && args[0] === target && ++reads === 2) {
+        if (field === 'boot') return 'changed';
+        if (field === 'uid')
+          return result.replace(/^Uid:\s+\d+/m, `Uid:\t${process.getuid!() + 1}`);
+        const end = result.lastIndexOf(')') + 2,
+          fields = result.slice(end).split(' ');
+        fields[field === 'birth' ? 19 : 1] = '1';
+        return result.slice(0, end) + fields.join(' ');
+      }
+      return result;
+    }) as typeof fileSystem.readFileSync);
+    vi.spyOn(fileSystem, 'readlinkSync').mockImplementation(((...args: unknown[]) => {
+      if (field === 'namespace' && args[0] === `/proc/${process.pid}/ns/mnt` && ++reads === 2)
+        return 'changed';
+      return Reflect.apply(actualLink, fileSystem, args);
+    }) as typeof fileSystem.readlinkSync);
+    try {
+      expect(() => observeLiveKernel(process.pid)).toThrow('LIVE_PROCESS_IDENTITY_UNAVAILABLE');
+      expect(reads).toBe(2);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);

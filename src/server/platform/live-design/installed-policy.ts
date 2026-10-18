@@ -400,6 +400,97 @@ export class InstalledLivePolicy {
     )
       throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
   }
+  /** Exact cwd expected from the pinned Manager's private exec. Renewal stdout
+   * is not authority: follow authenticated birth/seal links to the original cwd.
+   * Manager independently validates the complete contract before it execs. */
+  owningRuntimeCwd(manifestPath: string, captureId: string): string {
+    try {
+      const pins = new Map<string, LiveConfigFile>();
+      const read = (path: string) => {
+        const pin = readLiveConfigFile(path),
+          info = lstatSync(path);
+        if (info.uid !== process.getuid?.() || info.mode & 0o077) throw new Error();
+        const value = JSON.parse(readFileSync(path, 'utf8'));
+        if (!isDeepStrictEqual(readLiveConfigFile(path), pin)) throw new Error();
+        pins.set(path, pin);
+        return value;
+      };
+      const manifest = read(manifestPath);
+      const keyPin = readLiveConfigFile(manifest.keyFile),
+        keyInfo = lstatSync(manifest.keyFile);
+      if (keyInfo.uid !== process.getuid?.() || keyInfo.mode & 0o077) throw new Error();
+      const key = readFileSync(manifest.keyFile);
+      if (key.length !== 32) throw new Error();
+      const signed = (path: string) => {
+        const record = read(path);
+        const mac =
+          typeof record.mac === 'string' && /^[a-f0-9]{64}$/.test(record.mac)
+            ? Buffer.from(record.mac, 'hex')
+            : Buffer.alloc(0);
+        const expected = createHmac('sha256', key).update(stable(record.body)).digest();
+        if (mac.length !== expected.length || !timingSafeEqual(mac, expected)) throw new Error();
+        return record.body;
+      };
+      const resolve = (
+        path: string,
+        id: string,
+        current: ReturnType<typeof read>,
+        depth: number,
+      ): string => {
+        if (depth >= 16 || current.keyFile !== manifest.keyFile) throw new Error();
+        z.uuid({ version: 'v4' }).parse(id);
+        const birth = signed(join(dirname(path), `birth-${id}.json`));
+        if (
+          birth.schemaVersion !== 2 ||
+          birth.kind !== 'before-runtime-birth' ||
+          birth.captureId !== id ||
+          typeof birth.basisDigest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(birth.basisDigest)
+        )
+          throw new Error();
+        if (!birth.renewal) return canonical(dirname(path), true);
+        const link = birth.renewal;
+        if (!['survivor', 'replacement'].includes(link.mode)) throw new Error();
+        const previousPath = canonical(link.previousManifest),
+          previous = read(previousPath);
+        if (
+          pins.get(previousPath)!.sha256 !== link.manifestDigest ||
+          previous.generation?.sessionId !== current.generation?.sessionId ||
+          !Number.isSafeInteger(current.generation?.generation) ||
+          !Number.isSafeInteger(previous.generation?.generation) ||
+          previous.generation.generation >= current.generation.generation ||
+          !isDeepStrictEqual(previous.controller, current.controller)
+        )
+          throw new Error();
+        z.uuid({ version: 'v4' }).parse(link.previousCaptureId);
+        const sealed = signed(
+          join(dirname(previousPath), `runtime-${link.previousCaptureId}.json`),
+        );
+        const before = signed(join(dirname(previousPath), `birth-${link.previousCaptureId}.json`));
+        const beforeDigest = hash(stable(before));
+        if (
+          sealed.schemaVersion !== 2 ||
+          sealed.kind !== 'owning-runtime-provenance' ||
+          sealed.captureId !== link.previousCaptureId ||
+          hash(stable(sealed)) !== link.sealDigest ||
+          beforeDigest !== link.beforeDigest ||
+          sealed.beforeDigest !== beforeDigest ||
+          sealed.basisDigest !== before.basisDigest
+        )
+          throw new Error();
+        const originalCwd = resolve(previousPath, link.previousCaptureId, previous, depth + 1);
+        if (sealed.runtime?.cwd !== originalCwd) throw new Error();
+        return originalCwd;
+      };
+      const cwd = resolve(canonical(manifestPath), captureId, manifest, 0);
+      if (!isDeepStrictEqual(readLiveConfigFile(manifest.keyFile), keyPin)) throw new Error();
+      for (const [path, pin] of pins)
+        if (!isDeepStrictEqual(readLiveConfigFile(path), pin)) throw new Error();
+      return cwd;
+    } catch {
+      throw new Error('LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED');
+    }
+  }
   contextLaunchIds(manifestPath: string): readonly string[] {
     return readdirSync(dirname(manifestPath)).filter((name) =>
       /^process-[a-f0-9-]{36}\.json$/.test(name),

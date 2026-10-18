@@ -1302,6 +1302,9 @@ test('actual browser emits bracket before canonical ack and in finally while pre
 test('startup failure classification retains only fixed timeout/refusal/closed/protocol vocabulary', () => {
   const records = [];
   for (const code of [
+    'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+    'LIVE_NATIVE_HANDOFF_TIMEOUT',
+    'LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED',
     'CODEX_STARTUP_DISCOVERY_TIMEOUT',
     'CODEX_STARTUP_CANCELLED',
     'CODEX_RPC_TRANSPORT_CLOSED',
