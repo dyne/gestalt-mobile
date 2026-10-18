@@ -23,6 +23,16 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { proofMode, validateSmokeEvidence } from './live-picker-smoke.mjs';
+import { editingRemaining, requireEditingBudget } from './live-production-edit-diagnostics.mjs';
+
+export function readEditingAnchor(path, original) {
+  const anchor = privateJson(path);
+  assert.deepEqual(Object.keys(anchor).sort(), ['boot', 'monotonicNs']);
+  assert.equal(anchor.boot, processBirth().boot, 'PROOF_BIRTH_CHANGED');
+  editingRemaining(anchor, 'job');
+  if (original) assert.deepEqual(anchor, original, 'PROOF_DRIVER_METADATA_CHANGED');
+  return anchor;
+}
 
 export const fullLanes = Object.freeze([
   'independent',
@@ -103,18 +113,21 @@ export const commonChecks = Object.freeze([
   'signedRevocationPrecedesOriginalOwnerExit',
   'revokeCloseAndInjectionRestore',
 ]);
-const modelChecks = [
+export const modelConfinementChecks = Object.freeze([
+  'actualContextMcpCompletedBeforeArtifactValidation',
+  'actualModelToolsAndChildInheritedConfinement',
+  'nativeModelContextToolConfined',
+  'futureControlDenialsAndArtifactCarveouts',
+]);
+const sharedModelChecks = [
   'actualMobileUiStartWithProductionAuthentication',
   'chatAutopilotOrgWritersRefusedDuringPickerFlow',
   'previewProbeHandedToActualBrowserConnection',
   'helperBearerAbsentFromActualProviderWire',
-  'actualContextMcpCompletedBeforeArtifactValidation',
   'actualMobileUiOpenAuthenticatedRemoteOverlay',
-  'actualModelToolsAndChildInheritedConfinement',
-  'nativeModelContextToolConfined',
-  'futureControlDenialsAndArtifactCarveouts',
   'sameOwningThreadModelThinkingAndDurableInbox',
 ];
+const modelChecks = [...sharedModelChecks, ...modelConfinementChecks];
 export const diagnosticPickerChecks = Object.freeze([
   ...commonChecks,
   ...modelChecks,
@@ -130,7 +143,7 @@ export const laneChecks = Object.freeze({
   ],
   'manual-discard': [
     ...commonChecks,
-    ...modelChecks,
+    ...sharedModelChecks,
     'actualPickerManualApplyGenerateDiscardWithExactSourceRestoration',
   ],
   recovery: [
@@ -148,6 +161,7 @@ export const laneChecks = Object.freeze({
 // Original full assertions are retained as explicit cross-lane claims. No lane
 // claims to have run another lane's actions in its own session.
 export const fullAssertionOwners = Object.freeze({
+  ...Object.fromEntries(modelConfinementChecks.map((check) => [check, ['accept-steer']])),
   realPickerGenerateSteerManualApplyAcceptDiscard: ['accept-steer', 'manual-discard'],
   canonicalJournalSourceEffectsAndDiscardRestoration: ['manual-discard'],
   actualViteHmrThroughAuthenticatedGateway: ['accept-steer'],
@@ -203,6 +217,77 @@ export function candidateIdentity() {
 function assertIdentity(actual, expected) {
   assert.deepEqual(actual, expected, 'PROOF_IDENTITY_CHANGED');
 }
+export function validateEditingContinuity(report) {
+  const proof = report.editingContinuity;
+  assert.equal(proof.kind, 'continuity-with-explicit-recovery');
+  assert.deepEqual(proof.phaseAllocationMs, [1_260_000, 1_020_000, 180_000]);
+  assert.equal(proof.resumeDispatches, 1);
+  for (const [key, cap] of [
+    ['phaseATotalMs', 1260000],
+    ['phaseBTotalMs', 1020000],
+    ['actionFinishedOffsetMs', 2400000],
+    ['cleanupFinishedOffsetMs', 2580000],
+  ])
+    assert.ok(Number.isFinite(proof[key]) && proof[key] >= 0 && proof[key] <= cap);
+
+  assert.ok(Number.isSafeInteger(proof.originalGeneration) && proof.originalGeneration > 0);
+  assert.ok(proof.recoveryGeneration > proof.originalGeneration);
+  assert.ok(proof.resumedGeneration > proof.recoveryGeneration);
+  assert.match(proof.acceptedSourceDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(proof.canonicalGenerations, {
+    generate: proof.originalGeneration,
+    accept: proof.originalGeneration,
+    steer: proof.resumedGeneration,
+  });
+  for (const key of [
+    'originalNativeSurvived',
+    'genuineBrowserClosed',
+    'newSignedCapture',
+    'sameNativeThreadSelection',
+    'noModelOrSourceReplay',
+    'oldCookieDenied',
+    'staleGrantDenied',
+  ])
+    assert.equal(proof[key], true);
+  assert.equal(proof.oldCookieDeniedStatus, 401);
+  assert.equal(proof.oldCookieDeniedCode, 'LIVE_AUTH_REQUIRED');
+  const { phaseA, phaseB } = proof;
+  for (const phase of [phaseA, phaseB]) {
+    for (const key of [
+      'trustedTls',
+      'separateBrowserNetwork',
+      'separateBrowserMountNamespace',
+      'openThroughMobileControls',
+      'extraPollOwnerDenied',
+    ])
+      assert.equal(phase[key], true);
+    assert.equal(phase.ignoreHttpsErrors, false);
+    assert.equal(phase.genuineProvider, false);
+    assert.equal(phase.proofLane, 'accept-steer');
+  }
+  assert.equal(phaseA.editingPhase, 'accepted');
+  assert.equal(phaseA.observedGeneration, proof.originalGeneration);
+  assert.equal(phaseA.exchangePosts, 1);
+  assert.equal(phaseA.realPickerGenerateAccept, true);
+  assert.equal(phaseA.realPickerSteer, false);
+  assert.equal(phaseB.editingPhase, 'steer');
+  assert.equal(phaseB.observedGeneration, proof.resumedGeneration);
+  assert.equal(phaseB.exchangePosts, 1);
+  assert.equal(phaseB.realPickerGenerateAccept, false);
+  assert.equal(phaseB.realPickerSteer, true);
+  assert.equal(phaseB.actualTabHiddenBeyondEightSeconds, true);
+  assert.ok(phaseB.hmrUpdates > 0);
+  for (const key of ['freshDocumentHelperConnected', 'visibleChrome', 'acceptedHeading'])
+    assert.equal(phaseB.postResumeContinuity[key], true);
+  assert.ok(
+    Number.isSafeInteger(phaseB.postResumeContinuity.elapsedMs) &&
+      phaseB.postResumeContinuity.elapsedMs >= 0 &&
+      phaseB.postResumeContinuity.elapsedMs <= 30_000,
+  );
+  assert.equal(report.recoveryHandoff.continuations, 1);
+  assert.equal(report.recoveryHandoff.cancelled, false);
+  assert.equal(report.recoveryHandoff.sameDriverBirth, true);
+}
 export function validateProductionLane(lane, report, identity) {
   assert.ok(laneChecks[lane], 'PROOF_LANE_INVALID');
   assert.equal(report.passed, true);
@@ -218,6 +303,14 @@ export function validateProductionLane(lane, report, identity) {
   for (const check of laneChecks[lane])
     assert.equal(report.checks[check], true, `PROOF_CHECK_MISSING:${check}`);
   assert.ok(Object.values(report.checks).every((value) => value === true));
+  if (lane === 'manual-discard') {
+    assert.equal(report.modelWorkload, 'owning-edit-only');
+    for (const check of modelConfinementChecks)
+      assert.equal(Object.hasOwn(report.checks, check), false);
+    assert.equal(report.provider.contextProtocol, undefined);
+    assert.equal(report.provider.spawnResponse, undefined);
+    assert.equal(report.nativeActivity?.files > 1, false);
+  }
   if (lane !== 'recovery') {
     const required =
       lane === 'accept-steer'
@@ -244,15 +337,9 @@ export function validateProductionLane(lane, report, identity) {
     assert.equal(browser.ignoreHttpsErrors, false);
     assert.equal(browser.genuineProvider, false);
     if (lane === 'accept-steer') {
+      validateEditingContinuity(report);
       assert.equal(browser.realPickerGenerateAccept, true);
       assert.equal(browser.realPickerSteer, true);
-      for (const key of ['freshDocumentHelperConnected', 'visibleChrome', 'acceptedHeading'])
-        assert.equal(browser.acceptContinuity[key], true);
-      assert.ok(
-        Number.isSafeInteger(browser.acceptContinuity.elapsedMs) &&
-          browser.acceptContinuity.elapsedMs >= 0 &&
-          browser.acceptContinuity.elapsedMs < 300_000,
-      );
       assert.equal(browser.actualTabHiddenBeyondEightSeconds, true);
       assert.ok(browser.hmrUpdates > 0);
       assert.equal(browser.realPickerManualApply, false);
@@ -488,7 +575,11 @@ const laneFiles = (lane) =>
     ? independentFiles
     : [
         'production-entrypoint/production-entrypoint-proof.json',
-        ...(lane === 'recovery' ? ['recovery-driver-cleanup.json'] : []),
+        ...(lane === 'recovery'
+          ? ['recovery-driver-cleanup.json']
+          : lane === 'accept-steer'
+            ? ['editing-driver-cleanup.json']
+            : []),
       ];
 function validateDriverCleanup(report, identity) {
   assertIdentity(report.identity, identity);
@@ -496,6 +587,14 @@ function validateDriverCleanup(report, identity) {
   assert.equal(report.cancelSent, false);
   assert.notEqual(report.cancelAttempted, true);
   assert.equal(report.failure, undefined);
+}
+function validateEditingDriverCleanup(cleanup, report, identity) {
+  validateDriverCleanup(cleanup, identity);
+  assert.equal(cleanup.finalDriverVerified, true);
+  assert.equal(
+    report.recoveryHandoff.birthDigest,
+    digest(Buffer.from(JSON.stringify(cleanup.birth))),
+  );
 }
 export function loadLanePacket(directory) {
   const read = (file) => {
@@ -551,6 +650,12 @@ export function writeLaneReceipt(
     validateProductionLane(lane, reports[files[0]], identity);
     if (lane === 'recovery')
       validateDriverCleanup(reports['recovery-driver-cleanup.json'], identity);
+    if (lane === 'accept-steer')
+      validateEditingDriverCleanup(
+        reports['editing-driver-cleanup.json'],
+        reports[files[0]],
+        identity,
+      );
   }
   const receipt = {
     schemaVersion: 1,
@@ -596,6 +701,7 @@ function validateIndependent(reports, identity) {
 }
 export function aggregateLanes(packets, identity) {
   assert.deepEqual(Object.keys(packets).sort(), [...fullLanes].sort(), 'PROOF_LANES_INCOMPLETE');
+  const validated = new Map();
   for (const lane of fullLanes) {
     const { receipt, reports } = packets[lane];
     assert.equal(receipt.schemaVersion, 1);
@@ -615,12 +721,24 @@ export function aggregateLanes(packets, identity) {
       assert.equal(digest(bytes), receipt.reports[file], 'PROOF_REPORT_CHANGED');
     }
     const parsed = Object.fromEntries(files.map((file) => [file, JSON.parse(reports[file])]));
+    validated.set(lane, parsed[files[0]]);
     if (lane === 'independent') validateIndependent(parsed, identity);
     else {
       validateProductionLane(lane, parsed[files[0]], identity);
       if (lane === 'recovery')
         validateDriverCleanup(parsed['recovery-driver-cleanup.json'], identity);
+      if (lane === 'accept-steer')
+        validateEditingDriverCleanup(
+          parsed['editing-driver-cleanup.json'],
+          parsed[files[0]],
+          identity,
+        );
     }
+  }
+  // Resolve direct claims only from the actual validated current owner report.
+  for (const check of modelConfinementChecks) {
+    assert.deepEqual(fullAssertionOwners[check], ['accept-steer']);
+    assert.equal(validated.get('accept-steer').checks[check], true);
   }
   return {
     schemaVersion: 1,
@@ -823,6 +941,11 @@ export async function openRecoveryHandoff({
   });
   return {
     snapshot,
+    cancel,
+    finishActions() {
+      assert.ok(phase === 'recovery' && continuations === 1 && !cancelled);
+      phase = 'settling';
+    },
     assertCurrent() {
       assert.ok(!cancelled && birthCurrent(birth), 'PROOF_CANCELLED');
     },
@@ -925,7 +1048,11 @@ export function handoffRequest(directory, command, expected, timeoutMs = 2500) {
         );
         assert.equal(response.schemaVersion, 1);
         assert.equal(response.socketDirectory, expected.socketDirectory ?? directory);
-        assert.ok(['setup', 'ready', 'recovery', 'cancelled', 'complete'].includes(response.phase));
+        assert.ok(
+          ['setup', 'ready', 'recovery', 'settling', 'cancelled', 'complete'].includes(
+            response.phase,
+          ),
+        );
         assert.ok([0, 1].includes(response.continuations));
         assert.equal(typeof response.cancelled, 'boolean');
         assert.deepEqual(
@@ -1024,7 +1151,7 @@ function boundDriver(directory, identity, originalLaunch, originalMetadata) {
   }
   return { launched, expected };
 }
-const phases = ['unobserved', 'setup', 'ready', 'recovery', 'cancelled', 'complete'];
+const phases = ['unobserved', 'setup', 'ready', 'recovery', 'settling', 'cancelled', 'complete'];
 const rpcBudget = (deadline, code) => {
   const budget = Math.min(2500, remaining(deadline));
   assert.ok(budget > 0, code);
@@ -1088,7 +1215,12 @@ export async function observeRecoveryPhase(directory, predicate, budgetMs, ident
 
 /** Idempotent cancel may have arrived despite a lost response. Observe/drain
  * the same birth within one existing total budget; never retry continuation. */
-export async function settleRecoveryDriver(directory, identity, budgetMs = 180_000) {
+export async function settleRecoveryDriver(
+  directory,
+  identity,
+  budgetMs = 180_000,
+  naturalCompletion = false,
+) {
   phaseBudget(budgetMs, 180_000);
   const began = performance.now(),
     deadline = began + budgetMs;
@@ -1112,8 +1244,22 @@ export async function settleRecoveryDriver(directory, identity, budgetMs = 180_0
       assert.ok(remaining(deadline) > 0, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
       if (bound.expected && !cleanup.cancelSent) {
         metadata ??= bound.expected;
-        cleanup.cancelAttempted = true;
         try {
+          if (naturalCompletion) {
+            const state = await handoffRequest(
+              directory,
+              'status',
+              metadata,
+              rpcBudget(deadline, 'PROOF_DRIVER_CLEANUP_UNVERIFIED'),
+            );
+            boundDriver(directory, identity, launch, metadata);
+            if (['settling', 'complete'].includes(state.phase)) {
+              cleanup.phase = state.phase;
+              await boundedSleep(deadline);
+              continue;
+            }
+          }
+          cleanup.cancelAttempted = true;
           const state = await handoffRequest(
             directory,
             'cancel',
@@ -1133,6 +1279,15 @@ export async function settleRecoveryDriver(directory, identity, budgetMs = 180_0
       await boundedSleep(deadline);
     }
     cleanup.driverExited = true;
+    if (naturalCompletion) {
+      const final = privateJson(join(directory, 'final-driver.json'));
+      assertIdentity(final.identity, identity);
+      assert.deepEqual(final.birth, launch.birth);
+      assert.equal(final.phase, 'complete');
+      assert.equal(final.cancelled, false);
+      assert.equal(final.continuations, 1);
+      cleanup.finalDriverVerified = true;
+    }
     return cleanup;
   } catch (error) {
     cleanup.failure = safeFailure(error);
@@ -1140,6 +1295,10 @@ export async function settleRecoveryDriver(directory, identity, budgetMs = 180_0
   } finally {
     cleanup.elapsedMs = Math.round(performance.now() - began);
     if (launch) cleanup.driverExited = !birthCurrent(launch.birth);
+    if (naturalCompletion && !cleanup.driverExited) {
+      cleanup.operationSettlementUnverified = true;
+      cleanup.lockRetained = true;
+    }
     // observation.json contains only fixed phase/codes and the exact launched
     // birth, never the socket path, environment or raw transport exception.
     try {
@@ -1173,24 +1332,62 @@ export async function settleRecoveryDriver(directory, identity, budgetMs = 180_0
 }
 async function driver(command, directory) {
   const identity = candidateIdentity();
+  const editing = command.startsWith('editing-');
+  if (editing) command = command.slice('editing-'.length);
+  const anchor = editing ? readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR) : undefined;
+  if (editing && command === 'start') {
+    requireEditingBudget(anchor, 'setup', 1);
+    requireEditingBudget(anchor, 'cleanup', 2_460_000);
+  }
   if (command === 'start') {
     privateDirectory(directory, true);
     const child = spawn(process.execPath, ['scripts/live-production-entrypoint-proof.mjs'], {
-      env: { ...process.env, LIVE_PRODUCTION_RECOVERY_CHANNEL: directory },
+      env: {
+        ...process.env,
+        LIVE_PRODUCTION_RECOVERY_CHANNEL: directory,
+        ...(editing ? { LIVE_PRODUCTION_EDIT_CONTINUITY: '1' } : {}),
+      },
       stdio: 'ignore',
       detached: true,
     });
     child.on('error', () => {});
     child.unref();
     writeJson(join(directory, 'launched.json'), { identity, birth: processBirth(child.pid) });
-    await observeRecoveryPhase(directory, (state) => state.phase === 'ready', 1_800_000, identity);
+    await observeRecoveryPhase(
+      directory,
+      (state) => state.phase === 'ready',
+      editing ? Math.min(1_260_000, editingRemaining(anchor, 'accepted')) : 1_800_000,
+      identity,
+    );
   } else if (command === 'continue') {
+    if (editing) requireEditingBudget(anchor, 'action', 1_020_000);
     const expected = privateJson(join(directory, 'driver.json'));
     assertIdentity(expected.identity, identity);
     const launched = privateJson(join(directory, 'launched.json'));
     assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
-    const until = performance.now() + 1_800_000;
+    const until =
+      performance.now() +
+      (editing ? Math.min(1_020_000, editingRemaining(anchor, 'action')) : 1_800_000);
     await handoffRequest(directory, 'continue', expected, Math.min(2500, remaining(until)));
+    if (editing) {
+      try {
+        await observeRecoveryPhase(
+          directory,
+          (state) => ['settling', 'complete'].includes(state.phase),
+          Math.max(1, remaining(until)),
+          identity,
+        );
+      } catch (error) {
+        if (error.message !== 'PROOF_DRIVER_EXITED') throw error;
+        const final = privateJson(join(directory, 'final-driver.json'));
+        assertIdentity(final.identity, identity);
+        assert.deepEqual(final.birth, expected.birth);
+        assert.equal(final.phase, 'complete');
+        assert.equal(final.cancelled, false);
+        assert.equal(final.continuations, 1);
+      }
+      return;
+    }
     while (birthCurrent(expected.birth) && remaining(until) > 0) await boundedSleep(until);
     assert.equal(birthCurrent(expected.birth), false, 'PROOF_DRIVER_PHASE_DEADLINE');
     const final = privateJson(join(directory, 'final-driver.json'));
@@ -1201,13 +1398,30 @@ async function driver(command, directory) {
     assert.equal(final.continuations, 1);
   } else {
     assert.equal(command, 'cleanup');
-    await settleRecoveryDriver(directory, identity);
+    await settleRecoveryDriver(
+      directory,
+      identity,
+      editing ? Math.max(1, Math.min(180_000, editingRemaining(anchor, 'cleanup'))) : 180_000,
+      editing,
+    );
   }
 }
 async function main() {
   const [command, argument, output] = process.argv.slice(2);
-  if (['start', 'continue', 'cleanup'].includes(command)) return driver(command, resolve(argument));
-  if (command === 'receipt')
+  if (
+    [
+      'start',
+      'continue',
+      'cleanup',
+      'editing-start',
+      'editing-continue',
+      'editing-cleanup',
+    ].includes(command)
+  )
+    return driver(command, resolve(argument));
+  if (command === 'receipt') {
+    if (process.env.LIVE_PRODUCTION_PROOF_LANE === 'accept-steer')
+      requireEditingBudget(readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR), 'artifacts', 1);
     return writeLaneReceipt(
       process.env.LIVE_PRODUCTION_PROOF_LANE,
       resolve(argument),
@@ -1215,6 +1429,7 @@ async function main() {
       process.env.LIVE_PROOF_MODE ?? 'full',
       process.env.LIVE_PROOF_VERIFICATION_SCOPE || undefined,
     );
+  }
   assert.ok(['aggregate', 'aggregate-diagnostic'].includes(command));
   const identity = candidateIdentity(),
     packets = {};

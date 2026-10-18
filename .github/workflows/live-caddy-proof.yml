@@ -85,6 +85,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: Anchor immutable editing job clock before checkout
+        if: matrix.lane == 'accept-steer'
+        run: |
+          node --input-type=module <<'NODE'
+          import {writeFileSync,readFileSync} from 'node:fs';
+          writeFileSync(process.env.RUNNER_TEMP+'/live-edit-job-anchor.json',JSON.stringify({boot:readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim(),monotonicNs:process.hrtime.bigint().toString()}),{mode:0o600,flag:'wx'});
+          NODE
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -350,7 +357,7 @@ jobs:
           set -Eeuo pipefail
           node scripts/live-remote-proof.mjs
       - name: Sole production admission and real picker editing through Native
-        if: matrix.lane != 'independent' && matrix.lane != 'recovery'
+        if: matrix.lane != 'independent' && matrix.lane != 'recovery' && matrix.lane != 'accept-steer'
         # Installed-source phase budgets are bounded in the adapter; this is a
         # separate aggregate hosted-proof cap, not permission to retry phases.
         timeout-minutes: 30
@@ -375,6 +382,53 @@ jobs:
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs scripts/live-picker-smoke.test.mjs scripts/live-production-proof-lanes.test.mjs
           mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
           PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
+      - name: 'Accept editing phase A: authentic admission Generate Accept and disconnect'
+        if: matrix.lane == 'accept-steer'
+        # Explicit proof allocation A1260+B1020+cleanup180; product caps unchanged.
+        timeout-minutes: 21
+        env:
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ steps.proof-mode.outputs.mode == 'preflight' && '1' || '0' }}
+          LIVE_PRODUCTION_ADMISSION_SEED: ${{ contains(github.event.head_commit.message, '[seeded-admission]') && '1' || '0' }}
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ steps.proof-mode.outputs.mode == 'preflight' && '0' || '1' }}
+          LIVE_PRODUCTION_PICKER_SMOKE: ${{ (steps.proof-mode.outputs.mode == 'picker-smoke' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && '1' || '0' }}
+          LIVE_PRODUCTION_PICKER_DIAGNOSTIC: ${{ steps.proof-mode.outputs.mode == 'picker-diagnostic' && '1' || '0' }}
+          LIVE_PICKER_SMOKE_RECEIPT: test-results/live-caddy-proof/picker-smoke-baseline.json
+          LIVE_PRODUCTION_PROOF_LANE: ${{ steps.proof-mode.outputs.mode == 'full' && matrix.lane || '' }}
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_INSTALLATION_ONLY: '0'
+          LIVE_PRODUCTION_CONSTRUCTION_ONLY: '0'
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          native_binary="$LIVE_HOST_CODEX_BINARY"
+          export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
+          node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs scripts/live-picker-smoke.test.mjs scripts/live-production-proof-lanes.test.mjs
+          mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
+          PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node scripts/live-production-proof-lanes.mjs editing-start "$RUNNER_TEMP/live-edit-continuity"
+      - name: 'Accept editing phase B: one Resume and real Steer on same owner'
+        if: matrix.lane == 'accept-steer'
+        timeout-minutes: 17
+        env:
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: PATH=/usr/bin:/bin /usr/bin/node scripts/live-production-proof-lanes.mjs editing-continue "$RUNNER_TEMP/live-edit-continuity"
+      - name: Always settle exact editing driver without replay
+        if: always() && matrix.lane == 'accept-steer'
+        timeout-minutes: 3
+        env:
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -f "$RUNNER_TEMP/live-edit-continuity/launched.json" ]]; then
+            cleanup_status=0
+            PATH=/usr/bin:/bin /usr/bin/node scripts/live-production-proof-lanes.mjs editing-cleanup "$RUNNER_TEMP/live-edit-continuity" || cleanup_status=$?
+            cp "$RUNNER_TEMP/live-edit-continuity/cleanup.json" test-results/live-caddy-proof/editing-driver-cleanup.json
+            exit "$cleanup_status"
+          fi
       - name: Fresh owning recovery chain setup and authentic Start
         if: matrix.lane == 'recovery'
         timeout-minutes: 30
@@ -430,15 +484,36 @@ jobs:
           LIVE_PROOF_MODE: ${{ steps.proof-mode.outputs.mode }}
           LIVE_PROOF_VERIFICATION_SCOPE: ${{ needs.proof-selection.outputs.verification-scope }}
 
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
           LIVE_PRODUCTION_PROOF_LANE: ${{ matrix.lane }}
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/live-production-proof-lanes.mjs receipt test-results/live-caddy-proof
+      - name: Check fixed editing artifact allocation before upload
+        if: always() && matrix.lane == 'accept-steer'
+        env:
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+        run: |
+          node --input-type=module <<'NODE'
+          import {readEditingAnchor} from './scripts/live-production-proof-lanes.mjs';
+          import {requireEditingBudget} from './scripts/live-production-edit-diagnostics.mjs';
+          requireEditingBudget(readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR),'artifacts',1);
+          NODE
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: ${{ (needs.proof-selection.outputs.mode == 'full' || needs.proof-selection.outputs.mode == 'picker-diagnostic' || needs.proof-selection.outputs.mode == 'independent-only') && format('live-caddy-proof-{0}', matrix.lane) || 'live-caddy-proof' }}
           path: test-results/live-caddy-proof
           if-no-files-found: error
+      - name: Require editing artifacts inside original allocation
+        if: always() && matrix.lane == 'accept-steer'
+        env:
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+        run: |
+          node --input-type=module <<'NODE'
+          import {readEditingAnchor} from './scripts/live-production-proof-lanes.mjs';
+          import {requireEditingBudget} from './scripts/live-production-edit-diagnostics.mjs';
+          requireEditingBudget(readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR),'artifacts',1);
+          NODE
   full-coverage:
     needs: [proof-selection, native-proof]
     if: always() && needs.proof-selection.outputs.mode == 'full' && needs.proof-selection.outputs.verification-scope != 'editing-only'

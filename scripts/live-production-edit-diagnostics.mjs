@@ -6,6 +6,83 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+// Explicit test allocation, not a product lease or authority. All offsets are
+// relative to one runner monotonic anchor; a continuation cannot reset them.
+export const editingSchedule = Object.freeze({
+  setup: 120_000,
+  accepted: 1_380_000,
+  action: 2_400_000,
+  cleanup: 2_580_000,
+  artifacts: 2_640_000,
+  job: 2_700_000,
+  resume: 720_000,
+  reopenedBrowser: 300_000,
+});
+export function editingRemaining(anchor, phase, now = process.hrtime.bigint()) {
+  if (
+    !anchor ||
+    !/^[0-9]{1,24}$/.test(anchor.monotonicNs ?? '') ||
+    !['setup', 'accepted', 'action', 'cleanup', 'artifacts', 'job'].includes(phase) ||
+    now < BigInt(anchor.monotonicNs)
+  )
+    throw new Error('PROOF_EDIT_CLOCK_INVALID');
+  return Math.max(
+    0,
+    Math.floor(editingSchedule[phase] - Number(now - BigInt(anchor.monotonicNs)) / 1e6),
+  );
+}
+export function requireEditingBudget(anchor, phase, minimum, now) {
+  const left = editingRemaining(anchor, phase, now);
+  if (!Number.isSafeInteger(minimum) || minimum <= 0 || left < minimum)
+    throw new Error('PROOF_EDIT_BUDGET_INSUFFICIENT');
+  return left;
+}
+export async function drainEditingFailure({ pending, record, stop }) {
+  record({ operationPending: !!pending, cleanupPending: true, lockRetained: true });
+  await pending?.catch(() => {});
+  return stop();
+}
+export function editingLeaseCapacity(status, generation, now = Date.now()) {
+  return (
+    Number.isSafeInteger(generation) &&
+    generation > 0 &&
+    status?.generation === generation &&
+    Math.min(Date.parse(status.leaseExpiresAt), Date.parse(status.absoluteExpiresAt)) - now >=
+      195_000
+  );
+}
+/** One observation of the actual cookie's lease, immediately before UI dispatch.
+ * Neither a peer's valid lease nor a hoped-for future renewal supplies capacity. */
+export async function observeEditingSteer({
+  observeContinuity,
+  readLease,
+  submit,
+  generation,
+  hostDeadline,
+  now = Date.now,
+}) {
+  await observeContinuity();
+  const lease = await readLease();
+  const sampledAt = now();
+  if (!editingLeaseCapacity(lease, generation, sampledAt))
+    throw new Error('PROOF_EDIT_LEASE_INSUFFICIENT');
+  const deadline =
+    Math.min(hostDeadline, Date.parse(lease.leaseExpiresAt), Date.parse(lease.absoluteExpiresAt)) -
+    15_000;
+  if (deadline - sampledAt < 180_000) throw new Error('PROOF_EDIT_BUDGET_INSUFFICIENT');
+  return submit(deadline);
+}
+export function assertOldPreviewCookieDenied(response) {
+  let code;
+  try {
+    code = JSON.parse(response?.body).code;
+  } catch {
+    /* Fixed refusal below. */
+  }
+  if (response?.status !== 401 || code !== 'LIVE_AUTH_REQUIRED')
+    throw new Error('PROOF_OLD_COOKIE_NOT_DENIED');
+}
+
 /** Controlled proof errors only. Never retain URLs, cookie values or bearer-shaped strings. */
 export function safeBrowserFailure(message) {
   return String(message ?? '')

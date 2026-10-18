@@ -14,6 +14,7 @@ import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import {
   safeBrowserFailure,
+  observeEditingSteer,
   pickerChromeSnapshot,
   observePickerContinuity,
   withinProofObservation,
@@ -502,7 +503,11 @@ try {
     }),
   );
   checkpoint('preview-exchange');
-  assert.equal((await exchangeResponse).status(), 201);
+  const actualExchange = await exchangeResponse;
+  assert.equal(actualExchange.status(), 201);
+  const exchangedLease = await actualExchange.json();
+  assert.equal(exchangedLease.liveId, config.liveId);
+  assert.equal(exchangedLease.generation, config.generation);
   try {
     await preview.waitForURL(config.previewOrigin + '/', { waitUntil: 'commit' });
   } catch (error) {
@@ -549,6 +554,10 @@ try {
   await preview.waitForFunction(() => window.__productionHelperConnected === true);
   checkpoint('app-module-ready');
   await preview.waitForFunction(() => document.body?.dataset.productionHmr === 'original');
+  if (config.editingPhase === 'steer')
+    await preview
+      .getByRole('heading', { name: 'Production chosen variant', exact: true })
+      .waitFor();
   checkpoint('helper-connected');
   assert.equal(
     await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
@@ -591,7 +600,7 @@ try {
     await preview.getByRole('heading', { name: label, exact: true }).waitFor();
     actions.add('generate');
   };
-  let acceptContinuity;
+  let acceptContinuity, resumedSteerDeadline;
   const accept = async () => {
     // Starts BEFORE the first Accept observation/click, never reset by acknowledgement/navigation.
     const acceptDeadline = Math.min(
@@ -610,7 +619,7 @@ try {
     await observePicker('after-accept');
     await command('accepted', acceptDeadline);
     await observePicker('after-accept-ack');
-    if (!config.pickerSmoke)
+    if (!config.pickerSmoke && config.editingPhase !== 'accepted')
       acceptContinuity = await observePickerContinuity(preview, {
         deadline: acceptDeadline,
         heading: 'Production chosen variant',
@@ -620,14 +629,55 @@ try {
   const steer = async () => {
     checkpoint('picker-steer');
     await observePicker('before-steer');
-    await ui.submitSteer(preview, 'production steer: update the HMR marker');
-    await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
-      timeout: modelEffectTimeout,
+    const submit = async (deadline) => {
+      resumedSteerDeadline = deadline;
+      if (resumedSteerDeadline)
+        assert.ok(
+          proofObservationRemaining(resumedSteerDeadline) >= 180_000,
+          'PROOF_EDIT_BUDGET_INSUFFICIENT',
+        );
+      await ui.submitSteer(preview, 'production steer: update the HMR marker');
+      await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
+        timeout: resumedSteerDeadline
+          ? Math.min(modelEffectTimeout, proofObservationRemaining(resumedSteerDeadline))
+          : modelEffectTimeout,
+      });
+      await ui.waitForSteerUnlocked(preview, {
+        timeout: resumedSteerDeadline
+          ? Math.min(modelEffectTimeout, proofObservationRemaining(resumedSteerDeadline))
+          : modelEffectTimeout,
+      });
+      assert.ok(hmrUpdates > 0);
+      await command('steered', resumedSteerDeadline);
+      actions.add('steer');
+    };
+    if (config.editingPhase !== 'steer') return submit();
+    return observeEditingSteer({
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      observeContinuity: async () => {
+        acceptContinuity = await observePickerContinuity(preview, {
+          deadline: Math.min(Date.now() + 30_000, config.observationHostDeadline - 195_000),
+          heading: 'Production chosen variant',
+        });
+      },
+      readLease: () =>
+        preview.evaluate(async (generation) => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) return null;
+          const lease = await response.json();
+          return {
+            generation,
+            leaseExpiresAt: lease.leaseExpiresAt,
+            absoluteExpiresAt: lease.absoluteExpiresAt,
+          };
+        }, exchangedLease.generation),
+      submit,
     });
-    await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
-    assert.ok(hmrUpdates > 0);
-    await command('steered');
-    actions.add('steer');
   };
   const manual = async () => {
     checkpoint('picker-manual-apply');
@@ -708,10 +758,18 @@ try {
   if (config.proofLane === 'manual-discard') {
     await manual();
     await discard();
+  } else if (config.editingPhase === 'steer') {
+    assert.equal(config.proofLane, 'accept-steer');
+    assert.ok(
+      config.observationHostDeadline - Date.now() >= 195_000,
+      'PROOF_EDIT_BUDGET_INSUFFICIENT',
+    );
+    await steer();
+    await background();
   } else {
     await generate('Production chosen variant');
     await accept();
-    if (!config.pickerSmoke) {
+    if (!config.pickerSmoke && config.editingPhase !== 'accepted') {
       await steer();
       if (config.proofLane !== 'accept-steer') {
         await manual();
@@ -731,8 +789,11 @@ try {
         separateBrowserMountNamespace: true,
         openThroughMobileControls: true,
         realPickerGenerateAccept: actions.has('generate') && actions.has('accept'),
-        acceptContinuity,
+        acceptContinuity: config.editingPhase ? undefined : acceptContinuity,
+        postResumeContinuity: config.editingPhase === 'steer' ? acceptContinuity : undefined,
         proofLane: config.proofLane || undefined,
+        editingPhase: config.editingPhase,
+        observedGeneration: config.generation,
         pickerSmoke: config.pickerSmoke === true,
         realPickerSteer: actions.has('steer'),
         realPickerManualApply: actions.has('manual'),

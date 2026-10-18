@@ -34,11 +34,21 @@ import {
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
+  editingSchedule,
+  editingRemaining,
+  requireEditingBudget,
+  drainEditingFailure,
+  editingLeaseCapacity,
+  observeEditingSteer,
+  assertOldPreviewCookieDenied,
 } from './live-production-edit-diagnostics.mjs';
 import { JSDOM } from 'jsdom';
 import { processBirth, birthCurrent } from './live-production-proof-lanes.mjs';
 import {
   createProductionEditProvider,
+  productionModelWorkload,
+  withoutProofInjection,
+  failureStopOperation,
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
 
@@ -1682,4 +1692,547 @@ test('independent image observer preserves first error identity and cleanup keep
     assert.ok(!JSON.stringify(copy).includes('secret-value'));
     assert.equal(copy.cleanupComplete, undefined);
   }
+});
+
+test('only exact manual lane selects owning edit-only work; other modes retain confinement', () => {
+  assert.equal(productionModelWorkload('manual-discard'), 'owning-edit-only');
+  for (const lane of ['', 'accept-steer', 'recovery'])
+    assert.equal(productionModelWorkload(lane), 'owning-edit-and-confinement');
+  assert.throws(() => productionModelWorkload('manual'));
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const identity = source.indexOf('assert.equal(metadata.session_id, owningNativeSession)');
+  const child = source.indexOf("assert.equal(role, 'root', 'MANUAL_UNEXPECTED_CHILD')");
+  const routing = source.indexOf(
+    "(productionModelWorkload(proofLane) === 'owning-edit-only' || step >= 7)",
+  );
+  assert.ok(identity > 0 && child > identity && routing > child);
+  assert.ok(source.slice(identity, routing).includes('liveEventFromRequest(body)'));
+  assert.ok(!source.includes('roles.set(role, 7)'));
+});
+
+test('actual entrypoint manual routing validates owning identity and performs one real patch/readback without probes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'l11-manual-entrypoint-'));
+  try {
+    const source = readFileSync(
+      new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+      'utf8',
+    );
+    const begin = source.indexOf('async function eventFor(body) {');
+    const end = source.indexOf('\nconst provider = createServer', begin);
+    assert.ok(begin > 0 && end > begin);
+    const manual = {
+      type: 'manual_edit_apply',
+      id: 'event',
+      batch: { entries: [{ id: 'entry', ops: [{ newText: 'Production manual approved' }] }] },
+    };
+    const create = () => {
+      const report = { provider: {} };
+      const emitted = [];
+      const planner = createProductionEditProvider(root, final, report, { lane: 'manual-discard' });
+      const factory = new Function(
+        'assert',
+        'productionModelWorkload',
+        'liveEventFromRequest',
+        'planner',
+        'report',
+        'emitted',
+        `
+        const proofLane='manual-discard', seed=false, editFlow=true;
+        const owningThread='thread',owningNativeSession='session';
+        let firstPickerEventId,firstPickerObservationStarted,contextCompletion,childThread;
+        const roles=new Map();
+        const hash=value=>value;
+        const toolsIn=tools=>tools;
+        const call=(tool,id,args)=>{emitted.push(tool.name);return {name:tool.name,args};};
+        const editResponse=planner;
+        ${source.slice(begin, end)}
+        return eventFor;
+      `,
+      );
+      return {
+        report,
+        emitted,
+        event: factory(
+          assert,
+          productionModelWorkload,
+          liveEventFromRequest,
+          planner,
+          report,
+          emitted,
+        ),
+      };
+    };
+    const request = (event = manual) => ({
+      ...body(event),
+      model: 'gpt-6-sol',
+      reasoning: { effort: 'medium' },
+      client_metadata: { thread_id: 'thread', session_id: 'session' },
+      tools: [{ name: 'apply_patch', type: 'custom' }],
+    });
+    writeFileSync(join(root, 'index.html'), '<h1>Owning app</h1>\n');
+    const f = create();
+    const patch = await f.event(request());
+    assert.deepEqual(f.emitted, ['apply_patch']);
+    simulatePatch(root, patch);
+    const result = await f.event(request());
+    assert.equal(result.status, 'done');
+    assert.deepEqual(result.appliedEntryIds, undefined);
+    assert.deepEqual(result.data.appliedEntryIds, ['entry']);
+    assert.deepEqual(f.emitted, ['apply_patch']);
+    assert.equal(f.report.modelWorkload, 'owning-edit-only');
+    assert.equal(f.report.provider.contextProtocol, undefined);
+    for (const mutate of [
+      (r) => {
+        r.client_metadata.thread_id = 'other';
+      },
+      (r) => {
+        r.client_metadata.session_id = 'other';
+      },
+      (r) => {
+        r.model = 'other';
+      },
+      (r) => {
+        r.reasoning.effort = 'low';
+      },
+      (r) => {
+        r.tools = [];
+      },
+    ]) {
+      writeFileSync(join(root, 'index.html'), '<h1>Owning app</h1>\n');
+      const bad = create(),
+        r = request();
+      mutate(r);
+      await assert.rejects(() => bad.event(r));
+      assert.deepEqual(bad.emitted, []);
+    }
+    writeFileSync(join(root, 'index.html'), '<h1>Owning app</h1>\n');
+    const changed = create();
+    simulatePatch(root, await changed.event(request()));
+    writeFileSync(join(root, 'index.html'), '<h1>unexpected mutation</h1>\n');
+    await assert.rejects(() => changed.event(request()));
+    assert.deepEqual(changed.emitted, ['apply_patch']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('failure Stop uses one exact fresh durable owner, joins real settlement and verifies restoration before cleanup', async () => {
+  const initial = {
+    run: {
+      liveId: 'live',
+      relayId: 'session',
+      rootThreadId: 'thread',
+      controllerEpoch: 'controller',
+      targetIdentity: 'target',
+      app: { device: '1', inode: '2' },
+      generation: 1,
+      state: 'active',
+    },
+    captureId: 'capture',
+  };
+  let current = structuredClone(initial),
+    calls = 0;
+  current.run.generation = 2;
+  current.run.state = 'recoveryRequired';
+  const evidence = [];
+  const attempt = failureStopOperation({
+    expected: initial,
+    read: () => structuredClone(current),
+    deadline: Date.now() + 1000,
+    evidence: (r) => evidence.push(r),
+    stop: async (fence) => {
+      calls++;
+      assert.deepEqual(fence, { liveId: 'live', generation: 2 });
+      current.run = { ...current.run, generation: 3, state: 'idle', controlsRestored: true };
+      return { state: 'idle' };
+    },
+    verify: async () => {
+      assert.equal(current.run.state, 'idle');
+    },
+  });
+  const operation = attempt();
+  assert.equal(attempt(), operation);
+  await operation.drain;
+  assert.equal(calls, 1);
+  assert.equal(operation.observed.drained, true);
+  assert.equal(operation.observed.verified, true);
+  assert.equal(evidence.at(-1).pending, false);
+});
+test('failure Stop refuses stale/mutated owners, captures and app identity before dispatch', async () => {
+  const expected = {
+    run: {
+      liveId: 'live',
+      relayId: 'session',
+      rootThreadId: 'thread',
+      controllerEpoch: 'controller',
+      targetIdentity: 'target',
+      app: { device: '1', inode: '2' },
+      generation: 1,
+      state: 'active',
+    },
+    captureId: 'capture',
+  };
+  for (const mutate of [
+    ...['liveId', 'relayId', 'rootThreadId', 'controllerEpoch', 'targetIdentity'].map(
+      (k) => (v) => {
+        v.run[k] = 'other';
+      },
+    ),
+    (v) => {
+      v.run.generation = 0;
+    },
+    (v) => {
+      v.captureId = 'other';
+    },
+    (v) => {
+      v.run.app.inode = 'other';
+    },
+    (v) => {
+      v.run.state = 'stopping';
+    },
+  ]) {
+    let calls = 0;
+    const value = structuredClone(expected);
+    mutate(value);
+    const operation = failureStopOperation({
+      expected,
+      read: () => value,
+      deadline: Date.now() + 1000,
+      evidence: () => {},
+      stop: async () => {
+        calls++;
+      },
+      verify: async () => {},
+    })();
+    await assert.rejects(() => operation.drain);
+    assert.equal(calls, 0);
+    assert.equal(operation.observed.verified, false);
+  }
+});
+test('expired failure Stop never dispatches and an in-flight expiry is not cancellation or drain', async () => {
+  const expected = {
+    run: {
+      liveId: 'live',
+      relayId: 'session',
+      rootThreadId: 'thread',
+      controllerEpoch: 'controller',
+      targetIdentity: 'target',
+      app: { device: '1', inode: '2' },
+      generation: 1,
+      state: 'active',
+    },
+    captureId: 'capture',
+  };
+  let calls = 0;
+  const expired = failureStopOperation({
+    expected,
+    read: () => expected,
+    deadline: Date.now() - 1,
+    evidence: () => {},
+    stop: async () => {
+      calls++;
+    },
+    verify: async () => {},
+  })();
+  await assert.rejects(() => expired.drain);
+  assert.equal(calls, 0);
+  let release;
+  const pending = new Promise((r) => (release = r));
+  let current = structuredClone(expected);
+  const evidence = [];
+  const attempt = failureStopOperation({
+    expected,
+    read: () => structuredClone(current),
+    deadline: Date.now() + 15,
+    evidence: (r) => evidence.push(r),
+    stop: async () => {
+      calls++;
+      await pending;
+      current.run.state = 'idle';
+      current.run.controlsRestored = true;
+      return { state: 'idle' };
+    },
+    verify: async () => {
+      assert.fail('late Stop cannot verify');
+    },
+  });
+  const operation = attempt();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(operation.observed.pending, true);
+  assert.equal(operation.observed.drained, false);
+  assert.equal(operation.observed.deadlineExceeded, true);
+  assert.equal(evidence.at(-1).pending, true);
+  release();
+  await assert.rejects(() => operation.drain, /PROOF_FAILURE_STOP_DEADLINE/);
+  assert.equal(operation.observed.drained, true);
+  assert.equal(operation.observed.verified, false);
+  assert.equal(calls, 1);
+  assert.equal(attempt(), operation);
+});
+test('failed or mutated late Stop/closure cannot replace original editing failure or claim cleanup', async () => {
+  const expected = {
+    run: {
+      liveId: 'live',
+      relayId: 'session',
+      rootThreadId: 'thread',
+      controllerEpoch: 'controller',
+      targetIdentity: 'target',
+      app: { device: '1', inode: '2' },
+      generation: 1,
+      state: 'active',
+    },
+    captureId: 'capture',
+  };
+  for (const kind of ['refusal', 'drain-timeout', 'wrong-result', 'closure', 'mutation']) {
+    const first = Error('ORIGINAL_EDIT_FAILURE');
+    const report = { failure: first };
+    let current = structuredClone(expected),
+      calls = 0;
+    const op = failureStopOperation({
+      expected,
+      read: () => structuredClone(current),
+      deadline: Date.now() + 1000,
+      evidence: (r) => {
+        report.failureStop = r;
+      },
+      stop: async () => {
+        calls++;
+        if (kind === 'refusal' || kind === 'drain-timeout') throw Error('STOP_REFUSED');
+        current.run.state = 'idle';
+        current.run.controlsRestored = true;
+        return { state: kind === 'wrong-result' ? 'active' : 'idle' };
+      },
+      verify: async () => {
+        if (kind === 'closure') throw Error('CLOSURE_UNVERIFIED');
+        if (kind === 'mutation') current.captureId = 'other';
+      },
+    })();
+    await assert.rejects(() => op.drain);
+    assert.equal(report.failure, first);
+    assert.equal(op.observed.verified, false);
+    assert.equal(calls, 1);
+  }
+});
+test('failure cleanup static source expectation matches actual pinned helper removal without erasing edits', () => {
+  const helper = process.env.LIVE_TEST_IMPECCABLE;
+  const root = mkdtempSync(join(tmpdir(), 'l11-cleanup-source-'));
+  try {
+    mkdirSync(join(root, '.impeccable/live'), { recursive: true });
+    writeFileSync(
+      join(root, '.impeccable/live/config.json'),
+      JSON.stringify({ files: ['index.html'], insertBefore: '</body>', commentSyntax: 'html' }),
+    );
+    writeFileSync(
+      join(root, 'index.html'),
+      '<html>\n<body>\n<h1>Edited app</h1>\n</body>\n</html>\n',
+    );
+    execFileSync(
+      helper,
+      ['live-inject', '--port', '8412', '--token', 'disposable-test-only', '--target', root],
+      { cwd: root, stdio: 'pipe' },
+    );
+    const expected = withoutProofInjection(readFileSync(join(root, 'index.html'), 'utf8'));
+    assert.ok(expected.includes('Edited app'));
+    execFileSync(helper, ['live-inject', '--remove', '--target', root], {
+      cwd: root,
+      stdio: 'pipe',
+    });
+    assert.equal(readFileSync(join(root, 'index.html'), 'utf8'), expected);
+    assert.throws(() => withoutProofInjection('<!-- impeccable-live-start -->unterminated'));
+    assert.throws(() => withoutProofInjection('<meta data-impeccable-csp-original="x">'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('editing clock propagates immutable absolute offsets and refuses late dispatch without resetting on navigation', () => {
+  const anchor = { monotonicNs: '1000000000' };
+  const at = (ms) => 1000000000n + BigInt(ms) * 1000000n;
+  assert.equal(editingSchedule.job, 2700000);
+  assert.equal(editingRemaining(anchor, 'setup', at(63520)), 56480);
+  assert.equal(editingRemaining(anchor, 'accepted', at(120000)), 1260000);
+  assert.equal(editingRemaining(anchor, 'action', at(1380000)), 1020000);
+  assert.equal(requireEditingBudget(anchor, 'action', 1020000, at(1380000)), 1020000);
+  assert.throws(() => requireEditingBudget(anchor, 'action', 1020000, at(1380001)), /INSUFFICIENT/);
+  assert.equal(editingRemaining(anchor, 'action', at(2400000)), 0);
+  assert.equal(editingRemaining(anchor, 'cleanup', at(2400000)), 180000);
+  assert.equal(editingRemaining(anchor, 'artifacts', at(2580000)), 60000);
+  assert.throws(() => editingRemaining(anchor, 'action', 1n), /CLOCK_INVALID/);
+  assert.throws(
+    () => editingRemaining({ monotonicNs: 'secret' }, 'action', at(0)),
+    /CLOCK_INVALID/,
+  );
+  assert.throws(() => editingRemaining(anchor, 'reset', at(0)), /CLOCK_INVALID/);
+  assert.throws(() => requireEditingBudget(anchor, 'setup', 1, at(120001)), /INSUFFICIENT/);
+});
+test('editing failure persists unresolved lock before joining actual operation; queued Stop is not cancellation', async () => {
+  for (const reject of [false, true]) {
+    let settle,
+      rows = [],
+      stopCalls = 0,
+      completed = false;
+    const pending = new Promise((resolve, failure) => {
+      settle = reject ? failure : resolve;
+    });
+    const drain = drainEditingFailure({
+      pending,
+      record: (row) => rows.push(row),
+      stop: async () => {
+        stopCalls++;
+      },
+    });
+    drain.then(() => {
+      completed = true;
+    });
+    await new Promise((done) => setTimeout(done, 15));
+    assert.deepEqual(rows, [{ operationPending: true, cleanupPending: true, lockRetained: true }]);
+    assert.equal(completed, false);
+    assert.equal(stopCalls, 0);
+    settle(new Error('private-token-must-not-be-retained'));
+    await drain;
+    assert.equal(stopCalls, 1);
+    assert.equal(JSON.stringify(rows).includes('private-token'), false);
+  }
+});
+
+test('resumed Steer uses BOTH current-cookie expiries; short sliding expiry cannot borrow a long absolute or peer lease', () => {
+  const now = 1000000;
+  const lease = {
+    generation: 3,
+    leaseExpiresAt: new Date(now + 300000).toISOString(),
+    absoluteExpiresAt: new Date(now + 3600000).toISOString(),
+  };
+  assert.equal(editingLeaseCapacity(lease, 3, now), true);
+  for (const mutate of [
+    (v) => {
+      v.generation = 2;
+    },
+    (v) => {
+      v.leaseExpiresAt = new Date(now + 1000).toISOString();
+    },
+    (v) => {
+      v.leaseExpiresAt = new Date(now + 194999).toISOString();
+    },
+    (v) => {
+      v.absoluteExpiresAt = new Date(now + 194999).toISOString();
+    },
+    (v) => {
+      v.absoluteExpiresAt = 'invalid';
+    },
+    (v) => {
+      v.leaseExpiresAt = 'invalid';
+    },
+  ]) {
+    const value = structuredClone(lease);
+    mutate(value);
+    assert.equal(editingLeaseCapacity(value, 3, now), false);
+  }
+  assert.equal(
+    editingLeaseCapacity({ state: 'active', generation: 3, leases: [lease] }, 3, now),
+    false,
+  );
+});
+test('actual Steer observation path reads fresh cookie lease AFTER continuity and clamps sliding absolute and host deadlines before submit', async () => {
+  for (const [sliding, absolute, host] of [
+    [250000, 350000, 400000],
+    [350000, 250000, 400000],
+    [350000, 350000, 250000],
+  ]) {
+    let now = 1000000,
+      reads = 0,
+      submits = 0;
+    const trace = [];
+    const deadline = await observeEditingSteer({
+      generation: 3,
+      hostDeadline: now + host,
+      now: () => now,
+      observeContinuity: async () => {
+        trace.push('continuity');
+        now += 30000;
+      },
+      readLease: async () => {
+        trace.push('current-cookie');
+        reads++;
+        return {
+          generation: 3,
+          leaseExpiresAt: new Date(1000000 + sliding).toISOString(),
+          absoluteExpiresAt: new Date(1000000 + absolute).toISOString(),
+        };
+      },
+      submit: (value) => {
+        trace.push('submitSteer');
+        submits++;
+        return value;
+      },
+    });
+    assert.deepEqual(trace, ['continuity', 'current-cookie', 'submitSteer']);
+    assert.equal(reads, 1);
+    assert.equal(submits, 1);
+    assert.equal(deadline, 1000000 + Math.min(sliding, absolute, host) - 15000);
+  }
+});
+test('fresh post-continuity expiry or failed cookie observation refuses actual submit with no renewal retry', async () => {
+  for (const kind of [
+    'one-second-sliding',
+    'continuity-used-capacity',
+    'stale-generation',
+    'missing-cookie',
+    'read-failure',
+    'host-expiry',
+  ]) {
+    let now = 1000000,
+      reads = 0,
+      submits = 0;
+    const until = now + 300000;
+    await assert.rejects(
+      observeEditingSteer({
+        generation: 3,
+        hostDeadline: kind === 'host-expiry' ? now + 200000 : now + 400000,
+        now: () => now,
+        observeContinuity: async () => {
+          now += kind === 'continuity-used-capacity' ? 120000 : 30000;
+        },
+        readLease: async () => {
+          reads++;
+          if (kind === 'read-failure') throw new Error('COOKIE_OBSERVATION_FAILED');
+          if (kind === 'missing-cookie') return null;
+          return {
+            generation: kind === 'stale-generation' ? 2 : 3,
+            leaseExpiresAt: new Date(
+              kind === 'one-second-sliding' ? now + 1000 : until,
+            ).toISOString(),
+            absoluteExpiresAt: new Date(until + 3600000).toISOString(),
+          };
+        },
+        submit: () => {
+          submits++;
+        },
+      }),
+      /PROOF_EDIT_(LEASE_INSUFFICIENT|BUDGET_INSUFFICIENT)|COOKIE_OBSERVATION_FAILED/,
+    );
+    assert.equal(reads, 1);
+    assert.equal(submits, 0);
+  }
+});
+test('old cookie proof requires exact supported401 LIVE_AUTH_REQUIRED, never infrastructure failure or malformed response', () => {
+  assertOldPreviewCookieDenied({
+    status: 401,
+    body: JSON.stringify({ code: 'LIVE_AUTH_REQUIRED' }),
+  });
+  for (const response of [
+    undefined,
+    { status: 500, body: 'private transport error' },
+    { status: 503, body: JSON.stringify({ code: 'LIVE_AUTH_REQUIRED' }) },
+    { status: 200, body: JSON.stringify({ code: 'LIVE_AUTH_REQUIRED' }) },
+    { status: 401, body: 'not-json' },
+    { status: 401, body: JSON.stringify({ code: 'AUTH_REQUIRED' }) },
+    { status: 401, body: JSON.stringify({ error: 'LIVE_AUTH_REQUIRED' }) },
+  ])
+    assert.throws(
+      () => assertOldPreviewCookieDenied(response),
+      (error) => error.message === 'PROOF_OLD_COOKIE_NOT_DENIED',
+    );
 });

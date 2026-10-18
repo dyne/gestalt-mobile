@@ -23,11 +23,21 @@ export async function productionEditBrowser(input) {
     assert.equal(input.browser.eventObservationBudgetMs, 300_000);
   // Six serial event observation windows at the measured120s authority allowance,
   // plus180s for setup, manual draft, background and host-control exchanges.
-  const browserDeadlineMs = input.browser.startThroughControls
+  let browserDeadlineMs = input.browser.startThroughControls
     ? input.browser.startObservationBudgetMs + 60_000
     : input.browser.preflight
       ? 480_000
       : 6 * 120_000 + 180_000;
+  if (input.browser.editingPhase) {
+    assert.ok(['accepted', 'steer'].includes(input.browser.editingPhase));
+    assert.match(input.absoluteDeadlineNs, /^[0-9]{1,24}$/);
+    browserDeadlineMs = Math.min(
+      browserDeadlineMs,
+      input.browser.editingPhase === 'steer' ? 300_000 : 900_000,
+      Math.floor(Number(BigInt(input.absoluteDeadlineNs) - process.hrtime.bigint()) / 1e6),
+    );
+    assert.ok(browserDeadlineMs > 0, 'PROOF_EDIT_BUDGET_INSUFFICIENT');
+  }
   const namespace = `l11edit-${process.pid}`;
   const hostInterface = `leh${process.pid}`;
   const peerInterface = `leb${process.pid}`;
@@ -35,7 +45,11 @@ export async function productionEditBrowser(input) {
   const browserAddress = '10.231.20.2';
   const home = join(
     input.privateRoot,
-    input.browser.startThroughControls ? 'controls-start-browser' : 'edit-browser',
+    input.browser.startThroughControls
+      ? 'controls-start-browser'
+      : input.browser.editingPhase
+        ? `edit-browser-${input.browser.editingPhase}`
+        : 'edit-browser',
   );
   mkdirSync(join(home, '.pki/nssdb'), { recursive: true, mode: 0o700 });
   mkdirSync(join(home, 'tmp'), { mode: 0o700 });
@@ -89,7 +103,14 @@ export async function productionEditBrowser(input) {
       .toString()
       .trim();
     assert.notEqual(serverNetwork, browserNetwork);
-    const observationHostDeadline = Date.now() + browserDeadlineMs;
+    const observationHostDeadline = Math.min(
+      Date.now() + browserDeadlineMs,
+      input.absoluteDeadlineNs
+        ? Date.now() +
+            Math.floor(Number(BigInt(input.absoluteDeadlineNs) - process.hrtime.bigint()) / 1e6)
+        : Infinity,
+    );
+    assert.ok(observationHostDeadline > Date.now(), 'PROOF_EDIT_BUDGET_INSUFFICIENT');
     const configPath = join(home, 'browser.json');
     writeFileSync(
       configPath,
@@ -322,6 +343,7 @@ export async function productionEditBrowser(input) {
               assert.ok(
                 [
                   'accepted',
+                  'steered',
                   'manual-poll-observed',
                   'manual-commit-observed',
                   'manual-applied',

@@ -47,12 +47,20 @@ import {
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
+  editingSchedule,
+  editingRemaining,
+  requireEditingBudget,
+  drainEditingFailure,
+  assertOldPreviewCookieDenied,
 } from './live-production-edit-diagnostics.mjs';
 import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
 import { PollLiveEvents } from '../dist/server/server/features/live-design/application/poll-events.js';
 import { IsolatedLiveHelper } from '../dist/server/server/platform/live-design/isolated-live-helper.js';
 import {
   createProductionEditProvider,
+  productionModelWorkload,
+  withoutProofInjection,
+  failureStopOperation,
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
@@ -62,6 +70,7 @@ import {
   openRecoveryHandoff,
   birthCurrent,
   productionLane,
+  readEditingAnchor,
 } from './live-production-proof-lanes.mjs';
 import {
   NativeContextCompletion,
@@ -126,9 +135,23 @@ assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
 const proofLane = productionLane(process.env.LIVE_PRODUCTION_PROOF_LANE);
+const editingContinuity = process.env.LIVE_PRODUCTION_EDIT_CONTINUITY === '1';
+assert.equal(editingContinuity, proofLane === 'accept-steer');
+const editingAnchor = editingContinuity
+  ? readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR)
+  : undefined;
+const editingDeadline = (phase) =>
+  (BigInt(editingAnchor.monotonicNs) + BigInt(editingSchedule[phase]) * 1_000_000n).toString();
+const assertEditingClock = () => {
+  readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR, editingAnchor);
+  recoveryHandoff?.assertCurrent();
+};
 assert.ok(!proofLane || (!pickerSmoke && !preflightOnly));
 assert.ok(!proofLane || (proofLane === 'recovery' ? recoveryOnly : editFlow));
-assert.equal(Boolean(process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL), proofLane === 'recovery');
+assert.equal(
+  Boolean(process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL),
+  proofLane === 'recovery' || editingContinuity,
+);
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
 );
@@ -775,7 +798,20 @@ const checkpoint = setInterval(() => {
 }, 5000);
 checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
-let recoveryHandoff, mobileClose;
+let recoveryHandoff, mobileClose, failureCleanupStop;
+let editingRaw, editingActionTimer, editingCleanupTimer, editingStopped, editingLatestCaptureId;
+let editingStopSettled = false;
+async function trackedEditingOperation(operation) {
+  if (!editingContinuity) return operation;
+  assert.equal(editingRaw, undefined, 'PROOF_EDIT_OPERATION_OVERLAP');
+  editingRaw = operation;
+  try {
+    return await operation;
+  } finally {
+    editingRaw = undefined;
+  }
+}
+
 async function closeMobileOnce() {
   if (!mobile) return;
   mobileClose ??= mobile.close();
@@ -1063,6 +1099,10 @@ async function eventFor(body) {
   }
   assert.equal(metadata.session_id, owningNativeSession);
   const role = metadata.thread_id === owningThread ? 'root' : 'child';
+  if (productionModelWorkload(proofLane) === 'owning-edit-only') {
+    assert.equal(role, 'root', 'MANUAL_UNEXPECTED_CHILD');
+    report.modelWorkload = 'owning-edit-only';
+  }
   if (editFlow && role === 'root') {
     const event = liveEventFromRequest(body);
     firstPickerEventId ??= event.id;
@@ -1102,7 +1142,12 @@ async function eventFor(body) {
       true,
     );
   };
-  if (editFlow && role === 'root' && step >= 7) return editResponse(body, toolCall);
+  if (
+    editFlow &&
+    role === 'root' &&
+    (productionModelWorkload(proofLane) === 'owning-edit-only' || step >= 7)
+  )
+    return editResponse(body, toolCall);
   if (step === 1) {
     const output = body.input.find(
       (x) =>
@@ -1521,16 +1566,51 @@ try {
     managerTree: '349182948619bbbeab892c9884cfb06badf13997',
     manager: LIVE_MANAGER_SHA256,
   };
-  if (proofLane === 'recovery')
+  if (proofLane === 'recovery' || editingContinuity)
     recoveryHandoff = await openRecoveryHandoff({
       directory: process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
       socketDirectory: privateRoot,
       identity: candidateIdentity(),
       onCancel: async () => {
         stopPreviewProbe();
+        if (editingContinuity) {
+          await drainEditingFailure({
+            pending: editingRaw,
+            record: (row) => {
+              report.editingUnresolved = row;
+              writeFileSync(join(evidence, 'editing-unresolved.json'), JSON.stringify(row));
+            },
+            stop: async () => {
+              if (failureCleanupStop) await failureCleanupStop();
+            },
+          });
+        }
         await closeMobileOnce();
       },
     });
+  if (editingContinuity) {
+    requireEditingBudget(editingAnchor, 'accepted', 1_260_000);
+    editingActionTimer = setTimeout(
+      () => {
+        void recoveryHandoff.cancel().catch(() => {});
+      },
+      editingRemaining(editingAnchor, 'action'),
+    );
+    editingCleanupTimer = setTimeout(
+      () => {
+        report.editingUnresolved = {
+          operationPending: !!editingRaw || (!!editingStopped && !editingStopSettled),
+          cleanupPending: report.cleanupStage !== 'settled',
+          lockRetained: report.cleanupStage !== 'settled',
+        };
+        writeFileSync(
+          join(evidence, 'editing-unresolved.json'),
+          JSON.stringify(report.editingUnresolved),
+        );
+      },
+      editingRemaining(editingAnchor, 'cleanup'),
+    );
+  }
   report.installationStage = 'vendor-copy';
   const vendor = join(installation, 'vendor');
   cpSync(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY)), join(vendor, 'bin'), {
@@ -2114,24 +2194,26 @@ try {
   const startAdmissionBegan = performance.now();
   let started;
   if (editFlow) {
-    await productionEditBrowser({
-      privateRoot,
-      certificate: join(caddyRoot, 'tls.pem'),
-      report,
-      browser: {
-        startThroughControls: true,
-        startObservationBudgetMs,
-        mobileOrigin,
-        sessionId: session.id,
-        sessionCookie: browserSession,
-        uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
-        resultFile: join(evidence, 'production-controls-start-browser.json'),
-        screenshot: join(evidence, 'production-controls-start.png'),
-      },
-      command: async () => {
-        throw new Error('START_BROWSER_COMMAND_UNAVAILABLE');
-      },
-    });
+    await trackedEditingOperation(
+      productionEditBrowser({
+        privateRoot,
+        certificate: join(caddyRoot, 'tls.pem'),
+        report,
+        browser: {
+          startThroughControls: true,
+          startObservationBudgetMs,
+          mobileOrigin,
+          sessionId: session.id,
+          sessionCookie: browserSession,
+          uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+          resultFile: join(evidence, 'production-controls-start-browser.json'),
+          screenshot: join(evidence, 'production-controls-start.png'),
+        },
+        command: async () => {
+          throw new Error('START_BROWSER_COMMAND_UNAVAILABLE');
+        },
+      }),
+    );
     report.mobileControlsStart = report.editBrowser;
     started = report.mobileControlsStart.startedRun;
     operation.operationId = report.mobileControlsStart.operationId;
@@ -2256,6 +2338,144 @@ try {
   assert.equal(reused.liveId, started.liveId);
   assert.equal(reused.generation, started.generation);
   report.checks.sameSessionReuseNoReplacement = true;
+  if (['accept-steer', 'manual-discard'].includes(proofLane)) {
+    const readOriginalOwner = () => {
+      const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const run = JSON.parse(
+          db.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+        );
+        assert.equal(run.relayId, session.id);
+        assert.equal(run.rootThreadId, owningThread);
+        assert.equal(run.app.device, String(statSync(appRoot).dev));
+        assert.equal(run.app.inode, String(statSync(appRoot).ino));
+        const currentManifest = JSON.parse(
+          readFileSync(join(generationDirectory, 'manifest.json')),
+        );
+        assert.equal(currentManifest.generation.sessionId, session.id);
+        assert.equal(currentManifest.generation.generation, started.generation);
+        assert.equal(currentManifest.appRoot, appRoot);
+        assert.equal(currentManifest.runtimeProvenance.captureId, captureId);
+        const admission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+        assert.equal(admission.captureId, captureId);
+        return { run, captureId: admission.captureId };
+      } finally {
+        db.close();
+      }
+    };
+    const readOwner = () => {
+      if (!editingContinuity) return readOriginalOwner();
+      const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const run = JSON.parse(
+          db.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+        );
+        assert.equal(run.relayId, session.id);
+        assert.equal(run.rootThreadId, owningThread);
+        assert.equal(run.app.device, String(statSync(appRoot).dev));
+        assert.equal(run.app.inode, String(statSync(appRoot).ino));
+        const admission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+        const directories = readdirSync(controller).filter((name) => name.startsWith('owner-'));
+        const matches = directories
+          .map((name) => join(controller, name))
+          .filter((directory) => {
+            const item = JSON.parse(readFileSync(join(directory, 'manifest.json')));
+            return item.runtimeProvenance.captureId === admission.captureId;
+          });
+        assert.equal(matches.length, 1);
+        const directory = matches[0];
+        const currentManifest = JSON.parse(readFileSync(join(directory, 'manifest.json')));
+        assert.equal(currentManifest.generation.sessionId, session.id);
+        assert.equal(currentManifest.generation.generation, admission.generation.generation);
+        assert.ok(currentManifest.generation.generation <= run.generation);
+        assert.equal(currentManifest.appRoot, appRoot);
+        const currentSealed = signed(join(directory, `runtime-${admission.captureId}.json`));
+        assert.equal(currentSealed.runtime.process.pid, sealed.runtime.process.pid);
+        assert.equal(currentSealed.runtime.process.birth, sealed.runtime.process.birth);
+        assert.equal(
+          currentSealed.inventory.observation.accountDigest,
+          sealed.inventory.observation.accountDigest,
+        );
+        assert.deepEqual(
+          currentSealed.inventory.observation.sessionFlags,
+          sealed.inventory.observation.sessionFlags,
+        );
+        if (!editingContinuity) {
+          assert.equal(directory, generationDirectory);
+          assert.equal(admission.captureId, captureId);
+        }
+        return { run, captureId: admission.captureId };
+      } finally {
+        db.close();
+      }
+    };
+    failureCleanupStop = () =>
+      (editingStopped ??= (async () => {
+        await editingRaw?.catch(() => {});
+        const expected = readOwner();
+        const deadline = editingContinuity
+          ? Date.now() + editingRemaining(editingAnchor, 'cleanup')
+          : JSON.parse(readFileSync(join(privateRoot, 'edit-browser/browser.json')))
+              .observationHostDeadline;
+        // No new observation budget: the original browser host deadline also
+        // bounds this failure reconciliation. Await actual Stop settlement, never
+        // confuse an observer expiry with cancelled controller work.
+        const expectedIndex = withoutProofInjection(
+          readFileSync(join(appRoot, 'index.html'), 'utf8'),
+        );
+        const expectedModule = hash(readFileSync(join(appRoot, 'app.js')));
+        const operation = failureStopOperation({
+          expected,
+          read: readOwner,
+          deadline,
+          evidence: (row) => {
+            report.failureStop = row;
+          },
+          stop: async (fence) => {
+            closureBoundary = 'closing';
+            if (!editingContinuity)
+              return api('POST', `/api/sessions/${session.id}/live/stop`, fence);
+            // This authenticated cleanup remains legal after driver cancellation;
+            // all model/Resume/launch paths still require the live driver fence.
+            const response = await mobile.inject({
+              method: 'POST',
+              url: `/api/sessions/${session.id}/live/stop`,
+              headers,
+              payload: fence,
+            });
+            assert.equal(response.statusCode, 200);
+            return response.json();
+          },
+          verify: async () => {
+            assert.equal(
+              signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
+              'revoked',
+            );
+            assert.equal(observedBirthExited(baselineBirth), true);
+            for (const process of projectProcesses.keys()) {
+              const proof = process.diagnostics();
+              assert.equal(proof.namespaceExited, true);
+              assert.equal(proof.pipeDescriptorsClosed, true);
+            }
+            assert.equal(
+              readFileSync(join(owningHome, 'config.toml'), 'utf8'),
+              installedOriginalConfig,
+            );
+            assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), expectedIndex);
+            assert.equal(hash(readFileSync(join(appRoot, 'app.js'))), expectedModule);
+            assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+            assert.equal(
+              readFileSync(join(appRoot, 'index.html'), 'utf8').includes('__IMPECCABLE_LIVE'),
+              false,
+            );
+          },
+        })();
+        await operation.drain;
+      })().finally(() => {
+        editingStopSettled = true;
+      }));
+  }
+
   if (preflightOnly) {
     assert.equal(report.provider.requestCount, seededPreflight ? 1 : 0);
     const catalogs = report.nativeLaunchLifetimes.flatMap((launch) => launch.owningCatalogs ?? []);
@@ -2488,135 +2708,328 @@ try {
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);
     browserEventLoop.enable();
-    await productionEditBrowser({
-      privateRoot,
-      certificate: join(caddyRoot, 'tls.pem'),
-      report,
-      checkpoint: (stage) => {
-        if (stage === 'picker-generate' || stage === 'picker-manual-apply')
-          firstPickerObservationStarted ??= performance.now();
-        if (stage === 'helper-connected') {
-          stopPreviewProbe();
-          report.checks.previewProbeHandedToActualBrowserConnection = true;
-        }
-      },
-      browser: {
-        mobileOrigin,
-        previewOrigin: preview,
-        sessionId: session.id,
-        liveId: started.liveId,
-        generation: started.generation,
-        helperTokenSha256: hash(token),
-        pickerSmoke,
-        proofLane,
-        eventObservationBudgetMs,
-        sessionCookie: browserSession,
-        uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
-        resultFile: join(evidence, 'production-edit-browser.json'),
-        screenshot: join(evidence, 'production-picker-edit.png'),
-      },
-      command: async (command, observation) => {
-        const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
-        if (command === 'manual-poll-observed') {
-          manualWaitDeadline = manualObservationDeadline(observation);
-          assert.equal(manualWaitDeadline, observation.deadline);
-          await until(
-            () => {
-              observedManualPoll = pendingCanonicalPoll(session.id, started.generation);
-              return !!observedManualPoll;
-            },
-            'PROOF_CANONICAL_POLL_OBSERVATION_DEADLINE',
-            proofObservationRemaining(manualWaitDeadline),
-            manualWaitDeadline,
-          );
-          report.manualPollObservation = observedManualPoll;
-          return observedManualPoll;
-        } else if (command === 'manual-commit-observed') {
-          const current = pendingCanonicalPoll(session.id, started.generation);
-          assert.ok(
-            current && current.sequence === observedManualPoll?.sequence,
-            'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
-          );
-          // The original480s reservation still covers manual150s + chain/UI/cleanup.
-          assert.ok(observation.hostDeadline - Date.now() >= 420_000, 'PROOF_MANUAL_CHAIN_BUDGET');
-          report.manualPollCommitObservation = current;
-          return current;
-        } else if (command === 'accepted') {
-          await acknowledged(
-            'accept',
-            observation
-              ? proofObservationRemaining(observation.deadline)
-              : eventObservationBudgetMs,
-            observation?.deadline,
-          );
-          assert.ok(source().includes('Production chosen variant'));
-          assert.ok(!source().includes('impeccable-variants-start'));
-        } else if (command === 'steered') {
-          await acknowledged('steer');
-          assert.ok(readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"));
-        } else if (command === 'manual-applied') {
-          await observeManualAcknowledgement(
-            () =>
-              acknowledged(
-                'manual_edit_apply',
-                proofObservationRemaining(observation.deadline),
-                observation.deadline,
-              ),
-            manualCanonicalObservations,
-            manualHistorySnapshot,
-          );
-          const db = new DatabaseSync(
-            join(
-              controller,
-              `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+    const runPicker = async (editingPhase) =>
+      trackedEditingOperation(
+        productionEditBrowser({
+          absoluteDeadlineNs: editingPhase
+            ? editingDeadline(editingPhase === 'accepted' ? 'accepted' : 'action')
+            : undefined,
+          privateRoot,
+          certificate: join(caddyRoot, 'tls.pem'),
+          report,
+          checkpoint: (stage) => {
+            if (stage === 'picker-generate' || stage === 'picker-manual-apply')
+              firstPickerObservationStarted ??= performance.now();
+            if (stage === 'helper-connected') {
+              stopPreviewProbe();
+              report.checks.previewProbeHandedToActualBrowserConnection = true;
+            }
+          },
+          browser: {
+            editingPhase,
+            mobileOrigin,
+            previewOrigin: preview,
+            sessionId: session.id,
+            liveId: started.liveId,
+            generation: started.generation,
+            helperTokenSha256: hash(
+              JSON.parse(readFileSync(join(appRoot, '.impeccable/live/server.json'))).token,
             ),
-            { readOnly: true },
-          );
-          try {
-            const items = db
-              .prepare('SELECT liveId,generation,record FROM live_event_inbox')
-              .all()
-              .map((row) => ({
-                ...JSON.parse(row.record),
-                liveId: row.liveId,
-                generation: row.generation,
-              }))
-              .filter((item) => item.kind === 'manual_edit_apply');
-            assert.equal(items.length, 1);
-            const item = items[0];
-            assert.equal(item.liveId, started.liveId);
-            assert.equal(item.generation, started.generation);
-            report.manualAcknowledgementObservation = verifyManualAcknowledgement({
-              ...observation.manual,
-              acknowledgedAt: Date.now(),
-              correlation: report.manualCanonicalCorrelation,
-              canonical: { ...item, eventDigest: hash(item.upstreamId) },
-            });
-          } finally {
-            db.close();
-          }
-          manualSource = source();
-          assert.ok(manualSource.includes('Production manual approved'));
-          assert.ok(
-            !/contenteditable|data-impeccable-editable|impeccable-variants-start/.test(
-              manualSource,
+            pickerSmoke,
+            proofLane,
+            eventObservationBudgetMs,
+            sessionCookie: browserSession,
+            uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+            resultFile: join(
+              evidence,
+              editingPhase
+                ? `production-edit-browser-${editingPhase}.json`
+                : 'production-edit-browser.json',
             ),
-          );
-        } else if (command === 'discarded') {
-          await acknowledged('discard');
-          assert.equal(source(), manualSource);
-        } else if (command === 'background-begin') {
-          backgroundSourceDigest = hash(source());
-          backgroundRequestCount = report.provider.requestCount;
-        } else if (command === 'background-finished') {
-          assert.equal(hash(source()), backgroundSourceDigest);
-          assert.equal(report.provider.requestCount, backgroundRequestCount);
-          const status = await api('GET', `/api/sessions/${session.id}/live`);
-          assert.ok(['active', 'recoveryRequired'].includes(status.state));
-          report.background = { state: status.state, noModelOrSourceEffect: true };
-        } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
-      },
-    });
+            screenshot: join(evidence, 'production-picker-edit.png'),
+          },
+          command: async (command, observation) => {
+            const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
+            if (command === 'manual-poll-observed') {
+              manualWaitDeadline = manualObservationDeadline(observation);
+              assert.equal(manualWaitDeadline, observation.deadline);
+              await until(
+                () => {
+                  observedManualPoll = pendingCanonicalPoll(session.id, started.generation);
+                  return !!observedManualPoll;
+                },
+                'PROOF_CANONICAL_POLL_OBSERVATION_DEADLINE',
+                proofObservationRemaining(manualWaitDeadline),
+                manualWaitDeadline,
+              );
+              report.manualPollObservation = observedManualPoll;
+              return observedManualPoll;
+            } else if (command === 'manual-commit-observed') {
+              const current = pendingCanonicalPoll(session.id, started.generation);
+              assert.ok(
+                current && current.sequence === observedManualPoll?.sequence,
+                'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
+              );
+              // The original480s reservation still covers manual150s + chain/UI/cleanup.
+              assert.ok(
+                observation.hostDeadline - Date.now() >= 420_000,
+                'PROOF_MANUAL_CHAIN_BUDGET',
+              );
+              report.manualPollCommitObservation = current;
+              return current;
+            } else if (command === 'accepted') {
+              await acknowledged(
+                'accept',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              assert.ok(source().includes('Production chosen variant'));
+              assert.ok(!source().includes('impeccable-variants-start'));
+            } else if (command === 'steered') {
+              await acknowledged(
+                'steer',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              assert.ok(
+                readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"),
+              );
+            } else if (command === 'manual-applied') {
+              await observeManualAcknowledgement(
+                () =>
+                  acknowledged(
+                    'manual_edit_apply',
+                    proofObservationRemaining(observation.deadline),
+                    observation.deadline,
+                  ),
+                manualCanonicalObservations,
+                manualHistorySnapshot,
+              );
+              const db = new DatabaseSync(
+                join(
+                  controller,
+                  `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+                ),
+                { readOnly: true },
+              );
+              try {
+                const items = db
+                  .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+                  .all()
+                  .map((row) => ({
+                    ...JSON.parse(row.record),
+                    liveId: row.liveId,
+                    generation: row.generation,
+                  }))
+                  .filter((item) => item.kind === 'manual_edit_apply');
+                assert.equal(items.length, 1);
+                const item = items[0];
+                assert.equal(item.liveId, started.liveId);
+                assert.equal(item.generation, started.generation);
+                report.manualAcknowledgementObservation = verifyManualAcknowledgement({
+                  ...observation.manual,
+                  acknowledgedAt: Date.now(),
+                  correlation: report.manualCanonicalCorrelation,
+                  canonical: { ...item, eventDigest: hash(item.upstreamId) },
+                });
+              } finally {
+                db.close();
+              }
+              manualSource = source();
+              assert.ok(manualSource.includes('Production manual approved'));
+              assert.ok(
+                !/contenteditable|data-impeccable-editable|impeccable-variants-start/.test(
+                  manualSource,
+                ),
+              );
+            } else if (command === 'discarded') {
+              await acknowledged('discard');
+              assert.equal(source(), manualSource);
+            } else if (command === 'background-begin') {
+              backgroundSourceDigest = hash(source());
+              backgroundRequestCount = report.provider.requestCount;
+            } else if (command === 'background-finished') {
+              assert.equal(hash(source()), backgroundSourceDigest);
+              assert.equal(report.provider.requestCount, backgroundRequestCount);
+              const status = await api('GET', `/api/sessions/${session.id}/live`);
+              assert.ok(['active', 'recoveryRequired'].includes(status.state));
+              report.background = { state: status.state, noModelOrSourceEffect: true };
+            } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
+          },
+        }),
+      );
+    await runPicker(editingContinuity ? 'accepted' : undefined);
+    if (editingContinuity) {
+      const phaseA = report.editBrowser;
+      assert.equal(phaseA.realPickerGenerateAccept, true);
+      assert.equal(phaseA.realPickerSteer, false);
+      assert.equal(report.editBrowserRemainingProcesses, 0);
+      stopPreviewProbe();
+      await probeRefresh;
+      const acceptedSource = hash(
+        withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8')),
+      );
+      const requestsBeforeResume = report.provider.requestCount;
+      let disconnected;
+      await until(
+        async () => {
+          disconnected = await api('GET', `/api/sessions/${session.id}/live`);
+          return disconnected.state === 'recoveryRequired';
+        },
+        'EDIT_GENUINE_DISCONNECT_DEADLINE',
+        Math.min(30_000, editingRemaining(editingAnchor, 'accepted')),
+      );
+      const disconnectDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const durable = JSON.parse(
+          disconnectDb.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId)
+            .record,
+        );
+        assert.equal(durable.failureCode, 'LIVE_BROWSER_DISCONNECTED');
+        assert.equal(durable.generation, disconnected.generation);
+        assert.equal(durable.rootThreadId, owningThread);
+      } finally {
+        disconnectDb.close();
+      }
+      const exitDb = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        const exits = exitDb
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+          .all()
+          .filter((row) => row.liveId === started.liveId && row.generation === started.generation)
+          .map((row) => JSON.parse(row.record))
+          .filter((row) => row.kind === 'exit');
+        assert.equal(exits.length, 1);
+        assert.equal(exits[0].stage, 'acknowledged');
+        assert.deepEqual(exits[0].history, ['received', 'dispatched', 'applied', 'acknowledged']);
+      } finally {
+        exitDb.close();
+      }
+      await until(
+        () =>
+          signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status === 'revoked',
+        'EDIT_DISCONNECT_REVOKE_DEADLINE',
+        Math.min(30_000, editingRemaining(editingAnchor, 'accepted')),
+      );
+      assert.equal(disconnected.liveId, started.liveId);
+      assert.ok(disconnected.generation > started.generation);
+      assert.equal(observedBirthExited(baselineBirth), false);
+      report.editingContinuity = {
+        kind: 'continuity-with-explicit-recovery',
+        phaseA,
+        originalGeneration: started.generation,
+        recoveryGeneration: disconnected.generation,
+        acceptedSourceDigest: acceptedSource,
+        originalNativeSurvived: true,
+        genuineBrowserClosed: true,
+        resumeDispatches: 0,
+        phaseAllocationMs: [1_260_000, 1_020_000, 180_000],
+        phaseATotalMs: recoveryHandoff.snapshot().phaseTimings.setupMs,
+      };
+      requireEditingBudget(editingAnchor, 'action', 1_020_000);
+      report.stage = 'editing-phase-ready';
+      await recoveryHandoff.boundary();
+      assertEditingClock();
+      requireEditingBudget(editingAnchor, 'action', 1_020_000);
+      report.stage = 'editing-explicit-resume';
+      report.editingContinuity.resumeDispatches++;
+      const resumeTimer = setTimeout(() => {
+        void recoveryHandoff.cancel().catch(() => {});
+      }, editingSchedule.resume);
+      try {
+        editingRaw = api('POST', `/api/sessions/${session.id}/live/resume`, {
+          liveId: disconnected.liveId,
+          generation: disconnected.generation,
+        });
+        started = await editingRaw;
+      } finally {
+        editingRaw = undefined;
+        clearTimeout(resumeTimer);
+      }
+      assertEditingClock();
+      assert.equal(started.state, 'active');
+      assert.equal(started.liveId, disconnected.liveId);
+      assert.ok(started.generation > disconnected.generation);
+      assert.equal(observedBirthExited(baselineBirth), false);
+      const selected = await api('GET', `/api/sessions/${session.id}`);
+      assert.equal(selected.threadId, owningThread);
+      assert.equal(selected.provider, session.provider);
+      assert.equal(selected.model, session.model);
+      assert.deepEqual(selected.modelSettings, session.modelSettings);
+      assert.equal(report.provider.requestCount, requestsBeforeResume);
+      assert.equal(
+        hash(withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8'))),
+        acceptedSource,
+      );
+      const currentAdmission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+      assert.equal(currentAdmission.status, 'sealed');
+      assert.equal(currentAdmission.generation.sessionId, session.id);
+      assert.equal(currentAdmission.generation.generation, started.generation);
+      const matches = readdirSync(controller)
+        .filter((name) => name.startsWith('owner-'))
+        .map((name) => join(controller, name))
+        .filter(
+          (path) =>
+            JSON.parse(readFileSync(join(path, 'manifest.json'))).runtimeProvenance.captureId ===
+            currentAdmission.captureId,
+        );
+      assert.equal(matches.length, 1);
+      const renewed = signed(join(matches[0], `runtime-${currentAdmission.captureId}.json`));
+      assert.equal(renewed.runtime.process.pid, sealed.runtime.process.pid);
+      assert.equal(renewed.runtime.process.birth, sealed.runtime.process.birth);
+      assert.equal(
+        renewed.inventory.observation.accountDigest,
+        sealed.inventory.observation.accountDigest,
+      );
+      assert.deepEqual(
+        renewed.inventory.observation.sessionFlags,
+        sealed.inventory.observation.sessionFlags,
+      );
+      editingLatestCaptureId = currentAdmission.captureId;
+      assert.notEqual(editingLatestCaptureId, captureId);
+      const deniedOldCookie = await remote('/__gestalt_live/lease', { method: 'POST', body: {} });
+      assertOldPreviewCookieDenied(deniedOldCookie);
+      const staleGrant = await mobile.inject({
+        method: 'POST',
+        url: `/api/sessions/${session.id}/live/launch-grants`,
+        headers,
+        payload: {
+          liveId: disconnected.liveId,
+          generation: report.editingContinuity.originalGeneration,
+          codeChallenge: previewSecrets.challenge(previewSecrets.token()),
+          codeChallengeMethod: 'S256',
+        },
+      });
+      assert.equal(staleGrant.statusCode, 409);
+      Object.assign(report.editingContinuity, {
+        resumedGeneration: started.generation,
+        newSignedCapture: true,
+        sameNativeThreadSelection: true,
+        noModelOrSourceReplay: true,
+        oldCookieDenied: true,
+        oldCookieDeniedStatus: 401,
+        oldCookieDeniedCode: 'LIVE_AUTH_REQUIRED',
+        staleGrantDenied: true,
+      });
+      requireEditingBudget(editingAnchor, 'action', 300_000);
+      report.stage = 'editing-resumed-steer';
+      await runPicker('steer');
+      report.editingContinuity.phaseB = report.editBrowser;
+      report.editBrowser = {
+        ...report.editBrowser,
+        realPickerGenerateAccept: phaseA.realPickerGenerateAccept,
+      };
+    }
     finishBrowserProfile();
     if (proofLane || pickerDiagnostic) {
       const required = pickerDiagnostic
@@ -2633,13 +3046,20 @@ try {
       );
       try {
         const records = db
-          .prepare('SELECT record FROM live_event_inbox')
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
           .all()
-          .map((row) => JSON.parse(row.record));
+          .filter((row) => row.liveId === started.liveId)
+          .map((row) => ({ ...JSON.parse(row.record), proofGeneration: row.generation }));
         report.laneCanonicalEvents = required.map((kind) => {
           const matches = records.filter((record) => record.kind === kind);
           assert.equal(matches.length, 1);
           assert.equal(matches[0].stage, 'acknowledged');
+          if (editingContinuity) {
+            const expectedGeneration =
+              kind === 'steer' ? started.generation : report.editingContinuity.originalGeneration;
+            assert.equal(matches[0].proofGeneration, expectedGeneration);
+            (report.editingContinuity.canonicalGenerations ??= {})[kind] = expectedGeneration;
+          }
           assert.deepEqual(matches[0].history, [
             'received',
             'dispatched',
@@ -2695,7 +3115,7 @@ try {
     report.modelEventStatus = event.status;
     assert.equal(event.status, 200);
   }
-  if (!recoveryOnly) {
+  if (!recoveryOnly && productionModelWorkload(proofLane) !== 'owning-edit-only') {
     await until(
       () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
       'PRODUCTION_MODEL_CHILD_DEADLINE',
@@ -2722,6 +3142,8 @@ try {
     report.checks.actualModelToolsAndChildInheritedConfinement = true;
     report.checks.nativeModelContextToolConfined = true;
     report.checks.futureControlDenialsAndArtifactCarveouts = true;
+  }
+  if (!recoveryOnly) {
     await until(() => {
       const db = new DatabaseSync(
         join(
@@ -2811,13 +3233,23 @@ try {
       },
     });
   }
+  if (editingContinuity) {
+    assertEditingClock();
+    requireEditingBudget(editingAnchor, 'action', 1);
+    clearTimeout(editingActionTimer);
+    report.editingContinuity.phaseBTotalMs = recoveryHandoff.snapshot().phaseTimings.recoveryMs;
+    report.editingContinuity.actionFinishedOffsetMs =
+      Number(process.hrtime.bigint() - BigInt(editingAnchor.monotonicNs)) / 1e6;
+    recoveryHandoff.finishActions();
+  }
   report.stage = 'revoke-and-production-shutdown';
   stopPreviewProbe();
+  if (editingContinuity) await failureCleanupStop();
   await closeMobileOnce();
   assert.equal(existsSync(join(controller, 'live-policy.key')), true);
   const fence = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
   assert.equal(fence.status, 'revoked');
-  assert.equal(fence.captureId, recovery?.latestCaptureId ?? captureId);
+  assert.equal(fence.captureId, editingLatestCaptureId ?? recovery?.latestCaptureId ?? captureId);
   assert.equal(observedBirthExited(baselineBirth), true);
   report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
   if (editFlow) {
@@ -2934,6 +3366,13 @@ try {
   stopPreviewProbe();
   await probeRefresh;
   if (mobile) {
+    if (report.failure && failureCleanupStop) {
+      try {
+        await failureCleanupStop();
+      } catch {
+        report.failureStopUnverified = true;
+      }
+    }
     try {
       await closeMobileOnce();
       if (report.projectMetadata)
@@ -3018,6 +3457,7 @@ try {
       continuations: state.continuations,
       cancelled: state.cancelled,
       sameDriverBirth: birthCurrent(state.birth),
+      ...(editingContinuity ? { birthDigest: hash(JSON.stringify(state.birth)) } : {}),
       phaseTimings: state.phaseTimings,
     };
     if (state.cancelled) {
@@ -3039,6 +3479,8 @@ try {
         processesClosed: !mobile && !caddy && !provider.listening,
       });
       report.disposableTreeRemoved = true;
+      if (report.failureStop?.verified === true && !report.failureStopUnverified)
+        report.cleanupComplete = true;
       if (installationOnly || constructionOnly || report.failure?.stage === 'installation')
         report.cleanupComplete = true;
     } catch (error) {
@@ -3058,8 +3500,20 @@ try {
     report.passed = false;
     report.cleanupComplete = false;
   }
+  if (editingContinuity && report.editingContinuity) {
+    report.editingContinuity.cleanupFinishedOffsetMs =
+      Number(process.hrtime.bigint() - BigInt(editingAnchor.monotonicNs)) / 1e6;
+    if (editingRemaining(editingAnchor, 'cleanup') === 0) {
+      report.passed = false;
+      report.cleanupComplete = false;
+      report.editingCleanupDeadlineExceeded = true;
+      process.exitCode = 1;
+    }
+  }
   report.cleanupStage = 'settled';
   clearInterval(checkpoint);
+  clearTimeout(editingActionTimer);
+  clearTimeout(editingCleanupTimer);
   writeFileSync(
     join(evidence, 'production-entrypoint-proof.json'),
     JSON.stringify(report, null, 2) + '\n',

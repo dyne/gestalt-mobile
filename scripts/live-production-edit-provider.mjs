@@ -9,6 +9,108 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+export function productionModelWorkload(lane) {
+  assert.ok(['', 'accept-steer', 'manual-discard', 'recovery'].includes(lane));
+  return lane === 'manual-discard' ? 'owning-edit-only' : 'owning-edit-and-confinement';
+}
+
+// Proof-only exact static-HTML expectation, matching the pinned helper's HTML
+// tag removal. Refuse CSP/other adapters instead of guessing restoration bytes.
+export function withoutProofInjection(source) {
+  assert.equal(source.includes('data-impeccable-csp-original'), false);
+  const pairs = [...source.matchAll(/<!--\s*impeccable-live-start\s*-->/g)];
+  assert.ok(pairs.length <= 1);
+  const result = source.replace(
+    /([ \t]*)<!--\s*impeccable-live-start\s*-->[\s\S]*?<!--\s*impeccable-live-end\s*-->([ \t]*(?:\r\n|\n|\r|$)?)/g,
+    (_all, indent, trailing) => (/[\r\n]/.test(trailing) || indent ? indent : trailing),
+  );
+  assert.equal(result.includes('impeccable-live-start'), false);
+  assert.equal(result.includes('impeccable-live-end'), false);
+  return result;
+}
+
+/** One proof-owned authenticated Stop. Expiry records an observation failure,
+ * never cancels or detaches the actual operation. The returned drain is the
+ * exact raw operation; a caller must join it before closing or claiming cleanup.
+ */
+export function failureStopOperation({
+  expected,
+  read,
+  stop,
+  verify,
+  now = Date.now,
+  deadline,
+  evidence,
+}) {
+  expected = structuredClone(expected);
+  let operation;
+  const current = () => {
+    const value = read();
+    for (const key of ['liveId', 'relayId', 'rootThreadId', 'controllerEpoch', 'targetIdentity'])
+      assert.equal(value.run[key], expected.run[key], 'PROOF_FAILURE_OWNER_CHANGED');
+    assert.deepEqual(value.run.app, expected.run.app, 'PROOF_FAILURE_APP_CHANGED');
+    assert.equal(value.captureId, expected.captureId, 'PROOF_FAILURE_CAPTURE_CHANGED');
+    assert.ok(
+      Number.isSafeInteger(value.run.generation) && value.run.generation >= expected.run.generation,
+    );
+    return value;
+  };
+  return () => {
+    if (operation) return operation;
+    const observed = {
+      dispatched: false,
+      pending: false,
+      drained: false,
+      deadlineExceeded: false,
+      verified: false,
+    };
+    let timer;
+    const drain = (async () => {
+      try {
+        assert.ok(Number.isFinite(deadline) && now() < deadline, 'PROOF_FAILURE_STOP_DEADLINE');
+        const before = current();
+        assert.ok(['active', 'recoveryRequired', 'error'].includes(before.run.state));
+        const fresh = current();
+        assert.deepEqual(fresh, before, 'PROOF_FAILURE_FENCE_CHANGED');
+        observed.dispatched = true;
+        observed.pending = true;
+        timer = setTimeout(
+          () => {
+            observed.deadlineExceeded = true;
+            evidence({ ...observed });
+          },
+          Math.max(1, deadline - now()),
+        );
+        const stopped = await stop({ liveId: fresh.run.liveId, generation: fresh.run.generation });
+        observed.pending = false;
+        observed.drained = true;
+        assert.equal(stopped.state, 'idle');
+        const after = current();
+        assert.equal(after.run.state, 'idle');
+        assert.equal(after.run.controlsRestored, true);
+        assert.ok(now() < deadline && !observed.deadlineExceeded, 'PROOF_FAILURE_STOP_DEADLINE');
+        await verify(after);
+        assert.deepEqual(current(), after, 'PROOF_FAILURE_FENCE_CHANGED');
+        assert.ok(now() < deadline && !observed.deadlineExceeded, 'PROOF_FAILURE_STOP_DEADLINE');
+        observed.verified = true;
+        evidence({ ...observed });
+        return { ...observed };
+      } catch (error) {
+        observed.pending = false;
+        observed.drained = observed.dispatched;
+        evidence({ ...observed, failed: true });
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    // Preserve actual settlement, including a rejection; expiry is not drainage.
+    drain.catch(() => {});
+    operation = { drain, observed };
+    return operation;
+  };
+}
+
 export function liveEventFromRequest(body) {
   const messages = (body.input ?? []).filter(
     (item) => item.type === 'message' && item.role === 'user',

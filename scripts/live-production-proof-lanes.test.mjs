@@ -29,6 +29,7 @@ import {
   fullLanes,
   fullAssertionOwners,
   laneChecks,
+  modelConfinementChecks,
   independentChecks,
   openRecoveryHandoff,
   handoffRequest,
@@ -40,6 +41,8 @@ import {
   proofPins,
   selectedLanes,
   loadLanePacket,
+  validateEditingContinuity,
+  readEditingAnchor,
 } from './live-production-proof-lanes.mjs';
 
 const identity = { candidate: 'a'.repeat(40), tree: 'b'.repeat(40), runId: '123', ...proofPins };
@@ -92,7 +95,55 @@ function production(lane) {
     },
     recoveryHandoff: { continuations: 1, cancelled: false, sameDriverBirth: true },
   };
+  if (lane === 'accept-steer') {
+    const phaseB = {
+      ...structuredClone(report.editBrowser),
+      editingPhase: 'steer',
+      observedGeneration: 3,
+      realPickerGenerateAccept: false,
+      exchangePosts: 1,
+      postResumeContinuity: structuredClone(report.editBrowser.acceptContinuity),
+    };
+    const phaseA = {
+      ...structuredClone(report.editBrowser),
+      editingPhase: 'accepted',
+      observedGeneration: 1,
+      exchangePosts: 1,
+      realPickerSteer: false,
+      actualTabHiddenBeyondEightSeconds: false,
+    };
+    report.recoveryHandoff.birthDigest = createHash('sha256')
+      .update(JSON.stringify({ pid: 1, start: '1', boot: 'a'.repeat(36) }))
+      .digest('hex');
+    report.editingContinuity = {
+      kind: 'continuity-with-explicit-recovery',
+      phaseATotalMs: 1200000,
+      phaseBTotalMs: 900000,
+      actionFinishedOffsetMs: 2300000,
+      cleanupFinishedOffsetMs: 2400000,
+      phaseAllocationMs: [1260000, 1020000, 180000],
+      originalGeneration: 1,
+      recoveryGeneration: 2,
+      resumedGeneration: 3,
+      acceptedSourceDigest: 'd'.repeat(64),
+      canonicalGenerations: { generate: 1, accept: 1, steer: 3 },
+      resumeDispatches: 1,
+      originalNativeSurvived: true,
+      genuineBrowserClosed: true,
+      newSignedCapture: true,
+      sameNativeThreadSelection: true,
+      noModelOrSourceReplay: true,
+      oldCookieDenied: true,
+      oldCookieDeniedStatus: 401,
+      oldCookieDeniedCode: 'LIVE_AUTH_REQUIRED',
+      staleGrantDenied: true,
+      phaseA,
+      phaseB,
+    };
+  }
   if (lane === 'manual-discard') {
+    report.modelWorkload = 'owning-edit-only';
+    report.provider = {};
     report.manualPollObservation = {
       sequence: 1,
       commandIpcDispatched: true,
@@ -163,11 +214,15 @@ function packets() {
           ? independent()
           : {
               'production-entrypoint/production-entrypoint-proof.json': production(lane),
-              ...(lane === 'recovery'
+              ...(['recovery', 'accept-steer'].includes(lane)
                 ? {
-                    'recovery-driver-cleanup.json': {
+                    [lane === 'recovery'
+                      ? 'recovery-driver-cleanup.json'
+                      : 'editing-driver-cleanup.json']: {
                       identity,
                       driverExited: true,
+                      finalDriverVerified: true,
+                      birth: { pid: 1, start: '1', boot: 'a'.repeat(36) },
                       cancelSent: false,
                     },
                   }
@@ -1111,25 +1166,25 @@ test('full lanes retain real continuity and exact dispatched-poll/manual120s obs
     [
       'accept-steer',
       (r) => {
-        r.editBrowser.acceptContinuity.visibleChrome = false;
+        r.editingContinuity.phaseB.postResumeContinuity.visibleChrome = false;
       },
     ],
     [
       'accept-steer',
       (r) => {
-        r.editBrowser.acceptContinuity.freshDocumentHelperConnected = false;
+        r.editingContinuity.phaseB.postResumeContinuity.freshDocumentHelperConnected = false;
       },
     ],
     [
       'accept-steer',
       (r) => {
-        r.editBrowser.acceptContinuity.acceptedHeading = false;
+        r.editingContinuity.phaseB.postResumeContinuity.acceptedHeading = false;
       },
     ],
     [
       'accept-steer',
       (r) => {
-        r.editBrowser.acceptContinuity.elapsedMs = 300000;
+        r.editingContinuity.phaseB.postResumeContinuity.elapsedMs = 300000;
       },
     ],
     [
@@ -1305,6 +1360,11 @@ test('editing milestone receipts retain complete identity/digests/cleanup and ne
       mkdirSync(join(root, 'production-entrypoint'), { recursive: true });
       const value = production(lane);
       const save = () => writeFileSync(join(root, file), JSON.stringify(value));
+      if (lane === 'accept-steer')
+        writeFileSync(
+          join(root, 'editing-driver-cleanup.json'),
+          packets()[lane].reports['editing-driver-cleanup.json'],
+        );
       save();
       const receipt = writeLaneReceipt(lane, root, identity, 'full', 'editing-only');
       assert.deepEqual(receipt.identity, identity);
@@ -1350,6 +1410,276 @@ test('editing milestone receipts retain complete identity/digests/cleanup and ne
       ),
     );
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('manual omits unexecuted confinement claims while exact-current accept owner remains mandatory', () => {
+  const result = aggregateLanes(packets(), identity);
+  for (const check of modelConfinementChecks) {
+    assert.deepEqual(result.fullAssertionOwners[check], ['accept-steer']);
+    assert.ok(!laneChecks['manual-discard'].includes(check));
+    assert.ok(laneChecks['accept-steer'].includes(check));
+    assert.ok(diagnosticPickerChecks.includes(check));
+    for (const mutation of [
+      (report) => {
+        report.checks[check] = true;
+      },
+      (report) => {
+        report.checks[check] = false;
+      },
+    ]) {
+      const values = packets();
+      mutateReport(values['manual-discard'], mutation);
+      assert.throws(() => aggregateLanes(values, identity));
+    }
+    const values = packets();
+    mutateReport(values['accept-steer'], (report) => {
+      delete report.checks[check];
+    });
+    assert.throws(() => aggregateLanes(values, identity));
+  }
+  for (const mutate of [
+    (report) => {
+      report.modelWorkload = 'owning-edit-and-confinement';
+    },
+    (report) => {
+      report.provider.contextProtocol = { state: 'completed' };
+    },
+    (report) => {
+      report.provider.spawnResponse = {};
+    },
+    (report) => {
+      report.nativeActivity = { files: 2 };
+    },
+    (report) => {
+      report.manualAcknowledgementObservation.enqueueToAckUpperBoundMs = 120001;
+    },
+    (report) => {
+      report.laneCanonicalEvents[0].history.pop();
+    },
+  ]) {
+    const values = packets();
+    mutateReport(values['manual-discard'], mutate);
+    assert.throws(() => aggregateLanes(values, identity));
+  }
+});
+
+test('editing anchor is shared across processes and refuses changed boot or monotonic origin', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'editing-clock-'));
+  const path = join(directory, 'anchor.json');
+  const original = { boot: processBirth().boot, monotonicNs: process.hrtime.bigint().toString() };
+  try {
+    writeFileSync(path, JSON.stringify(original), { mode: 0o600 });
+    assert.deepEqual(readEditingAnchor(path), original);
+    const sampled = BigInt(
+      execFileSync(process.execPath, ['-p', 'process.hrtime.bigint().toString()'], {
+        encoding: 'utf8',
+      }).trim(),
+    );
+    assert.ok(sampled >= BigInt(original.monotonicNs));
+    writeFileSync(path, JSON.stringify({ ...original, monotonicNs: (sampled + 1n).toString() }));
+    assert.throws(() => readEditingAnchor(path, original));
+    writeFileSync(path, JSON.stringify({ ...original, boot: '0'.repeat(36) }));
+    assert.throws(() => readEditingAnchor(path), /BIRTH_CHANGED/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('explicit editing recovery requires both original and new-fence phases without replay or claimed uninterrupted continuity', () => {
+  validateEditingContinuity(production('accept-steer'));
+  const mutations = [
+    (p) => {
+      p.oldCookieDeniedStatus = 500;
+    },
+    (p) => {
+      p.oldCookieDeniedCode = 'LIVE_AUTH_UNAVAILABLE';
+    },
+    ...['phaseATotalMs', 'phaseBTotalMs', 'actionFinishedOffsetMs', 'cleanupFinishedOffsetMs'].map(
+      (key) => (p) => {
+        p[key] = 2700001;
+      },
+    ),
+    (p) => {
+      p.kind = 'uninterrupted';
+    },
+    (p) => {
+      p.phaseAllocationMs[0]++;
+    },
+    (p) => {
+      p.resumeDispatches = 0;
+    },
+    (p) => {
+      p.resumeDispatches = 2;
+    },
+    (p) => {
+      p.recoveryGeneration = p.originalGeneration;
+    },
+    (p) => {
+      p.resumedGeneration = p.recoveryGeneration;
+    },
+    (p) => {
+      p.phaseA = p.phaseB;
+    },
+    (p) => {
+      p.phaseB = p.phaseA;
+    },
+    (p) => {
+      p.phaseA.realPickerGenerateAccept = false;
+    },
+    (p) => {
+      p.phaseA.realPickerSteer = true;
+    },
+    (p) => {
+      p.phaseB.realPickerGenerateAccept = true;
+    },
+    (p) => {
+      p.phaseB.observedGeneration = p.originalGeneration;
+    },
+    (p) => {
+      p.phaseB.exchangePosts = 2;
+    },
+    (p) => {
+      p.canonicalGenerations.accept = p.resumedGeneration;
+    },
+    (p) => {
+      p.canonicalGenerations.steer = p.originalGeneration;
+    },
+    (p) => {
+      p.phaseB.postResumeContinuity.visibleChrome = false;
+    },
+    (p) => {
+      p.phaseB.postResumeContinuity.elapsedMs = 30001;
+    },
+    ...[
+      'originalNativeSurvived',
+      'genuineBrowserClosed',
+      'newSignedCapture',
+      'sameNativeThreadSelection',
+      'noModelOrSourceReplay',
+      'oldCookieDenied',
+      'staleGrantDenied',
+    ].map((key) => (p) => {
+      p[key] = false;
+    }),
+  ];
+  for (const mutate of mutations) {
+    const report = production('accept-steer');
+    mutate(report.editingContinuity);
+    assert.throws(() => validateEditingContinuity(report));
+  }
+  for (const key of ['sameDriverBirth', 'cancelled', 'continuations']) {
+    const report = production('accept-steer');
+    report.recoveryHandoff[key] = key === 'cancelled' ? true : key === 'continuations' ? 2 : false;
+    assert.throws(() => validateEditingContinuity(report));
+  }
+});
+
+test('same living editing child separates action completion from naturally drained positive closure', async () => {
+  const directory = temporary();
+  const url = new URL('./live-production-proof-lanes.mjs', import.meta.url).href;
+  const code = `import {openRecoveryHandoff} from ${JSON.stringify(url)};
+    const h=await openRecoveryHandoff({directory:${JSON.stringify(directory)},identity:${JSON.stringify(identity)},onCancel(){throw new Error('unexpected-cancel')}});
+    await h.boundary(); h.finishActions();
+    await new Promise(done=>setTimeout(done,150)); await h.close();`;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', code], {
+    stdio: 'ignore',
+  });
+  const exited = new Promise((done) => child.once('close', done));
+  const birth = processBirth(child.pid);
+  writeFileSync(join(directory, 'launched.json'), JSON.stringify({ identity, birth }), {
+    mode: 0o600,
+  });
+  try {
+    await observeRecoveryPhase(directory, (state) => state.phase === 'ready', 3000, identity);
+    const expected = JSON.parse(readFileSync(join(directory, 'driver.json')));
+    await handoffRequest(directory, 'continue', expected);
+    const state = await observeRecoveryPhase(
+      directory,
+      (row) => row.phase === 'settling',
+      3000,
+      identity,
+    );
+    assert.equal(state.phase, 'settling');
+    assert.equal(birthCurrent(birth), true);
+    await assert.rejects(handoffRequest(directory, 'continue', expected));
+    const cleanup = await settleRecoveryDriver(directory, identity, 3000, true);
+    assert.equal(cleanup.cancelAttempted, false);
+    assert.equal(cleanup.cancelSent, false);
+    assert.equal(cleanup.finalDriverVerified, true);
+    assert.equal(cleanup.driverExited, true);
+    assert.equal(await exited, 0);
+  } finally {
+    if (birthCurrent(birth)) {
+      child.kill('SIGTERM');
+      await exited;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('editing aggregate refuses missing or substituted physical driver cleanup even with passing action phases', () => {
+  for (const change of [
+    (p) => {
+      delete p.reports['editing-driver-cleanup.json'];
+    },
+    (p) => {
+      const d = JSON.parse(p.reports['editing-driver-cleanup.json']);
+      d.finalDriverVerified = false;
+      p.reports['editing-driver-cleanup.json'] = Buffer.from(JSON.stringify(d));
+    },
+    (p) => {
+      const d = JSON.parse(p.reports['editing-driver-cleanup.json']);
+      d.birth.start = '2';
+      p.reports['editing-driver-cleanup.json'] = Buffer.from(JSON.stringify(d));
+    },
+    (p) => {
+      const d = JSON.parse(p.reports['editing-driver-cleanup.json']);
+      d.driverExited = false;
+      p.reports['editing-driver-cleanup.json'] = Buffer.from(JSON.stringify(d));
+    },
+  ]) {
+    const all = packets();
+    change(all['accept-steer']);
+    if (all['accept-steer'].reports['editing-driver-cleanup.json'])
+      all['accept-steer'].receipt.reports['editing-driver-cleanup.json'] = createHash('sha256')
+        .update(all['accept-steer'].reports['editing-driver-cleanup.json'])
+        .digest('hex');
+    assert.throws(() => aggregateLanes(all, identity));
+  }
+});
+
+test('expired editing cleanup persists unresolved operation and lock while the exact child is still alive', async () => {
+  const directory = temporary();
+  const url = new URL('./live-production-proof-lanes.mjs', import.meta.url).href;
+  const code = `import {openRecoveryHandoff} from ${JSON.stringify(url)};
+    const h=await openRecoveryHandoff({directory:${JSON.stringify(directory)},identity:${JSON.stringify(identity)},onCancel(){}});
+    await h.boundary(); h.finishActions(); await new Promise(done=>setTimeout(done,5000)); await h.close();`;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', code], {
+    stdio: 'ignore',
+  });
+  const exited = new Promise((done) => child.once('close', done));
+  const birth = processBirth(child.pid);
+  writeFileSync(join(directory, 'launched.json'), JSON.stringify({ identity, birth }), {
+    mode: 0o600,
+  });
+  try {
+    await observeRecoveryPhase(directory, (state) => state.phase === 'ready', 3000, identity);
+    const expected = JSON.parse(readFileSync(join(directory, 'driver.json')));
+    await handoffRequest(directory, 'continue', expected);
+    await observeRecoveryPhase(directory, (state) => state.phase === 'settling', 3000, identity);
+    await assert.rejects(settleRecoveryDriver(directory, identity, 50, true), /CLEANUP_UNVERIFIED/);
+    const cleanup = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+    assert.equal(cleanup.driverExited, false);
+    assert.equal(cleanup.operationSettlementUnverified, true);
+    assert.equal(cleanup.lockRetained, true);
+    assert.equal(cleanup.finalDriverVerified, undefined);
+    assert.equal(cleanup.cancelSent, false);
+    assert.equal(birthCurrent(birth), true);
+  } finally {
+    if (birthCurrent(birth)) {
+      child.kill('SIGTERM');
+      await exited;
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 });
