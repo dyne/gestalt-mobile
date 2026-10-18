@@ -12,20 +12,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let allowance = $state<CodexAllowance | null>(null);
   let loading = $state(true);
   let now = $state(Date.now());
-  let days = $derived(
-    allowance?.weeklyResetsAt == null
-      ? null
-      : Math.ceil((allowance.weeklyResetsAt * 1000 - now) / 86_400_000),
-  );
-  let resetLabel = $derived(
-    days == null
-      ? 'Reset date unavailable'
-      : days <= 0
-        ? 'Reset due'
-        : days === 1
-          ? 'Resets within 1 day'
-          : `Resets in ${days} days`,
-  );
+  let resetLabel = $derived.by(() => {
+    if (allowance?.weeklyResetsAt == null) return 'Reset date unavailable';
+    const remaining = allowance.weeklyResetsAt * 1000 - now;
+    if (remaining <= 0) return 'Reset due';
+    const minutes = Math.floor(remaining / 60_000);
+    if (minutes === 0) return 'Resets in less than 1 minute';
+    const days = Math.floor(minutes / 1_440);
+    const hours = Math.floor((minutes % 1_440) / 60);
+    const parts: string[] = [];
+    if (days) parts.push(`${days} ${days === 1 ? 'day' : 'days'}`);
+    if (hours) parts.push(`${hours} ${hours === 1 ? 'hour' : 'hours'}`);
+    if (!days && minutes % 60) {
+      const rest = minutes % 60;
+      parts.push(`${rest} ${rest === 1 ? 'minute' : 'minutes'}`);
+    }
+    return `Resets in ${parts.join(' ')}`;
+  });
 
   onMount(() => {
     const controller = new AbortController();
