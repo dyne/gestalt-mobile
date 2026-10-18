@@ -29,6 +29,8 @@ for (const [width, theme] of [
   test(`Sessions shows weekly allowance, reset date and credits at ${width}px in ${theme}`, async ({
     page,
   }, testInfo) => {
+    const now = new Date('2026-10-18T08:00:00Z');
+    await page.clock.setFixedTime(now);
     await page.setViewportSize({ width, height: 844 });
     await page.addInitScript(({ key, theme }) => localStorage.setItem(key, theme), {
       key: THEME_STORAGE_KEY,
@@ -39,7 +41,7 @@ for (const [width, theme] of [
       route.fulfill({
         json: {
           weeklyRemainingPercent: 63,
-          weeklyResetsAt: Math.floor(Date.now() / 1000) + 3 * 86_400,
+          weeklyResetsAt: now.getTime() / 1000 + 6 * 86_400 + 11 * 3_600,
           resetsAvailable: 2,
         },
       }),
@@ -48,7 +50,7 @@ for (const [width, theme] of [
     await page.getByRole('button', { name: 'Sessions', exact: true }).click();
     const summary = page.getByRole('region', { name: 'Codex allowance' });
     await expect(summary).toContainText('63% left');
-    await expect(summary).toContainText('Resets in 3 days');
+    await expect(summary).toContainText('Resets in 6 days 11 hours');
     await expect(summary).toContainText('2 available');
     await expect(summary.getByRole('progressbar')).toHaveAttribute('value', '63');
     await expect(summary).toBeInViewport();
