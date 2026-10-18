@@ -40,6 +40,8 @@ import {
   observeCanonicalPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
+  retainOwningStartupFailure,
+  observeOwningAdmissionFailure,
   observeManualAcknowledgement,
   retainManualCanonicalObservation,
   observeInstalledPolicyTimings,
@@ -49,7 +51,6 @@ import {
 import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
 import { PollLiveEvents } from '../dist/server/server/features/live-design/application/poll-events.js';
 import { IsolatedLiveHelper } from '../dist/server/server/platform/live-design/isolated-live-helper.js';
-import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
 import {
   createProductionEditProvider,
   liveEventFromRequest,
@@ -76,6 +77,7 @@ import {
   InstalledLivePolicy,
   InstalledLiveAdmissionError,
 } from '../dist/server/server/platform/live-design/installed-policy.js';
+import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
 import { ProductionLiveController } from '../dist/server/server/platform/live-design/production-controller.js';
 import { LiveDispatchGuard } from '../dist/server/server/platform/live-design/live-dispatch.js';
 import {
@@ -236,11 +238,18 @@ function renewalManifestRelation(input) {
     return { unavailable: true };
   }
 }
-for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime', 'revokeRuntime']) {
+for (const method of [
+  'bootstrapRuntime',
+  'captureRuntime',
+  'renewRuntime',
+  'sealRuntime',
+  'revokeRuntime',
+]) {
   const original = InstalledLivePolicy.prototype[method];
   InstalledLivePolicy.prototype[method] = async function (...args) {
     const rows = (report.policyProtocol ??= []);
     if (rows.length === 32) rows.shift();
+    const startedAt = performance.now();
     const row = { operation: method, outcome: 'pending' };
     rows.push(row);
     try {
@@ -251,9 +260,39 @@ for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime', 'revoke
       Object.assign(row, { outcome: 'refused', ...admissionFailure(error) });
       if (method === 'renewRuntime') row.manifestRelation = renewalManifestRelation(args[0]);
       throw error;
+    } finally {
+      row.elapsedMs = Math.round(performance.now() - startedAt);
     }
   };
 }
+const startupFailures = (report.owningStartupFailures = []);
+const observeStartupFailure = (boundary, error, startedAt, childAlive) =>
+  retainOwningStartupFailure(
+    startupFailures,
+    boundary,
+    error,
+    performance.now() - startedAt,
+    childAlive,
+    error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
+  );
+// withOwningAdmission is an instance field captured by composition. Observe the
+// existing runtime port before its first discovery call, never replace admission.
+const observedAdmissions = new WeakSet();
+const originalStartupDiscovery = CodexSessionRuntime.prototype.startWithDiscovery;
+CodexSessionRuntime.prototype.startWithDiscovery = function (...args) {
+  const admission = this.owningAdmission;
+  if (admission && !observedAdmissions.has(admission)) {
+    const run = admission.run.bind(admission);
+    admission.run = (session, work) => {
+      const startedAt = performance.now();
+      return observeOwningAdmissionFailure(run, session, work, (boundary, error) =>
+        observeStartupFailure(boundary, error, startedAt),
+      );
+    };
+    observedAdmissions.add(admission);
+  }
+  return originalStartupDiscovery.apply(this, args);
+};
 const originalPolicyVerify = InstalledLivePolicy.prototype.verify;
 InstalledLivePolicy.prototype.verify = async function (...args) {
   try {
@@ -404,6 +443,7 @@ ProductionLiveController.prototype.launchNative = function (input) {
   };
   const request = child.rpc.request.bind(child.rpc);
   child.rpc.request = async (method, params) => {
+    const startedAt = performance.now();
     const tracked =
       ['initialize', 'model/list', 'skills/list'].includes(method) &&
       observation.requests.length < 12;
@@ -479,6 +519,13 @@ ProductionLiveController.prototype.launchNative = function (input) {
       return value;
     } catch (error) {
       if (tracked) observation.requests.push({ method, completed: false });
+      if (observation.capturedOwner && method === 'initialize' && !observation.initializeFailure)
+        observation.initializeFailure = observeStartupFailure(
+          'captured-initialize',
+          error,
+          startedAt,
+          child.child.exitCode === null && child.child.signalCode === null,
+        );
       throw error;
     }
   };

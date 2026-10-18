@@ -890,3 +890,82 @@ export async function observeManualAcknowledgement(work, records, snapshot) {
     retainManualCanonicalObservation(records, completed ? 'ack-completed' : 'ack-failed', snapshot);
   }
 }
+
+/** Proof-only startup failure observation: fixed vocabulary, no payload/error text. */
+export function retainOwningStartupFailure(
+  records,
+  boundary,
+  error,
+  elapsedMs,
+  childAlive,
+  diagnostic,
+) {
+  const boundaries = ['captured-initialize', 'owning-admission-work', 'owning-admission-rejection'];
+  if (!boundaries.includes(boundary)) return;
+  const codes = [
+    'CODEX_STARTUP_DISCOVERY_TIMEOUT',
+    'CODEX_STARTUP_CANCELLED',
+    'CODEX_RPC_TRANSPORT_CLOSED',
+    'CODEX_RPC_INPUT_FAILED',
+    'CODEX_RPC_OUTPUT_FAILED',
+    'LIVE_ADMISSION_UNAVAILABLE',
+    'LIVE_CLEANUP_REQUIRED',
+    'LIVE_RUNTIME_CAPTURE_CLEANUP_REQUIRED',
+    'LIVE_RUNTIME_PROVENANCE_UNAVAILABLE',
+    'LIVE_INSTALLED_SOURCE_UNVERIFIED',
+  ];
+  const code = codes.includes(error?.message)
+    ? error.message
+    : error?.kind === 'CODEX_JSON_RPC_ERROR'
+      ? 'CODEX_JSON_RPC_ERROR'
+      : 'UNCLASSIFIED';
+  const phases = ['manager-command', 'agents-command'];
+  const reasons = [
+    'contract-refused',
+    'command-failed',
+    'source-changed',
+    'binary-changed',
+    'config-changed',
+    'unverified-owning-runtime',
+    'unauthorized-controller',
+    'stale-runtime-provenance',
+  ];
+  const row = {
+    boundary,
+    code,
+    elapsedMs: Number.isFinite(elapsedMs) && elapsedMs >= 0 ? Math.round(elapsedMs) : null,
+    childAlive: typeof childAlive === 'boolean' ? childAlive : null,
+  };
+  if (diagnostic && phases.includes(diagnostic.phase)) {
+    row.admission = {
+      phase: diagnostic.phase,
+      reason: reasons.includes(diagnostic.reason) ? diagnostic.reason : 'unclassified-refusal',
+    };
+  }
+  if (records.length >= 16) records.shift();
+  records.push(row);
+  return row;
+}
+/** Catch before caller cleanup, preserve the exact original work/error and one dispatch. */
+export async function observeOwningStartupFailure(work, record) {
+  try {
+    return await work();
+  } catch (error) {
+    try {
+      record(error);
+    } catch {
+      /* Diagnostic failure never replaces work failure. */
+    }
+    throw error;
+  }
+}
+
+export function observeOwningAdmissionFailure(run, session, work, record) {
+  return observeOwningStartupFailure(
+    () =>
+      run(session, () =>
+        observeOwningStartupFailure(work, (error) => record('owning-admission-work', error)),
+      ),
+    (error) => record('owning-admission-rejection', error),
+  );
+}

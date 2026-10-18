@@ -25,6 +25,9 @@ import {
   observeCanonicalPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
+  retainOwningStartupFailure,
+  observeOwningStartupFailure,
+  observeOwningAdmissionFailure,
   boundedManualCommitObservation,
   retainManualCanonicalObservation,
   observeManualAcknowledgement,
@@ -1294,4 +1297,121 @@ test('actual browser emits bracket before canonical ack and in finally while pre
       close > final,
   );
   assert.equal((script.match(/manualCommitDeadline = manualDeadline/g) || []).length, 1);
+});
+
+test('startup failure classification retains only fixed timeout/refusal/closed/protocol vocabulary', () => {
+  const records = [];
+  for (const code of [
+    'CODEX_STARTUP_DISCOVERY_TIMEOUT',
+    'CODEX_STARTUP_CANCELLED',
+    'CODEX_RPC_TRANSPORT_CLOSED',
+    'CODEX_RPC_INPUT_FAILED',
+    'CODEX_RPC_OUTPUT_FAILED',
+    'LIVE_ADMISSION_UNAVAILABLE',
+  ]) {
+    const row = retainOwningStartupFailure(
+      records,
+      'captured-initialize',
+      new Error(code),
+      12.4,
+      true,
+    );
+    assert.equal(row.code, code);
+    assert.equal(row.elapsedMs, 12);
+    assert.equal(row.childAlive, true);
+  }
+  const unknown = retainOwningStartupFailure(
+    records,
+    'captured-initialize',
+    { message: 'private-token-canary', code: '/private/path' },
+    NaN,
+    'alive',
+    { phase: 'manager-command', reason: 'private-secret-canary' },
+  );
+  assert.equal(unknown.code, 'UNCLASSIFIED');
+  assert.equal(unknown.elapsedMs, null);
+  assert.equal(unknown.childAlive, null);
+  assert.equal(unknown.admission.reason, 'unclassified-refusal');
+  assert.equal(
+    retainOwningStartupFailure(
+      records,
+      'captured-initialize',
+      { kind: 'CODEX_JSON_RPC_ERROR', message: 'raw-result-canary' },
+      0,
+      false,
+    ).code,
+    'CODEX_JSON_RPC_ERROR',
+  );
+  assert.equal(
+    retainOwningStartupFailure(records, 'captured-initialize', null, -1, null).code,
+    'UNCLASSIFIED',
+  );
+  assert.equal(
+    retainOwningStartupFailure(records, 'private-canary', new Error('secret'), 1, true),
+    undefined,
+  );
+  assert.ok(!JSON.stringify(records).includes('canary'));
+  for (let i = 0; i < 20; i++)
+    retainOwningStartupFailure(records, 'owning-admission-rejection', {}, 1, null);
+  assert.equal(records.length, 16);
+});
+test('startup observer preserves one dispatch and exact success/error with first failure before cleanup', async () => {
+  const failure = new Error('CODEX_STARTUP_DISCOVERY_TIMEOUT'),
+    cleanup = new Error('LIVE_CLEANUP_REQUIRED');
+  let dispatched = 0;
+  const events = [],
+    errors = [];
+  const work = async () => {
+    dispatched++;
+    throw failure;
+  };
+  const run = async (session, original) => {
+    assert.equal(session, 'exact-session');
+    try {
+      return await original();
+    } catch (error) {
+      assert.equal(error, failure);
+      events.push('cleanup');
+      throw cleanup;
+    }
+  };
+  await assert.rejects(
+    observeOwningAdmissionFailure(run, 'exact-session', work, (boundary, error) => {
+      events.push(boundary);
+      errors.push(error);
+    }),
+    (error) => error === cleanup,
+  );
+  assert.equal(dispatched, 1);
+  assert.deepEqual(errors, [failure, cleanup]);
+  assert.deepEqual(events, ['owning-admission-work', 'cleanup', 'owning-admission-rejection']);
+  await assert.rejects(
+    observeOwningStartupFailure(work, (error) => assert.equal(error, failure)),
+    (error) => error === failure,
+  );
+  await assert.rejects(
+    observeOwningStartupFailure(work, () => {
+      throw new Error('observer-canary');
+    }),
+    (error) => error === failure,
+  );
+  const result = { unchanged: true };
+  assert.equal(
+    await observeOwningAdmissionFailure(
+      (_session, original) => original(),
+      'exact-session',
+      () => result,
+      () => assert.fail('success is not failure'),
+    ),
+    result,
+  );
+});
+test('actual startup proof observes capture and first RPC error through the original admission port', () => {
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.ok(source.includes("'captureRuntime'"));
+  assert.ok(source.includes("'captured-initialize'"));
+  assert.ok(source.includes('return originalStartupDiscovery.apply(this, args)'));
 });
