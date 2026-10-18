@@ -104,6 +104,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
     return grouped;
   });
+  let displayGroups = $derived(groups.toReversed());
+
   function attentionReport(record: NonNullable<ChatMessage['attention']>): OrgPlanAttention {
     const requestedAt = record.requestedAt ? Date.parse(record.requestedAt) : NaN;
     const reports = messages.filter(
@@ -220,7 +222,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     );
   }
   function timeLabel(index: number, occurredAt: number | undefined): string | null {
-    return formatElapsedAfter(groups[index - 1]?.occurredAt, occurredAt);
+    return formatElapsedAfter(displayGroups[index + 1]?.occurredAt, occurredAt);
   }
   function openOrg(event: MouseEvent, href: string): void {
     if (!onopenorg || !isLocalOrgHref(href)) return;
@@ -359,13 +361,34 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 <ol aria-label="Chat messages">
-  {#if autopilotAuditTruncated}
-    <li class="audit-incomplete" role="status">
-      Earlier Autopilot audit entries are not shown; this timeline contains the retained recent
-      audit.
+  {#if promptGroups.length === 0 && unassignedInteractions.length}
+    <li class="interaction-only">
+      <InteractionList
+        interactions={unassignedInteractions}
+        {answers}
+        {submittedAnswers}
+        {onanswer}
+        {onquiz}
+        {onpermission}
+        {ondecision}
+        {onretry}
+      />
     </li>
   {/if}
-  {#each groups as group, index (group.id)}
+  {#if detached.length}
+    <li class="progress-item">
+      <section class={activeTurnId ? 'progress-turn' : 'orphan-activity-turn'}>
+        {#if activeTurnId}
+          <div class="entry-heading"><strong>working</strong></div>
+          <ActivityList activities={regularActivities(detached)} variant="live" />
+          {@render changedFiles(detached)}
+        {:else}
+          <WorkDetails activities={detached} {now} />
+        {/if}
+      </section>
+    </li>
+  {/if}
+  {#each displayGroups as group, index (group.id)}
     <li
       class={group.kind === 'user'
         ? 'prompt-turn'
@@ -520,31 +543,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       {/if}
     </li>
   {/each}
-  {#if promptGroups.length === 0 && unassignedInteractions.length}
-    <li class="interaction-only">
-      <InteractionList
-        interactions={unassignedInteractions}
-        {answers}
-        {submittedAnswers}
-        {onanswer}
-        {onquiz}
-        {onpermission}
-        {ondecision}
-        {onretry}
-      />
-    </li>
-  {/if}
-  {#if detached.length}
-    <li class="progress-item">
-      <section class={activeTurnId ? 'progress-turn' : 'orphan-activity-turn'}>
-        {#if activeTurnId}
-          <div class="entry-heading"><strong>working</strong></div>
-          <ActivityList activities={regularActivities(detached)} variant="live" />
-          {@render changedFiles(detached)}
-        {:else}
-          <WorkDetails activities={detached} {now} />
-        {/if}
-      </section>
+  {#if autopilotAuditTruncated}
+    <li class="audit-incomplete" role="status">
+      Earlier Autopilot audit entries are not shown; this timeline contains the retained recent
+      audit.
     </li>
   {/if}
 </ol>
@@ -620,6 +622,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   .entry-heading {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 0.75rem;
   }
@@ -628,7 +631,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     margin-inline-start: auto;
     color: var(--theme-text-muted);
     font-size: 0.875em;
-    white-space: nowrap;
+    white-space: normal;
   }
 
   .commentary-toggle {

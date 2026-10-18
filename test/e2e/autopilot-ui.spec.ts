@@ -353,17 +353,17 @@ test('keeps the attention dialogue at its original chat position with an explana
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   const entries = page.getByLabel('Chat messages').locator(':scope > li');
-  await expect(entries.nth(0)).toContainText('Earlier work');
-  await expect(entries.nth(1)).toContainText('Autopilot needs your attention');
-  await expect(entries.nth(1)).toContainText(report);
-  await expect(entries.nth(3)).toContainText('Later guidance');
+  await expect(entries.nth(3)).toContainText('Earlier work');
+  await expect(entries.nth(2)).toContainText('Autopilot needs your attention');
+  await expect(entries.nth(2)).toContainText(report);
+  await expect(entries.nth(0)).toContainText('Later guidance');
   await install(page, 'monitoring', undefined, false);
   await installHistory();
   await page.reload();
   await page.getByRole('button', { name: 'Chat' }).click();
-  await expect(entries.nth(1)).toContainText('Autopilot attention request');
-  await expect(entries.nth(1)).toContainText(report);
-  await expect(entries.nth(3)).toContainText('Later guidance');
+  await expect(entries.nth(2)).toContainText('Autopilot attention request');
+  await expect(entries.nth(2)).toContainText(report);
+  await expect(entries.nth(0)).toContainText('Later guidance');
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0);
 });
 

@@ -27,7 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     /** Owning provider; used only for provider-aware copy. */
     provider?: LlmProvider;
     onchange(value: string): void;
-    onscrollbottom?(): void;
+    onrevealprompt?(): void;
     onmodelselect?(model: string): void;
     onsend(): void;
     onqueue?(): void;
@@ -48,7 +48,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     models = [],
     provider = 'codex',
     onchange,
-    onscrollbottom = () => {},
+    onrevealprompt = () => {},
     onmodelselect = () => {},
     onsend,
     onqueue = () => {},
@@ -102,11 +102,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     else oninterruptsend();
   }
 
-  function updateMessage(value: string, requestTail = false): void {
+  function updateMessage(value: string, revealPrompt = false): void {
     dismissedCommandQuery = null;
     selectedCommandIndex = 0;
     onchange(value);
-    if (requestTail) onscrollbottom();
+    if (revealPrompt) onrevealprompt();
   }
 
   function chooseCommand(index = selectedCommandIndex): void {
@@ -202,7 +202,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             type="button"
             onclick={() => {
               onmodelselect(model);
-              onscrollbottom();
+              onrevealprompt();
             }}><code>{model}</code></button
           >
         </li>

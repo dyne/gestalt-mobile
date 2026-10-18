@@ -115,7 +115,7 @@ async function expectTimeline(page: Page, labels: string[]): Promise<void> {
   const entries = page.getByLabel('Chat messages').getByRole('listitem');
   await expect(entries).toHaveCount(labels.length);
   const actual = await entries.allTextContents();
-  labels.forEach((label, index) => expect(actual[index]).toContain(label));
+  labels.toReversed().forEach((label, index) => expect(actual[index]).toContain(label));
 }
 
 test('queues an active turn with Ctrl+Enter or replaces it from the action control', async ({
@@ -246,12 +246,14 @@ for (const viewport of [
     await expectTimeline(page, labels);
     const messageTimes = page.getByLabel('Chat messages').locator('time');
     const before = await messageTimes.evaluateAll((times) => times.map((time) => time.dateTime));
-    expect(before).toEqual([
-      '2026-01-01T12:00:00.000Z',
-      '2026-01-01T12:01:00.000Z',
-      '2026-01-01T12:03:00.000Z',
-      '2026-01-01T12:05:00.000Z',
-    ]);
+    expect(before).toEqual(
+      [
+        '2026-01-01T12:00:00.000Z',
+        '2026-01-01T12:01:00.000Z',
+        '2026-01-01T12:03:00.000Z',
+        '2026-01-01T12:05:00.000Z',
+      ].toReversed(),
+    );
     await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
     await expect(page.getByLabel('Chat messages')).toContainText('2 minutes later');
     await page.reload();
@@ -419,7 +421,7 @@ test('converges a live item through an overlapping snapshot, reconnect, and refr
   await expectTimeline(page, ['live convergence prompt', 'first second final']);
   const messageTimes = page.getByLabel('Chat messages').locator('time');
   await expect(messageTimes).toHaveCount(2);
-  await expect(messageTimes.last()).toHaveAttribute('datetime', startedAt);
+  await expect(messageTimes.first()).toHaveAttribute('datetime', startedAt);
   await expect(page.getByLabel('Chat messages')).toContainText('1 minute later');
   expect((await page.locator('.chat-tail').boundingBox())?.y ?? Infinity).toBeLessThanOrEqual(844);
 });
@@ -869,8 +871,11 @@ for (const shot of [
         document.documentElement.style.fontSize = '200%';
       });
     await page.getByRole('button', { name: 'Chat' }).click();
+    await page.getByRole('button', { name: 'Review command approval' }).click();
     const approve = page.getByRole('button', { name: 'Approve' });
     await expect(approve).toBeVisible();
+    await approve.scrollIntoViewIfNeeded();
+    await waitForSettledScroll(page);
     expect(
       (await approve.boundingBox())!.y + (await approve.boundingBox())!.height,
     ).toBeLessThanOrEqual(shot.height);
@@ -925,6 +930,8 @@ for (const shot of [
     ).toBe(true);
     await waitForSettledScroll(page);
     if (shot.fontScale === 200) {
+      await page.getByRole('button', { name: 'Chat', exact: true }).click();
+      await waitForSettledScroll(page);
       const [interruptBox, navigationBox] = await Promise.all([
         page.getByRole('button', { name: 'Interrupt' }).boundingBox(),
         page.getByLabel('Primary').boundingBox(),

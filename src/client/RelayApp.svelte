@@ -55,8 +55,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     readDetachedChatSession,
   } from './features/chat/detached-chat.js';
   import { ChatController, type ChatViewState } from './features/chat/chat-controller.js';
-  import { ChatFollowTail } from './features/chat/chat-follow-tail.js';
-  import { ChatTailScheduler } from './features/chat/chat-tail-scheduler.js';
   import type { ProjectionEvent } from './features/chat/chat-projection.js';
   import { isSessionStatus } from './features/sessions/session-status.js';
   import { relayFeedback, type RelayFeedbackCode } from './features/feedback/relay-messages.js';
@@ -345,19 +343,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   let userInputAnswers = $state<Record<string, string>>({});
   let submittedQuizAnswers = $state.raw<Record<string, readonly SubmittedQuizAnswer[]>>({});
   let chatTail = $state<HTMLElement | null>(null);
-  let presentationSignal = '';
-  const followTail = new ChatFollowTail({
-    requestFrame: (callback) => requestAnimationFrame(callback),
-    cancelFrame: (frame) => cancelAnimationFrame(frame),
-    reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    scrollTail: (behavior) => chatTail?.scrollIntoView({ block: 'end', behavior }),
-  });
-  const tailScheduler = new ChatTailScheduler(
-    (fn) => void tick().then(fn),
-    (reason) => {
-      if (tab === 'chat') followTail.request(reason);
-    },
-  );
   let interactionAnnouncement = $derived.by(() => {
     const interaction = chatView?.interactions.findLast((item) => item.state !== 'pending');
     if (!interaction) return '';
@@ -607,45 +592,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     }
   });
 
-  $effect(() => {
-    if (!chatTail) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => followTail.observeTail(entry?.isIntersecting ?? false),
-      { root: null },
-    );
-    observer.observe(chatTail);
-    return () => observer.disconnect();
-  });
-
-  $effect(() => {
-    const view = chatView;
-    const currentTab = tab;
-    const nextSignal = view
-      ? JSON.stringify({
-          messages: view.messages.map(({ id, text, complete }) => [id, text, complete]),
-          activities: view.activities.map(({ id, label, detail }) => [id, label, detail]),
-          interactions: view.interactions.map(({ key, state, attemptedOutcome }) => [
-            key,
-            state,
-            attemptedOutcome,
-          ]),
-        })
-      : '';
-    if (!nextSignal || nextSignal === presentationSignal) return;
-    presentationSignal = nextSignal;
-    if (currentTab !== 'chat') return;
-    scheduleTail('content');
-  });
-
-  function scheduleTail(reason: 'content' | 'explicit' | 'initial'): void {
-    tailScheduler.schedule(reason);
-  }
   function enterChatContext(): void {
-    tailScheduler.invalidate();
-    followTail.reset();
     tab = 'chat';
     scrollTabIntoInitialPosition('chat');
-    scheduleTail('initial');
     focusChatPrompt();
   }
 
@@ -679,8 +628,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     upgradeController.abort();
     plansCatalogRequest?.abort();
     passivePlanRequest?.abort();
-    tailScheduler.invalidate();
-    followTail.cancel();
     chatController.dispose();
     activityController.dispose();
     autopilotController.dispose();
@@ -1051,7 +998,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       }
       message = '';
       draftRevision = consumed.revision;
-      scheduleTail('explicit');
+      revealChatPrompt();
     } else if (submitted.sessionId === sessionId && submitted.revision === draftRevision) {
       writerFeedback = null;
       retryOperationId = submitted.operationId;
@@ -1111,16 +1058,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (detachedSessionId) return;
     if (next === 'chat' && !chatEnabled) return;
     const changedTab = tab !== next;
-    if (tab === 'chat' && next !== 'chat') {
-      tailScheduler.invalidate();
-      followTail.cancel();
-    }
     tab = next;
     scrollTabIntoInitialPosition(next);
     if (next === 'chat') {
       reconcileVisibleHistory();
-      followTail.reset();
-      scheduleTail('initial');
       if (changedTab) focusChatPrompt();
     }
     if (next === 'git' && gitWorkspaceId) void gitController.refresh();
@@ -1396,8 +1337,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function scrollTabIntoInitialPosition(target: Tab): void {
     requestAnimationFrame(() => {
       if (tab !== target) return;
-      if (target !== 'chat') window.scrollTo({ top: 0 });
+      window.scrollTo({ top: 0, behavior: 'instant' });
     });
+  }
+
+  function revealChatPrompt(): void {
+    scrollTabIntoInitialPosition('chat');
   }
 
   function focusChatPrompt(): void {
@@ -1543,7 +1488,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   async function resolveInteraction(requestId: string, decision: 'accept' | 'decline') {
-    scheduleTail('explicit');
     await chatController.respond(requestId, { decision });
   }
 
@@ -1552,7 +1496,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     kind: string;
     payload: unknown;
   }) {
-    scheduleTail('explicit');
     const quiz =
       interaction.kind === 'quiz'
         ? parseQuiz(interaction.payload)
@@ -1601,7 +1544,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       shellStatus = 'Codex sent an invalid permission request.';
       return;
     }
-    scheduleTail('explicit');
     await chatController.respond(interaction.requestId, response);
   }
 
@@ -1807,6 +1749,57 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             {interactionAnnouncement}
           </p>
           {#if sessionId}
+            <div class="chat-composer">
+              <Composer
+                newEmpty={chatView?.newEmpty ?? false}
+                status={chatView?.status ?? shellStatus}
+                readySince={chatView?.readySince ?? null}
+                {message}
+                activeTurnId={chatView?.activeTurnId ?? null}
+                starting={chatView?.starting ?? false}
+                detached={Boolean(
+                  sessions.find((session) => session.id === sessionId) &&
+                  !['ready', 'turnActive'].includes(
+                    sessions.find((session) => session.id === sessionId)?.state ?? '',
+                  ),
+                )}
+                retryMessage={writerFeedback}
+                retryable={retryOperationId !== null}
+                models={sessionModels[
+                  sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
+                ]}
+                provider={sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'}
+                onchange={updateDraft}
+                onrevealprompt={revealChatPrompt}
+                onmodelselect={(model) => void selectSessionModel(model)}
+                onsend={() => void sendMessage()}
+                onqueue={() => void queueMessage()}
+                oninterruptsend={() => void interruptAndSendMessage()}
+                onretry={() => void retrySend()}
+                oninterrupt={() => void interruptTurn()}
+              />
+              {#if hasAssignedOrgPlan(selectedSession)}
+                <div class="chat-controls" aria-label="Chat controls">
+                  {#if selectedSession?.provider !== 'kimi'}
+                    <AutopilotControl
+                      compact
+                      autopilot={autopilotState.snapshots.get(sessionId) ?? null}
+                      controlId={`chat-autopilot-${sessionId}`}
+                      pending={autopilotState.pending.has(sessionId)}
+                      ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
+                    />
+                  {/if}
+                  <AgentActivityIndicators
+                    compact
+                    activity={activitySnapshots.get(sessionId) ?? null}
+                    rootModel={sessions.find((session) => session.id === sessionId)?.model ??
+                      defaultSessionModel}
+                    plan={sessions.find((session) => session.id === sessionId)?.plan}
+                    onopen={() => sessionId && void activityController.resync(sessionId)}
+                  />
+                </div>
+              {/if}
+            </div>
             <PendingChatRequests
               interactions={chatView?.interactions ?? []}
               attention={autopilotState.attention.get(sessionId) ?? null}
@@ -1845,55 +1838,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               }}
               oncopyresult={reportCodeCopy}
             />
-            <Composer
-              newEmpty={chatView?.newEmpty ?? false}
-              status={chatView?.status ?? shellStatus}
-              readySince={chatView?.readySince ?? null}
-              {message}
-              activeTurnId={chatView?.activeTurnId ?? null}
-              starting={chatView?.starting ?? false}
-              detached={Boolean(
-                sessions.find((session) => session.id === sessionId) &&
-                !['ready', 'turnActive'].includes(
-                  sessions.find((session) => session.id === sessionId)?.state ?? '',
-                ),
-              )}
-              retryMessage={writerFeedback}
-              retryable={retryOperationId !== null}
-              models={sessionModels[
-                sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'
-              ]}
-              provider={sessions.find((session) => session.id === sessionId)?.provider ?? 'codex'}
-              onchange={updateDraft}
-              onscrollbottom={() => scheduleTail('explicit')}
-              onmodelselect={(model) => void selectSessionModel(model)}
-              onsend={() => void sendMessage()}
-              onqueue={() => void queueMessage()}
-              oninterruptsend={() => void interruptAndSendMessage()}
-              onretry={() => void retrySend()}
-              oninterrupt={() => void interruptTurn()}
-            />
-            {#if hasAssignedOrgPlan(selectedSession)}
-              <div class="chat-controls" aria-label="Chat controls">
-                {#if selectedSession?.provider !== 'kimi'}
-                  <AutopilotControl
-                    compact
-                    autopilot={autopilotState.snapshots.get(sessionId) ?? null}
-                    controlId={`chat-autopilot-${sessionId}`}
-                    pending={autopilotState.pending.has(sessionId)}
-                    ontoggle={(enabled) => sessionId && toggleAutopilot(sessionId, enabled)}
-                  />
-                {/if}
-                <AgentActivityIndicators
-                  compact
-                  activity={activitySnapshots.get(sessionId) ?? null}
-                  rootModel={sessions.find((session) => session.id === sessionId)?.model ??
-                    defaultSessionModel}
-                  plan={sessions.find((session) => session.id === sessionId)?.plan}
-                  onopen={() => sessionId && void activityController.resync(sessionId)}
-                />
-              </div>
-            {/if}
             <div bind:this={chatTail} class="chat-tail" aria-hidden="true"></div>
           {:else}
             <p>
@@ -2183,6 +2127,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .chat-tail {
     block-size: 1px;
     scroll-margin-block-end: var(--bottom-navigation-clearance);
+  }
+
+  .chat-composer {
+    margin-block-end: 1rem;
   }
 
   .chat-controls {
