@@ -8,6 +8,41 @@ import { mockAuthenticatedStatus } from './auth-fixture.js';
 import { ChatRelayFixture } from './chat-relay-fixture.js';
 import { chatSnapshot } from './chat-snapshot-fixture.js';
 
+test('Ready duration advances locally and survives switching tabs', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.clock.install({ time: new Date('2026-10-18T12:00:00Z') });
+  await mockAuthenticatedStatus(page);
+  const fixture = new ChatRelayFixture(page);
+  await fixture.install([
+    {
+      id: 'session-1',
+      state: 'ready',
+      threadId: 'thread-1',
+      workspaceId: 'workspace-1',
+      workspacePath: '/workspace',
+      profile: 'default',
+      activeTurnId: null,
+      pendingInteractions: [],
+    },
+  ]);
+  fixture.snapshot('session-1', chatSnapshot());
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('Ready since less than a minute ago');
+  const historyReads = fixture.protocol.filter((entry) => entry.kind === 'history').length;
+  await page.clock.fastForward(90_000);
+  await expect(page.getByRole('status')).toHaveText('Ready since 1 minute ago');
+  expect(fixture.protocol.filter((entry) => entry.kind === 'history')).toHaveLength(historyReads);
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await page.clock.fastForward(60_000);
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('Ready since 2 minutes ago');
+  fixture.event('session-1', 1, 'session.updated', { activeTurnId: 'turn-1' });
+  await expect(page.getByRole('status')).toHaveText('Codex is working…');
+  fixture.event('session-1', 2, 'turnCompleted', null);
+  await expect(page.getByRole('status')).toHaveText('Ready since less than a minute ago');
+});
+
 async function waitForSettledScroll(page: Page): Promise<void> {
   await page.evaluate(
     () =>
@@ -938,7 +973,7 @@ for (const shot of [
     await expect(page.getByRole('button', { name: 'commentary' })).toBeVisible();
     await expect(page.getByText('working screenshot')).toBeHidden();
     await expect(page.getByRole('button', { name: 'Interrupt' })).toHaveCount(0);
-    await expect(page.getByRole('status')).toHaveText('Ready');
+    await expect(page.getByRole('status')).toHaveText('Ready since less than a minute ago');
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,

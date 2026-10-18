@@ -179,7 +179,7 @@ test('restricts chat model switching to the session provider and badges kimi ses
   await expect(openSessions.getByRole('button', { name: /^Autopilot/ })).toHaveCount(0);
 
   await openChat(page);
-  await expect(page.getByRole('status', { name: 'Ready.' })).toBeVisible();
+  await expect(page.getByRole('status', { name: /^Ready since / })).toBeVisible();
   await page.getByRole('textbox', { name: 'Prompt' }).fill('/model ');
   const modelsMenu = page.getByRole('list', { name: 'Available models' });
   await expect(modelsMenu).toBeVisible();

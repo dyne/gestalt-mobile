@@ -1848,6 +1848,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
             <Composer
               newEmpty={chatView?.newEmpty ?? false}
               status={chatView?.status ?? shellStatus}
+              readySince={chatView?.readySince ?? null}
               {message}
               activeTurnId={chatView?.activeTurnId ?? null}
               starting={chatView?.starting ?? false}

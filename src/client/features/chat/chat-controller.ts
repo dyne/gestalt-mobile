@@ -31,7 +31,12 @@ import {
 
 type Timer = ReturnType<typeof setTimeout>;
 export type ChatViewState = Readonly<
-  ChatProjection & { status: string; starting: boolean; newEmpty: boolean }
+  ChatProjection & {
+    status: string;
+    readySince: number | null;
+    starting: boolean;
+    newEmpty: boolean;
+  }
 >;
 export type ChatSelectionOptions = Readonly<{ history?: 'load' | 'empty' }>;
 export type ChatRelay = Readonly<{
@@ -176,6 +181,7 @@ export class ChatController {
     return { ...this.#transport };
   }
   #sessionId: string | null = null;
+  #readySince: number | null = null;
   #generation = 0;
   #authoritativeGeneration = -1;
   #socket: WebSocket | null = null;
@@ -226,6 +232,7 @@ export class ChatController {
     return Object.freeze({
       ...this.#projection,
       status: deriveStatus(this.#projection),
+      readySince: this.#readySince,
       starting: this.#projection.lifecycle === 'starting',
       newEmpty: this.#historyKnownEmpty && !hasConversationContent(this.#projection),
     });
@@ -241,6 +248,7 @@ export class ChatController {
     if (this.#disposed || this.#sessionId === sessionId) return;
     this.#stop();
     this.#sessionId = sessionId;
+    this.#readySince = null;
     if (sessionId && options.history === 'empty') this.#newEmptySessions.add(sessionId);
     this.#historyKnownEmpty = sessionId !== null && this.#newEmptySessions.has(sessionId);
     const generation = ++this.#generation;
@@ -623,6 +631,15 @@ export class ChatController {
       void this.#options.cache.write(this.#sessionId, this.#projection).catch(() => {});
   }
   #publish(): void {
+    // A history refresh temporarily changes the label, but is not new work.
+    // Keep the episode across snapshots and reset it on actual lifecycle changes.
+    if (
+      this.#projection.sessionId &&
+      this.#projection.lifecycle === 'finished' &&
+      !this.#projection.activeTurnId
+    )
+      this.#readySince ??= this.#options.now();
+    else this.#readySince = null;
     this.#options.publish(this.view);
   }
   #conversationStarted(id: string): void {

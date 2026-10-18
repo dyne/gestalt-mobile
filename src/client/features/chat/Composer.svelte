@@ -5,6 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     argumentPickerFor,
     commandQuery,
@@ -14,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import type { LlmProvider } from '../../../shared/contracts/llm-provider.js';
   type Props = {
     status: string;
+    readySince?: number | null;
     message: string;
     activeTurnId: string | null;
     starting: boolean;
@@ -35,6 +37,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   };
   let {
     status,
+    readySince = null,
     message,
     activeTurnId,
     starting,
@@ -53,6 +56,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onretry = () => {},
     oninterrupt,
   }: Props = $props();
+
+  let now = $state(Date.now());
+  let readyLabel = $derived.by(() => {
+    if (readySince == null) return 'Ready';
+    const minutes = Math.floor(Math.max(0, now - readySince) / 60_000);
+    if (minutes === 0) return 'Ready since less than a minute ago';
+    const days = Math.floor(minutes / 1_440);
+    const hours = Math.floor((minutes % 1_440) / 60);
+    const remainder = minutes % 60;
+    const parts: string[] = [];
+    if (days) parts.push(`${days} ${days === 1 ? 'day' : 'days'}`);
+    if (hours) parts.push(`${hours} ${hours === 1 ? 'hour' : 'hours'}`);
+    if (remainder) parts.push(`${remainder} ${remainder === 1 ? 'minute' : 'minutes'}`);
+    return `Ready since ${parts.join(' ')} ago`;
+  });
+  onMount(() => {
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 30_000);
+    return () => clearInterval(timer);
+  });
 
   let selectedCommandIndex = $state(0);
   let dismissedCommandQuery = $state<string | null>(null);
@@ -131,9 +155,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 
 <form aria-busy={starting}>
-  <p role="status" aria-live="polite" aria-atomic="true" aria-label={status}>
+  <p
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+    aria-label={status === 'Ready.' && readySince != null ? readyLabel : status}
+  >
     {#if status === 'Ready.'}
-      Ready <span class="block-cursor" aria-hidden="true"></span>
+      {readyLabel} <span class="block-cursor" aria-hidden="true"></span>
     {:else}
       {status}
     {/if}
