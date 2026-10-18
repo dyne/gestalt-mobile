@@ -191,3 +191,43 @@ reserve the canonical Org position forever.
 Existing SQLite databases gain a nullable `autopilot_sessions.lifecycle_json`
 column. Existing rows need no data rewrite. New lifecycle values are validated
 on read; malformed values fail closed rather than authorizing a final response.
+
+## Wait and dispatch diagnostics
+
+A successful wait-lease response confirms registration, not delivery of a later
+root turn. The durable journal and redacted `trace` export retain these separate
+boundaries:
+
+- `autopilot.wait-registered`: lease/report IDs, requested wake categories and
+  the absolute `resumeAt` deadline (null for a version 1 event-only wait).
+- `autopilot.wait-expired` or `autopilot.wait-woken`: the consumed episode and
+  observation time, or the matching wake category. `autopilot.wait-ended`
+  records supersession or cancellation before either wake.
+- `autopilot.continuation-scheduled`: report ID, control ID and original
+  `nextEvaluationAt`; then `autopilot.control-issued` and
+  `autopilot.turn-started`/`autopilot.turn-failed` retain the control correlation.
+  `autopilot.control-cancelled` records cancellation rather than leaving a
+  scheduled control's disappearance unexplained.
+- `autopilot.root-process-observed`: a root command completion received by Mobile,
+  its opaque command item ID, and UTC `observedAt`, including receipts after a
+  lease was consumed. This is Mobile receipt time, not proof of the process's
+  exact exit time. Codex command item IDs and shell process-session IDs are
+  different identifiers; use runtime records to correlate them.
+
+All records exclude commands, stdout/stderr, prompts and model output. They use
+transactional audit outbox persistence. An absent observation in a partial or
+rotated trace is not proof that the process never completed.
+
+For a timestamped GitHub run watcher, from the source or installed package root:
+
+```sh
+node scripts/watch-github-run.mjs OWNER/REPOSITORY RUN_ID
+```
+
+The helper reads `gh run view` every 30 seconds and emits only structured status,
+conclusion, run ID, local UTC `observedAt`, and separate `upstreamUpdatedAt` on
+every poll, including the terminal poll. It exits zero only for success and
+records read failures without exposing command diagnostics. Run it as an owned
+background process and register `processExited` plus `processResultAvailable`
+with a bounded version 2 wait lease. The helper does not enable Autopilot or
+register that lease itself. Existing running watchers are unchanged.

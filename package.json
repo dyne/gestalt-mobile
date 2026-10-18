@@ -27,7 +27,8 @@
     "dist/client",
     "README.md",
     "LICENSE",
-    "gestalt-supervision-capabilities.json"
+    "gestalt-supervision-capabilities.json",
+    "scripts/watch-github-run.mjs"
   ],
   "engines": {
     "node": ">=24.0.0"
