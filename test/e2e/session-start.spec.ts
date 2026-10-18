@@ -888,7 +888,7 @@ test('keeps the composer reachable at a phone viewport without horizontal overfl
 
   await openChat(page);
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeVisible();
-  const ready = page.getByRole('status', { name: 'Ready.' });
+  const ready = page.getByRole('status', { name: /^Ready since / });
   expect(
     await ready.evaluate((element) => parseFloat(getComputedStyle(element).marginTop)),
   ).toBeGreaterThan(0);
@@ -1977,7 +1977,7 @@ test('resynchronizes and reconnects after a relay restart closes its socket', as
   await expect(page.getByText('Restored after restart')).toBeVisible();
   await expect(page.getByText('live again')).toBeVisible();
   await expect.poll(() => connections).toBe(2);
-  await expect(page.getByRole('status')).toHaveText('Ready');
+  await expect(page.getByRole('status')).toHaveText('Ready since less than a minute ago');
 });
 
 test('clears an interrupted active turn when relay recovery updates the session', async ({

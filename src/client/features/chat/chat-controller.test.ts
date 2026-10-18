@@ -94,6 +94,74 @@ const environment = () => ({
   window: { addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as Window,
 });
 describe('ChatController', () => {
+  it('tracks each continuous Ready episode without resetting on idle updates', async () => {
+    let now = 1_000;
+    const socket = new Socket();
+    const getHistory = vi.fn().mockResolvedValue({
+      baseSequence: 0,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    });
+    const controller = new ChatController({
+      ...environment(),
+      now: () => now,
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: () => socket as unknown as WebSocket,
+    });
+    try {
+      controller.select('s');
+      await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+      expect(controller.view.readySince).toBe(1_000);
+      now = 61_000;
+      controller.refresh();
+      await vi.waitFor(() => expect(getHistory).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(controller.view.status).toBe('Ready.'));
+      expect(controller.view.readySince).toBe(1_000);
+      socket.emit({
+        type: 'relay.event',
+        event: {
+          sequence: 1,
+          type: 'session.updated',
+          payload: { activeTurnId: null },
+        },
+      });
+      expect(controller.view.readySince).toBe(1_000);
+      socket.emit({
+        type: 'relay.event',
+        event: {
+          sequence: 2,
+          type: 'session.updated',
+          payload: { activeTurnId: 'turn' },
+        },
+      });
+      expect(controller.view.readySince).toBeNull();
+      now = 121_000;
+      socket.emit({
+        type: 'relay.event',
+        event: {
+          sequence: 3,
+          type: 'turnCompleted',
+          payload: null,
+        },
+      });
+      expect(controller.view.readySince).toBe(121_000);
+      now = 181_000;
+      controller.select('other', { history: 'empty' });
+      expect(controller.view.readySince).toBe(181_000);
+      controller.select(null);
+      expect(controller.view.readySince).toBeNull();
+    } finally {
+      controller.dispose();
+    }
+  });
   it('hydrates once and immediately replaces a resync socket even without buffered events', async () => {
     const history = deferred<unknown>();
     const getHistory = vi.fn().mockReturnValue(history.promise);

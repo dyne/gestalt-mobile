@@ -9,10 +9,67 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Composer from './Composer.svelte';
+import { tick } from 'svelte';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('Composer', () => {
+  it('updates Ready elapsed time locally every 30 seconds and stops on unmount', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T12:00:00Z'));
+    const readySince = Date.now();
+    const props = {
+      status: 'Ready.',
+      readySince,
+      message: '',
+      activeTurnId: null,
+      starting: false,
+      onchange: vi.fn(),
+      onsend: vi.fn(),
+      oninterrupt: vi.fn(),
+    };
+    const view = render(Composer, props);
+    expect(screen.getByRole('status').textContent).toContain('Ready since less than a minute ago');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await tick();
+    expect(screen.getByRole('status', { name: 'Ready since 1 minute ago' })).toBeTruthy();
+    await view.rerender({ ...props, message: 'draft' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await tick();
+    expect(screen.getByRole('status').textContent).toContain('Ready since 2 minutes ago');
+    await view.rerender({ ...props, status: 'Codex is working…', readySince: null });
+    expect(screen.getByRole('status').textContent).toBe('Codex is working…');
+    await view.rerender({ ...props, readySince: Date.now() });
+    expect(screen.getByRole('status').textContent).toContain('Ready since less than a minute ago');
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    [60, '1 hour'],
+    [61, '1 hour 1 minute'],
+    [122, '2 hours 2 minutes'],
+    [1_440, '1 day'],
+    [2_883, '2 days 3 minutes'],
+  ])('formats %i elapsed minutes as %s', (minutes, label) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T12:00:00Z'));
+    render(Composer, {
+      status: 'Ready.',
+      readySince: Date.now() - minutes * 60_000,
+      message: '',
+      activeTurnId: null,
+      starting: false,
+      onchange: vi.fn(),
+      onsend: vi.fn(),
+      oninterrupt: vi.fn(),
+    });
+    expect(screen.getByRole('status', { name: `Ready since ${label} ago` })).toBeTruthy();
+  });
+
   it('separates the ready label from its cursor', () => {
     render(Composer, {
       status: 'Ready.',
