@@ -18,19 +18,20 @@ const required = [
   'LICENSE',
   'dist/server/server/main.js',
   'gestalt-supervision-capabilities.json',
+  'scripts/watch-github-run.mjs',
 ];
 const invalid = files.filter(
   (file) =>
-    !['package.json', 'README.md', 'LICENSE', 'gestalt-supervision-capabilities.json'].includes(
-      file,
-    ) &&
+    !required.includes(file) &&
     !file.startsWith('dist/server/') &&
     !file.startsWith('dist/client/'),
 );
-const forbidden = files.filter((file) =>
-  /\.org$|\.map$|\.sqlite$|\.test\.js$|\.integration\.test\.js$|(^|\/)(src|scripts|test|tests|\.github)(\/|$)/.test(
-    file,
-  ),
+const forbidden = files.filter(
+  (file) =>
+    file !== 'scripts/watch-github-run.mjs' &&
+    /\.org$|\.map$|\.sqlite$|\.test\.js$|\.integration\.test\.js$|(^|\/)(src|scripts|test|tests|\.github)(\/|$)/.test(
+      file,
+    ),
 );
 const missing = required.filter((file) => !files.includes(file));
 if (invalid.length || forbidden.length || missing.length)
