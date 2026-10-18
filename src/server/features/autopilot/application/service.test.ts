@@ -1999,6 +1999,8 @@ describe('AutopilotCoordinator', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  // File-backed migrations and reopening can exceed the unit-test budget on CI
+  // storage. Keep the condition waits bounded separately from this I/O budget.
   it('restores a checkpointed root boundary without a duplicate report, then continues the root once', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-checkpoint-executor-restart-'));
     const path = join(directory, 'relay.sqlite');
@@ -2157,7 +2159,7 @@ describe('AutopilotCoordinator', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
   it('launches the next canonical L1 once after restart despite stale historical executors', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gestalt-next-l1-restart-'));
     const path = join(directory, 'relay.sqlite');
