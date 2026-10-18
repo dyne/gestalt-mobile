@@ -35,6 +35,13 @@ const statusTypes = ['autopilot.updated', 'agent.activity.updated', 'session.sta
 
 // Export structural telemetry only. Event types alone do not imply payload safety.
 const diagnosticFields = new Set([
+  'leaseId',
+  'reportId',
+  'resumeAt',
+  'wakeCondition',
+  'wakeConditions',
+  'nextEvaluationAt',
+  'processId',
   'traceId',
   'handoffId',
   'controlId',
@@ -110,7 +117,7 @@ function objectPayload(value: string): Record<string, unknown> {
 }
 
 function correlation(payload: Record<string, unknown>): string | null {
-  for (const key of ['traceId', 'handoffId', 'controlId', 'turnId', 'requestId'])
+  for (const key of ['traceId', 'handoffId', 'controlId', 'leaseId', 'turnId', 'requestId'])
     if (typeof payload[key] === 'string' && payload[key]) return String(payload[key]);
   return null;
 }

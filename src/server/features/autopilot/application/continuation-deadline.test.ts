@@ -6,6 +6,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SqliteEventJournal } from '../../../platform/persistence/sqlite-event-journal.js';
 import { migrate } from '../../../platform/persistence/migrate.js';
 import { SqliteAutopilotStore } from '../../../platform/persistence/sqlite-autopilot-store.js';
 import { createAgentActivitySnapshot } from '../../agent-activity/model.js';
@@ -24,6 +25,7 @@ describe('continuation deadline across reconciliation', () => {
       "INSERT INTO relay_sessions (id,workspace_id,workspace_path,profile,state,desired_state,failure_count,next_sequence,created_at,updated_at) VALUES ('s','w','/w','p','ready','active',0,1,'t','t')",
     );
     const store = new SqliteAutopilotStore(database);
+    const journal = new SqliteEventJournal(database);
     const now = () => new Date().toISOString();
     const base = createAgentActivitySnapshot('s', now());
     const activity = {
@@ -80,11 +82,15 @@ describe('continuation deadline across reconciliation', () => {
       },
       nextControlId: () => `control-${++controlNumber}`,
       turnStarter: { start },
-      publish: (_sessionId, type) => events.push(type),
+      publish: (sessionId, type, payload, at, outboxId) => {
+        events.push(type);
+        journal.append(sessionId, type, payload, at, outboxId);
+      },
     });
     coordinator.enable('s');
     return {
       coordinator,
+      database,
       store,
       activity,
       start,
@@ -99,6 +105,138 @@ describe('continuation deadline across reconciliation', () => {
       },
     };
   }
+
+  it('expires an accepted wait and dispatches once despite reconciliation, retaining diagnostic boundaries', async () => {
+    const f = fixture();
+    try {
+      expect(
+        f.coordinator.registerProactiveWait('s', {
+          id: 'ci-running',
+          leaseId: 'ci-wait',
+          maxWaitMs: 600_000,
+          wakeConditions: ['processExited', 'processResultAvailable'],
+        }),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(600_000);
+      const due = f.store.find('s')!.nextEvaluationAt;
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        f.activity.confidence = 'reconciling';
+        f.coordinator.evaluate('s');
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(f.store.find('s')!.nextEvaluationAt).toBe(due);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(f.start).toHaveBeenCalledOnce();
+      const rows = f.database
+        .prepare(
+          "SELECT type,payload_json,occurred_at FROM session_events WHERE type IN ('autopilot.wait-registered','autopilot.wait-expired','autopilot.continuation-scheduled','autopilot.turn-started') ORDER BY sequence",
+        )
+        .all() as { type: string; payload_json: string; occurred_at: string }[];
+      const registered = rows.find((row) => row.type === 'autopilot.wait-registered')!;
+      expect(JSON.parse(registered.payload_json)).toMatchObject({
+        leaseId: 'ci-wait',
+        reportId: 'ci-running',
+        resumeAt: '2026-10-18T06:09:19.000Z',
+      });
+      expect(rows.find((row) => row.type === 'autopilot.wait-expired')?.occurred_at).toBe(
+        '2026-10-18T06:09:19.000Z',
+      );
+      expect(
+        JSON.parse(
+          rows.filter((row) => row.type === 'autopilot.continuation-scheduled').at(-1)!
+            .payload_json,
+        ),
+      ).toMatchObject({ reportId: 'ci-running', nextEvaluationAt: due });
+      expect(rows.at(-1)?.type).toBe('autopilot.turn-started');
+    } finally {
+      f.close();
+    }
+  });
+
+  it('records duplicate process completion observations after the wake was consumed', async () => {
+    const f = fixture();
+    try {
+      expect(
+        f.coordinator.registerProactiveWait('s', {
+          id: 'process-report',
+          leaseId: 'process-wait',
+          maxWaitMs: 60_000,
+          wakeConditions: ['processResultAvailable'],
+        }),
+      ).toBe(true);
+      expect(f.coordinator.rootProcessCompleted('s', 'watcher-48778')).toBe(true);
+      expect(f.coordinator.rootProcessCompleted('s', 'watcher-48778')).toBe(false);
+      const rows = f.database
+        .prepare(
+          "SELECT type,payload_json,occurred_at FROM session_events WHERE type IN ('autopilot.wait-woken','autopilot.root-process-observed') ORDER BY sequence",
+        )
+        .all() as { type: string; payload_json: string; occurred_at: string }[];
+      expect(rows.filter((row) => row.type === 'autopilot.wait-woken')).toHaveLength(1);
+      const observations = rows.filter((row) => row.type === 'autopilot.root-process-observed');
+      expect(observations).toHaveLength(2);
+      expect(JSON.parse(observations[0]!.payload_json)).toMatchObject({
+        processId: 'watcher-48778',
+        leaseId: 'process-wait',
+        observedAt: '2026-10-18T05:59:19.000Z',
+      });
+      expect(JSON.parse(observations[1]!.payload_json)).toMatchObject({
+        processId: 'watcher-48778',
+        leaseId: null,
+      });
+    } finally {
+      f.close();
+    }
+  });
+
+  it('timestamps a process completion after expiry without creating another wake', async () => {
+    const f = fixture();
+    try {
+      f.coordinator.registerProactiveWait('s', {
+        id: 'late-report',
+        leaseId: 'late-wait',
+        maxWaitMs: 60_000,
+        wakeConditions: ['processResultAvailable'],
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.coordinator.rootProcessCompleted('s', 'late-process')).toBe(false);
+      expect(f.events.filter((type) => type === 'autopilot.wait-expired')).toHaveLength(1);
+      expect(f.events).not.toContain('autopilot.wait-woken');
+      const row = f.database
+        .prepare(
+          "SELECT payload_json,occurred_at FROM session_events WHERE type='autopilot.root-process-observed'",
+        )
+        .get() as { payload_json: string; occurred_at: string };
+      expect(row.occurred_at).toBe('2026-10-18T06:00:19.000Z');
+      expect(JSON.parse(row.payload_json)).toMatchObject({
+        leaseId: null,
+        reportId: 'late-report',
+        observedAt: row.occurred_at,
+      });
+    } finally {
+      f.close();
+    }
+  });
+
+  it('retains lease cancellation and never expires it after manual intervention', async () => {
+    const f = fixture();
+    try {
+      f.coordinator.registerProactiveWait('s', {
+        id: 'manual-report',
+        leaseId: 'manual-wait',
+        maxWaitMs: 60_000,
+        wakeConditions: ['processExited'],
+      });
+      f.coordinator.manualSend('s');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.events).toContain('autopilot.wait-ended');
+      expect(f.events).not.toContain('autopilot.wait-expired');
+      expect(f.events).toContain('autopilot.control-cancelled');
+      expect(f.start).not.toHaveBeenCalled();
+    } finally {
+      f.close();
+    }
+  });
 
   it('dispatches the original durable control on time despite repeated reconciliation', async () => {
     const f = fixture();

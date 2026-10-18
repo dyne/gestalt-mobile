@@ -412,7 +412,20 @@ export class AutopilotCoordinator {
     if (nextProtocol === state.supervision) return false;
     this.cancelWaitTimer(sessionId);
     this.parkedSubscriptions.delete(sessionId);
-    this.persist({ ...state, supervision: nextProtocol, updatedAt: this.deps.now() });
+    const now = this.deps.now();
+    this.persist({ ...state, supervision: nextProtocol, updatedAt: now }, undefined, [
+      {
+        sessionId,
+        type: 'autopilot.wait-woken',
+        occurredAt: now,
+        payload: {
+          leaseId: wake.leaseId,
+          reportId: state.supervision.lastReportId,
+          wakeCondition: wake.condition,
+          resumeAt: state.supervision.waitLease?.resumeAt ?? null,
+        },
+      },
+    ]);
     this.evaluate(sessionId);
     return true;
   }
@@ -428,8 +441,31 @@ export class AutopilotCoordinator {
   }
   /** Bridges a completed root-owned background command into its one active wait episode. */
   rootProcessCompleted(sessionId: string, processId: string): boolean {
-    const lease = this.deps.store.find(sessionId)?.supervision?.waitLease;
-    if (!lease || !processId || processId.length > 256) return false;
+    if (!processId || processId.length > 256) return false;
+    const state = this.deps.store.find(sessionId);
+    if (!state) return false;
+    const lease = state.supervision?.waitLease;
+    const observedAt = this.deps.now();
+    // Record receipt even when an earlier deadline already consumed the lease.
+    // This is relay observation time, not an inferred process exit timestamp.
+    this.commit({
+      events: [
+        {
+          sessionId,
+          type: 'autopilot.root-process-observed',
+          occurredAt: observedAt,
+          payload: {
+            processId,
+            observedAt,
+            leaseId: lease?.id ?? null,
+            reportId: state.supervision?.lastReportId ?? null,
+            status: 'completed',
+          },
+        },
+      ],
+    });
+    this.flushOutbox(sessionId);
+    if (!lease) return false;
     const condition = lease.wakeConditions.includes('processResultAvailable')
       ? 'processResultAvailable'
       : lease.wakeConditions.includes('processExited')
@@ -718,6 +754,8 @@ export class AutopilotCoordinator {
             type: 'autopilot.continuation-scheduled',
             payload: {
               controlId: scheduledControlId,
+              reportId: prior.supervision?.lastReportId ?? null,
+              nextEvaluationAt: decision.at,
               ...(prior.checkpoints?.activeHandoffId
                 ? { traceId: prior.checkpoints.activeHandoffId }
                 : {}),
@@ -1412,11 +1450,60 @@ export class AutopilotCoordinator {
     control?: AutopilotControl,
     events: readonly AutopilotAuditEvent[] = [],
   ): void {
+    const prior = this.deps.store.find(next.sessionId);
+    const previousLease = prior?.supervision?.waitLease;
+    const nextLease = next.supervision?.waitLease;
+    const diagnostics: AutopilotAuditEvent[] = [];
+    if (nextLease && nextLease.id !== previousLease?.id)
+      diagnostics.push({
+        sessionId: next.sessionId,
+        type: 'autopilot.wait-registered',
+        occurredAt: next.updatedAt,
+        payload: {
+          leaseId: nextLease.id,
+          reportId: next.supervision?.lastReportId,
+          resumeAt: nextLease.resumeAt ?? null,
+          wakeConditions: nextLease.wakeConditions,
+        },
+      });
+    if (
+      previousLease &&
+      previousLease.id !== nextLease?.id &&
+      !events.some(
+        (event) => event.type === 'autopilot.wait-expired' || event.type === 'autopilot.wait-woken',
+      )
+    )
+      diagnostics.push({
+        sessionId: next.sessionId,
+        type: 'autopilot.wait-ended',
+        occurredAt: next.updatedAt,
+        payload: {
+          leaseId: previousLease.id,
+          reportId: prior?.supervision?.lastReportId,
+          resumeAt: previousLease.resumeAt ?? null,
+          reason: next.stopReason ?? 'superseded',
+          state: next.state,
+        },
+      });
+    if (
+      control?.status === 'cancelled' &&
+      this.deps.store.findControl(next.sessionId, control.controlId)?.status !== 'cancelled'
+    )
+      diagnostics.push({
+        sessionId: next.sessionId,
+        type: 'autopilot.control-cancelled',
+        occurredAt: next.updatedAt,
+        payload: {
+          controlId: control.controlId,
+          reportId: prior?.supervision?.lastReportId ?? null,
+          reason: next.stopReason ?? 'superseded',
+        },
+      });
     const snapshotEvents = this.snapshotEvents(next, control);
     this.commit({
       state: next,
       ...(control ? { control } : {}),
-      events: [...snapshotEvents, ...events],
+      events: [...snapshotEvents, ...diagnostics, ...events],
     });
     this.storeRecoveryAttempts.delete(next.sessionId);
     if (snapshotEvents.length)
@@ -1691,7 +1778,15 @@ export class AutopilotCoordinator {
             return;
           }
           this.parkedSubscriptions.delete(sessionId);
-          this.persist({ ...state, supervision: protocol, updatedAt: this.deps.now() });
+          const observedAt = this.deps.now();
+          this.persist({ ...state, supervision: protocol, updatedAt: observedAt }, undefined, [
+            {
+              sessionId,
+              type: 'autopilot.wait-expired',
+              occurredAt: observedAt,
+              payload: { leaseId, reportId: state.supervision.lastReportId, resumeAt, observedAt },
+            },
+          ]);
           this.evaluate(sessionId);
         },
         Math.max(0, Date.parse(resumeAt) - Date.parse(this.deps.now())),

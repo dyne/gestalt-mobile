@@ -37,6 +37,7 @@ describe('publishable package manifest', () => {
         'README.md',
         'LICENSE',
         'gestalt-supervision-capabilities.json',
+        'scripts/watch-github-run.mjs',
       ],
     });
     expect(manifest.private).not.toBe(true);

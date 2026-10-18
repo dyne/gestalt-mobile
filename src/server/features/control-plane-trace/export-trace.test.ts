@@ -24,6 +24,49 @@ afterEach(async () =>
 );
 
 describe('control-plane trace export', () => {
+  it('exports durable wait correlations and observation timestamps without command output', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'gestalt-wait-trace-'));
+    directories.push(directory);
+    const path = join(directory, 'relay.sqlite');
+    const db = new DatabaseSync(path);
+    db.exec(
+      'CREATE TABLE session_events (session_id TEXT, sequence INTEGER, occurred_at TEXT, type TEXT, payload_json TEXT)',
+    );
+    const payload = {
+      leaseId: 'lease-1',
+      reportId: 'report-1',
+      processId: 'process-1',
+      resumeAt: '2026-10-18T10:17:08.857Z',
+      observedAt: '2026-10-18T10:17:08.859Z',
+      wakeCondition: 'processResultAvailable',
+      wakeConditions: ['processExited'],
+      nextEvaluationAt: '2026-10-18T10:17:12.859Z',
+      command: 'private command',
+      stdout: 'private output',
+      environment: { TOKEN: 'private token' },
+    };
+    db.prepare('INSERT INTO session_events VALUES (?,?,?,?,?)').run(
+      's',
+      1,
+      payload.observedAt,
+      'autopilot.wait-expired',
+      JSON.stringify(payload),
+    );
+    db.close();
+    const trace = exportControlPlaneTrace(path, 's', payload.observedAt);
+    expect(trace.events[0]).toMatchObject({
+      traceId: 'lease-1',
+      payload: {
+        leaseId: 'lease-1',
+        reportId: 'report-1',
+        resumeAt: payload.resumeAt,
+        observedAt: payload.observedAt,
+        nextEvaluationAt: payload.nextEvaluationAt,
+      },
+    });
+    expect(JSON.stringify(trace)).not.toContain('private');
+  });
+
   it('retains provider error identifiers and HTTP status without provider prose', () => {
     expect(
       redactDiagnosticPayload({
