@@ -150,36 +150,36 @@ describe('Composer', () => {
     expect(onsend).not.toHaveBeenCalled();
   });
 
-  it('does not request a bottom scroll while typing but does after accepting a completion', async () => {
+  it('does not request revealing the prompt while typing but does after accepting a completion', async () => {
     const onchange = vi.fn();
-    const onscrollbottom = vi.fn();
+    const onrevealprompt = vi.fn();
     const { rerender } = render(Composer, {
       status: 'Ready.',
       message: '',
       activeTurnId: null,
       starting: false,
       onchange,
-      onscrollbottom,
+      onrevealprompt,
       onsend: () => {},
       oninterrupt: () => {},
     });
 
     const prompt = screen.getByRole('textbox', { name: 'Prompt' });
     await fireEvent.input(prompt, { target: { value: '/' } });
-    expect(onscrollbottom).not.toHaveBeenCalled();
+    expect(onrevealprompt).not.toHaveBeenCalled();
     rerender({
       status: 'Ready.',
       message: '/',
       activeTurnId: null,
       starting: false,
       onchange,
-      onscrollbottom,
+      onrevealprompt,
       onsend: () => {},
       oninterrupt: () => {},
     });
 
     await fireEvent.keyDown(prompt, { key: 'Tab' });
-    expect(onscrollbottom).toHaveBeenCalledTimes(1);
+    expect(onrevealprompt).toHaveBeenCalledTimes(1);
   });
 
   it('sends with Ctrl+Enter or the side button and leaves plain Enter available for editing', async () => {
@@ -304,7 +304,7 @@ describe('Composer', () => {
 
   it('keeps models visible after command completion and sorts newest first', async () => {
     const onmodelselect = vi.fn();
-    const onscrollbottom = vi.fn();
+    const onrevealprompt = vi.fn();
     render(Composer, {
       status: 'Ready.',
       message: '/model ',
@@ -313,7 +313,7 @@ describe('Composer', () => {
       models: ['gpt-5.4', 'gpt-5.6-terra'],
       onchange: () => {},
       onmodelselect,
-      onscrollbottom,
+      onrevealprompt,
       onsend: () => {},
       oninterrupt: () => {},
     });
@@ -323,7 +323,7 @@ describe('Composer', () => {
     );
     await fireEvent.click(screen.getByRole('button', { name: 'gpt-5.6-terra' }));
     expect(onmodelselect).toHaveBeenCalledWith('gpt-5.6-terra');
-    expect(onscrollbottom).toHaveBeenCalledOnce();
+    expect(onrevealprompt).toHaveBeenCalledOnce();
   });
 
   it('keeps reasoning choices visible after command completion adds a space', () => {

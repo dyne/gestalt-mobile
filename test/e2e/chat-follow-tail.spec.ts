@@ -24,21 +24,6 @@ async function waitForScrollToSettle(page: import('@playwright/test').Page): Pro
 
 test('rapid session switch replaces A timeline with B timeline', async ({ page }) => {
   await mockAuthenticatedStatus(page);
-  await page.addInitScript(() => {
-    (window as Window & { __tailCalls?: Array<{ marker: string; behavior: string }> }).__tailCalls =
-      [];
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function (options) {
-      if ((this as HTMLElement).classList.contains('chat-tail')) {
-        const body = document.body.textContent ?? '';
-        window.__tailCalls!.push({
-          marker: body.includes('marker B') ? 'B' : body.includes('marker A') ? 'A' : 'none',
-          behavior: typeof options === 'object' && options ? (options.behavior ?? '') : '',
-        });
-      }
-      original.call(this, options);
-    };
-  });
   const session = (id: string, workspacePath: string) => ({
     id,
     state: 'ready',
@@ -88,23 +73,8 @@ test('rapid session switch replaces A timeline with B timeline', async ({ page }
     .click();
   await expect(page.getByText('marker B')).toBeVisible();
   await expect(page.getByText('marker A')).toHaveCount(0);
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        (window as Window & { __tailCalls?: Array<{ marker: string }> }).__tailCalls?.some(
-          (call) => call.marker === 'B',
-        ),
-      ),
-    )
-    .toBe(true);
-  expect(
-    await page.evaluate(() => {
-      const calls =
-        (window as Window & { __tailCalls?: Array<{ marker: string }> }).__tailCalls ?? [];
-      const firstB = calls.findIndex((call) => call.marker === 'B');
-      return calls.slice(firstB + 1).every((call) => call.marker !== 'A');
-    }),
-  ).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeInViewport();
 });
 
 for (const viewport of [
@@ -112,7 +82,9 @@ for (const viewport of [
   { name: 'desktop', width: 1280, height: 800 },
 ]) {
   if (viewport.name === 'compact')
-    test('resolved interaction followed by output stays at tail', async ({ page }) => {
+    test('reviewing an interaction reaches the request and keeps subsequent output accessible', async ({
+      page,
+    }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await mockAuthenticatedStatus(page);
       const pending = {
@@ -175,6 +147,11 @@ for (const viewport of [
       );
       await page.goto('/');
       await page.getByRole('button', { name: 'Chat' }).click();
+      await page
+        .getByRole('button', { name: 'Review command approval', exact: true })
+        .first()
+        .click();
+      await expect(page.getByRole('button', { name: 'Approve' })).toBeInViewport();
       await page.getByRole('button', { name: 'Approve' }).click();
       await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Approved');
       socket!.send(
@@ -191,17 +168,15 @@ for (const viewport of [
       await expect(page.getByRole('button', { name: 'Interrupt' })).toBeVisible();
     });
   if (viewport.name === 'compact')
-    test('reduced motion uses instant tail scrolling', async ({ page }) => {
+    test('reduced motion opens Chat instantly at the top', async ({ page }) => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.addInitScript(() => {
         (window as Window & { __tailBehavior?: string }).__tailBehavior = '';
-        const original = Element.prototype.scrollIntoView;
-        Element.prototype.scrollIntoView = function (options) {
-          if ((this as HTMLElement).classList.contains('chat-tail'))
-            window.__tailBehavior =
-              typeof options === 'object' && options ? (options.behavior ?? '') : '';
-          original.call(this, options);
-        };
+        const original = window.scrollTo.bind(window);
+        window.scrollTo = ((options: ScrollToOptions) => {
+          window.__tailBehavior = options.behavior ?? '';
+          original(options);
+        }) as typeof window.scrollTo;
       });
       await mockAuthenticatedStatus(page);
       await page.route('**/api/bootstrap', (r) =>
@@ -238,10 +213,12 @@ for (const viewport of [
         .poll(() =>
           page.evaluate(() => (window as Window & { __tailBehavior?: string }).__tailBehavior),
         )
-        .toBe('auto');
+        .toBe('instant');
     });
   if (viewport.name === 'compact')
-    test('composer growth keeps reading position and completion returns tail', async ({ page }) => {
+    test('composer growth keeps the prompt visible without scrolling to history', async ({
+      page,
+    }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await mockAuthenticatedStatus(page);
       await page.route('**/api/bootstrap', (r) =>
@@ -329,7 +306,7 @@ for (const viewport of [
       expect(afterMetrics.scrollHeight).toBeGreaterThan(beforeMetrics.scrollHeight);
       expect((await prompt.boundingBox())!.y).toBeLessThan(500);
     });
-  test(`explicit send returns to tail before its HTTP response (${viewport.name})`, async ({
+  test(`explicit send keeps the prompt at the top before and after its HTTP response (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -387,7 +364,7 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     await waitForScrollToSettle(page);
-    await page.mouse.wheel(0, -2000);
+    await page.mouse.wheel(0, 2000);
     await page.evaluate(
       () =>
         new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
@@ -396,13 +373,15 @@ for (const viewport of [
     await page.getByRole('button', { name: 'Send prompt' }).click();
     await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('send while reading');
     await expect.poll(() => requests).toBe(1);
-    await expect(page.getByText('send while reading')).toBeVisible();
+    await expect(page.getByText('send while reading')).toBeAttached();
+    await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeInViewport();
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
     await fulfill?.();
     await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('');
     expect(requests).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   });
-  test(`follow-tail follows streaming but preserves reading position (${viewport.name})`, async ({
+  test(`newest streaming output stays above history and preserves reading position (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -454,6 +433,7 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     await expect(page.getByText('message 47')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await expect.poll(() => socket).toBeTruthy();
     socket!.send(
       JSON.stringify({
@@ -466,26 +446,20 @@ for (const viewport of [
       }),
     );
     await expect(page.getByText('tail stream')).toBeVisible();
-    const tailY = await page.evaluate(() => window.scrollY);
-    expect(await page.locator('.chat-tail').boundingBox()).toBeTruthy();
     await waitForScrollToSettle(page);
-    await page.mouse.wheel(0, -2_000);
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
-    const before = await page.evaluate(() => window.scrollY);
-    expect(before).toBeLessThan(tailY);
-    expect((await page.locator('.chat-tail').boundingBox())?.y ?? 0).toBeGreaterThan(
-      viewport.height,
-    );
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await expect(page.locator('.answer-item').first()).toContainText('tail stream');
+    await page.evaluate(() => window.scrollTo({ top: 2000 }));
+    await waitForScrollToSettle(page);
+    const reading = page.getByText('message 30', { exact: true });
+    const before = (await reading.boundingBox())!.y;
     socket!.send(
       JSON.stringify({
         type: 'relay.event',
         event: {
           sequence: 2,
           type: 'agentMessageDelta',
-          payload: { text: ' reading stream', phase: 'final_answer' },
+          payload: { text: ' reading stream'.repeat(100), phase: 'final_answer' },
         },
       }),
     );
@@ -496,10 +470,10 @@ for (const viewport of [
         event: { sequence: 2, type: 'agentMessageDelta', payload: { text: 'duplicate' } },
       }),
     );
-    expect(Math.abs((await page.evaluate(() => window.scrollY)) - before)).toBeLessThanOrEqual(2);
-    expect(tailY).toBeGreaterThan(0);
+    await waitForScrollToSettle(page);
+    expect(Math.abs((await reading.boundingBox())!.y - before)).toBeLessThanOrEqual(2);
   });
-  test(`follow-tail initial bottom and actionable clearance (${viewport.name})`, async ({
+  test(`Chat opens at top with prompt before newest-first history (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -547,17 +521,21 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     await expect(page.getByRole('textbox', { name: 'Prompt' })).toBeFocused();
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            document.documentElement.scrollHeight -
-            window.innerHeight -
-            window.scrollY -
-            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-        ),
-      )
-      .toBeLessThanOrEqual(1);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    const prompt = page.getByRole('textbox', { name: 'Prompt' });
+    await expect(prompt).toBeInViewport();
+    const positions = await page.evaluate(() => {
+      const prompt = document.querySelector('#message')!;
+      const messages = [...document.querySelectorAll('.prompt-turn')];
+      return {
+        promptY: prompt.getBoundingClientRect().y,
+        text: messages.map((message) => message.textContent),
+        firstY: messages[0]?.getBoundingClientRect().y,
+      };
+    });
+    expect(positions.firstY).toBeGreaterThan(positions.promptY);
+    expect(positions.text).toHaveLength(24);
+    positions.text.forEach((text, index) => expect(text).toContain(`message ${23 - index}`));
     await expect(page.getByText('message 23')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send prompt' })).toBeVisible();
     await page.screenshot({

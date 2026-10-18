@@ -16,6 +16,37 @@ describe('MessageList', () => {
     cleanup();
     vi.useRealTimers();
   });
+  it('renders newest answers before their prompts without mutating chronological input', async () => {
+    const messages = [
+      { id: 'old-prompt', role: 'user' as const, text: 'Old prompt', complete: true },
+      { id: 'old-answer', role: 'assistant' as const, text: 'Old answer', complete: true },
+      { id: 'new-prompt', role: 'user' as const, text: 'New prompt', complete: true },
+      { id: 'new-answer', role: 'assistant' as const, text: 'New answer', complete: false },
+    ];
+    const view = render(MessageList, { messages, activities: [] });
+    const texts = () =>
+      [...screen.getByRole('list', { name: 'Chat messages' }).children].map(
+        (entry) => entry.textContent,
+      );
+    ['New answer', 'New prompt', 'Old answer', 'Old prompt'].forEach((text, index) =>
+      expect(texts()[index]).toContain(text),
+    );
+    expect(messages.map((message) => message.id)).toEqual([
+      'old-prompt',
+      'old-answer',
+      'new-prompt',
+      'new-answer',
+    ]);
+    await view.rerender({
+      messages: [
+        ...messages,
+        { id: 'latest', role: 'user', text: 'Latest prompt', complete: true },
+      ],
+      activities: [],
+    });
+    expect(texts()[0]).toContain('Latest prompt');
+  });
+
   it('anchors the attention dialogue between earlier and later chat and keeps its explanation after resolution', async () => {
     const attention = {
       requestId: 'blocker',
@@ -57,10 +88,10 @@ describe('MessageList', () => {
     const onattentionresolve = vi.fn();
     const view = render(MessageList, { messages, activities: [], attention, onattentionresolve });
     const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
-    expect(entries[0]?.textContent).toContain('commentary');
+    expect(entries[2]?.textContent).toContain('commentary');
     expect(entries[1]?.textContent).toContain('Autopilot needs your attention');
     expect(entries[1]?.textContent).toContain('The L3 checkpoint cannot be validated');
-    expect(entries[2]?.textContent).toContain('Later guidance');
+    expect(entries[0]?.textContent).toContain('Later guidance');
     await fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     expect(onattentionresolve).toHaveBeenCalledWith('resume');
     await view.rerender({ messages, activities: [], attention: null });
@@ -69,7 +100,7 @@ describe('MessageList', () => {
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
-  it('appends a new attention dialogue after the existing chat even before its audit arrives', () => {
+  it('places a new attention dialogue above the existing chat even before its audit arrives', () => {
     render(MessageList, {
       messages: [{ id: 'prior', role: 'user', text: 'Existing chat', complete: true }],
       activities: [],
@@ -86,8 +117,8 @@ describe('MessageList', () => {
       },
     });
     const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
-    expect(entries[0]?.textContent).toContain('Existing chat');
-    expect(entries[1]?.textContent).toContain('The test runner is unavailable.');
+    expect(entries[1]?.textContent).toContain('Existing chat');
+    expect(entries[0]?.textContent).toContain('The test runner is unavailable.');
   });
 
   it('presents automatic continuation history as an audit entry, not a prompt bubble', () => {
@@ -495,7 +526,7 @@ describe('MessageList', () => {
     const prompt = screen.getByText('Inspect the workspace').closest('.prompt-turn');
     expect(prompt?.textContent).toContain('Approved');
     expect(screen.getByText('Done.').compareDocumentPosition(prompt!)).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING,
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
 
@@ -661,16 +692,18 @@ describe('MessageList', () => {
       activeTurnId: 'turn-2',
     });
     expect(screen.getByRole('list', { name: 'Chat messages' }).textContent).toMatch(
-      /first[\s\S]*first answer[\s\S]*second[\s\S]*checking/,
+      /checking[\s\S]*second[\s\S]*first answer[\s\S]*first/,
     );
     const times = screen.getAllByText(/:/).filter((element) => element.tagName === 'TIME');
     expect(times).toHaveLength(4);
-    expect(times.map((time) => time.getAttribute('datetime'))).toEqual([
-      new Date(start).toISOString(),
-      new Date(start + 60_000).toISOString(),
-      new Date(start + 120_000).toISOString(),
-      new Date(start + 180_000).toISOString(),
-    ]);
+    expect(times.map((time) => time.getAttribute('datetime'))).toEqual(
+      [
+        new Date(start).toISOString(),
+        new Date(start + 60_000).toISOString(),
+        new Date(start + 120_000).toISOString(),
+        new Date(start + 180_000).toISOString(),
+      ].toReversed(),
+    );
     expect(times.filter((time) => time.textContent?.includes('1 minute later'))).toHaveLength(3);
   });
 });
