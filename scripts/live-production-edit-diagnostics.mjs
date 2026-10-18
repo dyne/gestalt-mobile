@@ -61,7 +61,7 @@ export function pickerChromeSnapshot() {
   }
 }
 
-const boundaries = ['before-accept', 'after-accept', 'before-steer'];
+const boundaries = ['before-accept', 'after-accept', 'after-accept-ack', 'before-steer'];
 export function boundedPickerObservation(value) {
   if (!value || !boundaries.includes(value.boundary)) return null;
   const boolean = (v) => (typeof v === 'boolean' ? v : null);
@@ -108,6 +108,13 @@ export function boundedPickerObservation(value) {
 }
 
 const operations = new Set([
+  'admission-inspection',
+  'admission-catalog-context',
+  'admission-catalog-org',
+  'admission-config',
+  'admission-thread',
+  'admission-account',
+  'admission-resources',
   'policy-total',
   'policy-manager-verify',
   'policy-source-observer',
@@ -389,4 +396,107 @@ export function observeInstalledPolicyTimings(prototype) {
     options('policy-local-installation'),
   );
   return report;
+}
+
+/** Proof-only RPC spans. Groups identify an inspection, never cached authority.
+ * Resource checks outside inspection use group zero; nested spans are nonadditive. */
+export function observeAdmissionTimings(runtimePrototype, controllerPrototype) {
+  const labels = [
+    'admission-inspection',
+    'admission-catalog-context',
+    'admission-catalog-org',
+    'admission-config',
+    'admission-thread',
+    'admission-account',
+    'admission-resources',
+  ];
+  const report = {
+    timeBasis: 'milliseconds-since-diagnostic-installation',
+    calls: [],
+    counters: Object.fromEntries(
+      labels.map((label) => [label, { started: 0, completed: 0, failed: 0, totalMs: 0 }]),
+    ),
+  };
+  const scope = new AsyncLocalStorage();
+  const began = performance.now();
+  let groups = 0,
+    sequence = 0;
+  const options = (label, when) => ({
+    limit: 512,
+    when,
+    before(_owner, record) {
+      report.counters[label].started++;
+      record.sequence = ++sequence;
+      record.groupId = scope.getStore() ?? 0;
+      record.startedAfterMs = Math.max(0, Math.round(performance.now() - began));
+    },
+    after(_owner, record) {
+      report.counters[label][record.result]++;
+      report.counters[label].totalMs += record.elapsedMs;
+    },
+  });
+  const original = runtimePrototype.inspectLiveAdmission;
+  if (typeof original !== 'function') throw new Error('PROOF_DIAGNOSTIC_METHOD_INVALID');
+  const grouped = { invoke: original };
+  observeProofMethod(
+    grouped,
+    'invoke',
+    'admission-inspection',
+    report.calls,
+    options('admission-inspection'),
+  );
+  runtimePrototype.inspectLiveAdmission = function (...args) {
+    return scope.run(++groups, () => grouped.invoke.apply(this, args));
+  };
+  observeProofMethod(
+    controllerPrototype,
+    'verifyProjectResources',
+    'admission-resources',
+    report.calls,
+    options('admission-resources'),
+  );
+  return {
+    report,
+    observeRpc(rpc) {
+      for (const [label, selected] of [
+        [
+          'admission-catalog-context',
+          ([method, params]) =>
+            method === 'mcpServerStatus/list' &&
+            params?.serverName === 'context-mode' &&
+            typeof params.threadId === 'string' &&
+            params.threadId.length > 0 &&
+            params.detail === 'full',
+        ],
+        [
+          'admission-catalog-org',
+          ([method, params]) =>
+            method === 'mcpServerStatus/list' &&
+            params?.serverName === 'gestalt-org-plan' &&
+            typeof params.threadId === 'string' &&
+            params.threadId.length > 0 &&
+            params.detail === 'full',
+        ],
+        [
+          'admission-config',
+          ([method, params]) => method === 'config/read' && params?.includeLayers === true,
+        ],
+        [
+          'admission-thread',
+          ([method, params]) => method === 'thread/read' && params?.includeTurns === false,
+        ],
+        [
+          'admission-account',
+          ([method, params]) => method === 'account/read' && params?.refreshToken === false,
+        ],
+      ])
+        observeProofMethod(
+          rpc,
+          'request',
+          label,
+          report.calls,
+          options(label, (_owner, args) => selected(args)),
+        );
+    },
+  };
 }

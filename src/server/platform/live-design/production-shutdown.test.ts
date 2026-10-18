@@ -108,3 +108,121 @@ it('still revokes and aborts a genuine admission failure while the generation is
   expect(f.abort).toHaveBeenCalledOnce();
   expect(f.revoke).toHaveBeenCalledOnce();
 });
+
+it('keeps the complete failed admission pending until revoke-first physical and raw drainage finishes', async () => {
+  const f = fixture();
+  const order: string[] = [];
+  let finish!: () => void;
+  f.revoke.mockImplementation(async () => {
+    order.push('signed-revoke');
+  });
+  f.abort.mockImplementation(async () => {
+    order.push('abort');
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    order.push('raw-and-physical-drained');
+  });
+  let returned = false;
+  const rejected = f.controller.verifyLiveRuntime(f.run).catch((error) => {
+    returned = true;
+    return error;
+  });
+  await vi.waitFor(() => expect(f.inspect).toHaveBeenCalledOnce());
+  f.reject(new Error('LIVE_ADMISSION_UNAVAILABLE'));
+  await vi.waitFor(() => expect(f.abort).toHaveBeenCalledOnce());
+  expect(returned).toBe(false);
+  expect(order).toEqual(['signed-revoke', 'abort']);
+  expect(f.owners.current(f.run.liveId)?.state).toBe('recoveryRequired');
+  finish();
+  expect((await rejected).message).toBe('LIVE_ADMISSION_UNAVAILABLE');
+  expect(order).toEqual(['signed-revoke', 'abort', 'raw-and-physical-drained']);
+});
+
+it('retains recovery and blocks preflight when physical/raw admission retirement fails', async () => {
+  const f = fixture();
+  f.abort.mockRejectedValue(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED'));
+  const refused = expect(f.controller.verifyLiveRuntime(f.run)).rejects.toThrow(
+    'LIVE_CLEANUP_REQUIRED',
+  );
+  await vi.waitFor(() => expect(f.inspect).toHaveBeenCalledOnce());
+  f.reject(new Error('LIVE_ADMISSION_UNAVAILABLE'));
+  await refused;
+  expect(f.revoke).toHaveBeenCalledOnce();
+  expect(f.abort).toHaveBeenCalledOnce();
+  expect(f.owners.current(f.run.liveId)?.state).toBe('recoveryRequired');
+  expect(f.controller.preflightBlocked()).toBe(true);
+});
+
+it('Stop breaks the observation/poll cycle after revocation and awaits raw/physical retirement before cleanup', async () => {
+  const f = fixture();
+  const order: string[] = [];
+  let finish!: () => void;
+  let dispatched = false;
+  const verification = f.controller.verifyLiveRuntime(f.run).then(
+    () => {
+      dispatched = true;
+    },
+    () => {
+      order.push('private-inspection-refused');
+    },
+  );
+  await vi.waitFor(() => expect(f.inspect).toHaveBeenCalledOnce());
+  const stopping = f.owners.mutate(f.run, { event: 'stop' });
+  const cancel = vi.fn(() => {
+    order.push('interrupt-bounded-observation');
+    f.reject(new Error('LIVE_RUNTIME_UNAVAILABLE'));
+  });
+  f.revoke.mockImplementation(async () => {
+    order.push('signed-revoke');
+  });
+  f.abort.mockImplementation(async () => {
+    order.push('abort-owner');
+    await new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    order.push('raw-and-physical-drained');
+  });
+  const generation = {
+    resumed: true,
+    session: { id: 'relay' },
+    policy: { capture: {} },
+    loop: {
+      drain: vi.fn(async () => {
+        order.push('poll-drain');
+        await verification;
+      }),
+    },
+    helper: { stop: vi.fn(async () => {}) },
+    devserver: { stop: vi.fn(async () => {}) },
+    retired: false,
+  };
+  Reflect.set(f.controller, 'cleanupGeneration', () => generation);
+  Reflect.set(f.controller, 'requireBindings', () => ({
+    runtime: { cancelLiveAdmission: cancel, abortLiveOwner: f.abort },
+  }));
+  let completed = false;
+  const cleanup = (
+    Reflect.get(f.controller, 'cleanup').call(f.controller, stopping) as Promise<void>
+  ).then(() => {
+    completed = true;
+  });
+  await vi.waitFor(() => expect(f.abort).toHaveBeenCalledOnce());
+  expect(completed).toBe(false);
+  expect(dispatched).toBe(false);
+  expect(order.slice(0, 3)).toEqual([
+    'signed-revoke',
+    'interrupt-bounded-observation',
+    'poll-drain',
+  ]);
+  expect(generation.helper.stop).not.toHaveBeenCalled();
+  finish();
+  await cleanup;
+  expect(completed).toBe(true);
+  expect(generation.retired).toBe(true);
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(generation.loop.drain).toHaveBeenCalledOnce();
+  expect(generation.helper.stop).toHaveBeenCalledOnce();
+  expect(generation.devserver.stop).toHaveBeenCalledOnce();
+  expect(order.at(-1)).toBe('raw-and-physical-drained');
+});

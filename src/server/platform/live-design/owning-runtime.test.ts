@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RelaySession } from '../../features/sessions/model/relay-session.js';
@@ -16,6 +16,8 @@ import {
   type AppServerLaunchInput,
 } from '../codex/session-runtime.js';
 import { observeLiveProcess } from './process-identity.js';
+import { JsonRpcClient } from '../codex/json-rpc-client.js';
+import { SqliteLiveOwnership, liveAppIdentity } from './sqlite-live-ownership.js';
 import { LIVE_OWNING_CATALOG_MS } from './installed-launch-contract.js';
 
 function session() {
@@ -596,7 +598,8 @@ describe('owning runtime admission observations', () => {
   it('bounds a stalled owning catalog without launching a replacement or observing stale sources', async () => {
     const f = fixture();
     const owning = await f.runtime.start(session(), 'time');
-    f.setMcp(() => new Promise(() => {}));
+    const releases: ((value: unknown) => void)[] = [];
+    f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
     vi.useFakeTimers();
     try {
       const before = f.calls.length;
@@ -604,12 +607,19 @@ describe('owning runtime admission observations', () => {
         'LIVE_RUNTIME_UNAVAILABLE',
       );
       await vi.advanceTimersByTimeAsync(LIVE_OWNING_CATALOG_MS - 1);
-      expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+      expect(f.calls.slice(before).map((call) => call.method)).toEqual([
+        'mcpServerStatus/list',
+        'mcpServerStatus/list',
+      ]);
       await vi.advanceTimersByTimeAsync(1);
       await rejected;
-      expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+      expect(f.calls.slice(before).map((call) => call.method)).toEqual([
+        'mcpServerStatus/list',
+        'mcpServerStatus/list',
+      ]);
       expect(f.launch).toHaveBeenCalledTimes(1);
     } finally {
+      for (const release of releases) release({ data: [], nextCursor: null });
       f.runtime.stopAll();
       vi.useRealTimers();
     }
@@ -617,17 +627,20 @@ describe('owning runtime admission observations', () => {
   it('cancels pending owning catalog discovery on stop and fences a late reply', async () => {
     const f = fixture();
     const owning = await f.runtime.start(session(), 'time');
-    let release!: (value: unknown) => void;
-    f.setMcp(() => new Promise((resolve) => (release = resolve)));
+    const releases: ((value: unknown) => void)[] = [];
+    f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
     const before = f.calls.length;
     const rejected = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
       'LIVE_RUNTIME_UNAVAILABLE',
     );
     f.runtime.stop(owning.id);
     await rejected;
-    release({ data: [], nextCursor: null });
+    for (const release of releases) release({ data: [], nextCursor: null });
     await Promise.resolve();
-    expect(f.calls.slice(before).map((call) => call.method)).toEqual(['mcpServerStatus/list']);
+    expect(f.calls.slice(before).map((call) => call.method)).toEqual([
+      'mcpServerStatus/list',
+      'mcpServerStatus/list',
+    ]);
     expect(f.runtime.liveOwnerIds()).toEqual([]);
     expect(f.launch).toHaveBeenCalledTimes(1);
   });
@@ -829,4 +842,507 @@ describe('renewal through a private owning RPC', () => {
     expect(f.launch).toHaveBeenCalledTimes(2);
     f.runtime.stopAll();
   });
+});
+
+function retirementAuthority(owning: ReturnType<typeof session>) {
+  const root = mkdtempSync(join(tmpdir(), 'live-observation-retirement-'));
+  mkdirSync(join(root, 'app'));
+  const owners = new SqliteLiveOwnership(join(root, 'owners.sqlite'), 'controller', {
+    initialize: true,
+  });
+  let fence = owners.claim({
+    relayId: owning.id,
+    appId: 'app',
+    rootThreadId: owning.threadId!,
+    provider: 'codex',
+    app: liveAppIdentity(join(root, 'app')),
+    targetId: 'target',
+    targetIdentity: 'socket',
+    operationId: 'start',
+    previewOrigin: 'https://preview.test:9443',
+    authSessionHash: 'hash',
+    deviceId: 'device',
+  }).run;
+  fence = owners.mutate(fence, { event: 'stop' });
+  return {
+    authority: { owners, fence },
+    close() {
+      owners.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+it('overlaps only two exact owning catalogs and reads mutable sources only after both finish', async () => {
+  const f = fixture();
+  const owning = await f.runtime.start(session(), 'time');
+  const releases: ((value: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  const before = f.calls.length;
+  const pending = f.runtime.inspectLiveAdmission(owning);
+  expect(f.calls.slice(before)).toEqual(
+    ['context-mode', 'gestalt-org-plan'].map((serverName) => ({
+      method: 'mcpServerStatus/list',
+      params: { threadId: owning.threadId, serverName, detail: 'full' },
+    })),
+  );
+  try {
+    releases[0]({ data: [], nextCursor: null });
+    await Promise.resolve();
+    expect(f.calls.slice(before)).toHaveLength(2);
+    f.setConfiguration(async () => ({ config: { currentAfterBoth: true }, layers: [] }));
+    releases[1]({ data: [], nextCursor: null });
+    expect((await pending).configuration).toMatchObject({ config: { currentAfterBoth: true } });
+    expect(f.calls.slice(before).map((v) => v.method)).toEqual([
+      'mcpServerStatus/list',
+      'mcpServerStatus/list',
+      'config/read',
+      'thread/read',
+      'account/read',
+    ]);
+  } finally {
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await pending.catch(() => {});
+    f.runtime.stopAll();
+  }
+});
+
+it.each(['wrong-server', 'pagination', 'unknown-status', 'refused'] as const)(
+  'retains a hung raw peer after %s until both bounded outcomes and fenced physical drainage',
+  async (mutation) => {
+    const f = fixture(true, { lifetime: true });
+    const owning = await f.runtime.start(session(), 'time');
+    const a = retirementAuthority(owning);
+    let release!: (v: unknown) => void;
+    f.setMcp(async (params) => {
+      if ((params as { serverName: string }).serverName === 'gestalt-org-plan')
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      if (mutation === 'refused') throw new Error('REFUSED');
+      return {
+        data: [
+          {
+            name: mutation === 'wrong-server' ? 'foreign' : 'context-mode',
+            runtimeStatus: mutation === 'unknown-status' ? 'invented' : 'connected',
+          },
+        ],
+        nextCursor: mutation === 'pagination' ? 'cursor' : null,
+      };
+    });
+    vi.useFakeTimers();
+    try {
+      const before = f.calls.length;
+      let rejected = false;
+      const pending = f.runtime.inspectLiveAdmission(owning).catch((error) => {
+        rejected = true;
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(LIVE_OWNING_CATALOG_MS - 1);
+      expect(rejected).toBe(false);
+      expect(f.calls.slice(before)).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBeInstanceOf(Error);
+      f.runtime.stop(owning.id);
+      f.exit();
+      await expect(f.runtime.restore(owning, 'later')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      let drained = false;
+      const retirement = f.runtime.abortLiveOwner(owning, a.authority).then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(drained).toBe(false);
+      release({ data: [], nextCursor: null });
+      await retirement;
+      expect(drained).toBe(true);
+      expect(f.launch).toHaveBeenCalledOnce();
+      expect(f.launch.mock.results[0].value.close).toHaveBeenCalledOnce();
+    } finally {
+      release?.({ data: [], nextCursor: null });
+      f.runtime.stopAll();
+      a.close();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('Stop interrupts bounded inspection without dropping raw obligations after resource-map removal', async () => {
+  const f = fixture(true, { lifetime: true });
+  const owning = await f.runtime.start(session(), 'time');
+  const a = retirementAuthority(owning);
+  const releases: ((v: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  try {
+    const failed = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
+      'LIVE_RUNTIME_UNAVAILABLE',
+    );
+    f.runtime.cancelLiveAdmission(owning, a.authority);
+    await failed;
+    expect(releases).toHaveLength(2);
+    f.runtime.stop(owning.id);
+    f.exit();
+    expect(f.runtime.liveOwnerIds()).toEqual([]);
+    let finished = false;
+    const retirement = f.runtime.abortLiveOwner(owning, a.authority).then(() => {
+      finished = true;
+    });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await retirement;
+    expect(finished).toBe(true);
+    await f.runtime.start(session(), 'later');
+    expect(f.launch).toHaveBeenCalledTimes(2);
+  } finally {
+    for (const release of releases) release({ data: [], nextCursor: null });
+    f.runtime.stopAll();
+    a.close();
+  }
+});
+
+it.each(['physical-exit', 'raw-settlement'] as const)(
+  'bounded failed %s retains the raw drain obligation and refuses successors',
+  async (failure) => {
+    const f = fixture(true, { lifetime: true });
+    const owning = await f.runtime.start(session(), 'time');
+    const a = retirementAuthority(owning);
+    const releases: ((v: unknown) => void)[] = [];
+    f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+    vi.useFakeTimers();
+    try {
+      const inspection = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
+        'LIVE_RUNTIME_UNAVAILABLE',
+      );
+      f.runtime.cancelLiveAdmission(owning, a.authority);
+      await inspection;
+      if (failure === 'raw-settlement') f.exit();
+      const failed = expect(f.runtime.abortLiveOwner(owning, a.authority)).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      await vi.advanceTimersByTimeAsync(10000);
+      await failed;
+      for (const release of releases) release({ data: [], nextCursor: null });
+      await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      f.exit();
+      await f.runtime.abortLiveOwner(owning, a.authority);
+      expect(f.launch.mock.results[0].value.close).toHaveBeenCalledOnce();
+    } finally {
+      for (const release of releases) release({ data: [], nextCursor: null });
+      f.exit();
+      f.runtime.stopAll();
+      a.close();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('drains actual JsonRpcClient raw requests and positively waits for its exact owned child', async () => {
+  const f = fixture();
+  const child = spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
+    import {createInterface} from 'node:readline';
+    for await (const line of createInterface({input:process.stdin})) {
+      const r=JSON.parse(line);let result={};
+      if(r.method==='thread/start')result={thread:{id:'same-thread'},model:'selected-model',cwd:process.cwd()};
+      if(r.method==='model/list')result={data:[{id:'selected-model'}]};
+      if(r.method==='skills/list')result={data:[]};
+      if(r.method==='mcpServerStatus/list')continue;
+      process.stdout.write(JSON.stringify({id:r.id,result})+'\\n');
+    }
+  `,
+    ],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  );
+  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  const rpc = new JsonRpcClient(child.stdout, child.stdin);
+  const close = vi.fn(() => {
+    child.kill('SIGTERM');
+  });
+  f.launch.mockImplementation(() => ({
+    rpc,
+    close,
+    observeLiveLaunch: () => observeLiveProcess(child.pid!),
+    waitForExit: () => exited,
+  }));
+  let a: ReturnType<typeof retirementAuthority> | undefined;
+  try {
+    const owning = await f.runtime.start(session(), 'time');
+    a = retirementAuthority(owning);
+    const failed = expect(f.runtime.inspectLiveAdmission(owning)).rejects.toThrow(
+      'LIVE_RUNTIME_UNAVAILABLE',
+    );
+    f.runtime.cancelLiveAdmission(owning, a.authority);
+    await failed;
+    await f.runtime.abortLiveOwner(owning, a.authority);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    child.kill('SIGKILL');
+    await exited;
+    f.runtime.stopAll();
+    a?.close();
+  }
+});
+
+it('rejects a process-birth mutation during overlapped catalogs before returning admission', async () => {
+  const f = fixture();
+  const owning = await f.runtime.start(session(), 'time');
+  const process = f.launch.mock.results[0].value;
+  const observe = process.observeLiveLaunch!;
+  const releases: ((v: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  const pending = f.runtime.inspectLiveAdmission(owning);
+  const rejected = expect(pending).rejects.toThrow('LIVE_RUNTIME_IDENTITY_CHANGED');
+  try {
+    expect(releases).toHaveLength(2);
+    const birth = observe();
+    process.observeLiveLaunch = () => ({ ...birth, birth: 'changed-birth' });
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await rejected;
+    await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+    expect(f.launch).toHaveBeenCalledOnce();
+  } finally {
+    process.observeLiveLaunch = observe;
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await pending.catch(() => {});
+    f.runtime.stopAll();
+  }
+});
+
+it('rechecks raw drain obligations after asynchronous preparation immediately before successor launch', async () => {
+  let continueLaunch!: () => void;
+  let entered!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let launches = 0;
+  const f = fixture(true, {
+    beforeLaunch: async (_session, input) => {
+      if (++launches > 1) {
+        entered();
+        await new Promise<void>((resolve) => {
+          continueLaunch = resolve;
+        });
+      }
+      return input;
+    },
+  });
+  const owning = await f.runtime.start(session(), 'time');
+  const releases: ((v: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  const successor = f.runtime.start(session(), 'later');
+  await preparing;
+  const observation = f.runtime.inspectLiveAdmission(owning);
+  try {
+    expect(releases).toHaveLength(2);
+    continueLaunch();
+    await expect(successor).rejects.toThrow('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    expect(f.launch).toHaveBeenCalledOnce();
+  } finally {
+    continueLaunch?.();
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await observation.catch(() => {});
+    await successor.catch(() => {});
+    f.runtime.stopAll();
+  }
+});
+
+it.each(['account/read', 'config/read'] as const)(
+  'refuses an already-running %s peer after one failed inspection poisons the same owner',
+  async (heldMethod) => {
+    const f = fixture();
+    const owning = await f.runtime.start(session(), 'time');
+    const rpc = f.launch.mock.results[0].value.rpc;
+    const original = rpc.request;
+    let refuse!: (error: Error) => void;
+    let complete!: (value: unknown) => void;
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const methods: string[] = [];
+    rpc.request = (method: string, params: unknown) => {
+      methods.push(method);
+      if (method === heldMethod)
+        return new Promise((resolve) => {
+          complete = resolve;
+          entered();
+        });
+      return original.call(rpc, method, params);
+    };
+    let queries = 0;
+    f.setMcp(() =>
+      ++queries === 1
+        ? new Promise((_resolve, reject) => {
+            refuse = reject;
+          })
+        : Promise.resolve({ data: [], nextCursor: null }),
+    );
+    const first = f.runtime.inspectLiveAdmission(owning);
+    const firstRefused = expect(first).rejects.toThrow('REFUSED');
+    const peer = f.runtime.inspectLiveAdmission(owning);
+    const peerRefused = expect(peer).rejects.toThrow('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    try {
+      await reading;
+      refuse(new Error('REFUSED'));
+      await firstRefused;
+      const beforeCompletion = methods.length;
+      complete(
+        heldMethod === 'config/read'
+          ? { config: {}, layers: [] }
+          : { account: null, requiresOpenaiAuth: false },
+      );
+      await peerRefused;
+      expect(methods.slice(beforeCompletion)).toEqual([]);
+      await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+        'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+      );
+      expect(f.launch).toHaveBeenCalledOnce();
+    } finally {
+      refuse?.(new Error('REFUSED'));
+      complete?.({});
+      await first.catch(() => {});
+      await peer.catch(() => {});
+      f.runtime.stopAll();
+    }
+  },
+);
+
+it('shares concurrent retirement failure and late raw completion cannot release its obligation', async () => {
+  const f = fixture(true, { lifetime: true });
+  const owning = await f.runtime.start(session(), 'time');
+  const a = retirementAuthority(owning);
+  const process = f.launch.mock.results[0].value;
+  const releases: ((value: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  let failExit!: (error: Error) => void;
+  const wait = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failExit = reject;
+        }),
+    )
+    .mockResolvedValue(undefined);
+  process.waitForExit = wait;
+  const inspection = f.runtime.inspectLiveAdmission(owning);
+  const refused = expect(inspection).rejects.toThrow('LIVE_RUNTIME_UNAVAILABLE');
+  const flights: Promise<unknown>[] = [];
+  try {
+    f.runtime.cancelLiveAdmission(owning, a.authority);
+    await refused;
+    flights.push(f.runtime.abortLiveOwner(owning, a.authority).catch((error) => error));
+    flights.push(f.runtime.abortLiveOwner(owning, a.authority).catch((error) => error));
+    failExit(new Error('LIVE_PROCESS_TREE_UNVERIFIED'));
+    for (const release of releases) release({ data: [], nextCursor: null });
+    const outcomes = await Promise.all(flights);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(outcomes.every((value) => value instanceof Error)).toBe(true);
+    await expect(f.runtime.start(session(), 'later')).rejects.toThrow(
+      'LIVE_RUNTIME_LIFETIME_UNVERIFIED',
+    );
+    await f.runtime.abortLiveOwner(owning, a.authority);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(process.close).toHaveBeenCalledOnce();
+    await f.runtime.start(session(), 'later');
+    expect(f.launch).toHaveBeenCalledTimes(2);
+  } finally {
+    failExit?.(new Error('LIVE_PROCESS_TREE_UNVERIFIED'));
+    for (const release of releases) release({ data: [], nextCursor: null });
+    await inspection.catch(() => {});
+    await Promise.allSettled(flights);
+    f.exit();
+    f.runtime.stopAll();
+    a.close();
+  }
+});
+
+it('allows concurrent successful inspections on one owner without sharing observations or authority', async () => {
+  const f = fixture();
+  const owning = await f.runtime.start(session(), 'time');
+  const rpc = f.launch.mock.results[0].value.rpc;
+  const original = rpc.request;
+  const replies: ((value: unknown) => void)[] = [];
+  let entered!: () => void;
+  const bothReading = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  rpc.request = (method: string, params: unknown) =>
+    method === 'account/read'
+      ? new Promise((resolve) => {
+          replies.push(resolve);
+          if (replies.length === 2) entered();
+        })
+      : original.call(rpc, method, params);
+  const flights = [f.runtime.inspectLiveAdmission(owning), f.runtime.inspectLiveAdmission(owning)];
+  try {
+    await bothReading;
+    for (const reply of replies) reply({ account: null, requiresOpenaiAuth: false });
+    const values = await Promise.all(flights);
+    expect(values[0]).not.toBe(values[1]);
+    expect(values.every((v) => v.threadSelection?.threadId === owning.threadId)).toBe(true);
+    expect(f.calls.filter((v) => v.method === 'mcpServerStatus/list')).toHaveLength(4);
+  } finally {
+    for (const reply of replies) reply({});
+    await Promise.allSettled(flights);
+    f.runtime.stopAll();
+  }
+});
+
+it('shares successful physical and raw retirement across concurrent waiters without a second close', async () => {
+  const f = fixture(true, { lifetime: true });
+  const owning = await f.runtime.start(session(), 'time');
+  const a = retirementAuthority(owning);
+  const process = f.launch.mock.results[0].value;
+  const wait = vi.fn(process.waitForExit!);
+  process.waitForExit = wait;
+  const releases: ((value: unknown) => void)[] = [];
+  f.setMcp(() => new Promise((resolve) => releases.push(resolve)));
+  const inspection = f.runtime.inspectLiveAdmission(owning);
+  const refused = expect(inspection).rejects.toThrow('LIVE_RUNTIME_UNAVAILABLE');
+  const flights: Promise<void>[] = [];
+  let finished = 0;
+  try {
+    f.runtime.cancelLiveAdmission(owning, a.authority);
+    await refused;
+    for (let index = 0; index < 2; index++)
+      flights.push(
+        f.runtime.abortLiveOwner(owning, a.authority).then(() => {
+          finished++;
+        }),
+      );
+    expect(wait).toHaveBeenCalledOnce();
+    f.exit();
+    releases[0]({ data: [], nextCursor: null });
+    await Promise.resolve();
+    expect(finished).toBe(0);
+    releases[1]({ data: [], nextCursor: null });
+    await Promise.all(flights);
+    expect(finished).toBe(2);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(process.close).toHaveBeenCalledOnce();
+    await f.runtime.start(session(), 'later');
+    expect(f.launch).toHaveBeenCalledTimes(2);
+  } finally {
+    for (const release of releases) release({ data: [], nextCursor: null });
+    f.exit();
+    await inspection.catch(() => {});
+    await Promise.allSettled(flights);
+    f.runtime.stopAll();
+    a.close();
+  }
 });

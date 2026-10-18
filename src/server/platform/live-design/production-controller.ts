@@ -1589,6 +1589,7 @@ export class ProductionLiveController {
       } catch {
         /* cleanup remains required */
       }
+      let retired = false;
       try {
         const current = this.owners.assert(fence);
         const recovery = this.owners.mutate(current, {
@@ -1597,10 +1598,12 @@ export class ProductionLiveController {
         });
         await b.runtime.abortLiveOwner(g.session, { owners: this.owners, fence: recovery });
         g.resumed = false;
+        retired = true;
       } catch {
         this.failedPreparations.add(run.relayId);
       }
       if (!revoked) this.failedPreparations.add(run.relayId);
+      if (!revoked || !retired) throw new Error('LIVE_CLEANUP_REQUIRED', { cause: error });
       throw error;
     }
   };
@@ -1752,6 +1755,19 @@ export class ProductionLiveController {
       await this.revoke(run);
     } catch {
       failed = true;
+    }
+    // Signed revocation precedes this non-authorizing interruption. Interrupt
+    // bounded observation waits before poll drain, then retire/drain raw RPCs
+    // below; waiting for physical abort inside observation would deadlock Stop.
+    if (g.resumed && !preserveOwner) {
+      try {
+        this.requireBindings().runtime.cancelLiveAdmission(g.session, {
+          owners: this.owners,
+          fence: run,
+        });
+      } catch {
+        failed = true;
+      }
     }
     if (g.loop) {
       try {
@@ -1907,7 +1923,6 @@ export class ProductionLiveController {
                 // Recovery denies admission before its asynchronous revocation
                 // completes. Join that drain and attempt signed revocation before
                 // terminating the original owner. Never reuse old CLI authority.
-                await g.loop?.waitForRecoveryDrain(run);
                 try {
                   await this.revokeCapture(g.policy.capture);
                 } catch {
@@ -1921,6 +1936,17 @@ export class ProductionLiveController {
                 } catch {
                   failed = true;
                 }
+                if (g.resumed) {
+                  try {
+                    this.requireBindings().runtime.cancelLiveAdmission(g.session, {
+                      owners: this.owners,
+                      fence: run,
+                    });
+                  } catch {
+                    failed = true;
+                  }
+                }
+                await g.loop?.waitForRecoveryDrain(run);
                 if (g.resumed) {
                   try {
                     await this.requireBindings().runtime.abortLiveOwner(g.session, {

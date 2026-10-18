@@ -36,6 +36,7 @@ import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diag
 import {
   observeProofMethod,
   observeInstalledPolicyTimings,
+  observeAdmissionTimings,
   cleanupControllerSnapshot,
 } from './live-production-edit-diagnostics.mjs';
 import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
@@ -91,6 +92,8 @@ assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
 const pickerSmoke = process.env.LIVE_PRODUCTION_PICKER_SMOKE === '1';
+const pickerDiagnostic = process.env.LIVE_PRODUCTION_PICKER_DIAGNOSTIC === '1';
+assert.ok(!pickerDiagnostic || pickerSmoke);
 assert.ok(!pickerSmoke || (editFlow && !preflightOnly));
 const seededPreflight = process.env.LIVE_PRODUCTION_ADMISSION_SEED === '1';
 assert.ok(!seededPreflight || preflightOnly);
@@ -139,7 +142,18 @@ const report = {
         ]),
   ],
 };
-if (pickerSmoke) {
+if (pickerDiagnostic) {
+  report.proofKind = 'actual-picker-current-independent-diagnostic';
+  report.pickerDiagnostic = {
+    mode: 'picker-diagnostic',
+    diagnosticOnly: true,
+    fullExactCandidateStillRequired: true,
+    identity: candidateIdentity(),
+  };
+  report.limitations.push(
+    'Diagnostic Start/Generate/Accept only; fresh independent evidence on this exact candidate is mandatory in the aggregate. Steer/manual/discard/background/recovery remain unproven.',
+  );
+} else if (pickerSmoke) {
   const receipt = JSON.parse(readFileSync(process.env.LIVE_PICKER_SMOKE_RECEIPT, 'utf8'));
   assert.equal(receipt.schemaVersion, 1);
   assert.equal(receipt.mode, 'picker-smoke');
@@ -476,6 +490,7 @@ ProductionLiveController.prototype.launchNative = function (input) {
       throw error;
     }
   };
+  admissionTimings.observeRpc(child.rpc);
   return child;
 };
 const projectProcesses = new Map();
@@ -545,6 +560,11 @@ IsolatedProjectProcess.prototype.verifyForConnection = async function (
   }
 };
 report.policyVerificationTimings = observeInstalledPolicyTimings(InstalledLivePolicy.prototype);
+const admissionTimings = observeAdmissionTimings(
+  CodexSessionRuntime.prototype,
+  ProductionLiveController.prototype,
+);
+report.admissionVerificationTimings = admissionTimings.report;
 const cleanupOperations = (report.cleanupOperations = []);
 const lifecycle = (boundary, owner) => {
   const rows = (report.cleanupLifecycle ??= []);
@@ -2385,9 +2405,10 @@ try {
       },
     });
     finishBrowserProfile();
-    if (proofLane) {
-      const required =
-        proofLane === 'accept-steer'
+    if (proofLane || pickerDiagnostic) {
+      const required = pickerDiagnostic
+        ? ['generate', 'accept']
+        : proofLane === 'accept-steer'
           ? ['generate', 'accept', 'steer']
           : ['manual_edit_apply', 'generate', 'discard'];
       const db = new DatabaseSync(

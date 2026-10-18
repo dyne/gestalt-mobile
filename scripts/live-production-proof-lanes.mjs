@@ -30,6 +30,7 @@ export const fullLanes = Object.freeze([
   'manual-discard',
   'recovery',
 ]);
+export const diagnosticLanes = Object.freeze(['independent', 'picker-diagnostic']);
 export const proofPins = Object.freeze({
   native: 'b2730ae901da317bcc5933d9b87de6dfbea3e46a46b64f806e4268fd9a095578',
   manager: '8115c37344ef4a7a1b537e23ff069a90bbb188ec41c77ace8d5a41cc864118f9',
@@ -114,6 +115,11 @@ const modelChecks = [
   'futureControlDenialsAndArtifactCarveouts',
   'sameOwningThreadModelThinkingAndDurableInbox',
 ];
+export const diagnosticPickerChecks = Object.freeze([
+  ...commonChecks,
+  ...modelChecks,
+  'actualPickerGenerateAcceptWithCanonicalSourceEffect',
+]);
 export const laneChecks = Object.freeze({
   'accept-steer': [
     ...commonChecks,
@@ -150,7 +156,15 @@ export const fullAssertionOwners = Object.freeze({
 });
 export function selectedLanes(selection) {
   const mode = proofMode(selection);
-  return { mode, lanes: mode === 'full' ? [...fullLanes] : [mode] };
+  return {
+    mode,
+    lanes:
+      mode === 'full'
+        ? [...fullLanes]
+        : mode === 'picker-diagnostic'
+          ? [...diagnosticLanes]
+          : [mode],
+  };
 }
 export function productionLane(value = '') {
   assert.ok(
@@ -250,6 +264,122 @@ export function validateProductionLane(lane, report, identity) {
     assert.equal(report.recoveryHandoff.sameDriverBirth, true);
   }
 }
+/** Fresh independent evidence is required by the aggregate, never borrowed from
+ * historical smoke eligibility or interpreted as product dispatch authority. */
+export function validateDiagnosticPicker(report, identity) {
+  assert.equal(report.passed, true);
+  assert.equal(report.cleanupComplete, true);
+  assert.equal(report.disposableTreeRemoved, true);
+  assert.equal(report.productionLane, undefined);
+  assert.equal(report.proofKind, 'actual-picker-current-independent-diagnostic');
+  assert.equal(report.independentEvidenceReuse, undefined);
+  assert.deepEqual(report.pickerDiagnostic, {
+    mode: 'picker-diagnostic',
+    diagnosticOnly: true,
+    fullExactCandidateStillRequired: true,
+    identity,
+  });
+  assert.equal(report.provenance.head, identity.candidate);
+  assert.equal(report.provenance.tree, identity.tree);
+  for (const key of ['manager', 'managerTree', 'agents'])
+    assert.equal(report.provenance[key], identity[key]);
+  assert.equal(report.nativeBinarySha256, identity.native);
+  assert.equal(report.sourceInventory.signatureVerified, true);
+  assert.equal(report.sourceInventory.captureGenerationMatchesLiveGeneration, true);
+  assert.deepEqual(Object.keys(report.checks).sort(), [...diagnosticPickerChecks].sort());
+  assert.ok(Object.values(report.checks).every((v) => v === true));
+  const browser = report.editBrowser;
+  for (const key of [
+    'trustedTls',
+    'separateBrowserNetwork',
+    'separateBrowserMountNamespace',
+    'openThroughMobileControls',
+    'extraPollOwnerDenied',
+    'realPickerGenerateAccept',
+    'pickerSmoke',
+  ])
+    assert.equal(browser[key], true);
+  for (const key of [
+    'ignoreHttpsErrors',
+    'genuineProvider',
+    'realPickerSteer',
+    'realPickerManualApply',
+    'realPickerDiscard',
+    'actualTabHiddenBeyondEightSeconds',
+  ])
+    assert.equal(browser[key], false);
+  assert.deepEqual(
+    report.laneCanonicalEvents,
+    ['generate', 'accept'].map((kind) => ({
+      kind,
+      stage: 'acknowledged',
+      history: ['received', 'dispatched', 'applied', 'acknowledged'],
+    })),
+  );
+  assert.deepEqual(
+    report.pickerObservations.map((v) => v.boundary),
+    ['before-accept', 'after-accept', 'after-accept-ack'],
+  );
+  assert.ok(report.pickerObservations.every((v) => v.available === true));
+  for (const snapshot of report.pickerObservations) {
+    assert.ok(Number.isSafeInteger(snapshot.navigationCount) && snapshot.navigationCount >= 0);
+    assert.equal(typeof snapshot.pageChatInDocument, 'boolean');
+    assert.equal(typeof snapshot.globalBar.present, 'boolean');
+    assert.equal(typeof snapshot.pageChat.present, 'boolean');
+  }
+  assert.ok(
+    Number.isSafeInteger(report.startAdmissionElapsedMs) && report.startAdmissionElapsedMs > 0,
+  );
+  assert.ok(report.eventAuthorityTimings.some((v) => v.phase === 'event-turn'));
+  for (const row of report.eventAuthorityTimings) {
+    assert.ok(['canonical-poll', 'event-turn'].includes(row.phase));
+    assert.equal(row.completed, true);
+    assert.ok(Number.isSafeInteger(row.grantedAfterMs) && row.grantedAfterMs >= 0);
+    assert.ok(Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= row.grantedAfterMs);
+  }
+  for (const [field, labels] of [
+    [
+      'admissionVerificationTimings',
+      [
+        'admission-inspection',
+        'admission-catalog-context',
+        'admission-catalog-org',
+        'admission-config',
+        'admission-thread',
+        'admission-account',
+        'admission-resources',
+      ],
+    ],
+    [
+      'policyVerificationTimings',
+      [
+        'policy-total',
+        'policy-manager-verify',
+        'policy-source-observer',
+        'policy-agents-verify',
+        'policy-local-installation',
+      ],
+    ],
+  ]) {
+    const timings = report[field];
+    assert.ok(
+      Array.isArray(timings.calls) && timings.calls.length > 0 && timings.calls.length <= 512,
+    );
+    for (const row of timings.calls) {
+      assert.ok(labels.includes(row.operation));
+      assert.ok(['completed', 'failed'].includes(row.result));
+      for (const key of ['groupId', 'startedAfterMs', 'elapsedMs'])
+        assert.ok(Number.isSafeInteger(row[key]) && row[key] >= 0);
+    }
+    assert.deepEqual(Object.keys(timings.counters).sort(), [...labels].sort());
+    for (const counter of Object.values(timings.counters)) {
+      assert.ok(Number.isSafeInteger(counter.started) && counter.started > 0);
+      for (const key of ['completed', 'failed', 'totalMs'])
+        assert.ok(Number.isSafeInteger(counter[key]) && counter[key] >= 0);
+      assert.equal(counter.started, counter.completed + counter.failed);
+    }
+  }
+}
 const independentFiles = [
   'native-model-tools/native-model-tools-proof.json',
   'remote-proof.json',
@@ -289,18 +419,20 @@ export function loadLanePacket(directory) {
     return readFileSync(path);
   };
   const receipt = JSON.parse(read('lane-receipt.json'));
-  assert.ok(fullLanes.includes(receipt.lane));
+  assert.ok([...fullLanes, 'picker-diagnostic'].includes(receipt.lane));
   assert.deepEqual(Object.keys(receipt.reports).sort(), [...laneFiles(receipt.lane)].sort());
   return {
     receipt,
     reports: Object.fromEntries(laneFiles(receipt.lane).map((file) => [file, read(file)])),
   };
 }
-export function writeLaneReceipt(lane, directory, identity = candidateIdentity()) {
-  assert.ok(fullLanes.includes(lane));
+export function writeLaneReceipt(lane, directory, identity = candidateIdentity(), mode = 'full') {
+  assert.ok(['full', 'picker-diagnostic'].includes(mode));
+  assert.ok((mode === 'full' ? fullLanes : diagnosticLanes).includes(lane));
   const files = laneFiles(lane);
   const reports = Object.fromEntries(files.map((file) => [file, json(join(directory, file))]));
   if (lane === 'independent') validateIndependent(reports, identity);
+  else if (lane === 'picker-diagnostic') validateDiagnosticPicker(reports[files[0]], identity);
   else {
     validateProductionLane(lane, reports[files[0]], identity);
     if (lane === 'recovery')
@@ -310,6 +442,9 @@ export function writeLaneReceipt(lane, directory, identity = candidateIdentity()
     schemaVersion: 1,
     lane,
     identity,
+    ...(mode === 'picker-diagnostic'
+      ? { mode, diagnosticOnly: true, fullExactCandidateStillRequired: true }
+      : {}),
     passed: true,
     cleanupComplete: true,
     reports: Object.fromEntries(
@@ -342,6 +477,8 @@ export function aggregateLanes(packets, identity) {
     const { receipt, reports } = packets[lane];
     assert.equal(receipt.schemaVersion, 1);
     assert.equal(receipt.lane, lane);
+    assert.equal(receipt.mode, undefined);
+    assert.equal(receipt.diagnosticOnly, undefined);
     assertIdentity(receipt.identity, identity);
     assert.equal(receipt.passed, true);
     assert.equal(receipt.cleanupComplete, true);
@@ -405,6 +542,50 @@ export function birthCurrent(birth) {
     return false;
   }
 }
+export function aggregateDiagnostic(packets, identity) {
+  assert.deepEqual(
+    Object.keys(packets).sort(),
+    [...diagnosticLanes].sort(),
+    'DIAGNOSTIC_LANES_INCOMPLETE',
+  );
+  for (const lane of diagnosticLanes) {
+    const { receipt, reports } = packets[lane];
+    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.lane, lane);
+    assert.equal(receipt.mode, 'picker-diagnostic');
+    assert.equal(receipt.diagnosticOnly, true);
+    assert.equal(receipt.fullExactCandidateStillRequired, true);
+    assertIdentity(receipt.identity, identity);
+    assert.equal(receipt.passed, true);
+    assert.equal(receipt.cleanupComplete, true);
+    const files = laneFiles(lane);
+    assert.deepEqual(Object.keys(receipt.reports).sort(), [...files].sort());
+    assert.deepEqual(Object.keys(reports).sort(), [...files].sort());
+    for (const file of files)
+      assert.equal(digest(reports[file]), receipt.reports[file], 'PROOF_REPORT_CHANGED');
+    const parsed = Object.fromEntries(files.map((file) => [file, JSON.parse(reports[file])]));
+    if (lane === 'independent') validateIndependent(parsed, identity);
+    else validateDiagnosticPicker(parsed[files[0]], identity);
+  }
+  return {
+    schemaVersion: 1,
+    passed: true,
+    cleanupComplete: true,
+    identity,
+    proofKind: 'exact-candidate-picker-diagnostic-with-independent-proofs',
+    diagnosticOnly: true,
+    fullAcceptance: false,
+    fullExactCandidateStillRequired: true,
+    crossLaneEvidence: true,
+    lanes: [...diagnosticLanes],
+    independentChecks,
+    diagnosticPickerChecks,
+    unprovenActions: ['steer', 'manual-apply', 'discard', 'background', 'recovery'],
+    genuineProvider: false,
+    originalHookedEnabledHomeProven: false,
+  };
+}
+
 function privateDirectory(directory, create = false) {
   if (create) mkdirSync(directory, { mode: 0o700 });
   const info = lstatSync(directory);
@@ -900,8 +1081,13 @@ async function main() {
   const [command, argument, output] = process.argv.slice(2);
   if (['start', 'continue', 'cleanup'].includes(command)) return driver(command, resolve(argument));
   if (command === 'receipt')
-    return writeLaneReceipt(process.env.LIVE_PRODUCTION_PROOF_LANE, resolve(argument));
-  assert.equal(command, 'aggregate');
+    return writeLaneReceipt(
+      process.env.LIVE_PRODUCTION_PROOF_LANE,
+      resolve(argument),
+      candidateIdentity(),
+      process.env.LIVE_PROOF_MODE ?? 'full',
+    );
+  assert.ok(['aggregate', 'aggregate-diagnostic'].includes(command));
   const identity = candidateIdentity(),
     packets = {};
   try {
@@ -911,7 +1097,12 @@ async function main() {
       assert.ok(!packets[packet.receipt.lane], 'PROOF_LANE_DUPLICATE');
       packets[packet.receipt.lane] = packet;
     }
-    writeJson(output, aggregateLanes(packets, identity));
+    writeJson(
+      output,
+      command === 'aggregate'
+        ? aggregateLanes(packets, identity)
+        : aggregateDiagnostic(packets, identity),
+    );
   } catch {
     writeJson(output, {
       schemaVersion: 1,
@@ -919,6 +1110,9 @@ async function main() {
       cleanupComplete: false,
       identity,
       failure: 'CONTROLLED_PROOF_EVIDENCE_INVALID',
+      ...(command === 'aggregate-diagnostic'
+        ? { diagnosticOnly: true, fullAcceptance: false }
+        : {}),
       crossLaneEvidence: true,
     });
     throw new Error('CONTROLLED_PROOF_EVIDENCE_INVALID');

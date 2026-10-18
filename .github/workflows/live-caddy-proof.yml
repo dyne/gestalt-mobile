@@ -34,6 +34,10 @@ on:
         description: 'Diagnostic actual controls Start, picker Generate/Accept and signed cleanup; full acceptance still required'
         type: boolean
         default: false
+      picker_diagnostic:
+        description: 'Diagnostic exact-candidate independent proofs plus actual picker Start/Generate/Accept; full acceptance still required'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -57,12 +61,13 @@ jobs:
         env:
           REQUEST_PREFLIGHT: ${{ inputs.preflight }}
           REQUEST_PICKER_SMOKE: ${{ inputs.picker_smoke }}
+          REQUEST_PICKER_DIAGNOSTIC: ${{ inputs.picker_diagnostic }}
         run: |
           node --input-type=module <<'NODE'
           import {readFileSync,appendFileSync} from 'node:fs';
           import {selectedLanes} from './scripts/live-production-proof-lanes.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-          const selection=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true'});
+          const selection=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`mode=${selection.mode}\nlanes=${JSON.stringify(selection.lanes)}\n`);
           NODE
   native-proof:
@@ -87,12 +92,13 @@ jobs:
         env:
           REQUEST_PREFLIGHT: ${{ inputs.preflight }}
           REQUEST_PICKER_SMOKE: ${{ inputs.picker_smoke }}
+          REQUEST_PICKER_DIAGNOSTIC: ${{ inputs.picker_diagnostic }}
         run: |
           node --input-type=module <<'NODE'
           import {readFileSync,appendFileSync} from 'node:fs';
           import {proofMode} from './scripts/live-picker-smoke.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true'});
+          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`mode=${mode}\n`);
           NODE
       - run: npm ci
@@ -276,7 +282,7 @@ jobs:
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
         run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
-        if: steps.proof-mode.outputs.mode == 'full' && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
@@ -315,7 +321,7 @@ jobs:
       - name: Build Mobile server and current client for Native and controls proofs
         run: npm run build
       - name: Actual owning native model tools and permitted child with deterministic provider
-        if: steps.proof-mode.outputs.mode == 'full' && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
         timeout-minutes: 3
         env:
           LIVE_NATIVE_MODEL_PROOF: '1'
@@ -328,7 +334,7 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
-        if: steps.proof-mode.outputs.mode == 'full' && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
         timeout-minutes: 5
         env:
           LIVE_REMOTE_PROOF: '1'
@@ -346,7 +352,8 @@ jobs:
           LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ steps.proof-mode.outputs.mode == 'preflight' && '1' || '0' }}
           LIVE_PRODUCTION_ADMISSION_SEED: ${{ contains(github.event.head_commit.message, '[seeded-admission]') && '1' || '0' }}
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: ${{ steps.proof-mode.outputs.mode == 'preflight' && '0' || '1' }}
-          LIVE_PRODUCTION_PICKER_SMOKE: ${{ steps.proof-mode.outputs.mode == 'picker-smoke' && '1' || '0' }}
+          LIVE_PRODUCTION_PICKER_SMOKE: ${{ (steps.proof-mode.outputs.mode == 'picker-smoke' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && '1' || '0' }}
+          LIVE_PRODUCTION_PICKER_DIAGNOSTIC: ${{ steps.proof-mode.outputs.mode == 'picker-diagnostic' && '1' || '0' }}
           LIVE_PICKER_SMOKE_RECEIPT: test-results/live-caddy-proof/picker-smoke-baseline.json
           LIVE_PRODUCTION_PROOF_LANE: ${{ steps.proof-mode.outputs.mode == 'full' && matrix.lane || '' }}
           LIVE_PRODUCTION_RECOVERY_ONLY: '0'
@@ -411,15 +418,17 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-project-isolation-proof.mjs
       - name: Validate complete exact-candidate lane evidence
-        if: steps.proof-mode.outputs.mode == 'full'
+        if: steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic'
         env:
+          LIVE_PROOF_MODE: ${{ steps.proof-mode.outputs.mode }}
+
           LIVE_PRODUCTION_PROOF_LANE: ${{ matrix.lane }}
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node scripts/live-production-proof-lanes.mjs receipt test-results/live-caddy-proof
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: ${{ needs.proof-selection.outputs.mode == 'full' && format('live-caddy-proof-{0}', matrix.lane) || 'live-caddy-proof' }}
+          name: ${{ (needs.proof-selection.outputs.mode == 'full' || needs.proof-selection.outputs.mode == 'picker-diagnostic') && format('live-caddy-proof-{0}', matrix.lane) || 'live-caddy-proof' }}
           path: test-results/live-caddy-proof
           if-no-files-found: error
   full-coverage:
@@ -448,4 +457,31 @@ jobs:
         with:
           name: live-caddy-full-aggregate
           path: test-results/full-coverage.json
+          if-no-files-found: error
+  picker-diagnostic-coverage:
+    needs: [proof-selection, native-proof]
+    if: always() && needs.proof-selection.outputs.mode == 'picker-diagnostic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: live-caddy-proof-*
+          path: test-results/diagnostic-lanes
+      - name: Require fresh independent and picker diagnostic evidence on exact candidate
+        env:
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/live-production-proof-lanes.mjs aggregate-diagnostic test-results/diagnostic-lanes test-results/picker-diagnostic-coverage.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: live-caddy-picker-diagnostic-aggregate
+          path: test-results/picker-diagnostic-coverage.json
           if-no-files-found: error

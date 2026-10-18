@@ -18,6 +18,7 @@ import {
   boundedPickerObservation,
   observeProofMethod,
   observeInstalledPolicyTimings,
+  observeAdmissionTimings,
   cleanupControllerSnapshot,
 } from './live-production-edit-diagnostics.mjs';
 import { JSDOM } from 'jsdom';
@@ -626,4 +627,159 @@ test('concurrent independent verification observations correlate groups without 
   b.value = 3;
   assert.equal(await b.verify(), 3);
   assert.equal(report.counters['policy-total'].completed, 3);
+});
+
+test('admission observations retain original RPC promises, arguments, receiver, serial order and fixed labels', async () => {
+  const calls = [],
+    secret = 'private-canary',
+    expected = {};
+  let lastPromise;
+  const rpc = {
+    request(method, params) {
+      assert.equal(this, rpc);
+      calls.push([method, params]);
+      lastPromise = Promise.resolve(expected);
+      return lastPromise;
+    },
+  };
+  const params = [
+    ['mcpServerStatus/list', { threadId: secret, serverName: 'context-mode', detail: 'full' }],
+    ['mcpServerStatus/list', { threadId: secret, serverName: 'gestalt-org-plan', detail: 'full' }],
+    ['config/read', { includeLayers: true, cwd: secret }],
+    ['thread/read', { threadId: secret, includeTurns: false }],
+    ['account/read', { refreshToken: false }],
+  ];
+  const runtime = {
+    inspectLiveAdmission(arg) {
+      assert.equal(this, runtime);
+      assert.equal(arg, expected);
+      return (async () => {
+        for (const [method, input] of params) {
+          const result = rpc.request(method, input);
+          assert.equal(result, lastPromise);
+          assert.equal(await result, expected);
+        }
+        return expected;
+      })();
+    },
+  };
+  const controller = {
+    verifyProjectResources(arg) {
+      assert.equal(arg, expected);
+      return expected;
+    },
+  };
+  const timing = observeAdmissionTimings(runtime, controller);
+  timing.observeRpc(rpc);
+  assert.equal(await runtime.inspectLiveAdmission(expected), expected);
+  assert.equal(controller.verifyProjectResources(expected), expected);
+  assert.deepEqual(calls, params);
+  assert.deepEqual(
+    timing.report.calls.map((v) => v.operation),
+    [
+      'admission-inspection',
+      'admission-catalog-context',
+      'admission-catalog-org',
+      'admission-config',
+      'admission-thread',
+      'admission-account',
+      'admission-resources',
+    ],
+  );
+  assert.ok(
+    timing.report.calls.slice(0, 6).every((v) => v.groupId === 1 && v.result === 'completed'),
+  );
+  assert.equal(timing.report.calls.at(-1).groupId, 0);
+  assert.equal(timing.report.counters['admission-catalog-context'].started, 1);
+  assert.equal(timing.report.counters['admission-catalog-org'].completed, 1);
+  assert.ok(!JSON.stringify(timing.report).includes(secret));
+});
+
+test('admission observations preserve rejected promises and sync errors without retaining payloads or matching broad catalogs', async () => {
+  const error = new Error('private-canary');
+  const pending = Promise.reject(error);
+  const rpc = {
+    request() {
+      return pending;
+    },
+  };
+  const runtime = {
+    inspectLiveAdmission() {
+      return pending;
+    },
+  };
+  const controller = {
+    verifyProjectResources() {
+      throw error;
+    },
+  };
+  const timing = observeAdmissionTimings(runtime, controller);
+  timing.observeRpc(rpc);
+  assert.equal(runtime.inspectLiveAdmission(), pending);
+  assert.equal(rpc.request('mcpServerStatus/list', { threadId: 'private-canary' }), pending);
+  assert.equal(timing.report.calls.length, 1);
+  assert.equal(
+    rpc.request('mcpServerStatus/list', {
+      threadId: 'private-canary',
+      serverName: 'context-mode',
+      detail: 'full',
+    }),
+    pending,
+  );
+  await assert.rejects(pending, (value) => value === error);
+  assert.throws(
+    () => controller.verifyProjectResources(),
+    (value) => value === error,
+  );
+  assert.ok(
+    timing.report.calls.every((v) => v.result === 'failed' && v.failure === 'UNCLASSIFIED'),
+  );
+  assert.ok(!JSON.stringify(timing.report).includes('private-canary'));
+});
+
+test('admission timing bounds pending observations and keeps overlapping inspection groups distinct', async () => {
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const rpc = {
+    request() {
+      return pending;
+    },
+  };
+  const runtime = {
+    inspectLiveAdmission() {
+      return rpc.request('account/read', { refreshToken: false });
+    },
+  };
+  const controller = { verifyProjectResources() {} };
+  const timing = observeAdmissionTimings(runtime, controller);
+  timing.observeRpc(rpc);
+  for (let n = 0; n < 260; n++) assert.equal(runtime.inspectLiveAdmission(), pending);
+  assert.equal(timing.report.calls.length, 512);
+  assert.ok(timing.report.calls.some((v) => v.truncatedBefore));
+  assert.equal(new Set(timing.report.calls.map((v) => v.groupId)).size, 256);
+  finish();
+  await pending;
+  assert.ok(timing.report.calls.every((v) => v.result === 'completed'));
+  assert.equal(timing.report.counters['admission-inspection'].started, 260);
+  assert.equal(timing.report.counters['admission-account'].completed, 260);
+});
+
+test('post-Accept acknowledgement observation is allowlisted and follows acknowledgement without reordering Steer', () => {
+  const script = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  const immediate = script.indexOf("await observePicker('after-accept')");
+  const acknowledgement = script.indexOf("await command('accepted')", immediate);
+  const afterAck = script.indexOf("await observePicker('after-accept-ack')", acknowledgement);
+  const steer = script.indexOf("await observePicker('before-steer')", afterAck);
+  assert.ok(
+    immediate > 0 && acknowledgement > immediate && afterAck > acknowledgement && steer > afterAck,
+  );
+  assert.equal(
+    boundedPickerObservation({ boundary: 'after-accept-ack', available: false }).boundary,
+    'after-accept-ack',
+  );
 });

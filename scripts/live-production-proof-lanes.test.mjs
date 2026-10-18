@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {
   mkdtempSync,
   chmodSync,
@@ -21,6 +21,9 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import {
   aggregateLanes,
+  aggregateDiagnostic,
+  diagnosticLanes,
+  diagnosticPickerChecks,
   birthCurrent,
   fullLanes,
   fullAssertionOwners,
@@ -32,6 +35,7 @@ import {
   observeRecoveryPhase,
   settleRecoveryDriver,
   productionLane,
+  writeLaneReceipt,
   proofPins,
   selectedLanes,
   loadLanePacket,
@@ -592,4 +596,326 @@ test('top-level cleanup rejects changed launched birth and malformed retained ob
     assert.equal(JSON.parse(cleanup).driverExited, true);
     assert.ok(!cleanup.includes('canary-private'));
   });
+});
+
+function diagnosticPicker() {
+  const report = production('accept-steer');
+  delete report.productionLane;
+  report.proofKind = 'actual-picker-current-independent-diagnostic';
+  report.pickerDiagnostic = {
+    mode: 'picker-diagnostic',
+    diagnosticOnly: true,
+    fullExactCandidateStillRequired: true,
+    identity: structuredClone(identity),
+  };
+  report.disposableTreeRemoved = true;
+  report.checks = Object.fromEntries(diagnosticPickerChecks.map((key) => [key, true]));
+  report.editBrowser = {
+    ...report.editBrowser,
+    pickerSmoke: true,
+    realPickerSteer: false,
+    realPickerManualApply: false,
+    realPickerDiscard: false,
+    actualTabHiddenBeyondEightSeconds: false,
+  };
+  report.laneCanonicalEvents = report.laneCanonicalEvents.slice(0, 2);
+  report.pickerObservations = ['before-accept', 'after-accept', 'after-accept-ack'].map(
+    (boundary) => ({
+      boundary,
+      available: true,
+      navigationCount: 3,
+      pageChatInDocument: true,
+      globalBar: { present: true },
+      pageChat: { present: true },
+    }),
+  );
+  report.startAdmissionElapsedMs = 100;
+  report.eventAuthorityTimings = [
+    { phase: 'event-turn', grantedAfterMs: 1, elapsedMs: 2, completed: true },
+  ];
+  for (const [field, labels] of [
+    [
+      'admissionVerificationTimings',
+      [
+        'admission-inspection',
+        'admission-catalog-context',
+        'admission-catalog-org',
+        'admission-config',
+        'admission-thread',
+        'admission-account',
+        'admission-resources',
+      ],
+    ],
+    [
+      'policyVerificationTimings',
+      [
+        'policy-total',
+        'policy-manager-verify',
+        'policy-source-observer',
+        'policy-agents-verify',
+        'policy-local-installation',
+      ],
+    ],
+  ])
+    report[field] = {
+      calls: labels.map((operation) => ({
+        operation,
+        result: 'completed',
+        groupId: 1,
+        startedAfterMs: 0,
+        elapsedMs: 1,
+      })),
+      counters: Object.fromEntries(
+        labels.map((label) => [label, { started: 1, completed: 1, failed: 0, totalMs: 1 }]),
+      ),
+    };
+  return report;
+}
+function diagnosticPackets() {
+  const p = { independent: packets().independent };
+  const file = 'production-entrypoint/production-entrypoint-proof.json';
+  const bytes = JSON.stringify(diagnosticPicker());
+  p['picker-diagnostic'] = {
+    reports: { [file]: bytes },
+    receipt: {
+      schemaVersion: 1,
+      lane: 'picker-diagnostic',
+      identity: structuredClone(identity),
+      passed: true,
+      cleanupComplete: true,
+      reports: { [file]: sha(bytes) },
+    },
+  };
+  for (const packet of Object.values(p))
+    Object.assign(packet.receipt, {
+      mode: 'picker-diagnostic',
+      diagnosticOnly: true,
+      fullExactCandidateStillRequired: true,
+    });
+  return p;
+}
+
+test('explicit picker diagnostic mandates fresh independent plus picker lanes and cannot count as full', () => {
+  assert.deepEqual(selectedLanes({ eventName: 'push', message: '[picker-diagnostic]' }), {
+    mode: 'picker-diagnostic',
+    lanes: [...diagnosticLanes],
+  });
+  assert.deepEqual(
+    selectedLanes({ eventName: 'workflow_dispatch', preflight: true, pickerDiagnostic: true })
+      .lanes,
+    [...diagnosticLanes],
+  );
+  for (const message of ['[picker-diagnostic] [picker-smoke]', '[picker-diagnostic] [full-native]'])
+    assert.throws(() => selectedLanes({ eventName: 'push', message }));
+  const p = diagnosticPackets(),
+    result = aggregateDiagnostic(p, identity);
+  assert.equal(result.passed, true);
+  assert.equal(result.diagnosticOnly, true);
+  assert.equal(result.fullAcceptance, false);
+  assert.equal(result.fullExactCandidateStillRequired, true);
+  assert.equal(result.fullAssertionOwners, undefined);
+  assert.deepEqual(result.unprovenActions, [
+    'steer',
+    'manual-apply',
+    'discard',
+    'background',
+    'recovery',
+  ]);
+  assert.throws(() => aggregateLanes(p, identity));
+  const full = packets();
+  full.independent = p.independent;
+  assert.throws(() => aggregateLanes(full, identity));
+  assert.throws(() => aggregateDiagnostic(packets(), identity));
+});
+
+test('diagnostic aggregation refuses missing extra relabeled unbound or changed artifacts and every identity pin', () => {
+  const mutations = [
+    (p) => {
+      delete p.independent;
+    },
+    (p) => {
+      p.extra = p.independent;
+    },
+    (p) => {
+      p['picker-diagnostic'].receipt.lane = 'independent';
+    },
+    (p) => {
+      delete p.independent.receipt.mode;
+    },
+    (p) => {
+      p.independent.receipt.cleanupComplete = false;
+    },
+    (p) => {
+      p.independent.receipt.diagnosticOnly = false;
+    },
+    (p) => {
+      p['picker-diagnostic'].receipt.fullExactCandidateStillRequired = false;
+    },
+    (p) => {
+      p['picker-diagnostic'].reports['production-entrypoint/production-entrypoint-proof.json'] +=
+        ' ';
+    },
+  ];
+  for (const key of Object.keys(identity))
+    mutations.push((p) => {
+      p.independent.receipt.identity[key] = 'changed';
+    });
+  for (const mutate of mutations) {
+    const p = diagnosticPackets();
+    mutate(p);
+    assert.throws(() => aggregateDiagnostic(p, identity));
+  }
+  for (const [category, file] of [
+    ['native', 'native-model-tools/native-model-tools-proof.json'],
+    ['project', 'project-isolation/project-isolation-proof.json'],
+    ['remote', 'remote-proof.json'],
+  ]) {
+    for (const key of independentChecks[category]) {
+      const p = diagnosticPackets(),
+        packet = p.independent,
+        report = JSON.parse(packet.reports[file]);
+      if (category === 'remote') report[key] = false;
+      else report.checks[key] = false;
+      packet.reports[file] = JSON.stringify(report);
+      packet.receipt.reports[file] = sha(packet.reports[file]);
+      assert.throws(() => aggregateDiagnostic(p, identity));
+    }
+  }
+});
+
+test('diagnostic picker requires every original smoke assertion and actual canonical after-ack observations/timings', () => {
+  const mutations = [
+    (report) => {
+      report.independentEvidenceReuse = { baseline: 'historical' };
+    },
+    (report) => {
+      report.provenance.tree = 'changed';
+    },
+    (report) => {
+      report.sourceInventory.signatureVerified = false;
+    },
+    (report) => {
+      report.disposableTreeRemoved = false;
+    },
+    (report) => {
+      report.editBrowser.realPickerSteer = true;
+    },
+    (report) => {
+      report.pickerObservations.pop();
+    },
+    (report) => {
+      report.pickerObservations[2].available = false;
+    },
+    (report) => {
+      report.laneCanonicalEvents[1].stage = 'applied';
+    },
+    (report) => {
+      report.startAdmissionElapsedMs = 0;
+    },
+    (report) => {
+      report.eventAuthorityTimings[0].completed = false;
+    },
+    (report) => {
+      delete report.admissionVerificationTimings.counters['admission-catalog-org'];
+    },
+    (report) => {
+      report.admissionVerificationTimings.calls = [];
+    },
+    (report) => {
+      report.pickerObservations[2].pageChat = {};
+    },
+    (report) => {
+      report.policyVerificationTimings.counters['policy-total'].started++;
+    },
+    ...diagnosticPickerChecks.map((key) => (report) => {
+      delete report.checks[key];
+    }),
+  ];
+  for (const mutate of mutations) {
+    const p = diagnosticPackets();
+    mutateReport(p['picker-diagnostic'], mutate);
+    assert.throws(() => aggregateDiagnostic(p, identity));
+  }
+});
+
+test('diagnostic receipts round-trip bounded files and retain exact-candidate cleanup identity', () => {
+  const directory = temporary();
+  try {
+    for (const [lane, packet] of Object.entries(diagnosticPackets())) {
+      const root = join(directory, lane);
+      for (const [file, bytes] of Object.entries(packet.reports)) {
+        mkdirSync(join(root, file, '..'), { recursive: true });
+        writeFileSync(join(root, file), bytes);
+      }
+      writeLaneReceipt(lane, root, identity, 'picker-diagnostic');
+      const loaded = loadLanePacket(root);
+      assert.equal(loaded.receipt.diagnosticOnly, true);
+      packet.receipt = loaded.receipt;
+      packet.reports = loaded.reports;
+    }
+    const loaded = Object.fromEntries(
+      diagnosticLanes.map((lane) => [lane, loadLanePacket(join(directory, lane))]),
+    );
+    assert.equal(aggregateDiagnostic(loaded, identity).passed, true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('diagnostic CLI aggregates both exact-candidate receipts and emits only diagnostic failure for missing peers', () => {
+  const directory = temporary();
+  const entrypoint = new URL('./live-production-proof-lanes.mjs', import.meta.url);
+  try {
+    const bin = join(directory, 'bin');
+    mkdirSync(bin);
+    const fakeGit = join(bin, 'git');
+    writeFileSync(
+      fakeGit,
+      `#!${process.execPath}\nconst args=process.argv.slice(2);if(args.length!==2||args[0]!=='rev-parse')process.exit(1);if(args[1]==='HEAD')console.log('${identity.candidate}');else if(args[1]==='HEAD^{tree}')console.log('${identity.tree}');else process.exit(1);\n`,
+    );
+    chmodSync(fakeGit, 0o700);
+    const root = join(directory, 'lanes');
+    for (const [lane, packet] of Object.entries(diagnosticPackets())) {
+      for (const [file, bytes] of Object.entries(packet.reports)) {
+        mkdirSync(join(root, lane, file, '..'), { recursive: true });
+        writeFileSync(join(root, lane, file), bytes);
+      }
+      writeFileSync(join(root, lane, 'lane-receipt.json'), JSON.stringify(packet.receipt));
+    }
+    const output = join(directory, 'aggregate.json');
+    const options = {
+      cwd: directory,
+      env: {
+        PATH: bin + ':/usr/bin:/bin',
+        HOME: directory,
+        LIVE_PROOF_EXPECTED_HEAD: identity.candidate,
+        GITHUB_RUN_ID: identity.runId,
+      },
+      stdio: 'pipe',
+    };
+    execFileSync(
+      process.execPath,
+      [entrypoint.pathname, 'aggregate-diagnostic', root, output],
+      options,
+    );
+    const result = JSON.parse(readFileSync(output));
+    assert.equal(result.passed, true);
+    assert.equal(result.diagnosticOnly, true);
+    assert.equal(result.fullAcceptance, false);
+    rmSync(join(root, 'independent'), { recursive: true });
+    assert.throws(() =>
+      execFileSync(
+        process.execPath,
+        [entrypoint.pathname, 'aggregate-diagnostic', root, output],
+        options,
+      ),
+    );
+    const failed = JSON.parse(readFileSync(output));
+    assert.equal(failed.passed, false);
+    assert.equal(failed.cleanupComplete, false);
+    assert.equal(failed.diagnosticOnly, true);
+    assert.equal(failed.fullAcceptance, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

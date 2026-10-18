@@ -314,3 +314,23 @@ test('approved proof diagnostics path is eligible while unrelated product and de
       /independent proof inputs changed/,
     );
 });
+
+test('fresh picker diagnostic never expands historical baseline eligibility to changed runtime inputs', () => {
+  assert.equal(
+    proofMode({ eventName: 'push', message: '[picker-diagnostic]' }),
+    'picker-diagnostic',
+  );
+  for (const path of [
+    'src/server/platform/codex/session-runtime.ts',
+    'src/server/platform/live-design/owning-runtime.test.ts',
+    'src/server/platform/live-design/production-shutdown.test.ts',
+  ])
+    assert.throws(() => validateSmokeDelta([path]));
+  assert.equal(
+    proofMode({ eventName: 'workflow_dispatch', preflight: true, pickerDiagnostic: true }),
+    'picker-diagnostic',
+  );
+  assert.throws(() =>
+    proofMode({ eventName: 'workflow_dispatch', pickerSmoke: true, pickerDiagnostic: true }),
+  );
+});

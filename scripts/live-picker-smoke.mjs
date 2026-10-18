@@ -227,10 +227,19 @@ const permittedDelta = new Set([
   'src/server/platform/live-design/production-controller.ts',
   'src/server/platform/live-design/production-installed-policy.test.ts',
 ]);
-export function proofMode({ eventName, message = '', preflight = false, pickerSmoke = false }) {
+export function proofMode({
+  eventName,
+  message = '',
+  preflight = false,
+  pickerSmoke = false,
+  pickerDiagnostic = false,
+}) {
   const full = message.includes('[full-native]');
   const smoke = pickerSmoke || (eventName === 'push' && message.includes('[picker-smoke]'));
-  assert.ok(!(smoke && full), 'conflicting proof modes');
+  const diagnostic =
+    pickerDiagnostic || (eventName === 'push' && message.includes('[picker-diagnostic]'));
+  assert.ok(Number(smoke) + Number(full) + Number(diagnostic) <= 1, 'conflicting proof modes');
+  if (diagnostic) return 'picker-diagnostic';
   if (smoke) return 'picker-smoke';
   if (preflight || (eventName === 'push' && !full)) return 'preflight';
   return 'full';

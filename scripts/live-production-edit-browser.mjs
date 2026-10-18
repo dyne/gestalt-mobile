@@ -543,6 +543,7 @@ try {
     await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
     await observePicker('after-accept');
     await command('accepted');
+    await observePicker('after-accept-ack');
     actions.add('accept');
   };
   const steer = async () => {
