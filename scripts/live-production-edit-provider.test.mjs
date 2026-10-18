@@ -1418,3 +1418,268 @@ test('actual startup proof observes capture and first RPC error through the orig
   assert.ok(source.includes("'captured-initialize'"));
   assert.ok(source.includes('return originalStartupDiscovery.apply(this, args)'));
 });
+
+test('independent owning launch uses authenticated cwd and current runtime image gate before exactly one controlled RPC', async () => {
+  const { capturedNativeImageFence } =
+    await import('../dist/server/server/platform/codex/codex-process-launcher.js');
+  const { CodexSessionRuntime } =
+    await import('../dist/server/server/platform/codex/session-runtime.js');
+  const { JsonRpcClient } = await import('../dist/server/server/platform/codex/json-rpc-client.js');
+  const { dirname } = await import('node:path');
+  const { realpathSync, existsSync } = await import('node:fs');
+  const source = readFileSync(new URL('./live-model-tools-proof.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('function launchIndependentOwner(');
+  assert.ok(start >= 0);
+  const seam = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const executable = realpathSync(process.execPath);
+  const sha256 = createHash('sha256').update(readFileSync(executable)).digest('hex');
+  const root = mkdtempSync(join(tmpdir(), 'l11-independent-launch-'));
+  const final = join(root, 'owner'),
+    wrong = join(root, 'wrong');
+  mkdirSync(final);
+  mkdirSync(wrong);
+  try {
+    for (const variant of ['authenticated', 'missing', 'wrong']) {
+      const report = {};
+      let launches = 0,
+        observations = 0,
+        owned;
+      const requestLog = join(root, variant + '.rpc');
+      const code = `const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);fs.appendFileSync(${JSON.stringify(requestLog)},q.method+'\\n');process.stdout.write(JSON.stringify({id:q.id,result:{ok:true}})+'\\n');});`;
+      const args = ['-e', code];
+      const capture = { manifestPath: join(final, 'manifest.json'), captureId: 'exact-capture' };
+      const policy = {
+        owningRuntimeCwd(manifest, id) {
+          observations++;
+          assert.equal(manifest, capture.manifestPath);
+          assert.equal(id, capture.captureId);
+          return final;
+        },
+      };
+      const launcher = (input, trusted) => {
+        launches++;
+        assert.deepEqual(trusted.managedLaunch.cwdTransition, { intermediate: final, final });
+        const began = performance.now();
+        const child = spawn(
+          '/usr/bin/bash',
+          [
+            '--noprofile',
+            '--norc',
+            '-c',
+            'cd -- "$1"; shift; exec "$@"',
+            'wrapper',
+            final,
+            executable,
+            ...args,
+          ],
+          { cwd: input.cwd, env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' },
+        );
+        const closed = new Promise((resolve) => child.once('close', resolve));
+        const descriptor =
+          variant === 'missing'
+            ? { intermediate: '', final: '' }
+            : variant === 'wrong'
+              ? { intermediate: final, final: wrong }
+              : trusted.managedLaunch.cwdTransition;
+        owned = {
+          child,
+          closed,
+          rpc: new JsonRpcClient(child.stdout, child.stdin),
+          waitForLiveImage: capturedNativeImageFence(
+            child,
+            { executable, sha256, args, cwd: input.cwd, cwdTransition: descriptor },
+            began,
+          ),
+        };
+        return owned;
+      };
+      const launch = new Function(
+        'launchCodexAppServer',
+        'binary',
+        'LIVE_CODEX_SHA256',
+        'dirname',
+        'performance',
+        `${seam}\nreturn launchIndependentOwner;`,
+      )(launcher, executable, sha256, dirname, performance);
+      const processOwner = launch(
+        { cwd: root, liveCaptureId: capture.captureId },
+        capture,
+        policy,
+        { installation: { manager: { path: '/fixed-manager' } } },
+        {},
+        report,
+      );
+      const runtime = Object.create(CodexSessionRuntime.prototype);
+      runtime.admissionResources = new Set();
+      const resource = {
+        liveCaptureId: capture.captureId,
+        active: true,
+        process: processOwner,
+        lifetime: new AbortController(),
+        admissionRequests: new Set(),
+      };
+      try {
+        assert.equal(existsSync(requestLog), false);
+        if (variant === 'authenticated') {
+          await runtime.awaitCapturedImage(resource);
+          assert.equal(existsSync(requestLog), false);
+          assert.deepEqual(await runtime.startupRequest(resource, 'initialize', {}), { ok: true });
+          assert.equal(readFileSync(requestLog, 'utf8'), 'initialize\n');
+          assert.equal(report.nativeImage.outcome, 'completed');
+        } else {
+          await assert.rejects(
+            runtime.awaitCapturedImage(resource),
+            /LIVE_NATIVE_HANDOFF_UNVERIFIED/,
+          );
+          assert.equal(existsSync(requestLog), false);
+          assert.equal(report.nativeImage.outcome, 'failed');
+          assert.ok(['construction', 'cwd'].includes(report.nativeImage.phase));
+        }
+        assert.equal(launches, 1);
+        assert.equal(observations, 1);
+        assert.ok(!JSON.stringify(report).includes(root));
+      } finally {
+        owned.child.kill('SIGTERM');
+        await owned.closed;
+        assert.ok(owned.child.exitCode !== null || owned.child.signalCode !== null);
+        assert.equal(resource.admissionRequests.size, 0);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('independent image observer preserves first error identity and cleanup keeps bounded revoke failure separate', async () => {
+  const { InstalledLiveAdmissionError } =
+    await import('../dist/server/server/platform/live-design/installed-policy.js');
+  const source = readFileSync(new URL('./live-model-tools-proof.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('function launchIndependentOwner(');
+  const seam = source.slice(start, source.indexOf('\n}\n', start) + 3);
+  const invalidAuthority = new Error('LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED');
+  let unauthenticatedLaunches = 0;
+  const forbiddenLaunch = new Function(
+    'launchCodexAppServer',
+    'binary',
+    'LIVE_CODEX_SHA256',
+    'dirname',
+    'performance',
+    `${seam}\nreturn launchIndependentOwner;`,
+  )(
+    () => {
+      unauthenticatedLaunches++;
+    },
+    '/fixed-native',
+    'fixed-digest',
+    () => '/fixed-dir',
+    performance,
+  );
+  assert.throws(
+    () =>
+      forbiddenLaunch(
+        {},
+        { manifestPath: '/fixed', captureId: 'capture' },
+        {
+          owningRuntimeCwd() {
+            throw invalidAuthority;
+          },
+        },
+        { installation: { manager: { path: '/fixed-manager' } } },
+        {},
+        {},
+      ),
+    (error) => error === invalidAuthority,
+  );
+  assert.equal(unauthenticatedLaunches, 0);
+  const first = Object.assign(new Error('LIVE_NATIVE_HANDOFF_UNVERIFIED'), {
+    handoffPhase: 'cwd',
+    privateCanary: 'secret-value',
+  });
+  const owner = {
+    async waitForLiveImage() {
+      throw first;
+    },
+  };
+  const launch = new Function(
+    'launchCodexAppServer',
+    'binary',
+    'LIVE_CODEX_SHA256',
+    'dirname',
+    'performance',
+    `${seam}\nreturn launchIndependentOwner;`,
+  )(
+    () => owner,
+    '/fixed-native',
+    'fixed-digest',
+    () => '/fixed-dir',
+    performance,
+  );
+  const report = { failure: { code: first.message } };
+  launch(
+    {},
+    { manifestPath: '/fixed-dir/manifest', captureId: 'capture' },
+    { owningRuntimeCwd: () => '/fixed-dir' },
+    { installation: { manager: { path: '/fixed-manager' } } },
+    {},
+    report,
+  );
+  await assert.rejects(
+    owner.waitForLiveImage(new AbortController().signal),
+    (error) => error === first,
+  );
+  assert.equal(report.nativeImage.code, first.message);
+  assert.equal(report.nativeImage.phase, 'cwd');
+  const cleanupStart = source.indexOf(
+    '  if (capture && !captureRevoked) {',
+    source.indexOf('} finally {\n  report.cleanupStage'),
+  );
+  const cleanup = source.slice(
+    cleanupStart,
+    source.indexOf("  report.cleanupStage = 'runtime-stop';", cleanupStart),
+  );
+  const run = new Function(
+    'capture',
+    'captureRevoked',
+    'policy',
+    'report',
+    'InstalledLiveAdmissionError',
+    'performance',
+    `return (async()=>{${cleanup};return captureRevoked;})();`,
+  );
+  for (const error of [
+    Object.assign(new Error('secret-value'), { code: 'ETIMEDOUT' }),
+    Object.assign(new Error('secret-value'), {
+      stdout: JSON.stringify({
+        schemaVersion: 2,
+        available: false,
+        liveReady: false,
+        reason: 'invalid-capture',
+      }),
+    }),
+    Object.assign(new Error('secret-value'), { stdout: 'malformed secret-value' }),
+  ]) {
+    let calls = 0;
+    const copy = structuredClone(report);
+    const revoked = await run(
+      { manifestPath: '/fixed', captureId: 'capture' },
+      false,
+      {
+        async revokeRuntime() {
+          calls++;
+          throw error;
+        },
+      },
+      copy,
+      InstalledLiveAdmissionError,
+      performance,
+    );
+    assert.equal(revoked, false);
+    assert.equal(calls, 1);
+    assert.equal(copy.cleanupFailure, 'NATIVE_CAPTURE_REVOCATION_UNVERIFIED');
+    assert.equal(copy.cleanupRevoke.outcome, 'failed');
+    assert.deepEqual(copy.failure, report.failure);
+    assert.equal(copy.nativeImage.code, first.message);
+    assert.ok(!JSON.stringify(copy).includes('secret-value'));
+    assert.equal(copy.cleanupComplete, undefined);
+  }
+});

@@ -50,6 +50,70 @@ import { captureOwningRuntime } from '../dist/server/server/platform/live-design
 import { resolveLiveSourceInventory } from '../dist/server/server/platform/live-design/owning-source-inventory.js';
 import { readLiveConfigFile } from '../dist/server/server/platform/live-design/effective-config.js';
 
+/** Proof-local launch seam; authority comes only from the authenticated policy API. */
+function launchIndependentOwner(input, capture, policy, configuration, environment, report) {
+  const process = launchCodexAppServer(input, {
+    executable: binary,
+    sha256: LIVE_CODEX_SHA256,
+    environment,
+    managedLaunch: {
+      command: configuration.installation.manager.path,
+      args: [
+        'cli',
+        '--',
+        '--live-policy-owning-runtime',
+        '--manifest',
+        capture.manifestPath,
+        '--capture-id',
+        capture.captureId,
+      ],
+      cwdTransition: {
+        intermediate: dirname(capture.manifestPath),
+        final: policy.owningRuntimeCwd(capture.manifestPath, capture.captureId),
+      },
+    },
+  });
+  if (process.waitForLiveImage) {
+    const wait = process.waitForLiveImage.bind(process);
+    process.waitForLiveImage = async (...args) => {
+      const began = performance.now();
+      const row = (report.nativeImage = { outcome: 'pending', budgetMs: 90_000 });
+      try {
+        const result = await wait(...args);
+        Object.assign(row, { outcome: 'completed', elapsedFromSpawnMs: result.elapsedMs });
+        return result;
+      } catch (error) {
+        Object.assign(row, {
+          outcome: 'failed',
+          code: [
+            'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+            'LIVE_NATIVE_HANDOFF_TIMEOUT',
+            'CODEX_STARTUP_CANCELLED',
+            'LIVE_RUNTIME_UNAVAILABLE',
+          ].includes(error?.message)
+            ? error.message
+            : 'UNCLASSIFIED',
+          phase: [
+            'construction',
+            'identity',
+            'cwd',
+            'source',
+            'image',
+            'wrapper',
+            'deadline',
+          ].includes(error?.handoffPhase)
+            ? error.handoffPhase
+            : 'unclassified',
+        });
+        throw error;
+      } finally {
+        row.elapsedMs = Math.max(0, Math.round(performance.now() - began));
+      }
+    };
+  }
+  return process;
+}
+
 assert.equal(process.env.LIVE_NATIVE_MODEL_PROOF, '1', 'Disposable supported-host opt-in required');
 const binary = realpathSync(process.env.LIVE_HOST_CODEX_BINARY);
 const evidence = resolve(process.env.LIVE_MODEL_EVIDENCE ?? 'test-results/live-model-tools');
@@ -598,23 +662,7 @@ try {
     (input) => {
       launches++;
       assert.equal(launches, 1);
-      appServer = launchCodexAppServer(input, {
-        executable: binary,
-        sha256: LIVE_CODEX_SHA256,
-        environment: env,
-        managedLaunch: {
-          command: managedConfiguration.installation.manager.path,
-          args: [
-            'cli',
-            '--',
-            '--live-policy-owning-runtime',
-            '--manifest',
-            capture.manifestPath,
-            '--capture-id',
-            capture.captureId,
-          ],
-        },
-      });
+      appServer = launchIndependentOwner(input, capture, policy, managedConfiguration, env, report);
       appServer.child.stderr.on('data', (bytes) => {
         const lower = bytes.toString('utf8').toLowerCase();
         for (const marker of [
@@ -877,6 +925,10 @@ try {
     'LIVE_RUNTIME_CAPTURE_REPLY_INVALID',
     'LIVE_ADMISSION_UNAVAILABLE',
     'LIVE_CONFIG_CHANGED',
+    'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+    'LIVE_NATIVE_HANDOFF_TIMEOUT',
+    'LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED',
+    'CODEX_STARTUP_CANCELLED',
     'LIVE_EFFECTIVE_CONFIG_UNAVAILABLE',
     'LIVE_OWNING_POLICY_UNVERIFIED',
     'LIVE_PRIVATE_STATE_INVALID',
@@ -900,6 +952,8 @@ try {
         ? error.message
         : 'UNCLASSIFIED',
   };
+  if (report.nativeImage?.outcome === 'failed')
+    report.failure.handoffPhase = report.nativeImage.phase;
   if (error instanceof InstalledLiveAdmissionError) report.failure.admission = error.diagnostic;
   else if (error?.cause instanceof InstalledLiveAdmissionError)
     report.failure.admission = error.cause.diagnostic;
@@ -949,12 +1003,28 @@ try {
 } finally {
   report.cleanupStage = 'capture-revoke';
   if (capture && !captureRevoked) {
+    const began = performance.now();
     try {
       await policy.revokeRuntime(capture.manifestPath, capture.captureId);
       captureRevoked = true;
-    } catch {
+      report.cleanupRevoke = {
+        outcome: 'completed',
+        elapsedMs: Math.round(performance.now() - began),
+      };
+    } catch (error) {
       report.passed = false;
       report.cleanupFailure = 'NATIVE_CAPTURE_REVOCATION_UNVERIFIED';
+      const classified =
+        error instanceof InstalledLiveAdmissionError
+          ? error
+          : error?.cause instanceof InstalledLiveAdmissionError
+            ? error.cause
+            : InstalledLiveAdmissionError.command('manager-command', error);
+      report.cleanupRevoke = {
+        outcome: 'failed',
+        elapsedMs: Math.round(performance.now() - began),
+        admission: classified.diagnostic,
+      };
     }
   }
   report.cleanupStage = 'runtime-stop';
