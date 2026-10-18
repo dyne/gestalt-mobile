@@ -1270,3 +1270,86 @@ test('independent-only receipt retains complete evidence and cannot satisfy eith
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('fixed editing milestone scope requires explicit full push and selects exactly the two unchanged editing lanes', () => {
+  assert.deepEqual(selectedLanes({ eventName: 'push', message: '[full-native] [editing-lanes]' }), {
+    mode: 'full',
+    lanes: ['accept-steer', 'manual-discard'],
+    verificationScope: 'editing-only',
+  });
+  for (const selection of [
+    { eventName: 'push', message: '[editing-lanes]' },
+    { eventName: 'pull_request', message: '[full-native] [editing-lanes]' },
+    { eventName: 'workflow_dispatch', message: '[full-native] [editing-lanes]' },
+    { eventName: 'push', message: '[full-native] [editing-lanes]', preflight: true },
+    { eventName: 'push', message: '[full-native] [editing-lanes] [picker-smoke]' },
+    { eventName: 'push', message: '[full-native] [editing-lanes] [independent-only]' },
+  ])
+    assert.throws(() => selectedLanes(selection));
+  assert.deepEqual(selectedLanes({ eventName: 'push', message: '[full-native]' }), {
+    mode: 'full',
+    lanes: [...fullLanes],
+  });
+  assert.deepEqual(selectedLanes({ eventName: 'push' }), {
+    mode: 'preflight',
+    lanes: ['preflight'],
+  });
+});
+
+test('editing milestone receipts retain complete identity/digests/cleanup and never substitute for full coverage', () => {
+  const directory = temporary();
+  try {
+    for (const lane of ['accept-steer', 'manual-discard']) {
+      const root = join(directory, lane),
+        file = 'production-entrypoint/production-entrypoint-proof.json';
+      mkdirSync(join(root, 'production-entrypoint'), { recursive: true });
+      const value = production(lane);
+      const save = () => writeFileSync(join(root, file), JSON.stringify(value));
+      save();
+      const receipt = writeLaneReceipt(lane, root, identity, 'full', 'editing-only');
+      assert.deepEqual(receipt.identity, identity);
+      assert.equal(receipt.verificationScope, 'editing-only');
+      assert.equal(receipt.partialL11EditingEvidence, true);
+      assert.equal(receipt.fullExactCandidateStillRequired, true);
+      assert.equal(receipt.cleanupComplete, true);
+      const packet = loadLanePacket(root);
+      assert.equal(sha(packet.reports[file]), receipt.reports[file]);
+      const complete = packets();
+      complete[lane] = packet;
+      assert.throws(() => aggregateLanes(complete, identity));
+      value.provenance.head = 'c'.repeat(40);
+      save();
+      assert.throws(() => writeLaneReceipt(lane, root, identity, 'full', 'editing-only'));
+      value.provenance.head = identity.candidate;
+      value.cleanupComplete = false;
+      save();
+      assert.throws(() => writeLaneReceipt(lane, root, identity, 'full', 'editing-only'));
+      value.cleanupComplete = true;
+      save();
+      assert.throws(() =>
+        writeLaneReceipt(lane, root, identity, 'picker-diagnostic', 'editing-only'),
+      );
+      assert.throws(() => writeLaneReceipt(lane, root, identity, 'full', 'arbitrary-lanes'));
+    }
+    assert.throws(() => writeLaneReceipt('recovery', directory, identity, 'full', 'editing-only'));
+    assert.throws(() =>
+      writeLaneReceipt('independent', directory, identity, 'full', 'editing-only'),
+    );
+    const workflow = readFileSync(
+      new URL('../.github/workflows/live-caddy-proof.yml', import.meta.url),
+      'utf8',
+    );
+    assert.ok(
+      workflow.includes(
+        "if: always() && needs.proof-selection.outputs.mode == 'full' && needs.proof-selection.outputs.verification-scope != 'editing-only'",
+      ),
+    );
+    assert.ok(
+      workflow.includes(
+        'LIVE_PROOF_VERIFICATION_SCOPE: ${{ needs.proof-selection.outputs.verification-scope }}',
+      ),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

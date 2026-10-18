@@ -51,6 +51,7 @@ jobs:
     outputs:
       mode: ${{ steps.select.outputs.mode }}
       lanes: ${{ steps.select.outputs.lanes }}
+      verification-scope: ${{ steps.select.outputs.verification-scope }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -73,7 +74,7 @@ jobs:
           import {selectedLanes} from './scripts/live-production-proof-lanes.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
           const selection=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true',independentOnly:process.env.REQUEST_INDEPENDENT_ONLY==='true'});
-          appendFileSync(process.env.GITHUB_OUTPUT,`mode=${selection.mode}\nlanes=${JSON.stringify(selection.lanes)}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`mode=${selection.mode}\nlanes=${JSON.stringify(selection.lanes)}\nverification-scope=${selection.verificationScope??''}\n`);
           NODE
   native-proof:
     needs: proof-selection
@@ -427,6 +428,7 @@ jobs:
         if: steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only'
         env:
           LIVE_PROOF_MODE: ${{ steps.proof-mode.outputs.mode }}
+          LIVE_PROOF_VERIFICATION_SCOPE: ${{ needs.proof-selection.outputs.verification-scope }}
 
           LIVE_PRODUCTION_PROOF_LANE: ${{ matrix.lane }}
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -439,7 +441,7 @@ jobs:
           if-no-files-found: error
   full-coverage:
     needs: [proof-selection, native-proof]
-    if: always() && needs.proof-selection.outputs.mode == 'full'
+    if: always() && needs.proof-selection.outputs.mode == 'full' && needs.proof-selection.outputs.verification-scope != 'editing-only'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

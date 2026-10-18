@@ -156,6 +156,13 @@ export const fullAssertionOwners = Object.freeze({
 });
 export function selectedLanes(selection) {
   const mode = proofMode(selection);
+  const editing = (selection.message ?? '').includes('[editing-lanes]');
+  if (editing) {
+    assert.equal(selection.eventName, 'push');
+    assert.ok(selection.message.includes('[full-native]'));
+    assert.equal(mode, 'full');
+    return { mode, lanes: ['accept-steer', 'manual-discard'], verificationScope: 'editing-only' };
+  }
   return {
     mode,
     lanes:
@@ -515,7 +522,18 @@ export function loadLanePacket(directory) {
     reports: Object.fromEntries(laneFiles(receipt.lane).map((file) => [file, read(file)])),
   };
 }
-export function writeLaneReceipt(lane, directory, identity = candidateIdentity(), mode = 'full') {
+export function writeLaneReceipt(
+  lane,
+  directory,
+  identity = candidateIdentity(),
+  mode = 'full',
+  verificationScope,
+) {
+  assert.ok(verificationScope === undefined || verificationScope === 'editing-only');
+  if (verificationScope) {
+    assert.equal(mode, 'full');
+    assert.ok(['accept-steer', 'manual-discard'].includes(lane));
+  }
   assert.ok(['full', 'picker-diagnostic', 'independent-only'].includes(mode));
   assert.ok(
     (mode === 'full'
@@ -538,6 +556,13 @@ export function writeLaneReceipt(lane, directory, identity = candidateIdentity()
     schemaVersion: 1,
     lane,
     identity,
+    ...(verificationScope
+      ? {
+          verificationScope,
+          partialL11EditingEvidence: true,
+          fullExactCandidateStillRequired: true,
+        }
+      : {}),
     ...(mode === 'picker-diagnostic'
       ? { mode, diagnosticOnly: true, fullExactCandidateStillRequired: true }
       : mode === 'independent-only'
@@ -576,6 +601,8 @@ export function aggregateLanes(packets, identity) {
     assert.equal(receipt.schemaVersion, 1);
     assert.equal(receipt.lane, lane);
     assert.equal(receipt.mode, undefined);
+    assert.equal(receipt.verificationScope, undefined);
+    assert.equal(receipt.partialL11EditingEvidence, undefined);
     assert.equal(receipt.diagnosticOnly, undefined);
     assertIdentity(receipt.identity, identity);
     assert.equal(receipt.passed, true);
@@ -1186,6 +1213,7 @@ async function main() {
       resolve(argument),
       candidateIdentity(),
       process.env.LIVE_PROOF_MODE ?? 'full',
+      process.env.LIVE_PROOF_VERIFICATION_SCOPE || undefined,
     );
   assert.ok(['aggregate', 'aggregate-diagnostic'].includes(command));
   const identity = candidateIdentity(),
