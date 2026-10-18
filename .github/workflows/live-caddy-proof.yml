@@ -38,6 +38,10 @@ on:
         description: 'Diagnostic exact-candidate independent proofs plus actual picker Start/Generate/Accept; full acceptance still required'
         type: boolean
         default: false
+      independent_only:
+        description: 'Only current Native model/child and browser/project confinement evidence; full acceptance still required'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -62,12 +66,13 @@ jobs:
           REQUEST_PREFLIGHT: ${{ inputs.preflight }}
           REQUEST_PICKER_SMOKE: ${{ inputs.picker_smoke }}
           REQUEST_PICKER_DIAGNOSTIC: ${{ inputs.picker_diagnostic }}
+          REQUEST_INDEPENDENT_ONLY: ${{ inputs.independent_only }}
         run: |
           node --input-type=module <<'NODE'
           import {readFileSync,appendFileSync} from 'node:fs';
           import {selectedLanes} from './scripts/live-production-proof-lanes.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-          const selection=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true'});
+          const selection=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true',independentOnly:process.env.REQUEST_INDEPENDENT_ONLY==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`mode=${selection.mode}\nlanes=${JSON.stringify(selection.lanes)}\n`);
           NODE
   native-proof:
@@ -93,12 +98,13 @@ jobs:
           REQUEST_PREFLIGHT: ${{ inputs.preflight }}
           REQUEST_PICKER_SMOKE: ${{ inputs.picker_smoke }}
           REQUEST_PICKER_DIAGNOSTIC: ${{ inputs.picker_diagnostic }}
+          REQUEST_INDEPENDENT_ONLY: ${{ inputs.independent_only }}
         run: |
           node --input-type=module <<'NODE'
           import {readFileSync,appendFileSync} from 'node:fs';
           import {proofMode} from './scripts/live-picker-smoke.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true'});
+          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true',independentOnly:process.env.REQUEST_INDEPENDENT_ONLY==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`mode=${mode}\n`);
           NODE
       - run: npm ci
@@ -282,7 +288,7 @@ jobs:
           LIVE_PRODUCTION_EDIT_FLOW_PROOF: '1'
         run: node scripts/live-production-browser-preflight.mjs
       - name: Real temporary Caddy and actual same-UID managed project denial
-        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only') && matrix.lane == 'independent'
         env:
           LIVE_NATIVE_CADDY_PROOF: '1'
           LIVE_CADDY_EVIDENCE_DIR: test-results/live-caddy-proof
@@ -321,7 +327,7 @@ jobs:
       - name: Build Mobile server and current client for Native and controls proofs
         run: npm run build
       - name: Actual owning native model tools and permitted child with deterministic provider
-        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only') && matrix.lane == 'independent'
         timeout-minutes: 3
         env:
           LIVE_NATIVE_MODEL_PROOF: '1'
@@ -334,7 +340,7 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-model-tools-proof.mjs
       - name: Real helper browser proof in separate network with trusted TLS
-        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic') && matrix.lane == 'independent'
+        if: (steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only') && matrix.lane == 'independent'
         timeout-minutes: 5
         env:
           LIVE_REMOTE_PROOF: '1'
@@ -418,7 +424,7 @@ jobs:
           native_binary="$LIVE_HOST_CODEX_BINARY"
           LIVE_HOST_CODEX_BINARY="$native_binary" node scripts/live-project-isolation-proof.mjs
       - name: Validate complete exact-candidate lane evidence
-        if: steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic'
+        if: steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only'
         env:
           LIVE_PROOF_MODE: ${{ steps.proof-mode.outputs.mode }}
 
@@ -428,7 +434,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: ${{ (needs.proof-selection.outputs.mode == 'full' || needs.proof-selection.outputs.mode == 'picker-diagnostic') && format('live-caddy-proof-{0}', matrix.lane) || 'live-caddy-proof' }}
+          name: ${{ (needs.proof-selection.outputs.mode == 'full' || needs.proof-selection.outputs.mode == 'picker-diagnostic' || needs.proof-selection.outputs.mode == 'independent-only') && format('live-caddy-proof-{0}', matrix.lane) || 'live-caddy-proof' }}
           path: test-results/live-caddy-proof
           if-no-files-found: error
   full-coverage:

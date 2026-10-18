@@ -1187,3 +1187,86 @@ test('full lanes retain real continuity and exact dispatched-poll/manual120s obs
     assert.throws(() => aggregateLanes(p, identity));
   }
 });
+
+test('independent-only selects exactly the existing independent lane without production editing or recovery', () => {
+  for (const selection of [
+    { eventName: 'push', message: '[independent-only]' },
+    { eventName: 'workflow_dispatch', independentOnly: true, preflight: true },
+  ])
+    assert.deepEqual(selectedLanes(selection), {
+      mode: 'independent-only',
+      lanes: ['independent'],
+    });
+});
+
+test('independent-only receipt retains complete evidence and cannot satisfy either acceptance aggregate', () => {
+  const root = temporary();
+  try {
+    const reports = independent();
+    const save = () => {
+      for (const [file, value] of Object.entries(reports)) {
+        mkdirSync(join(root, file, '..'), { recursive: true });
+        writeFileSync(join(root, file), JSON.stringify(value));
+      }
+    };
+    save();
+    const receipt = writeLaneReceipt('independent', root, identity, 'independent-only');
+    assert.equal(receipt.partialL11AdmissionEvidence, true);
+    assert.equal(receipt.fullExactCandidateStillRequired, true);
+    assert.equal(receipt.mode, 'independent-only');
+    const loaded = loadLanePacket(root);
+    assert.deepEqual(loaded.receipt, receipt);
+    for (const [file, bytes] of Object.entries(loaded.reports))
+      assert.equal(sha(bytes), receipt.reports[file]);
+    const full = packets();
+    full.independent = loaded;
+    assert.throws(() => aggregateLanes(full, identity));
+    const diagnostic = diagnosticPackets();
+    diagnostic.independent = loaded;
+    assert.throws(() => aggregateDiagnostic(diagnostic, identity));
+    assert.throws(() => writeLaneReceipt('accept-steer', root, identity, 'independent-only'));
+    assert.throws(() => writeLaneReceipt('independent', root, identity, 'unknown'));
+    for (const mutate of [
+      () => {
+        reports[
+          'native-model-tools/native-model-tools-proof.json'
+        ].checks.modelPrivateReadNeverReachedProvider = false;
+      },
+      () => {
+        reports['native-model-tools/native-model-tools-proof.json'].provenance.mobileHead =
+          'c'.repeat(40);
+      },
+      () => {
+        reports['native-model-tools/native-model-tools-proof.json'].provenance.mobileTree =
+          'c'.repeat(40);
+      },
+      () => {
+        reports['native-model-tools/native-model-tools-proof.json'].provenance.binarySha256 =
+          'c'.repeat(64);
+      },
+      () => {
+        reports['cleanup-proof.json'].cleanupFailures = 1;
+      },
+      () => {
+        reports['project-isolation/project-isolation-proof.json'].cleanupComplete = false;
+      },
+    ]) {
+      const clean = structuredClone(reports);
+      mutate();
+      save();
+      assert.throws(() => writeLaneReceipt('independent', root, identity, 'independent-only'));
+      for (const key of Object.keys(reports)) reports[key] = clean[key];
+    }
+    save();
+    rmSync(join(root, 'cleanup-proof.json'));
+    assert.throws(() => writeLaneReceipt('independent', root, identity, 'independent-only'));
+    const changed = structuredClone(loaded);
+    changed.reports['cleanup-proof.json'] += '\n';
+    delete changed.receipt.mode;
+    const changedFull = packets();
+    changedFull.independent = changed;
+    assert.throws(() => aggregateLanes(changedFull, identity), /PROOF_REPORT_CHANGED/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

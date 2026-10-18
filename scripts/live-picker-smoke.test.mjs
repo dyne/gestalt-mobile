@@ -334,3 +334,26 @@ test('fresh picker diagnostic never expands historical baseline eligibility to c
     proofMode({ eventName: 'workflow_dispatch', pickerSmoke: true, pickerDiagnostic: true }),
   );
 });
+
+test('independent-only is explicit, exclusive and overrides dispatch default preflight only when selected', () => {
+  assert.equal(proofMode({ eventName: 'push', message: '[independent-only]' }), 'independent-only');
+  assert.equal(
+    proofMode({ eventName: 'workflow_dispatch', independentOnly: true, preflight: true }),
+    'independent-only',
+  );
+  assert.equal(proofMode({ eventName: 'pull_request', message: '[independent-only]' }), 'full');
+  for (const other of ['[full-native]', '[picker-smoke]', '[picker-diagnostic]'])
+    assert.throws(
+      () => proofMode({ eventName: 'push', message: `[independent-only] ${other}` }),
+      /conflicting proof modes/,
+    );
+  for (const other of [
+    { pickerSmoke: true },
+    { pickerDiagnostic: true },
+    { message: '[full-native]' },
+  ])
+    assert.throws(
+      () => proofMode({ eventName: 'workflow_dispatch', independentOnly: true, ...other }),
+      /conflicting proof modes/,
+    );
+});

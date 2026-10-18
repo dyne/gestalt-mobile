@@ -233,12 +233,19 @@ export function proofMode({
   preflight = false,
   pickerSmoke = false,
   pickerDiagnostic = false,
+  independentOnly = false,
 }) {
   const full = message.includes('[full-native]');
   const smoke = pickerSmoke || (eventName === 'push' && message.includes('[picker-smoke]'));
   const diagnostic =
     pickerDiagnostic || (eventName === 'push' && message.includes('[picker-diagnostic]'));
-  assert.ok(Number(smoke) + Number(full) + Number(diagnostic) <= 1, 'conflicting proof modes');
+  const independent =
+    independentOnly || (eventName === 'push' && message.includes('[independent-only]'));
+  assert.ok(
+    Number(smoke) + Number(full) + Number(diagnostic) + Number(independent) <= 1,
+    'conflicting proof modes',
+  );
+  if (independent) return 'independent-only';
   if (diagnostic) return 'picker-diagnostic';
   if (smoke) return 'picker-smoke';
   if (preflight || (eventName === 'push' && !full)) return 'preflight';

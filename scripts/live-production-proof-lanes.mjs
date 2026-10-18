@@ -163,7 +163,9 @@ export function selectedLanes(selection) {
         ? [...fullLanes]
         : mode === 'picker-diagnostic'
           ? [...diagnosticLanes]
-          : [mode],
+          : mode === 'independent-only'
+            ? ['independent']
+            : [mode],
   };
 }
 export function productionLane(value = '') {
@@ -514,8 +516,15 @@ export function loadLanePacket(directory) {
   };
 }
 export function writeLaneReceipt(lane, directory, identity = candidateIdentity(), mode = 'full') {
-  assert.ok(['full', 'picker-diagnostic'].includes(mode));
-  assert.ok((mode === 'full' ? fullLanes : diagnosticLanes).includes(lane));
+  assert.ok(['full', 'picker-diagnostic', 'independent-only'].includes(mode));
+  assert.ok(
+    (mode === 'full'
+      ? fullLanes
+      : mode === 'picker-diagnostic'
+        ? diagnosticLanes
+        : ['independent']
+    ).includes(lane),
+  );
   const files = laneFiles(lane);
   const reports = Object.fromEntries(files.map((file) => [file, json(join(directory, file))]));
   if (lane === 'independent') validateIndependent(reports, identity);
@@ -531,7 +540,9 @@ export function writeLaneReceipt(lane, directory, identity = candidateIdentity()
     identity,
     ...(mode === 'picker-diagnostic'
       ? { mode, diagnosticOnly: true, fullExactCandidateStillRequired: true }
-      : {}),
+      : mode === 'independent-only'
+        ? { mode, partialL11AdmissionEvidence: true, fullExactCandidateStillRequired: true }
+        : {}),
     passed: true,
     cleanupComplete: true,
     reports: Object.fromEntries(
