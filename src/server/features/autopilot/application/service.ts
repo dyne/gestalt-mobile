@@ -483,9 +483,13 @@ export class AutopilotCoordinator {
       return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
     const currentPlan = this.deps.plan(sessionId);
     if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
-    if (executionComplete(currentPlan.plan)) return { code: 'AUTOPILOT_PLAN_COMPLETE' };
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    if (
+      executionComplete(currentPlan.plan) &&
+      !this.terminalReviewPending(prior, currentPlan.identity)
+    )
+      return { code: 'AUTOPILOT_PLAN_COMPLETE' };
     const nextFingerprint = fingerprint(currentPlan.plan);
     const replacing = Boolean(prior.planIdentity && prior.planIdentity !== currentPlan.identity);
     if (replacing) {
@@ -1223,9 +1227,13 @@ export class AutopilotCoordinator {
   supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
     const currentPlan = this.deps.plan(sessionId);
     if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
-    if (executionComplete(currentPlan.plan)) return { code: 'AUTOPILOT_PLAN_COMPLETE' };
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    if (
+      executionComplete(currentPlan.plan) &&
+      !this.terminalReviewPending(prior, currentPlan.identity)
+    )
+      return { code: 'AUTOPILOT_PLAN_COMPLETE' };
     if (
       prior.planIdentity === currentPlan.identity &&
       !prior.requestedEnabled &&
@@ -1953,7 +1961,20 @@ export class AutopilotCoordinator {
     }
   }
 
+  private terminalReviewPending(state: AutopilotSession, planIdentity: string): boolean {
+    return Boolean(
+      state.planIdentity === planIdentity &&
+      state.checkpoints?.planIdentity === planIdentity &&
+      state.checkpoints.protocolVersion === 1 &&
+      !state.checkpoints.terminalReviewAccepted,
+    );
+  }
+
   private requiresRootBoundary(state: AutopilotSession, plan: SupervisedPlan): boolean {
+    // Completed milestone reports do not complete terminal review or its fixes.
+    // Keep their continuation at root; a settled last executor cannot own it.
+    if (executionComplete(plan) && this.terminalReviewPending(state, state.planIdentity ?? ''))
+      return true;
     if (state.checkpoints?.rootContinuationFromTurnId) return true;
     const reportedL2 = new Set(state.checkpoints?.reportedL2Ids ?? []);
     const reportedL1 = new Set(state.checkpoints?.reportedL1Ids ?? []);
