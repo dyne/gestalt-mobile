@@ -8,6 +8,7 @@ import type { ExecutorLifecycle, StructuredBlock } from './supervised-lifecycle.
 import {
   describeProviderFailure,
   type ProviderFailure,
+  type ProviderRetry,
 } from '../../../../shared/contracts/provider-failure.js';
 import { checkpointHandoffRecoveryMessage } from '../../../../shared/contracts/autopilot-recovery.js';
 import {
@@ -49,6 +50,8 @@ export type AutopilotSession = Readonly<{
   lastControlId: string | null;
   stopReason: AutopilotStopReason | null;
   providerFailure?: ProviderFailure;
+  providerFailureTurnId?: string;
+  providerRetry?: ProviderRetry;
   executor?: ExecutorLifecycle;
   blocking?: StructuredBlock;
   supervision?: SupervisionProtocolState;
@@ -84,6 +87,7 @@ export type AutopilotSession = Readonly<{
 
 export type AutopilotSnapshot = Readonly<{
   providerFailure?: ProviderFailure;
+  providerRetry?: ProviderRetry;
   state: AutopilotState;
   enabled: boolean;
   /** Requested intent and healthy continuation are intentionally distinct. */
@@ -223,33 +227,31 @@ export function autopilotSnapshot(
                   : healthy && rootWorking
                     ? 'rootWorking'
                     : 'degraded';
-  const nextExpectedAction =
-    state.providerFailure &&
-    ['providerError', 'usageLimitExceeded'].includes(state.stopReason ?? '')
-      ? describeProviderFailure(state.providerFailure)
-      : state.stopReason === 'usageLimitExceeded'
-        ? 'Codex usage limit reached. Restore available usage or wait for the limit to reset, then resume Autopilot.'
-        : phase === 'checkpointRecovery'
-          ? checkpointHandoffRecoveryMessage
-          : phase === 'rootWorking'
-            ? 'Wait for the root turn to settle.'
-            : phase === 'continuationScheduled'
-              ? 'Run the scheduled continuation.'
-              : phase === 'waitingForAgentEvent'
-                ? parkedWait
-                  ? 'Wait for a subscribed agent or process event.'
-                  : 'Wait for the active executor or owned process to settle.'
-                : phase === 'checkingState'
-                  ? 'Reconcile supervised execution state.'
-                  : phase === 'needsYou'
-                    ? 'Respond to the pending attention request.'
-                    : phase === 'complete'
-                      ? 'No further plan action is required.'
-                      : phase === 'off'
-                        ? 'Enable Autopilot to supervise an incomplete plan.'
-                        : phase === 'safetyPaused'
-                          ? 'Resume manually after reviewing the safety pause.'
-                          : 'Restore a valid continuation before relying on Autopilot.';
+  const nextExpectedAction = state.providerFailure
+    ? describeProviderFailure(state.providerFailure)
+    : state.stopReason === 'usageLimitExceeded'
+      ? 'Codex usage limit reached. Restore available usage or wait for the limit to reset, then resume Autopilot.'
+      : phase === 'checkpointRecovery'
+        ? checkpointHandoffRecoveryMessage
+        : phase === 'rootWorking'
+          ? 'Wait for the root turn to settle.'
+          : phase === 'continuationScheduled'
+            ? 'Run the scheduled continuation.'
+            : phase === 'waitingForAgentEvent'
+              ? parkedWait
+                ? 'Wait for a subscribed agent or process event.'
+                : 'Wait for the active executor or owned process to settle.'
+              : phase === 'checkingState'
+                ? 'Reconcile supervised execution state.'
+                : phase === 'needsYou'
+                  ? 'Respond to the pending attention request.'
+                  : phase === 'complete'
+                    ? 'No further plan action is required.'
+                    : phase === 'off'
+                      ? 'Enable Autopilot to supervise an incomplete plan.'
+                      : phase === 'safetyPaused'
+                        ? 'Resume manually after reviewing the safety pause.'
+                        : 'Restore a valid continuation before relying on Autopilot.';
   return {
     state: state.state,
     enabled: state.requestedEnabled,
@@ -296,10 +298,8 @@ export function autopilotSnapshot(
     ...(state.nextEvaluationAt ? { nextEvaluationAt: state.nextEvaluationAt } : {}),
     ...(state.executor ? { executor: state.executor } : {}),
     ...(state.blocking ? { blocking: state.blocking } : {}),
-    ...(state.providerFailure &&
-    ['providerError', 'usageLimitExceeded'].includes(state.stopReason ?? '')
-      ? { providerFailure: state.providerFailure }
-      : {}),
+    ...(state.providerFailure ? { providerFailure: state.providerFailure } : {}),
+    ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     updatedAt: state.updatedAt,
   };
 }

@@ -102,6 +102,7 @@ export type AutopilotDependencies = Readonly<{
 }>;
 
 export class AutopilotCoordinator {
+  private readonly providerTimers = new Map<string, () => void>();
   private readonly timers = new Map<string, () => void>();
   private readonly completionTimers = new Map<string, () => void>();
   private readonly executorTimers = new Map<string, () => void>();
@@ -163,6 +164,16 @@ export class AutopilotCoordinator {
     } catch (error) {
       if (!(error instanceof AutopilotStateError)) throw error;
       return; // snapshot exposes controllerUnavailable; only explicit Off repairs it.
+    }
+    if (state?.providerRetry?.pending) {
+      // A restart loses the live reconciliation context. Retain the used budget
+      // and require explicit recovery instead of manufacturing fresh authority.
+      this.persist({
+        ...state,
+        providerRetry: { ...state.providerRetry, pending: false },
+        nextEvaluationAt: null,
+        updatedAt: this.deps.now(),
+      });
     }
     const session = this.deps.session(sessionId);
     if (
@@ -513,6 +524,8 @@ export class AutopilotCoordinator {
       nextEvaluationAt: null,
       stopReason: null,
       providerFailure: undefined,
+      providerFailureTurnId: undefined,
+      providerRetry: undefined,
       executor: !replacing && prior.state === 'attentionRequired' ? prior.executor : undefined,
       blocking: undefined,
       supervision: recoverSafetyPause(
@@ -623,6 +636,7 @@ export class AutopilotCoordinator {
       prior.state === 'disabled' &&
       !cancelled &&
       !prior.supervision?.waitLease &&
+      !prior.providerFailure &&
       (!currentPlan || prior.planIdentity === currentPlan.identity)
     )
       return this.snapshot(sessionId);
@@ -635,6 +649,9 @@ export class AutopilotCoordinator {
       nextEvaluationAt: null,
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: 'manualDisabled',
+      providerFailure: undefined,
+      providerFailureTurnId: undefined,
+      providerRetry: undefined,
       blocking: undefined,
       supervision: consumeObsoleteWait(
         prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
@@ -839,40 +856,187 @@ export class AutopilotCoordinator {
     }
     return this.snapshot(sessionId);
   }
-  /** Terminal provider failures are retained even when automatic supervision is off. */
-  providerFailed(sessionId: string, failure: ProviderFailure): boolean {
+  /** Retain structured failures without turning manual Off into an automatic pause. */
+  providerFailed(
+    sessionId: string,
+    failure: ProviderFailure,
+    origin?: { actor: 'root' | 'child'; turnId?: string; settled: boolean },
+  ): boolean {
     const now = this.deps.now();
     const state = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
+    const retry = state.providerRetry;
     if (
-      state.state === 'safetyPaused' &&
+      retry &&
+      !retry.pending &&
+      retry.turnId === origin?.turnId &&
+      failure.code === 'serverOverloaded'
+    )
+      return false;
+    if (retry && retry.turnId === origin?.turnId && state.providerFailure?.code === failure.code) {
+      if (origin?.settled && !retry.settled)
+        this.persist({ ...state, providerRetry: { ...retry, settled: true }, updatedAt: now });
+      return false;
+    }
+    if (
+      !state.requestedEnabled &&
+      !retry?.pending &&
+      state.providerFailureTurnId === origin?.turnId &&
       state.providerFailure?.code === failure.code &&
       state.providerFailure.httpStatusCode === failure.httpStatusCode
     )
       return false;
+    const enabled = state.requestedEnabled || Boolean(retry?.pending);
+    const attempt = (retry?.attempt ?? 0) + 1;
+    const recoverable =
+      enabled &&
+      failure.code === 'serverOverloaded' &&
+      origin?.actor === 'root' &&
+      Boolean(origin.turnId) &&
+      origin.turnId === this.deps.session(sessionId)?.activeTurnId &&
+      attempt <= 2;
+    const event: AutopilotAuditEvent = {
+      sessionId,
+      type: 'autopilot.provider-failed',
+      occurredAt: now,
+      payload: {
+        providerFailure: failure,
+        requestedEnabled: enabled,
+        actor: origin?.actor ?? 'unknown',
+        turnId: origin?.turnId ?? null,
+        retryAttempt: recoverable ? attempt : null,
+      },
+    };
+    if (!enabled) {
+      this.persist(
+        {
+          ...state,
+          providerFailure: failure,
+          providerFailureTurnId: origin?.turnId,
+          updatedAt: now,
+        },
+        undefined,
+        [event],
+      );
+      return true;
+    }
     const cancelled = this.cancelScheduledControl(state, now);
     this.cancelTimer(sessionId);
     this.cancelWaitTimer(sessionId);
+    const next: AutopilotSession = {
+      ...(this.deps.store.find(sessionId) ?? state),
+      state: 'safetyPaused',
+      requestedEnabled: false,
+      generation: state.generation + 1,
+      nextEvaluationAt: recoverable
+        ? new Date(Date.parse(now) + 30_000 * attempt).toISOString()
+        : null,
+      ...(cancelled ? { lastControlId: null } : {}),
+      stopReason: failure.code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
+      providerFailure: failure,
+      providerFailureTurnId: origin?.turnId,
+      providerRetry: recoverable
+        ? {
+            turnId: origin!.turnId!,
+            attempt,
+            notBefore: new Date(Date.parse(now) + 30_000 * attempt).toISOString(),
+            settled: origin!.settled,
+            pending: true,
+            resumeRoot: false,
+          }
+        : retry
+          ? { ...retry, pending: false, resumeRoot: false }
+          : undefined,
+      supervision: undefined,
+      updatedAt: now,
+    };
+    this.persist(next, cancelled, [event]);
+    if (recoverable)
+      this.providerTimers.set(
+        sessionId,
+        this.deps.schedule(() => {
+          this.providerTimers.delete(sessionId);
+          this.enqueue(sessionId, () => this.retryProvider(sessionId, next.generation));
+        }, 30_000 * attempt),
+      );
+    return true;
+  }
+
+  private async retryProvider(sessionId: string, generation: number): Promise<void> {
+    const initial = this.deps.store.find(sessionId);
+    if (!initial?.providerRetry?.pending || initial.generation !== generation) return;
+    let compatible = false;
+    try {
+      compatible = (await this.deps.reconcile(sessionId)).compatible;
+    } catch {
+      /* fail closed */
+    }
+    const current = this.deps.store.find(sessionId),
+      session = this.deps.session(sessionId),
+      activity = this.deps.activity(sessionId),
+      retained = this.deps.plan(sessionId);
+    if (!current?.providerRetry?.pending || current.generation !== generation) return;
+    const safe =
+      Date.parse(this.deps.now()) >= Date.parse(current.providerRetry.notBefore) &&
+      compatible &&
+      current.providerRetry.settled &&
+      session?.state === 'ready' &&
+      !session.activeTurnId &&
+      activity?.confidence === 'fresh' &&
+      activity.root.state === 'idle' &&
+      Date.parse(this.deps.now()) - Date.parse(activity.root.observedAt) <=
+        this.deps.policy.staleAfterMs &&
+      activity.subagents.every(
+        (agent) =>
+          agent.state === 'idle' &&
+          !agent.ownedProcesses?.some((process) =>
+            ['running', 'detached-active'].includes(process.state),
+          ),
+      ) &&
+      !this.deps.pendingInteraction(sessionId) &&
+      retained?.identity === current.planIdentity &&
+      fingerprint(retained.plan) === current.planFingerprint &&
+      (!executionComplete(retained.plan) || this.terminalReviewPending(current, retained.identity));
+    const now = this.deps.now();
     this.persist(
       {
-        // Timer cancellation also persists cancelled executor commands.
-        ...(this.deps.store.find(sessionId) ?? state),
-        state: 'safetyPaused',
-        requestedEnabled: false,
-        generation: state.generation + 1,
+        ...current,
+        providerRetry: { ...current.providerRetry, pending: false, resumeRoot: safe },
         nextEvaluationAt: null,
-        ...(cancelled ? { lastControlId: null } : {}),
-        stopReason: failure.code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
-        providerFailure: failure,
-        supervision: undefined,
+        ...(safe
+          ? {
+              state: 'monitoring' as const,
+              requestedEnabled: true,
+              stopReason: null,
+              providerFailure: undefined,
+              providerFailureTurnId: undefined,
+              supervision: startSupervisionProtocol(this.progressKey(sessionId)),
+            }
+          : {}),
         updatedAt: now,
       },
-      cancelled,
+      undefined,
+      [
+        {
+          sessionId,
+          type: safe ? 'autopilot.provider-retry-ready' : 'autopilot.provider-retry-abandoned',
+          occurredAt: now,
+          payload: {
+            turnId: current.providerRetry.turnId,
+            retryAttempt: current.providerRetry.attempt,
+            reason: safe ? 'settledRoot' : 'unsafeOrUnconfirmed',
+          },
+        },
+      ],
     );
-    return true;
+    if (safe) this.evaluate(sessionId);
   }
   /** Returns whether an incomplete supervised plan may be treated as terminal by the relay. */
   turnCompleted(sessionId: string, turnId?: string): boolean {
-    const state = this.deps.store.find(sessionId);
+    let state = this.deps.store.find(sessionId);
+    if (state?.providerRetry?.resumeRoot && turnId && turnId !== state.providerRetry.turnId) {
+      state = { ...state, providerRetry: { ...state.providerRetry, resumeRoot: false } };
+      this.persist(state);
+    }
     if (turnId && state?.checkpoints?.pendingTurnId && state.checkpoints.pendingTurnId !== turnId)
       return false;
     const plan = this.deps.plan(sessionId)?.plan;
@@ -1391,6 +1555,14 @@ export class AutopilotCoordinator {
     this.cancelWaitTimer(sessionId);
     this.parkedSubscriptions.delete(sessionId);
     const prior = this.deps.store.find(sessionId);
+    if (prior?.providerRetry?.pending)
+      this.persist({
+        ...prior,
+        providerRetry: { ...prior.providerRetry, pending: false },
+        nextEvaluationAt: null,
+        generation: prior.generation + 1,
+        updatedAt: this.deps.now(),
+      });
     if (!prior || !prior.requestedEnabled) return;
     const now = this.deps.now();
     const cancelled = this.cancelScheduledControl(prior, now);
@@ -1725,6 +1897,8 @@ export class AutopilotCoordinator {
     }
   }
   private cancelTimer(sessionId: string): void {
+    this.providerTimers.get(sessionId)?.();
+    this.providerTimers.delete(sessionId);
     this.timers.get(sessionId)?.();
     this.timers.delete(sessionId);
     this.completionTimers.get(sessionId)?.();
@@ -1971,6 +2145,7 @@ export class AutopilotCoordinator {
   }
 
   private requiresRootBoundary(state: AutopilotSession, plan: SupervisedPlan): boolean {
+    if (state.providerRetry?.resumeRoot) return true;
     // Completed milestone reports do not complete terminal review or its fixes.
     // Keep their continuation at root; a settled last executor cannot own it.
     if (executionComplete(plan) && this.terminalReviewPending(state, state.planIdentity ?? ''))

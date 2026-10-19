@@ -58,3 +58,40 @@ export function describeProviderFailure(failure: ProviderFailure): string {
     : 'Codex reported an execution failure with no known description.';
   return `${failure.code}${failure.httpStatusCode ? ` (HTTP ${failure.httpStatusCode})` : ''}: ${description}`;
 }
+
+/** One bounded root recovery episode; persisted so restarts cannot reset its budget. */
+export type ProviderRetry = Readonly<{
+  turnId: string;
+  attempt: number;
+  notBefore: string;
+  settled: boolean;
+  pending: boolean;
+  resumeRoot: boolean;
+}>;
+
+export function parseProviderRetry(value: unknown): ProviderRetry | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const r = value as Record<string, unknown>;
+  if (
+    typeof r.turnId !== 'string' ||
+    !r.turnId ||
+    r.turnId.length > 256 ||
+    !Number.isInteger(r.attempt) ||
+    Number(r.attempt) < 1 ||
+    Number(r.attempt) > 2 ||
+    typeof r.notBefore !== 'string' ||
+    !Number.isFinite(Date.parse(r.notBefore)) ||
+    typeof r.settled !== 'boolean' ||
+    typeof r.pending !== 'boolean' ||
+    typeof r.resumeRoot !== 'boolean'
+  )
+    return undefined;
+  return {
+    turnId: r.turnId,
+    attempt: r.attempt as number,
+    notBefore: r.notBefore,
+    settled: r.settled,
+    pending: r.pending,
+    resumeRoot: r.resumeRoot,
+  };
+}

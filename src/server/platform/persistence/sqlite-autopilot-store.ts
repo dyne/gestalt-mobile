@@ -18,7 +18,10 @@ import {
 } from '../../features/autopilot/domain/autopilot-session.js';
 import { AutopilotStateError } from '../../features/autopilot/domain/persisted-state-error.js';
 import { parsePersistedSupervisedLifecycle } from '../../features/autopilot/domain/supervised-lifecycle.js';
-import { parseProviderFailure } from '../../../shared/contracts/provider-failure.js';
+import {
+  parseProviderFailure,
+  parseProviderRetry,
+} from '../../../shared/contracts/provider-failure.js';
 import {
   MAX_AUTOPILOT_RECORD_BYTES,
   parsePlanFingerprint,
@@ -94,6 +97,8 @@ export class SqliteAutopilotStore implements AutopilotStore {
       state.supervision,
       state.checkpoints,
       state.providerFailure,
+      state.providerRetry,
+      state.providerFailureTurnId,
     ].some((value) => value !== undefined)
       ? JSON.stringify({
           executor: state.executor,
@@ -101,6 +106,8 @@ export class SqliteAutopilotStore implements AutopilotStore {
           supervision: state.supervision,
           checkpoints: state.checkpoints,
           providerFailure: state.providerFailure,
+          providerRetry: state.providerRetry,
+          providerFailureTurnId: state.providerFailureTurnId,
         })
       : null;
     // Use the reader's exact contract before any write (including transaction/outbox writes).
@@ -320,7 +327,13 @@ function parseLifecycle(
   value: unknown,
 ): Pick<
   AutopilotSession,
-  'executor' | 'blocking' | 'supervision' | 'checkpoints' | 'providerFailure'
+  | 'executor'
+  | 'blocking'
+  | 'supervision'
+  | 'checkpoints'
+  | 'providerFailure'
+  | 'providerRetry'
+  | 'providerFailureTurnId'
 > | null {
   if (value === null || value === undefined) return {};
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_AUTOPILOT_RECORD_BYTES)
@@ -331,7 +344,22 @@ function parseLifecycle(
     if (!lifecycle) return null;
     const providerFailure = parseProviderFailure(parsed.providerFailure);
     if (parsed.providerFailure !== undefined && !providerFailure) return null;
-    return { ...lifecycle, ...(providerFailure ? { providerFailure } : {}) };
+    const providerFailureTurnId = parsed.providerFailureTurnId;
+    if (
+      providerFailureTurnId !== undefined &&
+      (typeof providerFailureTurnId !== 'string' ||
+        !providerFailureTurnId ||
+        providerFailureTurnId.length > 256)
+    )
+      return null;
+    const providerRetry = parseProviderRetry(parsed.providerRetry);
+    if (parsed.providerRetry !== undefined && !providerRetry) return null;
+    return {
+      ...lifecycle,
+      ...(providerFailureTurnId ? { providerFailureTurnId } : {}),
+      ...(providerFailure ? { providerFailure } : {}),
+      ...(providerRetry ? { providerRetry } : {}),
+    };
   } catch {
     return null;
   }
