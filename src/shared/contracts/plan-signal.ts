@@ -17,6 +17,7 @@ export const planSignalReasons = [
 export type PlanSignalReason =
   | (typeof planSignalReasons)[number]
   | `review:${string}:REVIEWED`
+  | `measure:${'start' | 'checkpoint' | 'finish'}:${string}`
   | `l2:${string}:${'WIP' | 'DONE'}`;
 
 export function isPlanSignalReason(value: unknown): value is PlanSignalReason {
@@ -24,6 +25,7 @@ export function isPlanSignalReason(value: unknown): value is PlanSignalReason {
     typeof value === 'string' &&
     ((planSignalReasons as readonly string[]).includes(value) ||
       /^review:[A-Za-z0-9._-]{1,128}:REVIEWED$/.test(value) ||
+      /^measure:(start|checkpoint|finish):[A-Za-z0-9._-]{1,128}$/.test(value) ||
       /^l2:[A-Za-z0-9._-]{1,128}:(WIP|DONE)$/.test(value))
   );
 }

@@ -52,6 +52,75 @@ const checkpoint = {
 };
 
 describe('validOrgPlanCheckpoint', () => {
+  it('selects a measured reviewed milestone without guessing from multiple historical completions', () => {
+    const current = { ...plan, steps: [plan.steps[0], { ...plan.steps[0], id: 'last' }] };
+    expect(resolveOrgPlanCheckpointSignal('l1Accepted', current, 'plan')).toBeNull();
+    expect(
+      resolveOrgPlanCheckpointSignal('l1Accepted', current, 'plan', 'measure:finish:last'),
+    ).toMatchObject({ l1Id: 'last', position: 'L2' });
+    for (const reason of [
+      'measure:finish:missing',
+      'measure:start:last',
+      'measure:checkpoint:last',
+    ])
+      expect(resolveOrgPlanCheckpointSignal('l1Accepted', current, 'plan', reason)).toBeNull();
+    expect(
+      resolveOrgPlanCheckpointSignal(
+        'l1Accepted',
+        {
+          ...current,
+          steps: [plan.steps[0], { ...plan.steps[0], id: 'last', reviewStatus: 'UNREVIEWED' }],
+        },
+        'plan',
+        'measure:finish:last',
+      ),
+    ).toBeNull();
+    expect(
+      resolveOrgPlanCheckpointSignal(
+        'l1Accepted',
+        current,
+        'plan',
+        'measure:finish:last',
+        [],
+        JSON.stringify(['l1', 'l1']),
+      ),
+    ).toMatchObject({ l1Id: 'l1' });
+  });
+
+  it('selects a measured DONE child but never accepts an unfinished measurement target', () => {
+    const current = {
+      ...plan,
+      steps: [
+        {
+          ...plan.steps[0],
+          reviewStatus: 'UNREVIEWED' as const,
+          children: [plan.steps[0].children[0], { ...plan.steps[0].children[0], id: 'last' }],
+        },
+      ],
+    };
+    expect(
+      resolveOrgPlanCheckpointSignal('l2Completed', current, 'plan', 'measure:finish:last'),
+    ).toMatchObject({ l2Id: 'last', position: 'L1.2' });
+    expect(
+      resolveOrgPlanCheckpointSignal(
+        'l2Completed',
+        {
+          ...current,
+          steps: [
+            {
+              ...current.steps[0],
+              children: [
+                plan.steps[0].children[0],
+                { ...plan.steps[0].children[0], id: 'last', state: 'WIP' },
+              ],
+            },
+          ],
+        },
+        'plan',
+        'measure:finish:last',
+      ),
+    ).toBeNull();
+  });
   it('resolves out-of-order completions by publication identity and refuses ambiguous history', () => {
     const current = {
       ...plan,

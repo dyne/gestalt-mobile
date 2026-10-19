@@ -1950,7 +1950,85 @@ describe('production composition', () => {
       await fixture.app.close();
     });
 
-    it('refreshes the published L2 boundary before selecting among multiple DONE children', async () => {
+    it.each(['l2:second-child:DONE', 'measure:finish:second-child'])(
+      'refreshes the published L2 boundary %s before selecting among multiple DONE children',
+      async (reason) => {
+        const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+        const fixture = await createProductionAutopilotFixture({
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        });
+        timers.find((timer) => !timer.cancelled)!.callback();
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+          ).toEqual(expect.any(String)),
+        );
+        const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+        const handle = fixture.handles.find((candidate) =>
+          candidate.requests.some((request) => request.method === 'turn/start'),
+        )!;
+        const planPath = join(fixture.workspacePath, 'autopilot.org');
+        await writeFile(
+          planPath,
+          `${autopilotPlanText('DONE')}
+** DONE [#A] Newly completed child
+:PROPERTIES:
+:ID: second-child
+:END:
+- Why :: Verify a resumed plan with earlier completed work.
+- Change :: Preserve the publication target.
+- Tests :: Checkpoint immediately after writing the signal.
+- Done when :: L1.2 is recorded exactly once.
+`,
+        );
+        await writeFile(
+          planStatusFilePath(
+            planStatusDirectoryPath(fixture.workspacePath, fixture.sessionId),
+            planPath,
+          ),
+          JSON.stringify({
+            schemaVersion: 1,
+            planPath,
+            reason,
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+        // No watcher wait or GET /plan refresh: the checkpoint itself is the barrier.
+        await expect(
+          handle.request!({
+            id: 818,
+            method: 'item/tool/call',
+            params: {
+              threadId: session.threadId,
+              turnId: session.activeTurnId,
+              tool: 'gestalt_org_plan_checkpoint',
+              arguments: { kind: 'l2Completed' },
+            },
+          }),
+        ).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+        const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        const rows = db
+          .prepare(
+            "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'org-plan.step-checkpointed'",
+          )
+          .all(fixture.sessionId) as { payload_json: string }[];
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0]!.payload_json)).toMatchObject({
+          l2Id: 'second-child',
+          position: 'L1.2',
+        });
+        db.close();
+        await fixture.app.close();
+      },
+    );
+
+    it('records the final measured L1 among six reviewed milestones without observing the review publication', async () => {
       const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
       const fixture = await createProductionAutopilotFixture({
         autopilotSchedule: (callback) => {
@@ -1961,68 +2039,132 @@ describe('production composition', () => {
           };
         },
       });
-      timers.find((timer) => !timer.cancelled)!.callback();
-      await vi.waitFor(async () =>
-        expect(
-          (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
-        ).toEqual(expect.any(String)),
-      );
-      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
-      const handle = fixture.handles.find((candidate) =>
-        candidate.requests.some((request) => request.method === 'turn/start'),
-      )!;
-      const planPath = join(fixture.workspacePath, 'autopilot.org');
-      await writeFile(
-        planPath,
-        `${autopilotPlanText('DONE')}
-** DONE [#A] Newly completed child
-:PROPERTIES:
-:ID: second-child
-:END:
-- Why :: Verify a resumed plan with earlier completed work.
-- Change :: Preserve the publication target.
-- Tests :: Checkpoint immediately after writing the signal.
-- Done when :: L1.2 is recorded exactly once.
-`,
-      );
-      await writeFile(
-        planStatusFilePath(
-          planStatusDirectoryPath(fixture.workspacePath, fixture.sessionId),
+      try {
+        // Establish the retained checkpoint protocol, as in a resumed supervised plan.
+        const prior = await holdCheckpointRequest(fixture, timers, 817, true, true);
+        prior.handle.responseSettled!({ id: 817, outcome: 'resultWritten' });
+        await expect(prior.response).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+        prior.handle.deferResponseSettlement = false;
+        const priorTimerCount = timers.length;
+        prior.handle.notify!({
+          method: 'turn/completed',
+          params: { threadId: prior.threadId, turn: { id: prior.turnId } },
+        });
+        await vi.waitFor(() => expect(timers.length).toBeGreaterThan(priorTimerCount));
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const timer = timers.at(-1)!;
+          timer.callback();
+          await vi.waitFor(() =>
+            expect(
+              fixture.handles
+                .flatMap((candidate) => candidate.requests)
+                .filter((request) => request.method === 'turn/start').length > 1 ||
+                timers.at(-1) !== timer,
+            ).toBe(true),
+          );
+          if (
+            fixture.handles
+              .flatMap((candidate) => candidate.requests)
+              .filter((request) => request.method === 'turn/start').length > 1
+          )
+            break;
+        }
+        const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+        const handle = fixture.handles.find((candidate) =>
+          candidate.requests.some((request) => request.method === 'turn/start'),
+        )!;
+        const planPath = join(fixture.workspacePath, 'autopilot.org');
+        await writeFile(
           planPath,
-        ),
-        JSON.stringify({
-          schemaVersion: 1,
-          planPath,
-          reason: 'l2:second-child:DONE',
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-      // No watcher wait or GET /plan refresh: the checkpoint itself is the barrier.
-      await expect(
-        handle.request!({
-          id: 818,
+          '#+TITLE: Completed plan\n' +
+            Array.from({ length: 6 }, (_, index) =>
+              completedAutopilotPlanText()
+                .replace(/^#\+TITLE:.*\n/, '')
+                .replace(
+                  ':ID: parent',
+                  `:ID: ${index === 5 ? 'end-to-end-acceptance' : `parent-${index}`}`,
+                )
+                .replace(':ID: child', `:ID: child-${index}`),
+            ).join('\n'),
+        );
+        // The watcher may coalesce review and measurement writes. Only the durable final
+        // publication is available, just as after a relay restart.
+        await writeFile(
+          planStatusFilePath(
+            planStatusDirectoryPath(fixture.workspacePath, fixture.sessionId),
+            planPath,
+          ),
+          JSON.stringify({
+            schemaVersion: 1,
+            planPath,
+            reason: 'measure:finish:end-to-end-acceptance',
+            updatedAt: new Date().toISOString(),
+          }),
+        );
+        const checkpointCall = (id: number) => ({
+          id,
           method: 'item/tool/call',
           params: {
             threadId: session.threadId,
             turnId: session.activeTurnId,
             tool: 'gestalt_org_plan_checkpoint',
-            arguments: { kind: 'l2Completed' },
+            arguments: { kind: 'l1Accepted' },
           },
-        }),
-      ).resolves.toEqual(toOrgPlanCheckpointToolResponse('recorded'));
-      const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
-      const rows = db
-        .prepare(
-          "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'org-plan.step-checkpointed'",
-        )
-        .all(fixture.sessionId) as { payload_json: string }[];
-      expect(rows).toHaveLength(1);
-      expect(JSON.parse(rows[0]!.payload_json)).toMatchObject({
-        l2Id: 'second-child',
-        position: 'L1.2',
-      });
-      db.close();
-      await fixture.app.close();
+        });
+        await expect(handle.request!(checkpointCall(819))).resolves.toEqual(
+          toOrgPlanCheckpointToolResponse('recorded'),
+        );
+        await expect(handle.request!(checkpointCall(820))).resolves.toEqual(
+          toOrgPlanCheckpointToolResponse('alreadyRecorded'),
+        );
+        const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        try {
+          const rows = db
+            .prepare(
+              "SELECT payload_json FROM session_events WHERE session_id = ? AND type = 'org-plan.milestone-checkpointed'",
+            )
+            .all(fixture.sessionId) as { payload_json: string }[];
+          expect(rows).toHaveLength(1);
+          expect(JSON.parse(rows[0]!.payload_json)).toMatchObject({
+            l1Id: 'end-to-end-acceptance',
+            position: 'L6',
+          });
+          // The accepted final milestone must release a new root turn for independent
+          // terminal review, rather than treating implementation completion as final.
+          const timerCount = timers.length;
+          handle.notify!({
+            method: 'turn/completed',
+            params: {
+              threadId: session.threadId,
+              turn: { id: session.activeTurnId },
+            },
+          });
+          await vi.waitFor(() => expect(timers.length).toBeGreaterThan(timerCount));
+          const startedTurns = () =>
+            fixture.handles
+              .flatMap((candidate) => candidate.requests)
+              .filter((request) => request.method === 'turn/start').length;
+          for (let attempt = 0; attempt < 3 && startedTurns() === 2; attempt += 1) {
+            const timer = timers.at(-1)!;
+            timer.callback();
+            await vi.waitFor(() =>
+              expect(startedTurns() > 2 || timers.at(-1) !== timer).toBe(true),
+            );
+          }
+          await vi.waitFor(() => expect(startedTurns()).toBe(3));
+          const lifecycle = db
+            .prepare('SELECT lifecycle_json FROM autopilot_sessions WHERE session_id = ?')
+            .get(fixture.sessionId) as { lifecycle_json: string };
+          expect(JSON.parse(lifecycle.lifecycle_json).checkpoints).toMatchObject({
+            reportedL1Ids: ['end-to-end-acceptance'],
+            terminalReviewAccepted: false,
+          });
+        } finally {
+          db.close();
+        }
+      } finally {
+        await fixture.app.close();
+      }
     });
 
     it('records and idempotently replays accepted L1 after REVIEWED advances to the next TODO L1', async () => {
