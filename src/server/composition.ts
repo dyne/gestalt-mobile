@@ -1090,7 +1090,15 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           // Unknown threads must not stop an unrelated session on the shared server.
           const providerFailure = decodeCodexFailure(notification);
           if (resolvedOrigin.kind !== 'unknown' && providerFailure)
-            autopilot.providerFailed(sessionId, providerFailure);
+            autopilot.providerFailed(sessionId, providerFailure, {
+              actor: resolvedOrigin.kind === 'root' ? 'root' : 'child',
+              turnId:
+                completionTurnId ??
+                (typeof (notification.params as { turnId?: unknown })?.turnId === 'string'
+                  ? (notification.params as { turnId: string }).turnId
+                  : undefined),
+              settled: notification.method === 'turn/completed',
+            });
           const rootCommandId =
             resolvedOrigin.kind === 'root' ? completedCommandId(notification) : null;
           if (rootCommandId) autopilot.rootProcessCompleted(sessionId, rootCommandId);

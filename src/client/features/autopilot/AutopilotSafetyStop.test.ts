@@ -26,6 +26,49 @@ const safety = (
 });
 
 describe('AutopilotSafetyStop', () => {
+  it('distinguishes an off-session provider failure from paused automatic work', () => {
+    render(AutopilotSafetyStop, {
+      autopilot: {
+        ...safety('reconcileFailed'),
+        state: 'disabled',
+        reason: 'manualDisabled',
+        providerFailure: { code: 'serverOverloaded' },
+      },
+      attention: null,
+    });
+    expect(screen.getByRole('alert', { name: 'Codex request failed' }).textContent).toContain(
+      'Automatic supervision was not running',
+    );
+    expect(screen.queryByRole('button', { name: 'Retry Autopilot' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+  });
+  it('explains the bounded pending retry and permits cancellation', () => {
+    render(AutopilotSafetyStop, {
+      autopilot: {
+        ...safety('reconcileFailed'),
+        state: 'safetyPaused',
+        reason: 'providerError',
+        providerFailure: { code: 'serverOverloaded' },
+        providerRetry: {
+          turnId: 'turn',
+          attempt: 1,
+          notBefore: '2026-10-19T00:00:30Z',
+          settled: true,
+          pending: true,
+          resumeRoot: false,
+        },
+      },
+      attention: null,
+    });
+    expect(screen.getByRole('alert').textContent).toContain('attempt 1 of 2');
+    expect(
+      (screen.getByRole('button', { name: 'Retry Autopilot' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: 'Disable Autopilot' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
   it('keeps structured provider failure visible until supervision resumes', async () => {
     const { rerender } = render(AutopilotSafetyStop, {
       autopilot: {

@@ -1001,6 +1001,83 @@ describe('production composition', () => {
       );
       await app.close();
     });
+    it('production correlates overload recovery with a settled root turn and cancels it on Off', async () => {
+      const timers: Array<{ callback: () => void; delay: number; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        autopilotSchedule: (callback, delay) => {
+          const timer = { callback, delay, cancelled: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(fixture.handles.some((handle) => handle.calls.includes('turn/start'))).toBe(true),
+      );
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const handle = fixture.handles.find((candidate) => candidate.calls.includes('turn/start'))!;
+      const error = { codexErrorInfo: 'serverOverloaded', message: 'private overload body' };
+      handle.notify!({
+        method: 'error',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          error,
+          willRetry: false,
+        },
+      });
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot
+          .providerRetry,
+      ).toMatchObject({ turnId: session.activeTurnId, attempt: 1, pending: true, settled: false });
+      handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: session.threadId,
+          turn: { id: session.activeTurnId, status: 'failed', error },
+        },
+      });
+      const completed = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      expect(completed.activeTurnId).toBeNull();
+      expect(completed.autopilot.providerRetry).toMatchObject({
+        attempt: 1,
+        pending: true,
+        settled: true,
+      });
+      const retry = timers.find((timer) => timer.delay === 30_000 && !timer.cancelled)!;
+      expect(retry).toBeDefined();
+      await fixture.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${fixture.sessionId}/autopilot`,
+        payload: { enabled: false },
+      });
+      expect(retry.cancelled).toBe(true);
+      retry.callback();
+      expect(
+        (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().autopilot,
+      ).toMatchObject({ enabled: false, state: 'disabled' });
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        const rows = database
+          .prepare(
+            "SELECT payload_json FROM session_events WHERE session_id=? AND type='autopilot.provider-failed'",
+          )
+          .all(fixture.sessionId);
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0]!.payload_json as string)).toMatchObject({
+          actor: 'root',
+          turnId: session.activeTurnId,
+          requestedEnabled: true,
+          providerFailure: { code: 'serverOverloaded' },
+        });
+        expect(JSON.stringify(rows)).not.toContain('private overload body');
+      } finally {
+        database.close();
+      }
+    });
     it.each(
       [
         'usageLimitExceeded',
@@ -1112,8 +1189,13 @@ describe('production composition', () => {
       expect(result.activeTurnId).toBeNull();
       expect(result.autopilot).toMatchObject({
         enabled: false,
-        state: 'safetyPaused',
-        reason: code === 'usageLimitExceeded' ? 'usageLimitExceeded' : 'providerError',
+        state: code === 'unauthorized' ? 'disabled' : 'safetyPaused',
+        reason:
+          code === 'unauthorized'
+            ? 'manualDisabled'
+            : code === 'usageLimitExceeded'
+              ? 'usageLimitExceeded'
+              : 'providerError',
         providerFailure: failure,
         health: { nextExpectedAction: expect.stringContaining(code) },
       });

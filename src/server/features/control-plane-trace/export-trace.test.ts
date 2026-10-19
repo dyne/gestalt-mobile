@@ -103,12 +103,34 @@ describe('control-plane trace export', () => {
       ]!;
       insert.run('s1', index + 2, at, type, JSON.stringify({ state: 'idle', observedAt: at }));
     }
+    insert.run(
+      's1',
+      0,
+      at,
+      'autopilot.provider-failed',
+      JSON.stringify({
+        providerFailure: { code: 'serverOverloaded', message: 'private-content' },
+        turnId: 'root-turn',
+        actor: 'root',
+        requestedEnabled: false,
+        retryAttempt: null,
+      }),
+    );
     insert.run('other-session', 1, at, 'autopilot.turn-failed', '{}');
     database.exec('COMMIT');
     database.close();
     const trace = exportControlPlaneTrace(path, 's1', at);
-    expect(trace.events).toHaveLength(101);
+    expect(trace.events).toHaveLength(102);
     expect(trace.events[0]).toMatchObject({
+      type: 'autopilot.provider-failed',
+      payload: {
+        providerFailure: { code: 'serverOverloaded' },
+        turnId: 'root-turn',
+        actor: 'root',
+        requestedEnabled: false,
+      },
+    });
+    expect(trace.events[1]).toMatchObject({
       sequence: 1,
       type: 'autopilot.operation-failed',
       payload: { kind: 'executorResume', rpcCode: -32600 },

@@ -6,6 +6,8 @@
 
 import {
   parseProviderFailure,
+  parseProviderRetry,
+  type ProviderRetry,
   type ProviderFailure,
 } from '../../../shared/contracts/provider-failure.js';
 
@@ -14,6 +16,7 @@ export type AutopilotState =
 
 export type AutopilotSnapshot = Readonly<{
   providerFailure?: ProviderFailure;
+  providerRetry?: ProviderRetry;
   state: AutopilotState;
   enabled: boolean;
   health?: Readonly<{
@@ -124,6 +127,7 @@ export function isAutopilotSnapshot(value: unknown): value is AutopilotSnapshot 
     (snapshot.reason === undefined || text(snapshot.reason, 80)) &&
     (snapshot.providerFailure === undefined ||
       Boolean(parseProviderFailure(snapshot.providerFailure))) &&
+    (snapshot.providerRetry === undefined || Boolean(parseProviderRetry(snapshot.providerRetry))) &&
     (snapshot.nextEvaluationAt === undefined || text(snapshot.nextEvaluationAt, 64)) &&
     (snapshot.health === undefined || validHealth(snapshot.health))
   );

@@ -153,7 +153,25 @@ async function install(
   healthyController = false,
   checkpointRecovery = false,
   supervisorReport?: string,
+  providerScenario?: 'manual' | 'retry',
 ) {
+  const providerFields = providerScenario
+    ? {
+        providerFailure: { code: 'serverOverloaded' },
+        ...(providerScenario === 'retry'
+          ? {
+              providerRetry: {
+                turnId: 'turn-1',
+                attempt: 1,
+                notBefore: '2026-10-19T00:00:30.000Z',
+                settled: true,
+                pending: true,
+                resumeRoot: false,
+              },
+            }
+          : {}),
+      }
+    : {};
   const session = {
     id: 'session-1',
     state: 'ready',
@@ -193,7 +211,7 @@ async function install(
       : {}),
     autopilot: checkpointRecovery
       ? checkpointRecoveryAutopilot()
-      : autopilot(state, reason, continuationPhase, healthyController),
+      : { ...autopilot(state, reason, continuationPhase, healthyController), ...providerFields },
     pendingInteractions: hasAttention
       ? [
           {
@@ -273,7 +291,10 @@ async function install(
       body: JSON.stringify({
         autopilot: checkpointRecovery
           ? checkpointRecoveryAutopilot()
-          : autopilot(state, reason, continuationPhase, healthyController),
+          : {
+              ...autopilot(state, reason, continuationPhase, healthyController),
+              ...providerFields,
+            },
       }),
     }),
   );
@@ -1235,4 +1256,56 @@ test('coordinator-derived event fixture, replay gap, and a Sessions-origin toggl
   await expect.poll(() => refreshes).toBe(1);
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
+});
+
+test('manual provider failure preserves Off and gives manual recovery guidance', async ({
+  page,
+}) => {
+  await install(
+    page,
+    'disabled',
+    'manualDisabled',
+    false,
+    undefined,
+    false,
+    undefined,
+    false,
+    false,
+    false,
+    undefined,
+    'manual',
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Codex request failed' })).toContainText(
+    'Automatic supervision was not running',
+  );
+  await expect(page.getByRole('button', { name: 'Retry Autopilot', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Dismiss', exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Codex request failed' })).toBeVisible();
+});
+test('pending overload retry explains the cap and offers cancellation', async ({ page }) => {
+  await install(
+    page,
+    'safetyPaused',
+    'providerError',
+    false,
+    undefined,
+    false,
+    undefined,
+    false,
+    false,
+    false,
+    undefined,
+    'retry',
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Chat' }).click();
+  await expect(page.getByRole('alert', { name: 'Codex execution paused' })).toContainText(
+    'attempt 1 of 2',
+  );
+  await expect(page.getByRole('button', { name: 'Retry Autopilot', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Disable Autopilot', exact: true })).toBeEnabled();
 });

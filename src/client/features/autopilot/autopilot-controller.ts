@@ -308,7 +308,7 @@ export class AutopilotController {
   #applySnapshot(id: string, candidate: unknown): void {
     if (!isAutopilotSnapshot(candidate)) return;
     this.#snapshots.set(id, candidate);
-    if (candidate.state === 'safetyPaused' && candidate.providerFailure)
+    if (candidate.providerFailure)
       this.#recoveryErrors.set(id, describeProviderFailure(candidate.providerFailure));
     else if (candidate.health?.phase === 'checkpointRecovery')
       this.#recoveryErrors.set(id, checkpointHandoffRecoveryMessage);
