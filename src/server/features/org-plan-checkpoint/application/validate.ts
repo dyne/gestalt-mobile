@@ -67,12 +67,18 @@ export function resolveOrgPlanCheckpointSignal(
       verdict: 'ACCEPT',
     };
   const pending = pendingTarget ? (JSON.parse(pendingTarget) as string[]) : undefined;
+  // Finishing measurement can replace the review/DONE publication before the
+  // watcher reads it. Recover its target from the durable reason, but require
+  // the same authoritative DONE/REVIEWED state below; measurement is not acceptance.
+  const measuredId = publicationReason?.match(/^measure:finish:([A-Za-z0-9._-]{1,128})$/)?.[1];
   const reviewedId =
     (pending?.[0] === 'l1' ? pending[1] : undefined) ??
-    publicationReason?.match(/^review:([^:]{1,128}):REVIEWED$/)?.[1];
+    publicationReason?.match(/^review:([^:]{1,128}):REVIEWED$/)?.[1] ??
+    measuredId;
   const completedId =
     (pending?.[0] === 'l2' ? pending[2] : undefined) ??
-    publicationReason?.match(/^l2:([^:]{1,128}):DONE$/)?.[1];
+    publicationReason?.match(/^l2:([^:]{1,128}):DONE$/)?.[1] ??
+    measuredId;
   // Publication identifies the actual transition, regardless of list order.
   // Without it, expand only an unambiguous boundary; never guess the last row.
   const allReviewed = plan.steps.filter(
