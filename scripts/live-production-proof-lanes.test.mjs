@@ -1690,6 +1690,19 @@ test('expired editing cleanup persists unresolved operation and lock while the e
 });
 
 const waitFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Shift the logical origin, preserving real elapsed time for the actual handoff timers.
+// A short host uptime must not make a historical phase start or job anchor negative.
+function testWithEditingClock(name, run) {
+  for (const uptimeSeconds of [0, 1, 60, 1309, 1310, 3600]) {
+    test(`${name} (host uptime ${uptimeSeconds}s)`, async (t) => {
+      const realNow = process.hrtime.bigint.bind(process.hrtime),
+        realStart = realNow(),
+        logicalStart = 1_310_000_000_000n + BigInt(uptimeSeconds) * 1_000_000_000n;
+      t.mock.method(process.hrtime, 'bigint', () => logicalStart + realNow() - realStart);
+      await run();
+    });
+  }
+}
 async function editingHandoff({
   left = 5000,
   onCancel = async () => {},
@@ -1745,138 +1758,147 @@ test('parent phase bounds intersect one immutable global clock and reject reset,
     /PROOF_DRIVER_PHASE_DEADLINE/,
   );
 });
-test('actual editing driver and parent share exact A cutoff; expiry keeps original raw operation owned until drained', async () => {
-  let release,
-    stops = 0,
-    closed = false;
-  const raw = new Promise((resolve) => {
-      release = resolve;
-    }),
-    failures = [];
-  const h = await editingHandoff({
-    left: 150,
-    onFailure: (code) => failures.push(code),
-    onCancel: async () => {
-      await raw;
-      stops++;
-    },
-  });
-  try {
-    assert.equal(h.expected.schemaVersion, 2);
-    assert.equal(h.handoff.deadlineNs('accepted'), h.editing.phaseA.deadlineNs);
-    await assert.rejects(
-      observeRecoveryPhase(
-        h.directory,
-        (s) => s.phase === 'ready',
-        1000,
-        identity,
-        h.editing.phaseA,
-      ),
-      /PROOF_DRIVER_PHASE_DEADLINE/,
-    );
-    await waitFor(5);
-    assert.equal(h.handoff.snapshot().cancelled, true);
-    assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
-    assert.equal(stops, 0);
-    const closing = h.handoff.close().then(() => {
-      closed = true;
-    });
-    await waitFor(10);
-    assert.equal(closed, false);
-    release();
-    await closing;
-    assert.equal(stops, 1);
-    assert.deepEqual(failures, ['PROOF_DRIVER_PHASE_DEADLINE']);
-  } finally {
-    release();
-    await h.handoff.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
-test('editing continuation carries exact original birth and B bound; missing, changed and replayed admission refuse', async () => {
-  const h = await editingHandoff();
-  const boundary = h.handoff.boundary();
-  boundary.catch(() => {});
-  try {
-    await assert.rejects(
-      handoffRequest(h.directory, 'continue', h.expected),
-      /PROOF_HANDOFF_REFUSED/,
-    );
-    const phaseB = writeContinuation(h);
-    await assert.rejects(
-      handoffRequest(h.directory, 'continue', {
-        ...h.expected,
-        identity: { ...identity, tree: 'f'.repeat(40) },
+testWithEditingClock(
+  'actual editing driver and parent share exact A cutoff; expiry keeps original raw operation owned until drained',
+  async () => {
+    let release,
+      stops = 0,
+      closed = false;
+    const raw = new Promise((resolve) => {
+        release = resolve;
       }),
-      /PROOF_HANDOFF_REFUSED/,
-    );
-    assert.throws(
-      () =>
+      failures = [];
+    const h = await editingHandoff({
+      left: 150,
+      onFailure: (code) => failures.push(code),
+      onCancel: async () => {
+        await raw;
+        stops++;
+      },
+    });
+    try {
+      assert.equal(h.expected.schemaVersion, 2);
+      assert.equal(h.handoff.deadlineNs('accepted'), h.editing.phaseA.deadlineNs);
+      await assert.rejects(
+        observeRecoveryPhase(
+          h.directory,
+          (s) => s.phase === 'ready',
+          1000,
+          identity,
+          h.editing.phaseA,
+        ),
+        /PROOF_DRIVER_PHASE_DEADLINE/,
+      );
+      await waitFor(5);
+      assert.equal(h.handoff.snapshot().cancelled, true);
+      assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
+      assert.equal(stops, 0);
+      const closing = h.handoff.close().then(() => {
+        closed = true;
+      });
+      await waitFor(10);
+      assert.equal(closed, false);
+      release();
+      await closing;
+      assert.equal(stops, 1);
+      assert.deepEqual(failures, ['PROOF_DRIVER_PHASE_DEADLINE']);
+    } finally {
+      release();
+      await h.handoff.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
+testWithEditingClock(
+  'editing continuation carries exact original birth and B bound; missing, changed and replayed admission refuse',
+  async () => {
+    const h = await editingHandoff();
+    const boundary = h.handoff.boundary();
+    boundary.catch(() => {});
+    try {
+      await assert.rejects(
+        handoffRequest(h.directory, 'continue', h.expected),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      const phaseB = writeContinuation(h);
+      await assert.rejects(
         handoffRequest(h.directory, 'continue', {
           ...h.expected,
-          birth: { ...h.birth, start: '0' },
+          identity: { ...identity, tree: 'f'.repeat(40) },
         }),
-      /PROOF_DRIVER_EXITED/,
-    );
-    const state = await handoffRequest(h.directory, 'continue', h.expected);
-    await boundary;
-    assert.deepEqual(state.phaseB, phaseB);
-    assert.equal(h.handoff.deadlineNs('action'), phaseB.deadlineNs);
-    await assert.rejects(
-      handoffRequest(h.directory, 'continue', h.expected),
-      /PROOF_HANDOFF_REFUSED/,
-    );
-    const changed = editingPhaseBound(h.editing.anchor, 'action');
-    writeFileSync(
-      join(h.directory, 'continuation.json'),
-      JSON.stringify({ identity, birth: h.birth, phaseB: changed }),
-      { mode: 0o600 },
-    );
-    await assert.rejects(
-      handoffRequest(h.directory, 'status', h.expected),
-      /PROOF_HANDOFF_REFUSED/,
-    );
-    writeFileSync(
-      join(h.directory, 'continuation.json'),
-      JSON.stringify({ identity, birth: h.birth, phaseB }),
-      { mode: 0o600 },
-    );
-    h.handoff.finishActions();
-  } finally {
-    await h.handoff.cancel();
-    await boundary.catch(() => {});
-    await h.handoff.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
-test('parent refuses changed protected A cutoff and no expired B may release continuation', async () => {
-  const h = await editingHandoff();
-  const boundary = h.handoff.boundary();
-  boundary.catch(() => {});
-  try {
-    const wrong = {
-      ...h.editing.phaseA,
-      deadlineNs: (BigInt(h.editing.phaseA.deadlineNs) + 1n).toString(),
-    };
-    await assert.rejects(
-      observeRecoveryPhase(h.directory, () => true, 100, identity, wrong),
-      /PROOF_DRIVER_METADATA_CHANGED/,
-    );
-    const now = process.hrtime.bigint();
-    const expired = editingPhaseBound(h.editing.anchor, 'action', now - 1_020_001_000_000n);
-    writeContinuation(h, expired);
-    await assert.rejects(
-      handoffRequest(h.directory, 'continue', h.expected),
-      /PROOF_HANDOFF_REFUSED/,
-    );
-    assert.equal(h.handoff.snapshot().continuations, 0);
-  } finally {
-    await h.handoff.cancel();
-    await boundary.catch(() => {});
-    await h.handoff.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      assert.throws(
+        () =>
+          handoffRequest(h.directory, 'continue', {
+            ...h.expected,
+            birth: { ...h.birth, start: '0' },
+          }),
+        /PROOF_DRIVER_EXITED/,
+      );
+      const state = await handoffRequest(h.directory, 'continue', h.expected);
+      await boundary;
+      assert.deepEqual(state.phaseB, phaseB);
+      assert.equal(h.handoff.deadlineNs('action'), phaseB.deadlineNs);
+      await assert.rejects(
+        handoffRequest(h.directory, 'continue', h.expected),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      const changed = editingPhaseBound(h.editing.anchor, 'action');
+      writeFileSync(
+        join(h.directory, 'continuation.json'),
+        JSON.stringify({ identity, birth: h.birth, phaseB: changed }),
+        { mode: 0o600 },
+      );
+      await assert.rejects(
+        handoffRequest(h.directory, 'status', h.expected),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      writeFileSync(
+        join(h.directory, 'continuation.json'),
+        JSON.stringify({ identity, birth: h.birth, phaseB }),
+        { mode: 0o600 },
+      );
+      h.handoff.finishActions();
+    } finally {
+      await h.handoff.cancel();
+      await boundary.catch(() => {});
+      await h.handoff.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
+testWithEditingClock(
+  'parent refuses changed protected A cutoff and no expired B may release continuation',
+  async () => {
+    const h = await editingHandoff();
+    const boundary = h.handoff.boundary();
+    boundary.catch(() => {});
+    try {
+      const wrong = {
+        ...h.editing.phaseA,
+        deadlineNs: (BigInt(h.editing.phaseA.deadlineNs) + 1n).toString(),
+      };
+      await assert.rejects(
+        observeRecoveryPhase(h.directory, () => true, 100, identity, wrong),
+        /PROOF_DRIVER_METADATA_CHANGED/,
+      );
+      const now = process.hrtime.bigint();
+      const expired = editingPhaseBound(h.editing.anchor, 'action', now - 1_020_001_000_000n);
+      writeContinuation(h, expired);
+      await assert.rejects(
+        handoffRequest(h.directory, 'continue', h.expected),
+        /PROOF_HANDOFF_REFUSED/,
+      );
+      assert.equal(h.handoff.snapshot().continuations, 0);
+    } finally {
+      await h.handoff.cancel();
+      await boundary.catch(() => {});
+      await h.handoff.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
 test('fixed first-cause taxonomy recognizes actual assertion message and never copies arbitrary errors', () => {
   assert.equal(
     fixedProofFailure({ code: 'ERR_ASSERTION', message: 'PROOF_CANCELLED' }),
@@ -1894,119 +1916,125 @@ test('fixed first-cause taxonomy recognizes actual assertion message and never c
     assert.equal(fixedProofFailure(new Error(message)), null);
 });
 
-test('actual API admits once, retains the original RPC through cancellation and refuses its late result and any next dispatch', async () => {
-  let release,
-    calls = 0,
-    jsonReads = 0,
-    stops = 0;
-  const raw = new Promise((resolve) => {
-      release = resolve;
-    }),
-    editingApiRaw = new Set();
-  const h = await editingHandoff({
-    left: 120,
-    onCancel: async () => {
-      await Promise.allSettled([...editingApiRaw]);
-      stops++;
-    },
-  });
-  const source = readFileSync(
-    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
-    'utf8',
-  );
-  const begin = source.indexOf('async function api(method, path, payload) {'),
-    end = source.indexOf('\ntry {', begin);
-  const api = new Function(
-    'recoveryHandoff',
-    'mobile',
-    'headers',
-    'report',
-    'editingContinuity',
-    'editingApiRaw',
-    source.slice(begin, end) + '; return api;',
-  )(
-    h.handoff,
-    {
-      inject() {
-        calls++;
-        return raw;
-      },
-    },
-    {},
-    {},
-    true,
-    editingApiRaw,
-  );
-  try {
-    const admitted = api('POST', '/actual-owner', {});
-    const refused = assert.rejects(admitted, /PROOF_DRIVER_PHASE_DEADLINE/);
-    assert.equal(editingApiRaw.size, 1);
-    await waitFor(150);
-    assert.equal(stops, 0);
-    assert.equal(editingApiRaw.size, 1);
-    await assert.rejects(api('POST', '/later-edit', {}), /PROOF_DRIVER_PHASE_DEADLINE/);
-    assert.equal(calls, 1);
-    release({
-      statusCode: 200,
-      json() {
-        jsonReads++;
-        return {};
+testWithEditingClock(
+  'actual API admits once, retains the original RPC through cancellation and refuses its late result and any next dispatch',
+  async () => {
+    let release,
+      calls = 0,
+      jsonReads = 0,
+      stops = 0;
+    const raw = new Promise((resolve) => {
+        release = resolve;
+      }),
+      editingApiRaw = new Set();
+    const h = await editingHandoff({
+      left: 120,
+      onCancel: async () => {
+        await Promise.allSettled([...editingApiRaw]);
+        stops++;
       },
     });
-    await refused;
-    await h.handoff.close();
-    assert.equal(editingApiRaw.size, 0);
-    assert.equal(stops, 1);
-    assert.equal(jsonReads, 0);
-  } finally {
-    release({ statusCode: 200, json: () => ({}) });
-    await h.handoff.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
+    const source = readFileSync(
+      new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+      'utf8',
+    );
+    const begin = source.indexOf('async function api(method, path, payload) {'),
+      end = source.indexOf('\ntry {', begin);
+    const api = new Function(
+      'recoveryHandoff',
+      'mobile',
+      'headers',
+      'report',
+      'editingContinuity',
+      'editingApiRaw',
+      source.slice(begin, end) + '; return api;',
+    )(
+      h.handoff,
+      {
+        inject() {
+          calls++;
+          return raw;
+        },
+      },
+      {},
+      {},
+      true,
+      editingApiRaw,
+    );
+    try {
+      const admitted = api('POST', '/actual-owner', {});
+      const refused = assert.rejects(admitted, /PROOF_DRIVER_PHASE_DEADLINE/);
+      assert.equal(editingApiRaw.size, 1);
+      await waitFor(150);
+      assert.equal(stops, 0);
+      assert.equal(editingApiRaw.size, 1);
+      await assert.rejects(api('POST', '/later-edit', {}), /PROOF_DRIVER_PHASE_DEADLINE/);
+      assert.equal(calls, 1);
+      release({
+        statusCode: 200,
+        json() {
+          jsonReads++;
+          return {};
+        },
+      });
+      await refused;
+      await h.handoff.close();
+      assert.equal(editingApiRaw.size, 0);
+      assert.equal(stops, 1);
+      assert.equal(jsonReads, 0);
+    } finally {
+      release({ statusCode: 200, json: () => ({}) });
+      await h.handoff.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
 
-test('actual continued child and parent expire at the exact original B cutoff, retaining pending cancellation until raw settlement', async () => {
-  let release,
-    stopped = false;
-  const raw = new Promise((resolve) => {
-    release = resolve;
-  });
-  const h = await editingHandoff({
-    onCancel: async () => {
-      await raw;
-      stopped = true;
-    },
-  });
-  const boundary = h.handoff.boundary();
-  boundary.catch(() => {});
-  try {
-    const phaseB = editingPhaseBound(
-      h.editing.anchor,
-      'action',
-      process.hrtime.bigint() - 1_019_850_000_000n,
-    );
-    writeContinuation(h, phaseB);
-    await handoffRequest(h.directory, 'continue', h.expected);
-    await boundary;
-    await assert.rejects(
-      observeRecoveryPhase(h.directory, (s) => s.phase === 'settling', 1000, identity, phaseB),
-      /PROOF_DRIVER_PHASE_DEADLINE/,
-    );
-    await waitFor(5);
-    assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
-    assert.equal(stopped, false);
-    assert.equal(h.handoff.snapshot().continuations, 1);
-    release();
-    await h.handoff.close();
-    assert.equal(stopped, true);
-  } finally {
-    release();
-    await h.handoff.cancel();
-    await boundary.catch(() => {});
-    await h.handoff.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
+testWithEditingClock(
+  'actual continued child and parent expire at the exact original B cutoff, retaining pending cancellation until raw settlement',
+  async () => {
+    let release,
+      stopped = false;
+    const raw = new Promise((resolve) => {
+      release = resolve;
+    });
+    const h = await editingHandoff({
+      onCancel: async () => {
+        await raw;
+        stopped = true;
+      },
+    });
+    const boundary = h.handoff.boundary();
+    boundary.catch(() => {});
+    try {
+      const phaseB = editingPhaseBound(
+        h.editing.anchor,
+        'action',
+        process.hrtime.bigint() - 1_019_850_000_000n,
+      );
+      writeContinuation(h, phaseB);
+      await handoffRequest(h.directory, 'continue', h.expected);
+      await boundary;
+      await assert.rejects(
+        observeRecoveryPhase(h.directory, (s) => s.phase === 'settling', 1000, identity, phaseB),
+        /PROOF_DRIVER_PHASE_DEADLINE/,
+      );
+      await waitFor(5);
+      assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
+      assert.equal(stopped, false);
+      assert.equal(h.handoff.snapshot().continuations, 1);
+      release();
+      await h.handoff.close();
+      assert.equal(stopped, true);
+    } finally {
+      release();
+      await h.handoff.cancel();
+      await boundary.catch(() => {});
+      await h.handoff.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test('explicit serial profile marker selects one full accept continuity lane with partial evidence and rejects every conflicting route', () => {
   const selected = { eventName: 'push', message: '[full-native] [serial-accept-profile]' };

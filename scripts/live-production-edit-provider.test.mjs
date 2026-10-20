@@ -3637,6 +3637,20 @@ test('actual source-patch observer ends only after matching original tool output
 });
 
 // Dependency-backed injection test belongs after npm ci, not selection bootstrap.
+// Shift the logical origin, preserving real elapsed time for the actual handoff timers.
+// A short host uptime must not make a historical phase start or job anchor negative.
+function testWithEditingClock(name, run) {
+  for (const uptimeSeconds of [0, 1, 60, 1309, 1310, 3600]) {
+    test(`${name} (host uptime ${uptimeSeconds}s)`, async (t) => {
+      const realNow = process.hrtime.bigint.bind(process.hrtime),
+        realStart = realNow(),
+        logicalStart = 1_310_000_000_000n + BigInt(uptimeSeconds) * 1_000_000_000n;
+      t.mock.method(process.hrtime, 'bigint', () => logicalStart + realNow() - realStart);
+      await run();
+    });
+  }
+}
+
 async function dependencyPreparedEditingHandoff({
   left = 5000,
   onCancel = async () => {},
@@ -3655,67 +3669,70 @@ async function dependencyPreparedEditingHandoff({
   const handoff = await openRecoveryHandoff({ directory, identity, editing, onCancel, onFailure });
   return { directory, handoff, expected: handoff.snapshot(), editing, birth };
 }
-test('actual Fastify injection keeps one original request when cancellation joins its retained thenable', async () => {
-  const { default: fastify } = await import('fastify');
-  const mobile = fastify(),
-    editingApiRaw = new Set();
-  let release,
-    enter,
-    calls = 0,
-    stopped = false;
-  const gate = new Promise((resolve) => {
-    release = resolve;
-  });
-  const entered = new Promise((resolve) => {
-    enter = resolve;
-  });
-  mobile.post('/pending', async () => {
-    calls++;
-    enter();
-    await gate;
-    return { actual: true };
-  });
-  await mobile.ready();
-  const h = await dependencyPreparedEditingHandoff({
-    left: 120,
-    onCancel: async () => {
-      await Promise.allSettled([...editingApiRaw]);
-      stopped = true;
-    },
-  });
-  const source = readFileSync(
-    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
-    'utf8',
-  );
-  const begin = source.indexOf('async function api(method, path, payload) {'),
-    end = source.indexOf('\ntry {', begin);
-  const api = new Function(
-    'recoveryHandoff',
-    'mobile',
-    'headers',
-    'report',
-    'editingContinuity',
-    'editingApiRaw',
-    source.slice(begin, end) + '; return api;',
-  )(h.handoff, mobile, {}, {}, true, editingApiRaw);
-  try {
-    const pending = api('POST', '/pending', {}),
-      refused = assert.rejects(pending, /PROOF_DRIVER_PHASE_DEADLINE/);
-    await entered;
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(calls, 1);
-    assert.equal(editingApiRaw.size, 1);
-    assert.equal(stopped, false);
-    release();
-    await refused;
-    await h.handoff.close();
-    assert.equal(calls, 1);
-    assert.equal(editingApiRaw.size, 0);
-    assert.equal(stopped, true);
-  } finally {
-    release();
-    await h.handoff.close();
-    await mobile.close();
-    rmSync(h.directory, { recursive: true, force: true });
-  }
-});
+testWithEditingClock(
+  'actual Fastify injection keeps one original request when cancellation joins its retained thenable',
+  async () => {
+    const { default: fastify } = await import('fastify');
+    const mobile = fastify(),
+      editingApiRaw = new Set();
+    let release,
+      enter,
+      calls = 0,
+      stopped = false;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise((resolve) => {
+      enter = resolve;
+    });
+    mobile.post('/pending', async () => {
+      calls++;
+      enter();
+      await gate;
+      return { actual: true };
+    });
+    await mobile.ready();
+    const h = await dependencyPreparedEditingHandoff({
+      left: 120,
+      onCancel: async () => {
+        await Promise.allSettled([...editingApiRaw]);
+        stopped = true;
+      },
+    });
+    const source = readFileSync(
+      new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+      'utf8',
+    );
+    const begin = source.indexOf('async function api(method, path, payload) {'),
+      end = source.indexOf('\ntry {', begin);
+    const api = new Function(
+      'recoveryHandoff',
+      'mobile',
+      'headers',
+      'report',
+      'editingContinuity',
+      'editingApiRaw',
+      source.slice(begin, end) + '; return api;',
+    )(h.handoff, mobile, {}, {}, true, editingApiRaw);
+    try {
+      const pending = api('POST', '/pending', {}),
+        refused = assert.rejects(pending, /PROOF_DRIVER_PHASE_DEADLINE/);
+      await entered;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(calls, 1);
+      assert.equal(editingApiRaw.size, 1);
+      assert.equal(stopped, false);
+      release();
+      await refused;
+      await h.handoff.close();
+      assert.equal(calls, 1);
+      assert.equal(editingApiRaw.size, 0);
+      assert.equal(stopped, true);
+    } finally {
+      release();
+      await h.handoff.close();
+      await mobile.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    }
+  },
+);
