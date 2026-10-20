@@ -14,6 +14,7 @@ import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import {
   safeBrowserFailure,
+  observePreviewExchange,
   observeEditingSteer,
   pickerChromeSnapshot,
   observePickerContinuity,
@@ -481,16 +482,33 @@ try {
     );
     throw new Error('CONTROLS_START_COMPLETE');
   }
+  const previewDeadline = Math.min(Date.now() + 60_000, config.observationHostDeadline);
+  const grantResponse = mobile.waitForResponse(
+    (response) =>
+      new URL(response.url()).origin === new URL(config.mobileOrigin).origin &&
+      new URL(response.url()).pathname === `/api/sessions/${config.sessionId}/live/launch-grants` &&
+      response.request().method() === 'POST',
+    { timeout: proofObservationRemaining(previewDeadline) },
+  );
+  // All observers are armed once before the click; rejected peers remain handled
+  // while another exact phase is being observed. No retry mints another grant.
+  void grantResponse.catch(() => {});
   const exchangeResponse = context.waitForEvent('response', {
     predicate: (response) =>
       new URL(response.url()).origin === config.previewOrigin &&
       new URL(response.url()).pathname === '/__gestalt_live/exchange',
-    timeout: 60000,
+    timeout: proofObservationRemaining(previewDeadline),
   });
-  const popup = mobile.waitForEvent('popup');
+  void exchangeResponse.catch(() => {});
+  const popup = mobile.waitForEvent('popup', {
+    timeout: proofObservationRemaining(previewDeadline),
+  });
+  void popup.catch(() => {});
   checkpoint('preview-popup');
-  await mobile.getByRole('button', { name: 'Open preview', exact: true }).click();
-  const preview = await popup;
+  await mobile.getByRole('button', { name: 'Open preview', exact: true }).click({
+    timeout: proofObservationRemaining(previewDeadline),
+  });
+  const preview = await withinProofObservation(() => popup, previewDeadline);
   await preview.setViewportSize({ width: 1440, height: 900 });
   let hmrUpdates = 0;
   preview.on('websocket', (socket) =>
@@ -503,13 +521,21 @@ try {
     }),
   );
   checkpoint('preview-exchange');
-  const actualExchange = await exchangeResponse;
-  assert.equal(actualExchange.status(), 201);
-  const exchangedLease = await actualExchange.json();
-  assert.equal(exchangedLease.liveId, config.liveId);
-  assert.equal(exchangedLease.generation, config.generation);
+  const exchangedLease = await observePreviewExchange({
+    grantResponse,
+    exchangeResponse,
+    liveId: config.liveId,
+    generation: config.generation,
+    previewOrigin: config.previewOrigin,
+    deadline: previewDeadline,
+    checkpoint,
+  });
+  checkpoint('preview-navigation');
   try {
-    await preview.waitForURL(config.previewOrigin + '/', { waitUntil: 'commit' });
+    await preview.waitForURL(config.previewOrigin + '/', {
+      waitUntil: 'commit',
+      timeout: proofObservationRemaining(previewDeadline),
+    });
   } catch (error) {
     if (!String(error?.message ?? '').startsWith('page.waitForURL: net::ERR_NETWORK_CHANGED'))
       throw error;
@@ -519,10 +545,13 @@ try {
     await preview.waitForFunction(
       () => document.documentURI.startsWith('chrome-error://') && document.readyState !== 'loading',
       null,
-      { timeout: 5000 },
+      { timeout: Math.min(5000, proofObservationRemaining(previewDeadline)) },
     );
     checkpoint('preview-get-after-network-change');
-    const recovered = await preview.goto(config.previewOrigin + '/', { waitUntil: 'commit' });
+    const recovered = await preview.goto(config.previewOrigin + '/', {
+      waitUntil: 'commit',
+      timeout: proofObservationRemaining(previewDeadline),
+    });
     assert.equal(recovered.status(), 200);
     initialPreviewGetRetried = true;
   }
@@ -779,6 +808,19 @@ try {
     }
   }
   await preview.screenshot({ path: config.screenshot });
+  let postAcceptPollObservation;
+  if (config.editingPhase === 'accepted') {
+    // Keep the real preview/SSE alive until the next owning poll has actually
+    // dispatched after authority validation. This read cannot reset phase A.
+    checkpoint('post-accept-poll-dispatch');
+    const deadline = Math.min(Date.now() + 300_000, config.observationHostDeadline);
+    postAcceptPollObservation = await command('accepted-poll-observed', deadline, {
+      hostDeadline: config.observationHostDeadline,
+    });
+    assert.equal(postAcceptPollObservation.commandIpcDispatched, true);
+    assert.equal(postAcceptPollObservation.postAuthority, true);
+    assert.equal(postAcceptPollObservation.pending, true);
+  }
   await writeFile(
     config.resultFile,
     JSON.stringify(
@@ -793,6 +835,7 @@ try {
         postResumeContinuity: config.editingPhase === 'steer' ? acceptContinuity : undefined,
         proofLane: config.proofLane || undefined,
         editingPhase: config.editingPhase,
+        postAcceptPollObservation,
         observedGeneration: config.generation,
         pickerSmoke: config.pickerSmoke === true,
         realPickerSteer: actions.has('steer'),

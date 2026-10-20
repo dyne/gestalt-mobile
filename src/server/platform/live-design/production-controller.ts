@@ -1504,7 +1504,14 @@ export class ProductionLiveController {
       g.claim.app.device !== run.app.device ||
       g.claim.app.inode !== run.app.inode ||
       (g.plannedGeneration !== run.generation &&
-        !['stopping', 'recoveryRequired'].includes(run.state))
+        !['stopping', 'recoveryRequired'].includes(run.state) &&
+        !(
+          run.state === 'idle' &&
+          run.controlsRestored &&
+          g.retired &&
+          !g.resumed &&
+          this.revokedCaptures.has(g.policy.capture.captureId)
+        ))
     )
       throw new Error('LIVE_GENERATION_STALE');
     return g;

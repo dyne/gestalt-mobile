@@ -343,6 +343,7 @@ export async function productionEditBrowser(input) {
               assert.ok(
                 [
                   'accepted',
+                  'accepted-poll-observed',
                   'steered',
                   'manual-poll-observed',
                   'manual-commit-observed',
@@ -354,6 +355,11 @@ export async function productionEditBrowser(input) {
                   observation.deadline > Date.now() &&
                   observation.deadline <= Date.now() + 300_000,
               );
+              if (value.command === 'accepted-poll-observed') {
+                assert.equal(input.browser.editingPhase, 'accepted');
+                assert.equal(observation.hostDeadline, observationHostDeadline);
+                assert.ok(observation.deadline <= observationHostDeadline);
+              }
               if (value.command.startsWith('manual-') && value.command !== 'manual-applied') {
                 assert.equal(observation.hostDeadline, observationHostDeadline);
                 assert.ok(

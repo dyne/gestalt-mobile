@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   safeBrowserFailure,
+  observePreviewExchange,
   pickerChromeSnapshot,
   boundedPickerObservation,
   observeProofMethod,
@@ -23,6 +24,7 @@ import {
   pickerContinuityProbe,
   observePickerContinuity,
   observeCanonicalPollDispatch,
+  observePostAcceptPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
   retainOwningStartupFailure,
@@ -2235,4 +2237,306 @@ test('old cookie proof requires exact supported401 LIVE_AUTH_REQUIRED, never inf
       () => assertOldPreviewCookieDenied(response),
       (error) => error.message === 'PROOF_OLD_COOKIE_NOT_DENIED',
     );
+});
+
+function previewExchangeFixture() {
+  const verifier = 'v'.repeat(43);
+  const request = {
+    liveId: 'live-id',
+    generation: 3,
+    codeChallengeMethod: 'S256',
+    codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
+  };
+  const grant = {
+    previewOrigin: 'https://preview.test',
+    grantId: 'grant-id',
+    grant: 'g'.repeat(43),
+  };
+  const exchange = { grantId: grant.grantId, grant: grant.grant, codeVerifier: verifier };
+  const calls = { grantBodies: 0, exchangeBodies: 0 };
+  const phases = [];
+  const response = (body, status, url, json) => ({
+    request: () => ({ method: () => 'POST', postDataJSON: () => body }),
+    status: () => status,
+    url: () => url,
+    json,
+  });
+  const options = {
+    liveId: request.liveId,
+    generation: request.generation,
+    previewOrigin: grant.previewOrigin,
+    deadline: Date.now() + 1000,
+    checkpoint: (phase) => phases.push(phase),
+    grantResponse: Promise.resolve(
+      response(
+        request,
+        201,
+        'https://mobile.test/api/sessions/session/live/launch-grants',
+        async () => {
+          calls.grantBodies++;
+          return grant;
+        },
+      ),
+    ),
+    exchangeResponse: Promise.resolve(
+      response(exchange, 201, grant.previewOrigin + '/__gestalt_live/exchange', () => {
+        calls.exchangeBodies++;
+        return new Promise(() => {});
+      }),
+    ),
+  };
+  return { options, request, grant, exchange, calls, phases };
+}
+test('preview binds the real authenticated grant and exact exchange without consuming the retiring navigation body', async () => {
+  const f = previewExchangeFixture();
+  assert.deepEqual(await observePreviewExchange(f.options), { liveId: 'live-id', generation: 3 });
+  assert.deepEqual(f.calls, { grantBodies: 1, exchangeBodies: 0 });
+  assert.deepEqual(f.phases, [
+    'preview-grant-response',
+    'preview-grant-body',
+    'preview-exchange-response',
+  ]);
+});
+test('preview rejects stale/wrong grant identity, exchange identity, proof and origin without replay', async () => {
+  for (const mutate of [
+    (f) => {
+      f.request.liveId = 'wrong';
+    },
+    (f) => {
+      f.request.generation--;
+    },
+    (f) => {
+      f.request.codeChallengeMethod = 'plain';
+    },
+    (f) => {
+      f.request.codeChallenge = 'wrong';
+    },
+    (f) => {
+      f.grant.previewOrigin = 'https://other.test';
+    },
+    (f) => {
+      f.exchange.grantId = 'other';
+    },
+    (f) => {
+      f.exchange.grant = 'other';
+    },
+    (f) => {
+      f.exchange.codeVerifier = 'x'.repeat(43);
+    },
+    (f) => {
+      f.options.exchangeResponse = Promise.resolve({
+        request: () => ({ method: () => 'POST', postDataJSON: () => f.exchange }),
+        status: () => 500,
+        url: () => 'https://preview.test/__gestalt_live/exchange',
+      });
+    },
+    (f) => {
+      f.options.exchangeResponse = Promise.resolve({
+        request: () => ({ method: () => 'POST', postDataJSON: () => f.exchange }),
+        status: () => 201,
+        url: () => 'https://other.test/__gestalt_live/exchange',
+      });
+    },
+  ]) {
+    const f = previewExchangeFixture();
+    mutate(f);
+    await assert.rejects(observePreviewExchange(f.options), /PROOF_PREVIEW_IDENTITY_INVALID/);
+    assert.equal(f.calls.exchangeBodies, 0);
+    assert.ok(f.calls.grantBodies <= 1);
+  }
+});
+test('pending stable grant body or response expires at the original deadline and records the precise awaited phase', async () => {
+  for (const phase of ['response', 'body', 'exchange']) {
+    const f = previewExchangeFixture();
+    f.options.deadline = Date.now() + 25;
+    const pending = new Promise(() => {});
+    if (phase === 'response') f.options.grantResponse = pending;
+    if (phase === 'body') (await f.options.grantResponse).json = () => pending;
+    if (phase === 'exchange') f.options.exchangeResponse = pending;
+    await assert.rejects(observePreviewExchange(f.options), /PROOF_OBSERVATION_DEADLINE/);
+    assert.equal(
+      f.phases.at(-1),
+      phase === 'body'
+        ? 'preview-grant-body'
+        : phase === 'response'
+          ? 'preview-grant-response'
+          : 'preview-exchange-response',
+    );
+    assert.equal(f.calls.exchangeBodies, 0);
+  }
+});
+
+test('actual proof Stop verification preserves the live restored Native until actual Mobile close verifies its exit exactly once', async () => {
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const stopStart = source.indexOf('failureCleanupStop = () =>');
+  const verifyStart =
+    source.indexOf('verify: async () => {', stopStart) + 'verify: async () => {'.length;
+  const verifyBody = source.slice(
+    verifyStart,
+    source.indexOf('\n          },\n        })();', verifyStart),
+  );
+  const closeStart = source.indexOf('async function closeMobileOnce() {');
+  const closeBody = source.slice(closeStart, source.indexOf('\nlet probeTimer;', closeStart));
+  let alive = true,
+    closes = 0;
+  const observedBirthExited = () => !alive;
+  const contents = new Map([
+    ['/home/config.toml', 'original'],
+    ['/app/index.html', 'accepted'],
+    ['/app/app.js', 'module'],
+  ]);
+  const verify = new Function(
+    'assert',
+    'signed',
+    'join',
+    'controller',
+    'hash',
+    'appRoot',
+    'readOwner',
+    'projectProcesses',
+    'readFileSync',
+    'owningHome',
+    'installedOriginalConfig',
+    'expectedIndex',
+    'expectedModule',
+    'existsSync',
+    'observedBirthExited',
+    'baselineBirth',
+    'return async () => {' + verifyBody + '}',
+  )(
+    assert,
+    () => ({ status: 'revoked' }),
+    join,
+    '/controller',
+    (v) => String(v),
+    '/app',
+    () => ({ run: { state: 'idle', controlsRestored: true } }),
+    new Map([
+      [{ diagnostics: () => ({ namespaceExited: true, pipeDescriptorsClosed: true }) }, true],
+    ]),
+    (path) => contents.get(path),
+    '/home',
+    'original',
+    'accepted',
+    'module',
+    () => false,
+    observedBirthExited,
+    {},
+  );
+  await verify();
+  assert.equal(alive, true);
+  const makeClose = (mobile) =>
+    new Function(
+      'assert',
+      'mobile',
+      'baselineBirth',
+      'observedBirthExited',
+      'let mobileClose; ' + closeBody + '; return closeMobileOnce;',
+    )(assert, mobile, {}, observedBirthExited);
+  const close = makeClose({
+    close: async () => {
+      closes++;
+      alive = false;
+    },
+  });
+  await close();
+  await close();
+  assert.equal(closes, 1);
+  assert.equal(observedBirthExited(), true);
+  alive = true;
+  await assert.rejects(makeClose({ close: async () => {} })(), { code: 'ERR_ASSERTION' });
+  await assert.rejects(
+    makeClose({
+      close: async () => {
+        throw new Error('CLOSE_FAILED');
+      },
+    })(),
+    /CLOSE_FAILED/,
+  );
+  contents.set('/home/config.toml', 'not-restored');
+  await assert.rejects(verify(), { code: 'ERR_ASSERTION' });
+});
+
+test('post-Accept dispatch observation holds the browser during pending authority and releases only exact existing IPC evidence before original cutoff', async () => {
+  let now = 1000,
+    reads = 0,
+    ready = false;
+  const evidence = {
+    sequence: 8,
+    commandIpcDispatched: true,
+    workerBirthsCurrent: true,
+    postAuthority: true,
+    pending: true,
+    generationMatches: true,
+    foregroundChildBirthObserved: false,
+  };
+  const result = await observePostAcceptPollDispatch({
+    deadline: 121000,
+    now: () => now,
+    sample: () => {
+      reads++;
+      return ready ? evidence : null;
+    },
+    pause: async () => {
+      now += 117168;
+      ready = true;
+    },
+  });
+  assert.equal(result, evidence);
+  assert.equal(reads, 2);
+  assert.equal(now, 118168);
+});
+test('post-Accept readiness refuses pre-authority, settled, wrong-generation/birth and fabricated-child evidence', async () => {
+  const valid = {
+    sequence: 8,
+    commandIpcDispatched: true,
+    workerBirthsCurrent: true,
+    postAuthority: true,
+    pending: true,
+    generationMatches: true,
+    foregroundChildBirthObserved: false,
+  };
+  for (const changed of [
+    { sequence: 0 },
+    { commandIpcDispatched: false },
+    { workerBirthsCurrent: false },
+    { postAuthority: false },
+    { pending: false },
+    { generationMatches: false },
+    { foregroundChildBirthObserved: true },
+  ]) {
+    await assert.rejects(
+      observePostAcceptPollDispatch({
+        sample: () => ({ ...valid, ...changed }),
+        deadline: 2000,
+        now: () => 1000,
+      }),
+      /PROOF_POST_ACCEPT_POLL_INVALID/,
+    );
+  }
+});
+test('post-Accept readiness never resets expired A or accepts a read finishing after its original cutoff', async () => {
+  for (const kind of ['authority-never-dispatched', 'read-crossed-cutoff', 'already-expired']) {
+    let now = kind === 'already-expired' ? 2000 : 1000,
+      reads = 0;
+    await assert.rejects(
+      observePostAcceptPollDispatch({
+        deadline: 2000,
+        now: () => now,
+        sample: () => {
+          reads++;
+          if (kind === 'read-crossed-cutoff') now = 2000;
+          return null;
+        },
+        pause: async () => {
+          now = 2000;
+        },
+      }),
+      /PROOF_OBSERVATION_DEADLINE/,
+    );
+    assert.equal(reads, kind === 'already-expired' ? 0 : 1);
+  }
 });

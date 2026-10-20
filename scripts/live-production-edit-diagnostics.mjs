@@ -5,6 +5,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 
 // Explicit test allocation, not a product lease or authority. All offsets are
 // relative to one runner monotonic anchor; a continuation cannot reset them.
@@ -81,6 +82,58 @@ export function assertOldPreviewCookieDenied(response) {
   }
   if (response?.status !== 401 || code !== 'LIVE_AUTH_REQUIRED')
     throw new Error('PROOF_OLD_COOKIE_NOT_DENIED');
+}
+
+/** Observe one real grant/exchange under one fixed deadline. The exchange's
+ * navigation response body is deliberately never consumed: Chromium may retire
+ * its document before body delivery. Identity comes from the stable opener's
+ * authenticated grant request and the exact exchange request instead. */
+export async function observePreviewExchange({
+  grantResponse,
+  exchangeResponse,
+  liveId,
+  generation,
+  previewOrigin,
+  deadline,
+  checkpoint,
+}) {
+  const requireIdentity = (condition) => {
+    if (!condition) throw new Error('PROOF_PREVIEW_IDENTITY_INVALID');
+  };
+  checkpoint('preview-grant-response');
+  const granted = await withinProofObservation(() => grantResponse, deadline);
+  const request = granted.request();
+  const body = request.postDataJSON();
+  requireIdentity(
+    request.method() === 'POST' &&
+      granted.status() === 201 &&
+      body.liveId === liveId &&
+      body.generation === generation &&
+      body.codeChallengeMethod === 'S256' &&
+      /^[A-Za-z0-9_-]{43}$/.test(body.codeChallenge ?? ''),
+  );
+  checkpoint('preview-grant-body');
+  const grant = await withinProofObservation(() => granted.json(), deadline);
+  requireIdentity(grant.previewOrigin === previewOrigin);
+  checkpoint('preview-exchange-response');
+  const exchanged = await withinProofObservation(() => exchangeResponse, deadline);
+  const exchange = exchanged.request();
+  const data = exchange.postDataJSON();
+  const url = new URL(exchanged.url());
+  requireIdentity(
+    exchange.method() === 'POST' &&
+      exchanged.status() === 201 &&
+      url.origin === previewOrigin &&
+      url.pathname === '/__gestalt_live/exchange' &&
+      typeof grant.grantId === 'string' &&
+      /^[A-Za-z0-9_-]{1,128}$/.test(grant.grantId) &&
+      /^[A-Za-z0-9_-]{43,128}$/.test(grant.grant ?? '') &&
+      data.grantId === grant.grantId &&
+      data.grant === grant.grant &&
+      /^[A-Za-z0-9_-]{43,128}$/.test(data.codeVerifier ?? '') &&
+      createHash('sha256').update(data.codeVerifier).digest('base64url') === body.codeChallenge,
+  );
+  return { liveId, generation };
 }
 
 /** Controlled proof errors only. Never retain URLs, cookie values or bearer-shaped strings. */
@@ -846,6 +899,35 @@ export function observeCanonicalPollDispatch(prototype, assertBirthCurrent) {
     }
     return null;
   };
+}
+/** Read the existing owning flight only. Neither this observer nor its clock
+ * creates a helper poll or releases the browser before positive IPC evidence. */
+export async function observePostAcceptPollDispatch({
+  sample,
+  deadline,
+  now = Date.now,
+  pause = () => new Promise((resolve) => setTimeout(resolve, 25)),
+}) {
+  for (;;) {
+    proofObservationRemaining(deadline, now());
+    const current = sample();
+    proofObservationRemaining(deadline, now());
+    if (current) {
+      if (
+        !Number.isSafeInteger(current.sequence) ||
+        current.sequence <= 0 ||
+        current.commandIpcDispatched !== true ||
+        current.workerBirthsCurrent !== true ||
+        current.postAuthority !== true ||
+        current.pending !== true ||
+        current.generationMatches !== true ||
+        current.foregroundChildBirthObserved !== false
+      )
+        throw new Error('PROOF_POST_ACCEPT_POLL_INVALID');
+      return current;
+    }
+    await withinProofObservation(pause, deadline, now);
+  }
 }
 export function manualObservationDeadline({ startedAt, hostDeadline, now = Date.now() }) {
   // Pre-enqueue observation only. The event's actual595s inbox lease starts at receipt.

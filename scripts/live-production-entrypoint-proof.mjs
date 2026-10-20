@@ -38,6 +38,7 @@ import {
   observeEventAuthority,
   proofObservationRemaining,
   observeCanonicalPollDispatch,
+  observePostAcceptPollDispatch,
   manualObservationDeadline,
   verifyManualAcknowledgement,
   retainOwningStartupFailure,
@@ -816,6 +817,7 @@ async function closeMobileOnce() {
   if (!mobile) return;
   mobileClose ??= mobile.close();
   await mobileClose;
+  if (baselineBirth) assert.equal(observedBirthExited(baselineBirth), true);
   mobile = undefined;
 }
 let probeTimer;
@@ -2451,7 +2453,11 @@ try {
               signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
               'revoked',
             );
-            assert.equal(observedBirthExited(baselineBirth), true);
+            // Stop restores ordinary owner configuration; only Mobile close owns
+            // physical original-Native exit, verified after closeMobileOnce.
+            const stopped = readOwner().run;
+            assert.equal(stopped.state, 'idle');
+            assert.equal(stopped.controlsRestored, true);
             for (const process of projectProcesses.keys()) {
               const proof = process.diagnostics();
               assert.equal(proof.namespaceExited, true);
@@ -2638,7 +2644,9 @@ try {
     }
     assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
     report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
-    let manualSource, observedManualPoll;
+    let manualSource,
+      observedManualPoll,
+      acceptedCanonicalAcknowledged = false;
     let manualWaitDeadline;
     let backgroundSourceDigest, backgroundRequestCount;
     const manualHistorySnapshot = () => {
@@ -2779,6 +2787,13 @@ try {
               return current;
             } else if (command === 'accepted') {
               await acknowledged(
+                'generate',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              await acknowledged(
                 'accept',
                 observation
                   ? proofObservationRemaining(observation.deadline)
@@ -2787,6 +2802,25 @@ try {
               );
               assert.ok(source().includes('Production chosen variant'));
               assert.ok(!source().includes('impeccable-variants-start'));
+              acceptedCanonicalAcknowledged = true;
+            } else if (command === 'accepted-poll-observed') {
+              assert.equal(editingPhase, 'accepted');
+              assert.equal(acceptedCanonicalAcknowledged, true);
+              // Read-only observation of the existing signed/birth-fenced helper
+              // IPC flight. The same Native/session remains alive; never poll here.
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const deadline = Math.min(
+                observation.deadline,
+                Date.now() + editingRemaining(editingAnchor, 'accepted'),
+              );
+              const current = await observePostAcceptPollDispatch({
+                sample: () => pendingCanonicalPoll(session.id, started.generation),
+                deadline,
+              });
+              assert.equal(observedBirthExited(baselineBirth), false);
+              report.postAcceptPollObservation = current;
+              report.checks.authenticPostAcceptPollDispatchedBeforeBrowserClose = true;
+              return current;
             } else if (command === 'steered') {
               await acknowledged(
                 'steer',
@@ -2867,6 +2901,9 @@ try {
       const phaseA = report.editBrowser;
       assert.equal(phaseA.realPickerGenerateAccept, true);
       assert.equal(phaseA.realPickerSteer, false);
+      assert.deepEqual(phaseA.postAcceptPollObservation, report.postAcceptPollObservation);
+      assert.equal(report.postAcceptPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postAcceptPollObservation.postAuthority, true);
       assert.equal(report.editBrowserRemainingProcesses, 0);
       stopPreviewProbe();
       await probeRefresh;
