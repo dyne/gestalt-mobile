@@ -19,6 +19,7 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
+import { createSerialProfile, validateSerialProfile } from './live-production-edit-diagnostics.mjs';
 import {
   aggregateLanes,
   aggregateDiagnostic,
@@ -43,6 +44,10 @@ import {
   loadLanePacket,
   validateEditingContinuity,
   readEditingAnchor,
+  editingPhaseBound,
+  validateEditingPhaseBound,
+  phaseBoundRemaining,
+  fixedProofFailure,
 } from './live-production-proof-lanes.mjs';
 
 const identity = { candidate: 'a'.repeat(40), tree: 'b'.repeat(40), runId: '123', ...proofPins };
@@ -1682,4 +1687,602 @@ test('expired editing cleanup persists unresolved operation and lock while the e
     }
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+const waitFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function editingHandoff({
+  left = 5000,
+  onCancel = async () => {},
+  onFailure = () => {},
+} = {}) {
+  const directory = temporary(),
+    now = process.hrtime.bigint();
+  const anchor = { boot: processBirth().boot, monotonicNs: (now - 1_310_000_000_000n).toString() };
+  const phaseA = editingPhaseBound(anchor, 'accepted', now - BigInt(1_260_000 - left) * 1_000_000n);
+  const editing = { anchor, phaseA },
+    birth = processBirth();
+  writeFileSync(join(directory, 'launched.json'), JSON.stringify({ identity, birth, editing }), {
+    mode: 0o600,
+  });
+  const handoff = await openRecoveryHandoff({ directory, identity, editing, onCancel, onFailure });
+  return { directory, handoff, expected: handoff.snapshot(), editing, birth };
+}
+function writeContinuation(h, phaseB = editingPhaseBound(h.editing.anchor, 'action')) {
+  writeFileSync(
+    join(h.directory, 'continuation.json'),
+    JSON.stringify({ identity, birth: h.birth, phaseB }),
+    { mode: 0o600, flag: 'wx' },
+  );
+  return phaseB;
+}
+test('parent phase bounds intersect one immutable global clock and reject reset, malformed, future or changed metadata', () => {
+  const anchor = { monotonicNs: '0' },
+    now = 79_000_000_000n;
+  const bound = editingPhaseBound(anchor, 'accepted', now);
+  assert.deepEqual(bound, {
+    phase: 'accepted',
+    startedNs: now.toString(),
+    deadlineNs: '1339000000000',
+  });
+  assert.equal(phaseBoundRemaining(bound, 1_339_000_000_000n), 0);
+  assert.equal(validateEditingPhaseBound(bound, anchor, 'accepted', now), bound);
+  const nearGlobal = editingPhaseBound(anchor, 'accepted', 1_370_000_000_000n);
+  assert.equal(nearGlobal.deadlineNs, '1380000000000');
+  const b = editingPhaseBound(anchor, 'action', 1_379_000_000_000n);
+  assert.equal(b.deadlineNs, '2399000000000');
+  for (const change of [
+    { deadlineNs: '1380000000000' },
+    { phase: 'action' },
+    { startedNs: '80000000000' },
+    { extra: true },
+    { deadlineNs: '-1' },
+  ])
+    assert.throws(() =>
+      validateEditingPhaseBound({ ...bound, ...change }, anchor, 'accepted', now),
+    );
+  assert.throws(
+    () => editingPhaseBound(anchor, 'accepted', 1_380_000_000_000n),
+    /PROOF_DRIVER_PHASE_DEADLINE/,
+  );
+});
+test('actual editing driver and parent share exact A cutoff; expiry keeps original raw operation owned until drained', async () => {
+  let release,
+    stops = 0,
+    closed = false;
+  const raw = new Promise((resolve) => {
+      release = resolve;
+    }),
+    failures = [];
+  const h = await editingHandoff({
+    left: 150,
+    onFailure: (code) => failures.push(code),
+    onCancel: async () => {
+      await raw;
+      stops++;
+    },
+  });
+  try {
+    assert.equal(h.expected.schemaVersion, 2);
+    assert.equal(h.handoff.deadlineNs('accepted'), h.editing.phaseA.deadlineNs);
+    await assert.rejects(
+      observeRecoveryPhase(
+        h.directory,
+        (s) => s.phase === 'ready',
+        1000,
+        identity,
+        h.editing.phaseA,
+      ),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    await waitFor(5);
+    assert.equal(h.handoff.snapshot().cancelled, true);
+    assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
+    assert.equal(stops, 0);
+    const closing = h.handoff.close().then(() => {
+      closed = true;
+    });
+    await waitFor(10);
+    assert.equal(closed, false);
+    release();
+    await closing;
+    assert.equal(stops, 1);
+    assert.deepEqual(failures, ['PROOF_DRIVER_PHASE_DEADLINE']);
+  } finally {
+    release();
+    await h.handoff.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
+});
+test('editing continuation carries exact original birth and B bound; missing, changed and replayed admission refuse', async () => {
+  const h = await editingHandoff();
+  const boundary = h.handoff.boundary();
+  boundary.catch(() => {});
+  try {
+    await assert.rejects(
+      handoffRequest(h.directory, 'continue', h.expected),
+      /PROOF_HANDOFF_REFUSED/,
+    );
+    const phaseB = writeContinuation(h);
+    await assert.rejects(
+      handoffRequest(h.directory, 'continue', {
+        ...h.expected,
+        identity: { ...identity, tree: 'f'.repeat(40) },
+      }),
+      /PROOF_HANDOFF_REFUSED/,
+    );
+    assert.throws(
+      () =>
+        handoffRequest(h.directory, 'continue', {
+          ...h.expected,
+          birth: { ...h.birth, start: '0' },
+        }),
+      /PROOF_DRIVER_EXITED/,
+    );
+    const state = await handoffRequest(h.directory, 'continue', h.expected);
+    await boundary;
+    assert.deepEqual(state.phaseB, phaseB);
+    assert.equal(h.handoff.deadlineNs('action'), phaseB.deadlineNs);
+    await assert.rejects(
+      handoffRequest(h.directory, 'continue', h.expected),
+      /PROOF_HANDOFF_REFUSED/,
+    );
+    const changed = editingPhaseBound(h.editing.anchor, 'action');
+    writeFileSync(
+      join(h.directory, 'continuation.json'),
+      JSON.stringify({ identity, birth: h.birth, phaseB: changed }),
+      { mode: 0o600 },
+    );
+    await assert.rejects(
+      handoffRequest(h.directory, 'status', h.expected),
+      /PROOF_HANDOFF_REFUSED/,
+    );
+    writeFileSync(
+      join(h.directory, 'continuation.json'),
+      JSON.stringify({ identity, birth: h.birth, phaseB }),
+      { mode: 0o600 },
+    );
+    h.handoff.finishActions();
+  } finally {
+    await h.handoff.cancel();
+    await boundary.catch(() => {});
+    await h.handoff.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
+});
+test('parent refuses changed protected A cutoff and no expired B may release continuation', async () => {
+  const h = await editingHandoff();
+  const boundary = h.handoff.boundary();
+  boundary.catch(() => {});
+  try {
+    const wrong = {
+      ...h.editing.phaseA,
+      deadlineNs: (BigInt(h.editing.phaseA.deadlineNs) + 1n).toString(),
+    };
+    await assert.rejects(
+      observeRecoveryPhase(h.directory, () => true, 100, identity, wrong),
+      /PROOF_DRIVER_METADATA_CHANGED/,
+    );
+    const now = process.hrtime.bigint();
+    const expired = editingPhaseBound(h.editing.anchor, 'action', now - 1_020_001_000_000n);
+    writeContinuation(h, expired);
+    await assert.rejects(
+      handoffRequest(h.directory, 'continue', h.expected),
+      /PROOF_HANDOFF_REFUSED/,
+    );
+    assert.equal(h.handoff.snapshot().continuations, 0);
+  } finally {
+    await h.handoff.cancel();
+    await boundary.catch(() => {});
+    await h.handoff.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
+});
+test('fixed first-cause taxonomy recognizes actual assertion message and never copies arbitrary errors', () => {
+  assert.equal(
+    fixedProofFailure({ code: 'ERR_ASSERTION', message: 'PROOF_CANCELLED' }),
+    'PROOF_CANCELLED',
+  );
+  assert.equal(
+    fixedProofFailure(new Error('PROOF_DRIVER_PHASE_DEADLINE')),
+    'PROOF_DRIVER_PHASE_DEADLINE',
+  );
+  for (const message of [
+    'private-bearer-canary',
+    'PROOF_CANCELLED\nprivate-canary',
+    'https://private.test/token',
+  ])
+    assert.equal(fixedProofFailure(new Error(message)), null);
+});
+
+test('actual API admits once, retains the original RPC through cancellation and refuses its late result and any next dispatch', async () => {
+  let release,
+    calls = 0,
+    jsonReads = 0,
+    stops = 0;
+  const raw = new Promise((resolve) => {
+      release = resolve;
+    }),
+    editingApiRaw = new Set();
+  const h = await editingHandoff({
+    left: 120,
+    onCancel: async () => {
+      await Promise.allSettled([...editingApiRaw]);
+      stops++;
+    },
+  });
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const begin = source.indexOf('async function api(method, path, payload) {'),
+    end = source.indexOf('\ntry {', begin);
+  const api = new Function(
+    'recoveryHandoff',
+    'mobile',
+    'headers',
+    'report',
+    'editingContinuity',
+    'editingApiRaw',
+    source.slice(begin, end) + '; return api;',
+  )(
+    h.handoff,
+    {
+      inject() {
+        calls++;
+        return raw;
+      },
+    },
+    {},
+    {},
+    true,
+    editingApiRaw,
+  );
+  try {
+    const admitted = api('POST', '/actual-owner', {});
+    const refused = assert.rejects(admitted, /PROOF_DRIVER_PHASE_DEADLINE/);
+    assert.equal(editingApiRaw.size, 1);
+    await waitFor(150);
+    assert.equal(stops, 0);
+    assert.equal(editingApiRaw.size, 1);
+    await assert.rejects(api('POST', '/later-edit', {}), /PROOF_DRIVER_PHASE_DEADLINE/);
+    assert.equal(calls, 1);
+    release({
+      statusCode: 200,
+      json() {
+        jsonReads++;
+        return {};
+      },
+    });
+    await refused;
+    await h.handoff.close();
+    assert.equal(editingApiRaw.size, 0);
+    assert.equal(stops, 1);
+    assert.equal(jsonReads, 0);
+  } finally {
+    release({ statusCode: 200, json: () => ({}) });
+    await h.handoff.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
+});
+
+test('actual continued child and parent expire at the exact original B cutoff, retaining pending cancellation until raw settlement', async () => {
+  let release,
+    stopped = false;
+  const raw = new Promise((resolve) => {
+    release = resolve;
+  });
+  const h = await editingHandoff({
+    onCancel: async () => {
+      await raw;
+      stopped = true;
+    },
+  });
+  const boundary = h.handoff.boundary();
+  boundary.catch(() => {});
+  try {
+    const phaseB = editingPhaseBound(
+      h.editing.anchor,
+      'action',
+      process.hrtime.bigint() - 1_019_850_000_000n,
+    );
+    writeContinuation(h, phaseB);
+    await handoffRequest(h.directory, 'continue', h.expected);
+    await boundary;
+    await assert.rejects(
+      observeRecoveryPhase(h.directory, (s) => s.phase === 'settling', 1000, identity, phaseB),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    await waitFor(5);
+    assert.throws(() => h.handoff.assertCurrent(), /PROOF_DRIVER_PHASE_DEADLINE/);
+    assert.equal(stopped, false);
+    assert.equal(h.handoff.snapshot().continuations, 1);
+    release();
+    await h.handoff.close();
+    assert.equal(stopped, true);
+  } finally {
+    release();
+    await h.handoff.cancel();
+    await boundary.catch(() => {});
+    await h.handoff.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
+});
+
+test('explicit serial profile marker selects one full accept continuity lane with partial evidence and rejects every conflicting route', () => {
+  const selected = { eventName: 'push', message: '[full-native] [serial-accept-profile]' };
+  assert.deepEqual(selectedLanes(selected), {
+    mode: 'full',
+    lanes: ['accept-steer'],
+    verificationScope: 'editing-only',
+  });
+  for (const mutation of [
+    { eventName: 'pull_request' },
+    { eventName: 'workflow_dispatch' },
+    { message: '[serial-accept-profile]' },
+    { preflight: true },
+    { pickerSmoke: true },
+    { pickerDiagnostic: true },
+    { independentOnly: true },
+    ...[
+      '[editing-lanes]',
+      '[picker-smoke]',
+      '[picker-diagnostic]',
+      '[independent-only]',
+      '[seeded-admission]',
+    ].map((marker) => ({ message: selected.message + ' ' + marker })),
+  ])
+    assert.throws(() => selectedLanes({ ...selected, ...mutation }));
+  assert.deepEqual(selectedLanes({ eventName: 'push', message: '[full-native]' }).lanes, fullLanes);
+  assert.deepEqual(
+    selectedLanes({ eventName: 'push', message: '[full-native] [editing-lanes]' }).lanes,
+    ['accept-steer', 'manual-discard'],
+  );
+  const workflow = readFileSync(
+    new URL('../.github/workflows/live-caddy-proof.yml', import.meta.url),
+    'utf8',
+  );
+  const phaseA = workflow.slice(
+    workflow.indexOf("      - name: 'Accept editing phase A:"),
+    workflow.indexOf("      - name: 'Accept editing phase B:"),
+  );
+  const receipt = workflow.slice(
+    workflow.indexOf('      - name: Validate complete exact-candidate lane evidence'),
+    workflow.indexOf('      - name: Check fixed editing artifact allocation'),
+  );
+  assert.ok(
+    phaseA.includes(
+      "LIVE_PRODUCTION_SERIAL_PROFILE: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && '1' || '0' }}",
+    ),
+  );
+  assert.ok(
+    phaseA.includes(
+      "LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'serial-accept-baseline-1' || '' }}",
+    ),
+  );
+  assert.ok(receipt.includes('LIVE_PRODUCTION_SERIAL_PROFILE:'));
+  assert.ok(workflow.includes("verification-scope != 'editing-only'"));
+  assert.ok(phaseA.includes('timeout-minutes: 21'));
+});
+// Synthetic schema fixture only; this does not supply authentic profiling evidence.
+function profileContract() {
+  let now = 1n;
+  const profile = createSerialProfile(
+    {
+      trialId: 'serial-accept-baseline-1',
+      identity,
+      birth: { pid: 1, start: '1', boot: 'a'.repeat(36) },
+      anchor: { boot: 'a'.repeat(36), monotonicNs: '0' },
+      phaseA: { phase: 'accepted', startedNs: '0', deadlineNs: '1260000000000' },
+    },
+    () => now,
+  );
+  const begin = (label, at, metadata = {}) => {
+    now = BigInt(at);
+    return profile.begin(label, metadata);
+  };
+  const end = (id, at) => {
+    now = BigInt(at);
+    profile.end(id, 'completed');
+  };
+  const first = begin('idempotent-start', 1, { generation: 1 });
+  const poll = begin('poll-authority', 2, { generation: 1 });
+  profile.report.spans.at(-1).grantedNs = '3';
+  end(poll, 4);
+  end(first, 5);
+  const generate = begin('generate-authority', 6, { generation: 1, eventDigest: 'f'.repeat(64) });
+  profile.report.spans.at(-1).grantedNs = '7';
+  const root = begin('root-confinement', 8, { parentId: generate });
+  const child = begin('child-confinement', 9, { parentId: root });
+  end(child, 10);
+  end(root, 11);
+  end(begin('first-source-patch', 12, { parentId: root }), 13);
+  end(generate, 14);
+  for (const [index, label] of [
+    'accept-ack',
+    'post-accept-poll',
+    'browser-close',
+    'disconnect-ack',
+    'disconnect-revoke',
+  ].entries())
+    end(begin(label, 15 + index * 2), 16 + index * 2);
+  profile.report.originalOwner = {
+    generation: 1,
+    liveDigest: 'c'.repeat(64),
+    rootThreadDigest: 'd'.repeat(64),
+    captureDigest: 'e'.repeat(64),
+    nativeBirthDigest: 'f'.repeat(64),
+  };
+  return profile;
+}
+test('profile validity rejects swallowed diagnostic failures, pending raw rows, missing observations, stale identity and unbounded data', () => {
+  assert.equal(validateSerialProfile(profileContract().report), true);
+  for (const mutate of [
+    (p) => {
+      p.firstFailure = { code: 'PROOF_PROFILE_INVALID', observedNs: null };
+    },
+    (p) => {
+      p.spans[0].outcome = 'pending';
+      p.spans[0].endNs = null;
+    },
+    (p) => {
+      p.spans.pop();
+    },
+    (p) => {
+      p.spans[0].endNs = '1260000000001';
+    },
+    (p) => {
+      p.spans[2].grantedNs = undefined;
+    },
+    (p) => {
+      p.spans[4].parentId = 'profile-9999';
+    },
+    (p) => {
+      p.originalOwner.generation = 3;
+    },
+    (p) => {
+      p.spans[0].privatePayload = 'canary';
+    },
+    (p) => {
+      p.spans[0].label = 'arbitrary';
+    },
+  ]) {
+    const report = profileContract().report;
+    mutate(report);
+    assert.throws(() => validateSerialProfile(report), /PROOF_PROFILE_INVALID/);
+  }
+});
+test('profile128-span cap refuses before new dispatch and invalidates trial; ordinary lane receipt stays unchanged', () => {
+  const profile = profileContract();
+  let dispatched = 0;
+  while (profile.report.spans.length < 128) profile.trace('event-authority', () => 'settled');
+  assert.throws(
+    () =>
+      profile.trace('poll-authority', () => {
+        dispatched++;
+      }),
+    /PROOF_PROFILE_INVALID/,
+  );
+  assert.equal(dispatched, 0);
+  assert.equal(profile.report.spans.length, 128);
+  assert.throws(() => validateSerialProfile(profile.report), /PROOF_PROFILE_INVALID/);
+});
+test('explicit profile receipt requires valid complete profiling and remains partial; missing or silently invalid profile cannot publish success', () => {
+  const directory = temporary(),
+    file = 'production-entrypoint/production-entrypoint-proof.json';
+  mkdirSync(join(directory, 'production-entrypoint'));
+  const report = production('accept-steer');
+  writeFileSync(
+    join(directory, 'editing-driver-cleanup.json'),
+    packets()['accept-steer'].reports['editing-driver-cleanup.json'],
+  );
+  const save = () => writeFileSync(join(directory, file), JSON.stringify(report));
+  try {
+    save();
+    assert.ok(writeLaneReceipt('accept-steer', directory, identity, 'full', 'editing-only'));
+    assert.throws(() =>
+      writeLaneReceipt('accept-steer', directory, identity, 'full', 'editing-only', true),
+    );
+    report.serialProfileTrialRequested = true;
+    report.serialProfileValid = true;
+    report.serialProfile = profileContract().report;
+    save();
+    const receipt = writeLaneReceipt(
+      'accept-steer',
+      directory,
+      identity,
+      'full',
+      'editing-only',
+      true,
+    );
+    assert.equal(receipt.profilingTrial, 'serial-accept-baseline-1');
+    assert.equal(receipt.fullExactCandidateStillRequired, true);
+    const all = packets();
+    all['accept-steer'] = loadLanePacket(directory);
+    assert.throws(() => aggregateLanes(all, identity));
+    for (const mutate of [
+      (p) => {
+        p.serialProfileValid = false;
+      },
+      (p) => {
+        p.serialProfile.firstFailure = { code: 'PROOF_PROFILE_INVALID' };
+      },
+      (p) => {
+        p.serialProfile.binding.identity.tree = '0'.repeat(40);
+      },
+      (p) => {
+        p.serialProfile.binding.birth.start = '2';
+      },
+    ]) {
+      report.serialProfile = profileContract().report;
+      report.serialProfileValid = true;
+      mutate(report);
+      save();
+      assert.throws(() =>
+        writeLaneReceipt('accept-steer', directory, identity, 'full', 'editing-only', true),
+      );
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('actual final profile gate rejects silent observer invalidity while ordinary completion stays unchanged', () => {
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.lastIndexOf('  if (serialProfileRequested) {'),
+    end = source.indexOf("  report.cleanupStage = 'settled';", start);
+  assert.ok(start > 0 && end > start);
+  const gate = new Function(
+    'serialProfileRequested',
+    'report',
+    'validateSerialProfile',
+    'process',
+    source.slice(start, end),
+  );
+  const ordinary = { passed: true, cleanupComplete: true },
+    ordinaryProcess = {};
+  gate(false, ordinary, validateSerialProfile, ordinaryProcess);
+  assert.deepEqual(ordinary, { passed: true, cleanupComplete: true });
+  assert.equal(ordinaryProcess.exitCode, undefined);
+  const good = { passed: true, cleanupComplete: true, serialProfile: profileContract().report };
+  gate(true, good, validateSerialProfile, {});
+  assert.equal(good.passed, true);
+  assert.equal(good.serialProfileValid, true);
+  const bad = { passed: true, cleanupComplete: true, serialProfile: profileContract().report },
+    processState = {};
+  bad.serialProfile.firstFailure = { code: 'PROOF_PROFILE_INVALID', observedNs: null };
+  gate(true, bad, validateSerialProfile, processState);
+  assert.equal(bad.passed, false);
+  assert.equal(bad.serialProfileValid, false);
+  assert.equal(processState.exitCode, 1);
+  assert.equal(bad.cleanupComplete, true);
+  assert.equal(bad.firstFixedFailure.code, 'PROOF_PROFILE_INVALID');
+});
+test('a caught end-observation failure preserves raw result but invalidates profile instead of claiming success', async () => {
+  let now = 100n,
+    release;
+  const profile = createSerialProfile(profileContract().report.binding, () => now);
+  const raw = new Promise((resolve) => {
+    release = resolve;
+  });
+  assert.equal(
+    profile.trace('idempotent-start', () => raw),
+    raw,
+  );
+  now = 0n;
+  release('original-success');
+  assert.equal(await raw, 'original-success');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(profile.report.firstFailure.code, 'PROOF_PROFILE_INVALID');
+  assert.equal(profile.report.spans[0].endNs, null);
+  assert.throws(() => validateSerialProfile(profile.report), /PROOF_PROFILE_INVALID/);
+});
+
+test('generated authority callback refusal records fixed invalidity even if its caller catches the diagnostic error', () => {
+  const profile = createSerialProfile(profileContract().report.binding);
+  assert.throws(() => profile.granted(), /PROOF_PROFILE_INVALID/);
+  assert.equal(profile.report.firstFailure.code, 'PROOF_PROFILE_INVALID');
+  assert.throws(() => validateSerialProfile(profile.report), /PROOF_PROFILE_INVALID/);
 });

@@ -23,7 +23,12 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { proofMode, validateSmokeEvidence } from './live-picker-smoke.mjs';
-import { editingRemaining, requireEditingBudget } from './live-production-edit-diagnostics.mjs';
+import {
+  editingRemaining,
+  editingSchedule,
+  requireEditingBudget,
+  validateSerialProfile,
+} from './live-production-edit-diagnostics.mjs';
 
 export function readEditingAnchor(path, original) {
   const anchor = privateJson(path);
@@ -33,6 +38,90 @@ export function readEditingAnchor(path, original) {
   if (original) assert.deepEqual(anchor, original, 'PROOF_DRIVER_METADATA_CHANGED');
   return anchor;
 }
+
+// Parent-owned test deadlines use the runner's single monotonic clock. These
+// values are metadata, never Live authority or a renewed product lease.
+const phaseAllocation = { accepted: 1_260_000, action: 1_020_000 };
+export function editingPhaseBound(anchor, phase, now = process.hrtime.bigint()) {
+  assert.ok(Object.hasOwn(phaseAllocation, phase), 'PROOF_EDIT_CLOCK_INVALID');
+  editingRemaining(anchor, phase, now);
+  const global = BigInt(anchor.monotonicNs) + BigInt(editingSchedule[phase]) * 1_000_000n;
+  const local = now + BigInt(phaseAllocation[phase]) * 1_000_000n;
+  const result = {
+    phase,
+    startedNs: now.toString(),
+    deadlineNs: (local < global ? local : global).toString(),
+  };
+  assert.ok(BigInt(result.deadlineNs) > now, 'PROOF_DRIVER_PHASE_DEADLINE');
+  return result;
+}
+export function validateEditingPhaseBound(bound, anchor, phase, now = process.hrtime.bigint()) {
+  assert.deepEqual(
+    Object.keys(bound).sort(),
+    ['deadlineNs', 'phase', 'startedNs'],
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  assert.ok(
+    /^[0-9]{1,24}$/.test(bound.startedNs) && /^[0-9]{1,24}$/.test(bound.deadlineNs),
+    'PROOF_EDIT_CLOCK_INVALID',
+  );
+  assert.ok(BigInt(bound.startedNs) <= now, 'PROOF_EDIT_CLOCK_INVALID');
+  assert.deepEqual(
+    bound,
+    editingPhaseBound(anchor, phase, BigInt(bound.startedNs)),
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  return bound;
+}
+export function phaseBoundRemaining(bound, now = process.hrtime.bigint()) {
+  return Math.max(0, Number((BigInt(bound.deadlineNs) - now) / 1_000_000n));
+}
+function validateEditingMetadata(editing) {
+  assert.deepEqual(
+    Object.keys(editing).sort(),
+    ['anchor', 'phaseA'],
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  assert.deepEqual(
+    Object.keys(editing.anchor).sort(),
+    ['boot', 'monotonicNs'],
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  assert.equal(editing.anchor.boot, processBirth().boot, 'PROOF_BIRTH_CHANGED');
+  validateEditingPhaseBound(editing.phaseA, editing.anchor, 'accepted');
+}
+function continuationBound(directory, expected) {
+  if (!existsSync(join(directory, 'continuation.json'))) return null;
+  const row = privateJson(join(directory, 'continuation.json'));
+  assert.deepEqual(
+    Object.keys(row).sort(),
+    ['birth', 'identity', 'phaseB'],
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
+  assertIdentity(row.identity, expected.identity);
+  assert.deepEqual(row.birth, expected.birth, 'PROOF_BIRTH_CHANGED');
+  validateEditingPhaseBound(row.phaseB, expected.editing.anchor, 'action');
+  assert.ok(
+    BigInt(row.phaseB.startedNs) >= BigInt(expected.editing.phaseA.startedNs),
+    'PROOF_EDIT_CLOCK_INVALID',
+  );
+  return row.phaseB;
+}
+export const fixedProofFailure = (error) => {
+  const reasons = [
+    'PROOF_CANCELLED',
+    'PROOF_PROFILE_INVALID',
+    'PROOF_DRIVER_PHASE_DEADLINE',
+    'PROOF_EDIT_CLOCK_INVALID',
+    'PROOF_EDIT_BUDGET_INSUFFICIENT',
+    'PROOF_OBSERVATION_DEADLINE',
+    'PROOF_HANDOFF_REFUSED',
+    'PROOF_DRIVER_METADATA_CHANGED',
+    'PROOF_BIRTH_CHANGED',
+    'PROOF_IDENTITY_CHANGED',
+  ];
+  return reasons.includes(error?.message) ? error.message : null;
+};
 
 export const fullLanes = Object.freeze([
   'independent',
@@ -170,7 +259,21 @@ export const fullAssertionOwners = Object.freeze({
 });
 export function selectedLanes(selection) {
   const mode = proofMode(selection);
-  const editing = (selection.message ?? '').includes('[editing-lanes]');
+  const message = selection.message ?? '';
+  const editing = message.includes('[editing-lanes]');
+  if (message.includes('[serial-accept-profile]')) {
+    assert.equal(selection.eventName, 'push');
+    assert.ok(message.includes('[full-native]'));
+    assert.equal(mode, 'full');
+    assert.ok(!editing && !message.includes('[seeded-admission]'));
+    assert.ok(
+      !selection.preflight &&
+        !selection.pickerSmoke &&
+        !selection.pickerDiagnostic &&
+        !selection.independentOnly,
+    );
+    return { mode, lanes: ['accept-steer'], verificationScope: 'editing-only' };
+  }
   if (editing) {
     assert.equal(selection.eventName, 'push');
     assert.ok(selection.message.includes('[full-native]'));
@@ -289,6 +392,21 @@ export function validateEditingContinuity(report) {
   assert.equal(report.recoveryHandoff.sameDriverBirth, true);
 }
 export function validateProductionLane(lane, report, identity) {
+  if (report.serialProfileTrialRequested !== undefined || report.serialProfile !== undefined) {
+    assert.equal(lane, 'accept-steer');
+    assert.equal(report.serialProfileTrialRequested, true);
+    assert.equal(report.serialProfileValid, true);
+    validateSerialProfile(report.serialProfile);
+    assert.equal(
+      report.serialProfile.originalOwner.generation,
+      report.editingContinuity.originalGeneration,
+    );
+    assertIdentity(report.serialProfile.binding.identity, identity);
+    assert.equal(
+      report.recoveryHandoff.birthDigest,
+      digest(Buffer.from(JSON.stringify(report.serialProfile.binding.birth))),
+    );
+  }
   assert.ok(laneChecks[lane], 'PROOF_LANE_INVALID');
   assert.equal(report.passed, true);
   assert.equal(report.cleanupComplete, true);
@@ -627,6 +745,7 @@ export function writeLaneReceipt(
   identity = candidateIdentity(),
   mode = 'full',
   verificationScope,
+  serialProfileTrial = false,
 ) {
   assert.ok(verificationScope === undefined || verificationScope === 'editing-only');
   if (verificationScope) {
@@ -642,8 +761,14 @@ export function writeLaneReceipt(
         : ['independent']
     ).includes(lane),
   );
+  if (serialProfileTrial) {
+    assert.equal(lane, 'accept-steer');
+    assert.equal(mode, 'full');
+    assert.equal(verificationScope, 'editing-only');
+  }
   const files = laneFiles(lane);
   const reports = Object.fromEntries(files.map((file) => [file, json(join(directory, file))]));
+  if (serialProfileTrial) assert.equal(reports[files[0]].serialProfileTrialRequested, true);
   if (lane === 'independent') validateIndependent(reports, identity);
   else if (lane === 'picker-diagnostic') validateDiagnosticPicker(reports[files[0]], identity);
   else {
@@ -673,6 +798,7 @@ export function writeLaneReceipt(
       : mode === 'independent-only'
         ? { mode, partialL11AdmissionEvidence: true, fullExactCandidateStillRequired: true }
         : {}),
+    ...(serialProfileTrial ? { profilingTrial: 'serial-accept-baseline-1' } : {}),
     passed: true,
     cleanupComplete: true,
     reports: Object.fromEntries(
@@ -707,6 +833,7 @@ export function aggregateLanes(packets, identity) {
     assert.equal(receipt.schemaVersion, 1);
     assert.equal(receipt.lane, lane);
     assert.equal(receipt.mode, undefined);
+    assert.equal(receipt.profilingTrial, undefined);
     assert.equal(receipt.verificationScope, undefined);
     assert.equal(receipt.partialL11EditingEvidence, undefined);
     assert.equal(receipt.diagnosticOnly, undefined);
@@ -860,6 +987,8 @@ export async function openRecoveryHandoff({
   onCancel,
   pauseMs = 1_800_000,
   socketDirectory = directory,
+  editing,
+  onFailure = () => {},
 }) {
   assert.ok(
     Number.isFinite(pauseMs) && pauseMs > 0 && pauseMs <= 1_800_000,
@@ -868,6 +997,18 @@ export async function openRecoveryHandoff({
   privateDirectory(directory);
   privateDirectory(socketDirectory);
   const birth = processBirth();
+  if (editing) {
+    editing = structuredClone(editing);
+    Object.freeze(editing.anchor);
+    Object.freeze(editing.phaseA);
+    Object.freeze(editing);
+    validateEditingMetadata(editing);
+    const launched = privateJson(join(directory, 'launched.json'));
+    assert.deepEqual(launched, { identity, birth, editing }, 'PROOF_DRIVER_METADATA_CHANGED');
+  }
+  let phaseB = null,
+    phaseTimer,
+    firstFailure;
   const began = performance.now();
   let readyAt, continuedAt;
   let phase = 'setup',
@@ -877,10 +1018,11 @@ export async function openRecoveryHandoff({
     rejectPause;
   let cancellation;
   const snapshot = () => ({
-    schemaVersion: 1,
+    schemaVersion: editing ? 2 : 1,
     identity,
     birth,
     socketDirectory,
+    ...(editing ? { editing, phaseB, firstFailure: firstFailure ?? null } : {}),
     phase,
     continuations,
     cancelled,
@@ -891,16 +1033,43 @@ export async function openRecoveryHandoff({
       recoveryMs: continuedAt === undefined ? 0 : Math.round(performance.now() - continuedAt),
     },
   });
-  const cancel = () => {
+  const cancel = (reason = 'PROOF_CANCELLED') => {
     if (!cancelled) {
+      if (editing) {
+        firstFailure ??= fixedProofFailure(new Error(reason)) ?? 'PROOF_CANCELLED';
+        onFailure(firstFailure);
+      }
+      clearTimeout(phaseTimer);
       cancelled = true;
       phase = 'cancelled';
-      rejectPause?.(new Error('PROOF_CANCELLED'));
+      rejectPause?.(new Error(firstFailure ?? 'PROOF_CANCELLED'));
       cancellation = Promise.resolve().then(onCancel);
       cancellation.catch(() => {});
     }
     return cancellation;
   };
+  const armPhase = (bound) => {
+    clearTimeout(phaseTimer);
+    const left = phaseBoundRemaining(bound);
+    if (left <= 0) {
+      void cancel('PROOF_DRIVER_PHASE_DEADLINE');
+      return;
+    }
+    phaseTimer = setTimeout(() => void cancel('PROOF_DRIVER_PHASE_DEADLINE'), left);
+  };
+  const assertCurrent = () => {
+    if (
+      editing &&
+      ['setup', 'recovery'].includes(phase) &&
+      phaseBoundRemaining(phaseB ?? editing.phaseA) <= 0
+    )
+      void cancel('PROOF_DRIVER_PHASE_DEADLINE');
+    assert.ok(!cancelled && birthCurrent(birth), firstFailure ?? 'PROOF_CANCELLED');
+  };
+  if (editing) {
+    assertCurrent();
+    armPhase(editing.phaseA);
+  }
   const server = createServer((socket) => {
     socket.setTimeout(2000, () => socket.destroy());
     let text = '';
@@ -911,12 +1080,27 @@ export async function openRecoveryHandoff({
       if (!text.endsWith('\n')) return;
       try {
         const request = JSON.parse(text);
-        assert.deepEqual(Object.keys(request).sort(), ['birth', 'command', 'identity']);
+        assert.deepEqual(
+          Object.keys(request).sort(),
+          [
+            'birth',
+            'command',
+            'identity',
+            ...(editing && request.command === 'continue' ? ['phaseB'] : []),
+          ].sort(),
+        );
         assertIdentity(request.identity, identity);
         assert.deepEqual(request.birth, birth);
         assert.ok(birthCurrent(birth));
         if (request.command === 'continue') {
           assert.ok(phase === 'ready' && continuations === 0 && !cancelled);
+          if (editing) {
+            const bound = continuationBound(directory, { identity, birth, editing });
+            assert.ok(bound && phaseBoundRemaining(bound) > 0, 'PROOF_DRIVER_PHASE_DEADLINE');
+            assert.deepEqual(request.phaseB, bound, 'PROOF_DRIVER_METADATA_CHANGED');
+            phaseB = Object.freeze(bound);
+            armPhase(phaseB);
+          }
           continuations++;
           phase = 'recovery';
           continuedAt = performance.now();
@@ -944,13 +1128,22 @@ export async function openRecoveryHandoff({
     cancel,
     finishActions() {
       assert.ok(phase === 'recovery' && continuations === 1 && !cancelled);
+      assertCurrent();
       phase = 'settling';
+      clearTimeout(phaseTimer);
     },
-    assertCurrent() {
-      assert.ok(!cancelled && birthCurrent(birth), 'PROOF_CANCELLED');
+    assertCurrent,
+    deadlineNs(phaseName) {
+      assert.ok(editing, 'PROOF_EDIT_CLOCK_INVALID');
+      const bound = phaseName === 'accepted' ? editing.phaseA : phaseB;
+      assert.ok(bound, 'PROOF_HANDOFF_PHASE_INVALID');
+      assertCurrent();
+      return bound.deadlineNs;
     },
     async boundary() {
+      assertCurrent();
       assert.ok(phase === 'setup' && !cancelled, 'PROOF_HANDOFF_PHASE_INVALID');
+      clearTimeout(phaseTimer);
       let timer;
       try {
         await new Promise((done, reject) => {
@@ -970,10 +1163,12 @@ export async function openRecoveryHandoff({
         continuations === 1 && !cancelled && birthCurrent(birth),
         'PROOF_HANDOFF_PHASE_INVALID',
       );
+      assertCurrent();
     },
     async close() {
       if (phase === 'ready') await cancel();
       await cancellation;
+      clearTimeout(phaseTimer);
       phase = cancelled ? 'cancelled' : 'complete';
       writeJson(join(directory, 'final-driver.json'), snapshot());
       await new Promise((done) => server.close(done));
@@ -1017,11 +1212,22 @@ export function handoffRequest(directory, command, expected, timeoutMs = 2500) {
       if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT'].includes(error.code)) fail();
       else refuse();
     });
-    socket.on('connect', () =>
-      socket.end(
-        JSON.stringify({ command, identity: expected.identity, birth: expected.birth }) + '\n',
-      ),
-    );
+    socket.on('connect', () => {
+      try {
+        socket.end(
+          JSON.stringify({
+            command,
+            identity: expected.identity,
+            birth: expected.birth,
+            ...(expected.editing && command === 'continue'
+              ? { phaseB: continuationBound(directory, expected) }
+              : {}),
+          }) + '\n',
+        );
+      } catch {
+        refuse();
+      }
+    });
     socket.on('data', (chunk) => {
       text += chunk;
       if (Buffer.byteLength(text) > 4096) refuse();
@@ -1044,9 +1250,22 @@ export function handoffRequest(directory, command, expected, timeoutMs = 2500) {
             'continuations',
             'cancelled',
             'phaseTimings',
+            ...(expected.editing ? ['editing', 'phaseB', 'firstFailure'] : []),
           ].sort(),
         );
-        assert.equal(response.schemaVersion, 1);
+        assert.equal(response.schemaVersion, expected.editing ? 2 : 1);
+        if (expected.editing) {
+          assert.deepEqual(response.editing, expected.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+          assert.deepEqual(
+            response.phaseB,
+            continuationBound(directory, expected),
+            'PROOF_DRIVER_METADATA_CHANGED',
+          );
+          assert.ok(
+            response.firstFailure === null ||
+              fixedProofFailure(new Error(response.firstFailure)) === response.firstFailure,
+          );
+        }
         assert.equal(response.socketDirectory, expected.socketDirectory ?? directory);
         assert.ok(
           ['setup', 'ready', 'recovery', 'settling', 'cancelled', 'complete'].includes(
@@ -1084,6 +1303,9 @@ const safeFailure = (error) => {
     'PROOF_IDENTITY_CHANGED',
     'PROOF_DRIVER_METADATA_CHANGED',
     'PROOF_DRIVER_CLEANUP_UNVERIFIED',
+    'PROOF_CANCELLED',
+    'PROOF_EDIT_CLOCK_INVALID',
+    'PROOF_EDIT_BUDGET_INSUFFICIENT',
   ]).has(reason)
     ? reason
     : 'PROOF_EVIDENCE_INVALID';
@@ -1093,10 +1315,11 @@ function boundDriver(directory, identity, originalLaunch, originalMetadata) {
   const launched = privateJson(join(directory, 'launched.json'));
   assert.deepEqual(
     Object.keys(launched).sort(),
-    ['birth', 'identity'],
+    ['birth', 'identity', ...(launched.editing ? ['editing'] : [])].sort(),
     'PROOF_DRIVER_METADATA_CHANGED',
   );
   assertIdentity(launched.identity, identity);
+  if (launched.editing) validateEditingMetadata(launched.editing);
   assert.deepEqual(
     Object.keys(launched.birth).sort(),
     ['boot', 'pid', 'start'],
@@ -1125,13 +1348,19 @@ function boundDriver(directory, identity, originalLaunch, originalMetadata) {
         'continuations',
         'cancelled',
         'phaseTimings',
+        ...(launched.editing ? ['editing', 'phaseB', 'firstFailure'] : []),
       ].sort(),
       'PROOF_DRIVER_METADATA_CHANGED',
     );
     assert.equal(typeof expected.socketDirectory, 'string', 'PROOF_DRIVER_METADATA_CHANGED');
     assertIdentity(expected.identity, identity);
     assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
-    assert.equal(expected.schemaVersion, 1, 'PROOF_DRIVER_METADATA_CHANGED');
+    assert.equal(expected.schemaVersion, launched.editing ? 2 : 1, 'PROOF_DRIVER_METADATA_CHANGED');
+    if (launched.editing) {
+      assert.deepEqual(expected.editing, launched.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+      assert.equal(expected.phaseB, null, 'PROOF_DRIVER_METADATA_CHANGED');
+      assert.equal(expected.firstFailure, null, 'PROOF_DRIVER_METADATA_CHANGED');
+    }
     assert.equal(expected.phase, 'setup', 'PROOF_DRIVER_METADATA_CHANGED');
     assert.equal(expected.continuations, 0, 'PROOF_DRIVER_METADATA_CHANGED');
     assert.equal(expected.cancelled, false, 'PROOF_DRIVER_METADATA_CHANGED');
@@ -1151,6 +1380,14 @@ function boundDriver(directory, identity, originalLaunch, originalMetadata) {
   }
   return { launched, expected };
 }
+export function readEditingLaunch(directory, identity, anchor) {
+  const { launched } = boundDriver(directory, identity);
+  assert.ok(launched.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+  if (anchor) assert.deepEqual(launched.editing.anchor, anchor, 'PROOF_DRIVER_METADATA_CHANGED');
+  assert.deepEqual(launched.birth, processBirth(), 'PROOF_BIRTH_CHANGED');
+  return launched.editing;
+}
+
 const phases = ['unobserved', 'setup', 'ready', 'recovery', 'settling', 'cancelled', 'complete'];
 const rpcBudget = (deadline, code) => {
   const budget = Math.min(2500, remaining(deadline));
@@ -1167,16 +1404,23 @@ const phaseBudget = (budget, maximum) =>
 
 /** Read-only observation retries do not redispatch any Live work. Every retry
  * rereads protected metadata and retains the originally launched exact birth. */
-export async function observeRecoveryPhase(directory, predicate, budgetMs, identity) {
+export async function observeRecoveryPhase(directory, predicate, budgetMs, identity, phaseBound) {
   phaseBudget(budgetMs, 1_800_000);
   const began = performance.now(),
-    deadline = began + budgetMs;
+    deadline = began + Math.min(budgetMs, phaseBound ? phaseBoundRemaining(phaseBound) : budgetMs);
   const diagnostic = { identity, phase: 'unobserved', transientFailures: 0, driverExited: false };
   let launch, metadata;
   try {
     while (remaining(deadline) > 0) {
       const bound = boundDriver(directory, identity, launch, metadata);
       launch ??= bound.launched;
+      if (launch.editing) {
+        const actual =
+          phaseBound?.phase === 'action'
+            ? continuationBound(directory, { ...launch, editing: launch.editing })
+            : launch.editing.phaseA;
+        assert.deepEqual(phaseBound, actual, 'PROOF_DRIVER_METADATA_CHANGED');
+      }
       diagnostic.birth = launch.birth;
       assert.ok(birthCurrent(launch.birth), 'PROOF_DRIVER_EXITED');
       if (bound.expected) {
@@ -1191,6 +1435,10 @@ export async function observeRecoveryPhase(directory, predicate, budgetMs, ident
           boundDriver(directory, identity, launch, metadata);
           assert.ok(birthCurrent(launch.birth), 'PROOF_DRIVER_EXITED');
           diagnostic.phase = state.phase;
+          assert.ok(
+            remaining(deadline) > 0 && (!phaseBound || phaseBoundRemaining(phaseBound) > 0),
+            'PROOF_DRIVER_PHASE_DEADLINE',
+          );
           if (predicate(state)) return state;
         } catch (error) {
           if (error.message !== 'PROOF_HANDOFF_UNAVAILABLE') throw error;
@@ -1286,6 +1534,15 @@ export async function settleRecoveryDriver(
       assert.equal(final.phase, 'complete');
       assert.equal(final.cancelled, false);
       assert.equal(final.continuations, 1);
+      if (launch.editing) {
+        assert.deepEqual(final.editing, launch.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+        assert.deepEqual(
+          final.phaseB,
+          continuationBound(directory, launch),
+          'PROOF_DRIVER_METADATA_CHANGED',
+        );
+        assert.equal(final.firstFailure, null, 'PROOF_DRIVER_METADATA_CHANGED');
+      }
       cleanup.finalDriverVerified = true;
     }
     return cleanup;
@@ -1341,6 +1598,9 @@ async function driver(command, directory) {
   }
   if (command === 'start') {
     privateDirectory(directory, true);
+    const editingMetadata = editing
+      ? { anchor, phaseA: editingPhaseBound(anchor, 'accepted') }
+      : undefined;
     const child = spawn(process.execPath, ['scripts/live-production-entrypoint-proof.mjs'], {
       env: {
         ...process.env,
@@ -1352,12 +1612,17 @@ async function driver(command, directory) {
     });
     child.on('error', () => {});
     child.unref();
-    writeJson(join(directory, 'launched.json'), { identity, birth: processBirth(child.pid) });
+    writeJson(join(directory, 'launched.json'), {
+      identity,
+      birth: processBirth(child.pid),
+      ...(editing ? { editing: editingMetadata } : {}),
+    });
     await observeRecoveryPhase(
       directory,
       (state) => state.phase === 'ready',
       editing ? Math.min(1_260_000, editingRemaining(anchor, 'accepted')) : 1_800_000,
       identity,
+      editingMetadata?.phaseA,
     );
   } else if (command === 'continue') {
     if (editing) requireEditingBudget(anchor, 'action', 1_020_000);
@@ -1365,9 +1630,18 @@ async function driver(command, directory) {
     assertIdentity(expected.identity, identity);
     const launched = privateJson(join(directory, 'launched.json'));
     assert.deepEqual(expected.birth, launched.birth, 'PROOF_BIRTH_CHANGED');
-    const until =
-      performance.now() +
-      (editing ? Math.min(1_020_000, editingRemaining(anchor, 'action')) : 1_800_000);
+    if (editing) {
+      const bound = boundDriver(directory, identity);
+      assert.deepEqual(bound.launched.editing.anchor, anchor, 'PROOF_DRIVER_METADATA_CHANGED');
+    }
+    const phaseB = editing ? editingPhaseBound(anchor, 'action') : undefined;
+    if (editing)
+      writeFileSync(
+        join(directory, 'continuation.json'),
+        JSON.stringify({ identity, birth: expected.birth, phaseB }) + '\n',
+        { mode: 0o600, flag: 'wx' },
+      );
+    const until = performance.now() + (editing ? phaseBoundRemaining(phaseB) : 1_800_000);
     await handoffRequest(directory, 'continue', expected, Math.min(2500, remaining(until)));
     if (editing) {
       try {
@@ -1376,6 +1650,7 @@ async function driver(command, directory) {
           (state) => ['settling', 'complete'].includes(state.phase),
           Math.max(1, remaining(until)),
           identity,
+          phaseB,
         );
       } catch (error) {
         if (error.message !== 'PROOF_DRIVER_EXITED') throw error;
@@ -1385,6 +1660,9 @@ async function driver(command, directory) {
         assert.equal(final.phase, 'complete');
         assert.equal(final.cancelled, false);
         assert.equal(final.continuations, 1);
+        assert.deepEqual(final.editing, expected.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+        assert.deepEqual(final.phaseB, phaseB, 'PROOF_DRIVER_METADATA_CHANGED');
+        assert.equal(final.firstFailure, null, 'PROOF_DRIVER_METADATA_CHANGED');
       }
       return;
     }
@@ -1428,6 +1706,7 @@ async function main() {
       candidateIdentity(),
       process.env.LIVE_PROOF_MODE ?? 'full',
       process.env.LIVE_PROOF_VERIFICATION_SCOPE || undefined,
+      process.env.LIVE_PRODUCTION_SERIAL_PROFILE === '1',
     );
   }
   assert.ok(['aggregate', 'aggregate-diagnostic'].includes(command));

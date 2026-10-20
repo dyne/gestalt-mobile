@@ -180,7 +180,18 @@ export async function productionEditBrowser(input) {
             stage: value.checkpoint,
             elapsedMs: value.elapsedMs,
           });
-        input.checkpoint?.(value.checkpoint);
+        try {
+          if (
+            input.browser.serialProfile &&
+            value.checkpoint.startsWith('profile-browser-close-')
+          ) {
+            assert.match(value.monotonicNs, /^[0-9]{1,24}$/);
+            assert.ok(BigInt(value.monotonicNs) <= process.hrtime.bigint());
+          }
+          input.checkpoint?.(value.checkpoint, value.monotonicNs);
+        } catch {
+          commandFailure = true;
+        }
       }
       if (
         /^[a-z-]{1,64}$/.test(value.failure?.stage ?? '') &&

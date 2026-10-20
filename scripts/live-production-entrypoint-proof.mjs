@@ -48,6 +48,8 @@ import {
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
+  createSerialProfile,
+  validateSerialProfile,
   editingSchedule,
   editingRemaining,
   requireEditingBudget,
@@ -73,6 +75,8 @@ import {
   birthCurrent,
   productionLane,
   readEditingAnchor,
+  readEditingLaunch,
+  fixedProofFailure,
 } from './live-production-proof-lanes.mjs';
 import {
   NativeContextCompletion,
@@ -142,8 +146,12 @@ assert.equal(editingContinuity, proofLane === 'accept-steer');
 const editingAnchor = editingContinuity
   ? readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR)
   : undefined;
-const editingDeadline = (phase) =>
-  (BigInt(editingAnchor.monotonicNs) + BigInt(editingSchedule[phase]) * 1_000_000n).toString();
+const editingDeadline = (phase) => recoveryHandoff.deadlineNs(phase);
+const editingPhaseRemaining = (phase) =>
+  Math.min(
+    editingRemaining(editingAnchor, phase),
+    Math.max(0, Number((BigInt(editingDeadline(phase)) - process.hrtime.bigint()) / 1_000_000n)),
+  );
 const assertEditingClock = () => {
   readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR, editingAnchor);
   recoveryHandoff?.assertCurrent();
@@ -179,6 +187,36 @@ const report = {
         ]),
   ],
 };
+const serialProfileRequested = process.env.LIVE_PRODUCTION_SERIAL_PROFILE === '1';
+if (serialProfileRequested) {
+  report.serialProfileTrialRequested = true;
+  assert.ok(editingContinuity && !pickerSmoke && !preflightOnly && !recoveryOnly);
+  assert.equal(process.env.LIVE_PRODUCTION_PROFILE_TRIAL, 'serial-accept-baseline-1');
+  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+}
+let serialProfile, rootProfileId, childProfileId, sourcePatchProfile, browserCloseProfileId;
+const profiled = (label, work, metadata) =>
+  serialProfile ? serialProfile.trace(label, work, metadata) : work();
+const profileEventKind = (fence, eventId) => {
+  if (!/^[a-f0-9]{8}$/.test(eventId)) return 'poll-authority';
+  const path = join(
+    controller,
+    `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+  );
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const records = db
+      .prepare('SELECT record FROM live_event_inbox WHERE liveId=? AND generation=?')
+      .all(fence.liveId, fence.generation)
+      .map((row) => JSON.parse(row.record));
+    const found = records.filter((row) => row.upstreamId === eventId);
+    assert.equal(found.length, 1, 'PROOF_PROFILE_INVALID');
+    return found[0].kind === 'generate' ? 'generate-authority' : 'event-authority';
+  } finally {
+    db.close();
+  }
+};
+
 if (pickerDiagnostic) {
   report.proofKind = 'actual-picker-current-independent-diagnostic';
   report.pickerDiagnostic = {
@@ -359,6 +397,16 @@ observeEventAuthority(
   LiveDispatchGuard.prototype,
   (report.eventAuthorityTimings = []),
   () => closureBoundary,
+  {
+    trace: (fence, eventId, work) =>
+      serialProfile
+        ? serialProfile.trace(profileEventKind(fence, eventId), work, {
+            generation: fence.generation,
+            eventDigest: hash(eventId),
+          })
+        : work(),
+    granted: () => serialProfile?.granted(),
+  },
 );
 // Measure the real controller phases without supplying readiness or changing
 // their result. These fixed labels contain no arguments, paths or Native output.
@@ -665,10 +713,14 @@ IsolatedProjectProcess.prototype.verifyForConnection = async function (
     }
   }
 };
-report.policyVerificationTimings = observeInstalledPolicyTimings(InstalledLivePolicy.prototype);
+report.policyVerificationTimings = observeInstalledPolicyTimings(
+  InstalledLivePolicy.prototype,
+  () => serialProfile?.currentId(),
+);
 const admissionTimings = observeAdmissionTimings(
   CodexSessionRuntime.prototype,
   ProductionLiveController.prototype,
+  () => serialProfile?.currentId(),
 );
 report.admissionVerificationTimings = admissionTimings.report;
 const cleanupOperations = (report.cleanupOperations = []);
@@ -803,6 +855,7 @@ let mobile, caddy, stream, baselineBirth, generationDirectory;
 let recoveryHandoff, mobileClose, failureCleanupStop;
 let editingRaw, editingActionTimer, editingCleanupTimer, editingStopped, editingLatestCaptureId;
 let editingStopSettled = false;
+const editingApiRaw = new Set();
 async function trackedEditingOperation(operation) {
   if (!editingContinuity) return operation;
   assert.equal(editingRaw, undefined, 'PROOF_EDIT_OPERATION_OVERLAP');
@@ -844,9 +897,26 @@ let firstPickerEventId;
 let firstPickerObservationStarted;
 let retainManualFailureEvidence;
 let contextCompletion;
-const editResponse = createProductionEditProvider(appRoot, final, report, {
+const originalEditResponse = createProductionEditProvider(appRoot, final, report, {
   lane: proofLane === 'recovery' ? '' : proofLane,
 });
+const editResponse = (body, toolCall) => {
+  const response = originalEditResponse(body, toolCall);
+  if (
+    serialProfile &&
+    sourcePatchProfile &&
+    !sourcePatchProfile.settled &&
+    body.input.some(
+      (item) =>
+        item.call_id === sourcePatchProfile.callId &&
+        ['function_call_output', 'custom_tool_call_output'].includes(item.type),
+    )
+  ) {
+    serialProfile.end(sourcePatchProfile.id, 'completed');
+    sourcePatchProfile.settled = true;
+  }
+  return response;
+};
 let seed = true,
   owningThread,
   owningNativeSession,
@@ -854,11 +924,17 @@ let seed = true,
   providerFailure;
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 async function until(check, stage, budget = 30000, absoluteDeadline) {
-  const deadline = Math.min(Date.now() + budget, absoluteDeadline ?? Infinity);
+  const phase = recoveryHandoff?.snapshot().phase;
+  const phaseDeadline =
+    editingContinuity && ['setup', 'recovery'].includes(phase)
+      ? Date.now() + editingPhaseRemaining(phase === 'setup' ? 'accepted' : 'action')
+      : Infinity;
+  const deadline = Math.min(Date.now() + budget, absoluteDeadline ?? Infinity, phaseDeadline);
   while (Date.now() < deadline) {
     recoveryHandoff?.assertCurrent();
     if (providerFailure) throw new Error('CONTROLLED_PROVIDER_FAILED');
     if (await check()) {
+      recoveryHandoff?.assertCurrent();
       if (absoluteDeadline !== undefined && Date.now() >= deadline) throw new Error(stage);
       return;
     }
@@ -866,6 +942,7 @@ async function until(check, stage, budget = 30000, absoluteDeadline) {
       absoluteDeadline === undefined ? 50 : Math.max(0, Math.min(50, deadline - Date.now())),
     );
   }
+  recoveryHandoff?.assertCurrent();
   throw new Error(stage);
 }
 // Never read project configuration or remove metadata: the production resolver
@@ -1125,6 +1202,17 @@ async function eventFor(body) {
     childThread = metadata.thread_id;
   }
   const step = roles.get(role) ?? 0;
+  if (serialProfile && step === 0) {
+    const parentId =
+      role === 'root'
+        ? serialProfile.eventParent(hash(liveEventFromRequest(body).id))
+        : rootProfileId;
+    const id = serialProfile.begin(role === 'root' ? 'root-confinement' : 'child-confinement', {
+      parentId,
+    });
+    if (role === 'root') rootProfileId = id;
+    else childProfileId = id;
+  }
   roles.set(role, step + 1);
   report.provider.lastCall = { role, step };
   const available = toolsIn([
@@ -1135,6 +1223,19 @@ async function eventFor(body) {
   ]);
   const code = available.find((tool) => tool.name === 'exec' && tool.type === 'custom');
   const toolCall = (name, args, custom = false) => {
+    if (
+      serialProfile &&
+      role === 'root' &&
+      step >= 6 &&
+      name === 'apply_patch' &&
+      !sourcePatchProfile
+    ) {
+      sourcePatchProfile = {
+        id: serialProfile.begin('first-source-patch', { parentId: rootProfileId }),
+        callId: `${role}-${step}`,
+        settled: false,
+      };
+    }
     const direct = available.find((tool) => tool.name === name);
     if (direct) return call(direct, `${role}-${step}`, args, custom);
     assert.ok(code?.description?.includes(`declare const tools: { ${name}(`));
@@ -1309,8 +1410,10 @@ async function eventFor(body) {
     assert.ok(spawned);
     report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
+    if (serialProfile) serialProfile.end(rootProfileId, 'completed');
     if (editFlow) return editResponse(body, toolCall);
   }
+  if (serialProfile && role === 'child') serialProfile.end(childProfileId, 'completed');
   return final(
     `${role}-final`,
     role === 'root'
@@ -1548,7 +1651,15 @@ async function remote(
 }
 async function api(method, path, payload) {
   recoveryHandoff?.assertCurrent();
-  const res = await mobile.inject({ method, url: path, payload, headers });
+  const raw = mobile.inject({ method, url: path, payload, headers });
+  if (editingContinuity) editingApiRaw.add(raw);
+  let res;
+  try {
+    res = await raw;
+  } finally {
+    editingApiRaw.delete(raw);
+  }
+  recoveryHandoff?.assertCurrent();
   if (res.statusCode >= 400) {
     report.apiFailure = { status: res.statusCode, code: res.json()?.code ?? 'UNCLASSIFIED' };
     throw new Error('PRODUCTION_API_REFUSED');
@@ -1574,11 +1685,24 @@ try {
       directory: process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
       socketDirectory: privateRoot,
       identity: candidateIdentity(),
+      ...(editingContinuity
+        ? {
+            editing: readEditingLaunch(
+              process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+              candidateIdentity(),
+              editingAnchor,
+            ),
+            onFailure: (code) => {
+              report.firstFixedFailure ??= { stage: report.stage, code };
+              serialProfile?.failure(code);
+            },
+          }
+        : {}),
       onCancel: async () => {
         stopPreviewProbe();
         if (editingContinuity) {
           await drainEditingFailure({
-            pending: editingRaw,
+            pending: Promise.allSettled([editingRaw, ...editingApiRaw].filter(Boolean)),
             record: (row) => {
               report.editingUnresolved = row;
               writeFileSync(join(evidence, 'editing-unresolved.json'), JSON.stringify(row));
@@ -1591,11 +1715,22 @@ try {
         await closeMobileOnce();
       },
     });
+  if (serialProfileRequested) {
+    serialProfile = createSerialProfile({
+      trialId: process.env.LIVE_PRODUCTION_PROFILE_TRIAL,
+      identity: candidateIdentity(),
+      birth: recoveryHandoff.snapshot().birth,
+      anchor: editingAnchor,
+      phaseA: recoveryHandoff.snapshot().editing.phaseA,
+    });
+    report.serialProfile = serialProfile.report;
+  }
   if (editingContinuity) {
-    requireEditingBudget(editingAnchor, 'accepted', 1_260_000);
+    requireEditingBudget(editingAnchor, 'accepted', 1);
+    recoveryHandoff.assertCurrent();
     editingActionTimer = setTimeout(
       () => {
-        void recoveryHandoff.cancel().catch(() => {});
+        void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
       },
       editingRemaining(editingAnchor, 'action'),
     );
@@ -2337,7 +2472,19 @@ try {
   report.checks.installedExecutableSourceSeparatelySignedAndSealed = true;
   report.checks.originalManagedOwnerRetainedWithSignedV2Sources = true;
   report.checks.productionContextNativeAdmissionProbe = true; // active follows the actual fixed context probe, never a fixture callback.
-  const reused = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  if (serialProfile)
+    serialProfile.report.originalOwner = {
+      liveDigest: hash(started.liveId),
+      generation: started.generation,
+      rootThreadDigest: hash(owningThread),
+      captureDigest: hash(captureId),
+      nativeBirthDigest: hash(JSON.stringify(baselineBirth)),
+    };
+  const reused = await profiled(
+    'idempotent-start',
+    () => api('POST', `/api/sessions/${session.id}/live/start`, operation),
+    { generation: started.generation },
+  );
   assert.equal(reused.liveId, started.liveId);
   assert.equal(reused.generation, started.generation);
   report.checks.sameSessionReuseNoReplacement = true;
@@ -2691,34 +2838,37 @@ try {
         boundary,
         manualHistorySnapshot,
       );
-    const acknowledged = async (kind, budget = eventObservationBudgetMs, absoluteDeadline) =>
-      until(
-        () => {
-          const db = new DatabaseSync(
-            join(
-              controller,
-              `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
-            ),
-            {
-              readOnly: true,
-            },
-          );
-          try {
-            return db
-              .prepare('SELECT record FROM live_event_inbox')
-              .all()
-              .some((row) => {
-                const item = JSON.parse(row.record);
-                return item.kind === kind && item.stage === 'acknowledged';
-              });
-          } finally {
-            db.close();
-          }
-        },
-        'EDIT_CANONICAL_ACK_DEADLINE',
-        budget,
-        absoluteDeadline,
-      );
+    const acknowledged = async (kind, budget = eventObservationBudgetMs, absoluteDeadline) => {
+      const work = () =>
+        until(
+          () => {
+            const db = new DatabaseSync(
+              join(
+                controller,
+                `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+              ),
+              {
+                readOnly: true,
+              },
+            );
+            try {
+              return db
+                .prepare('SELECT record FROM live_event_inbox')
+                .all()
+                .some((row) => {
+                  const item = JSON.parse(row.record);
+                  return item.kind === kind && item.stage === 'acknowledged';
+                });
+            } finally {
+              db.close();
+            }
+          },
+          'EDIT_CANONICAL_ACK_DEADLINE',
+          budget,
+          absoluteDeadline,
+        );
+      return kind === 'accept' ? profiled('accept-ack', work) : work();
+    };
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);
     browserEventLoop.enable();
@@ -2731,7 +2881,19 @@ try {
           privateRoot,
           certificate: join(caddyRoot, 'tls.pem'),
           report,
-          checkpoint: (stage) => {
+          checkpoint: (stage, monotonicNs) => {
+            if (
+              serialProfile &&
+              editingPhase === 'accepted' &&
+              stage === 'profile-browser-close-start'
+            )
+              browserCloseProfileId = serialProfile.begin('browser-close', {}, BigInt(monotonicNs));
+            if (
+              serialProfile &&
+              editingPhase === 'accepted' &&
+              stage === 'profile-browser-close-end'
+            )
+              serialProfile.end(browserCloseProfileId, 'completed', BigInt(monotonicNs));
             if (stage === 'picker-generate' || stage === 'picker-manual-apply')
               firstPickerObservationStarted ??= performance.now();
             if (stage === 'helper-connected') {
@@ -2741,6 +2903,7 @@ try {
           },
           browser: {
             editingPhase,
+            serialProfile: serialProfileRequested,
             mobileOrigin,
             previewOrigin: preview,
             sessionId: session.id,
@@ -2925,13 +3088,15 @@ try {
               const deadline = Math.min(
                 observation.deadline,
                 editingAnchor
-                  ? Date.now() + editingRemaining(editingAnchor, phaseA ? 'accepted' : 'action')
+                  ? Date.now() + editingPhaseRemaining(phaseA ? 'accepted' : 'action')
                   : Infinity,
               );
-              const current = await observePostAcceptPollDispatch({
-                sample: () => pendingCanonicalPoll(session.id, started.generation),
-                deadline,
-              });
+              const work = () =>
+                observePostAcceptPollDispatch({
+                  sample: () => pendingCanonicalPoll(session.id, started.generation),
+                  deadline,
+                });
+              const current = await (phaseA ? profiled('post-accept-poll', work) : work());
               assert.equal(observedBirthExited(baselineBirth), false);
               if (phaseA) {
                 report.postAcceptPollObservation = current;
@@ -3044,13 +3209,15 @@ try {
       );
       const requestsBeforeResume = report.provider.requestCount;
       let disconnected;
-      await until(
-        async () => {
-          disconnected = await api('GET', `/api/sessions/${session.id}/live`);
-          return disconnected.state === 'recoveryRequired';
-        },
-        'EDIT_GENUINE_DISCONNECT_DEADLINE',
-        Math.min(30_000, editingRemaining(editingAnchor, 'accepted')),
+      await profiled('disconnect-ack', () =>
+        until(
+          async () => {
+            disconnected = await api('GET', `/api/sessions/${session.id}/live`);
+            return disconnected.state === 'recoveryRequired';
+          },
+          'EDIT_GENUINE_DISCONNECT_DEADLINE',
+          Math.min(30_000, editingPhaseRemaining('accepted')),
+        ),
       );
       const disconnectDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
       try {
@@ -3084,11 +3251,14 @@ try {
       } finally {
         exitDb.close();
       }
-      await until(
-        () =>
-          signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status === 'revoked',
-        'EDIT_DISCONNECT_REVOKE_DEADLINE',
-        Math.min(30_000, editingRemaining(editingAnchor, 'accepted')),
+      await profiled('disconnect-revoke', () =>
+        until(
+          () =>
+            signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status ===
+            'revoked',
+          'EDIT_DISCONNECT_REVOKE_DEADLINE',
+          Math.min(30_000, editingPhaseRemaining('accepted')),
+        ),
       );
       assert.equal(disconnected.liveId, started.liveId);
       assert.ok(disconnected.generation > started.generation);
@@ -3112,9 +3282,12 @@ try {
       requireEditingBudget(editingAnchor, 'action', 1_020_000);
       report.stage = 'editing-explicit-resume';
       report.editingContinuity.resumeDispatches++;
-      const resumeTimer = setTimeout(() => {
-        void recoveryHandoff.cancel().catch(() => {});
-      }, editingSchedule.resume);
+      const resumeTimer = setTimeout(
+        () => {
+          void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+        },
+        Math.min(editingSchedule.resume, editingPhaseRemaining('action')),
+      );
       try {
         editingRaw = api('POST', `/api/sessions/${session.id}/live/resume`, {
           liveId: disconnected.liveId,
@@ -3469,6 +3642,11 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
+  const fixedFailure = fixedProofFailure(error);
+  if (fixedFailure) {
+    report.firstFixedFailure ??= { stage: report.stage, code: fixedFailure };
+    serialProfile?.failure(fixedFailure);
+  }
   retainManualFailureEvidence?.('production-failure');
   finishBrowserProfile();
   if (
@@ -3655,7 +3833,12 @@ try {
       continuations: state.continuations,
       cancelled: state.cancelled,
       sameDriverBirth: birthCurrent(state.birth),
-      ...(editingContinuity ? { birthDigest: hash(JSON.stringify(state.birth)) } : {}),
+      ...(editingContinuity
+        ? {
+            birthDigest: hash(JSON.stringify(state.birth)),
+            phaseBounds: { phaseA: state.editing.phaseA, phaseB: state.phaseB },
+          }
+        : {}),
       phaseTimings: state.phaseTimings,
     };
     if (state.cancelled) {
@@ -3705,6 +3888,20 @@ try {
       report.passed = false;
       report.cleanupComplete = false;
       report.editingCleanupDeadlineExceeded = true;
+      process.exitCode = 1;
+    }
+  }
+  if (serialProfileRequested) {
+    try {
+      validateSerialProfile(report.serialProfile);
+      report.serialProfileValid = true;
+    } catch {
+      report.serialProfileValid = false;
+      report.firstFixedFailure ??= {
+        stage: 'serial-profile-validation',
+        code: 'PROOF_PROFILE_INVALID',
+      };
+      report.passed = false;
       process.exitCode = 1;
     }
   }

@@ -27,6 +27,7 @@ import {
   manualLeaseDeadline,
   manualLeaseEstimate,
   ownedProofSequence,
+  expectedPollProbeResponse,
 } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
@@ -48,7 +49,9 @@ const resourcePending = {};
 const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
-let firstHelperAuthLoss, lastAuthenticatedHelper;
+let firstHelperAuthLoss, lastAuthenticatedHelper, expectedPollProbeRequest;
+let pollProbeArmed = false;
+const pollProbeTag = createHash('sha256').update(String(process.hrtime.bigint())).digest('hex');
 const editRequests = [];
 let manualEntryDigest, manualCommit, manualCommitDeadline;
 const emitManualCommitObservation = (boundary) => {
@@ -76,7 +79,11 @@ let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
   stage = value;
   process.stdout.write(
-    JSON.stringify({ checkpoint: value, elapsedMs: Date.now() - browserStarted }) + '\n',
+    JSON.stringify({
+      checkpoint: value,
+      elapsedMs: Date.now() - browserStarted,
+      ...(config.serialProfile ? { monotonicNs: process.hrtime.bigint().toString() } : {}),
+    }) + '\n',
   );
 };
 const replyLines = createInterface({ input: process.stdin });
@@ -212,7 +219,7 @@ try {
       if (text.includes(marker)) chromeStartupMarkers.add(code);
   });
   let debugPort;
-  const launchDeadline = Date.now() + 30000;
+  const launchDeadline = Math.min(Date.now() + 30000, config.observationHostDeadline);
   while (Date.now() < launchDeadline) {
     try {
       const lines = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
@@ -313,6 +320,16 @@ try {
         initialMobileAssetsChanged = true;
     }
   });
+  context.on('request', (request) => {
+    if (
+      pollProbeArmed &&
+      !expectedPollProbeRequest &&
+      request.method() === 'GET' &&
+      request.url() === `${config.previewOrigin}/__gestalt_live/poll` &&
+      request.headers()['x-gestalt-proof-probe'] === pollProbeTag
+    )
+      expectedPollProbeRequest = request;
+  });
   context.on('response', async (response) => {
     if (
       new URL(response.url()).pathname === '/__gestalt_live/manual-edit-commit' &&
@@ -335,6 +352,7 @@ try {
         'agent-target-claim',
         'manual-edit-stash',
         'manual-edit-commit',
+        'poll',
       ];
       const tail = url.pathname.slice('/__gestalt_live/'.length);
       let headers = {};
@@ -359,7 +377,16 @@ try {
             : createHash('sha256').update(requestToken).digest('hex') === config.helperTokenSha256,
         cookiePresent: String(headers.cookie ?? '').includes('__Host-gestalt_live_p'),
       };
-      if (!firstHelperAuthLoss && [401, 403].includes(observed.status)) {
+      observed.expectedPollProbe = expectedPollProbeResponse(
+        response,
+        expectedPollProbeRequest,
+        config.previewOrigin,
+      );
+      if (
+        !firstHelperAuthLoss &&
+        [401, 403].includes(observed.status) &&
+        !observed.expectedPollProbe
+      ) {
         firstHelperAuthLoss = { previous: lastAuthenticatedHelper ?? null, first: observed };
         process.stdout.write(JSON.stringify({ firstHelperAuthLoss }) + '\n');
       }
@@ -613,10 +640,21 @@ try {
       .getByRole('heading', { name: 'Production chosen variant', exact: true })
       .waitFor();
   checkpoint('helper-connected');
-  assert.equal(
-    await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
-    403,
-  );
+  pollProbeArmed = true;
+  try {
+    assert.equal(
+      await preview.evaluate(
+        async (tag) =>
+          (await fetch('/__gestalt_live/poll', { headers: { 'x-gestalt-proof-probe': tag } }))
+            .status,
+        pollProbeTag,
+      ),
+      403,
+    );
+    assert.ok(expectedPollProbeRequest, 'PROOF_POLL_PROBE_UNOBSERVED');
+  } finally {
+    pollProbeArmed = false;
+  }
   preview.on('framenavigated', (frame) => {
     if (frame === preview.mainFrame()) previewNavigationCount++;
   });
@@ -835,7 +873,7 @@ try {
     await ui.clickSaveEdit(preview);
     await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
     await command('manual-commit-observed', pollDeadline, manualObservation);
-    const manualDeadline = Date.now() + 120_000;
+    const manualDeadline = Math.min(Date.now() + 120_000, config.observationHostDeadline);
     manualCommitDeadline = manualDeadline;
     await withinProofObservation(() => ui.clickApplyEdits(preview), manualDeadline);
     await withinProofObservation(async () => {
@@ -1057,7 +1095,9 @@ try {
   }
 } finally {
   emitManualCommitObservation('browser-finally');
+  if (config.serialProfile) checkpoint('profile-browser-close-start');
   await browser?.close();
+  if (config.serialProfile) checkpoint('profile-browser-close-end');
   if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
     browserProcess.kill('SIGTERM');
     let timer;

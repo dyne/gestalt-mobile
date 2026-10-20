@@ -7,6 +7,322 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 
+// Opt-in observer only: fixed labels/IDs, one kernel clock, original operations.
+// Pending rows are not settlement; cancellation never fabricates an end time.
+export function createSerialProfile(binding, now = () => process.hrtime.bigint()) {
+  const labels = new Set([
+    'idempotent-start',
+    'poll-authority',
+    'generate-authority',
+    'event-authority',
+    'root-confinement',
+    'child-confinement',
+    'first-source-patch',
+    'accept-ack',
+    'post-accept-poll',
+    'browser-close',
+    'disconnect-ack',
+    'disconnect-revoke',
+  ]);
+  if (
+    binding?.trialId !== 'serial-accept-baseline-1' ||
+    !/^[0-9]{1,24}$/.test(binding.anchor?.monotonicNs ?? '')
+  )
+    throw Error('PROOF_PROFILE_INVALID');
+  binding = structuredClone(binding);
+  const exact = (value, keys) =>
+    value && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+  const hex = (value, length) =>
+    typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
+  if (
+    !exact(binding, ['trialId', 'identity', 'birth', 'anchor', 'phaseA']) ||
+    !exact(binding.identity, [
+      'candidate',
+      'tree',
+      'runId',
+      'native',
+      'manager',
+      'managerTree',
+      'agents',
+    ]) ||
+    !['candidate', 'tree', 'managerTree', 'agents'].every((k) => hex(binding.identity[k], 40)) ||
+    !['native', 'manager'].every((k) => hex(binding.identity[k], 64)) ||
+    !/^[1-9][0-9]{0,20}$/.test(binding.identity.runId) ||
+    !exact(binding.birth, ['pid', 'start', 'boot']) ||
+    !Number.isSafeInteger(binding.birth.pid) ||
+    binding.birth.pid <= 0 ||
+    !/^[0-9]{1,24}$/.test(binding.birth.start) ||
+    !/^[a-f0-9-]{36}$/.test(binding.birth.boot) ||
+    !exact(binding.anchor, ['boot', 'monotonicNs']) ||
+    binding.anchor.boot !== binding.birth.boot ||
+    !exact(binding.phaseA, ['phase', 'startedNs', 'deadlineNs']) ||
+    binding.phaseA.phase !== 'accepted' ||
+    !['startedNs', 'deadlineNs'].every((k) => /^[0-9]{1,24}$/.test(binding.phaseA[k])) ||
+    BigInt(binding.phaseA.startedNs) < BigInt(binding.anchor.monotonicNs) ||
+    BigInt(binding.phaseA.deadlineNs) > BigInt(binding.anchor.monotonicNs) + 1_380_000_000_000n ||
+    BigInt(binding.phaseA.deadlineNs) > BigInt(binding.phaseA.startedNs) + 1_260_000_000_000n
+  )
+    throw Error('PROOF_PROFILE_INVALID');
+  const report = {
+    schemaVersion: 1,
+    scheduling: 'unchanged-serial',
+    attempt: 1,
+    binding: structuredClone(binding),
+    spans: [],
+    firstFailure: null,
+  };
+  const invalid = () => {
+    report.firstFailure ??= { code: 'PROOF_PROFILE_INVALID', observedNs: null };
+    throw Error('PROOF_PROFILE_INVALID');
+  };
+  const scope = new AsyncLocalStorage(),
+    rows = new Map();
+  const clock = (value = now()) => {
+    if (typeof value !== 'bigint' || value < BigInt(binding.anchor.monotonicNs) || value > now())
+      invalid();
+    return value.toString();
+  };
+  const begin = (label, metadata = {}, at) => {
+    if (
+      !labels.has(label) ||
+      rows.size >= 128 ||
+      Object.keys(metadata).some((k) => !['parentId', 'generation', 'eventDigest'].includes(k)) ||
+      (metadata.parentId !== undefined && !rows.has(metadata.parentId)) ||
+      (metadata.generation !== undefined &&
+        (!Number.isSafeInteger(metadata.generation) || metadata.generation <= 0)) ||
+      (metadata.eventDigest !== undefined && !/^[a-f0-9]{64}$/.test(metadata.eventDigest))
+    ) {
+      report.firstFailure ??= { code: 'PROOF_PROFILE_INVALID', observedNs: null };
+      invalid();
+    }
+    const id = `profile-${String(rows.size + 1).padStart(4, '0')}`;
+    const row = {
+      id,
+      label,
+      ...structuredClone(metadata),
+      startNs: clock(at),
+      endNs: null,
+      outcome: 'pending',
+    };
+    rows.set(id, row);
+    report.spans.push(row);
+    return id;
+  };
+  const end = (id, outcome, at) => {
+    const row = rows.get(id),
+      endNs = clock(at);
+    if (
+      !row ||
+      row.endNs !== null ||
+      !['completed', 'refused'].includes(outcome) ||
+      BigInt(endNs) < BigInt(row.startNs)
+    )
+      invalid();
+    Object.assign(row, { endNs, outcome });
+  };
+  const trace = (label, work, metadata = {}) => {
+    const parentId = scope.getStore();
+    const id = begin(label, { ...(parentId ? { parentId } : {}), ...metadata });
+    return scope.run(id, () => {
+      try {
+        const raw = work();
+        if (raw && typeof raw.then === 'function') {
+          raw
+            .then(
+              () => end(id, 'completed'),
+              () => end(id, 'refused'),
+            )
+            .catch(() => {
+              report.firstFailure ??= { code: 'PROOF_PROFILE_INVALID', observedNs: null };
+            });
+          return raw;
+        }
+        end(id, 'completed');
+        return raw;
+      } catch (error) {
+        end(id, 'refused');
+        throw error;
+      }
+    });
+  };
+  return {
+    report,
+    begin,
+    end,
+    trace,
+    currentId: () => scope.getStore() ?? null,
+    granted() {
+      const row = rows.get(scope.getStore());
+      if (!row || row.grantedNs !== undefined) invalid();
+      row.grantedNs = clock();
+    },
+    eventParent(eventDigest) {
+      const matches = report.spans.filter(
+        (r) =>
+          r.label === 'generate-authority' &&
+          r.eventDigest === eventDigest &&
+          r.grantedNs !== undefined,
+      );
+      if (matches.length !== 1) invalid();
+      return matches[0].id;
+    },
+    failure(code) {
+      if (
+        ![
+          'PROOF_CANCELLED',
+          'PROOF_DRIVER_PHASE_DEADLINE',
+          'PROOF_OBSERVATION_DEADLINE',
+          'PROOF_EDIT_BUDGET_INSUFFICIENT',
+        ].includes(code)
+      )
+        return;
+      report.firstFailure ??= { code, observedNs: clock() };
+    },
+  };
+}
+
+/** Profile-trial acceptance only. Ordinary lane assertions remain independent. */
+export function validateSerialProfile(report) {
+  const check = (value) => {
+    if (!value) throw Error('PROOF_PROFILE_INVALID');
+  };
+  check(
+    report?.schemaVersion === 1 &&
+      report.scheduling === 'unchanged-serial' &&
+      report.attempt === 1 &&
+      report.firstFailure === null,
+  );
+  createSerialProfile(report.binding); // Same strict payload-free identity schema.
+  const labels = new Set([
+    'idempotent-start',
+    'generate-authority',
+    'root-confinement',
+    'child-confinement',
+    'first-source-patch',
+    'accept-ack',
+    'post-accept-poll',
+    'browser-close',
+    'disconnect-ack',
+    'disconnect-revoke',
+    'poll-authority',
+    'event-authority',
+  ]);
+  const rows = report.spans;
+  check(Array.isArray(rows) && rows.length > 0 && rows.length <= 128);
+  const seen = new Set(),
+    number = (value) => typeof value === 'string' && /^[0-9]{1,24}$/.test(value);
+  for (const [index, row] of rows.entries()) {
+    check(
+      labels.has(row.label) &&
+        Object.keys(row).every((key) =>
+          [
+            'id',
+            'label',
+            'startNs',
+            'endNs',
+            'outcome',
+            'generation',
+            'parentId',
+            'eventDigest',
+            'grantedNs',
+          ].includes(key),
+        ),
+    );
+    check(
+      row.generation === undefined || (Number.isSafeInteger(row.generation) && row.generation > 0),
+    );
+    check(row.eventDigest === undefined || /^[a-f0-9]{64}$/.test(row.eventDigest));
+    check(row.id === `profile-${String(index + 1).padStart(4, '0')}` && !seen.has(row.id));
+    check(
+      number(row.startNs) &&
+        number(row.endNs) &&
+        BigInt(row.startNs) >= BigInt(report.binding.anchor.monotonicNs) &&
+        BigInt(row.endNs) >= BigInt(row.startNs),
+    );
+    check(['completed', 'refused'].includes(row.outcome));
+    check(row.parentId === undefined || seen.has(row.parentId));
+    check(
+      row.grantedNs === undefined ||
+        (number(row.grantedNs) &&
+          BigInt(row.grantedNs) >= BigInt(row.startNs) &&
+          BigInt(row.grantedNs) <= BigInt(row.endNs)),
+    );
+    seen.add(row.id);
+  }
+  const one = (label) => {
+    const found = rows.filter((row) => row.label === label);
+    check(found.length === 1 && found[0].outcome === 'completed');
+    check(BigInt(found[0].endNs) <= BigInt(report.binding.phaseA.deadlineNs));
+    return found[0];
+  };
+  const required = Object.fromEntries(
+    [
+      'idempotent-start',
+      'generate-authority',
+      'root-confinement',
+      'child-confinement',
+      'first-source-patch',
+      'accept-ack',
+      'post-accept-poll',
+      'browser-close',
+      'disconnect-ack',
+      'disconnect-revoke',
+    ].map((label) => [label, one(label)]),
+  );
+  const owner = report.originalOwner;
+  check(
+    owner &&
+      Object.keys(owner).sort().join(',') ===
+        ['liveDigest', 'generation', 'rootThreadDigest', 'captureDigest', 'nativeBirthDigest']
+          .sort()
+          .join(','),
+  );
+  check(
+    ['liveDigest', 'rootThreadDigest', 'captureDigest', 'nativeBirthDigest'].every((key) =>
+      /^[a-f0-9]{64}$/.test(owner[key]),
+    ) &&
+      Number.isSafeInteger(owner.generation) &&
+      owner.generation > 0,
+  );
+  const generate = required['generate-authority'],
+    root = required['root-confinement'],
+    child = required['child-confinement'],
+    patch = required['first-source-patch'];
+  check(
+    generate.grantedNs !== undefined &&
+      generate.generation === owner.generation &&
+      required['idempotent-start'].generation === owner.generation,
+  );
+  check(root.parentId === generate.id && child.parentId === root.id && patch.parentId === root.id);
+  check(
+    BigInt(required['idempotent-start'].endNs) <= BigInt(generate.grantedNs) &&
+      BigInt(generate.grantedNs) <= BigInt(root.startNs),
+  );
+  check(
+    BigInt(root.startNs) <= BigInt(child.startNs) &&
+      BigInt(child.endNs) <= BigInt(root.endNs) &&
+      BigInt(root.endNs) <= BigInt(patch.startNs),
+  );
+  for (const [before, after] of [
+    ['first-source-patch', 'accept-ack'],
+    ['accept-ack', 'post-accept-poll'],
+    ['post-accept-poll', 'browser-close'],
+    ['browser-close', 'disconnect-ack'],
+    ['disconnect-ack', 'disconnect-revoke'],
+  ])
+    check(BigInt(required[before].endNs) <= BigInt(required[after].endNs));
+  check(
+    rows.some(
+      (row) =>
+        row.label === 'poll-authority' &&
+        row.grantedNs !== undefined &&
+        row.generation === owner.generation &&
+        BigInt(row.grantedNs) <= BigInt(generate.grantedNs),
+    ),
+  );
+  return true;
+}
+
 // Explicit test allocation, not a product lease or authority. All offsets are
 // relative to one runner monotonic anchor; a continuation cannot reset them.
 export const editingSchedule = Object.freeze({
@@ -91,6 +407,18 @@ export const manualLeaseEstimate = Object.freeze({
   discard: 74_270 + 87_260 + 30_000,
   'post-discard': 87_260 + 30_000,
 });
+// The explicitly issued extra-owner probe is the only expected helper refusal.
+// Match its actual Playwright request object, never a route/status heuristic.
+export function expectedPollProbeResponse(response, originalRequest, origin) {
+  const request = response.request();
+  return (
+    !!originalRequest &&
+    request === originalRequest &&
+    request.method() === 'GET' &&
+    request.url() === `${origin}/__gestalt_live/poll` &&
+    response.status() === 403
+  );
+}
 export function boundedHelperAuthLoss(value) {
   const sample = (item) =>
     item &&
@@ -110,6 +438,7 @@ export function boundedHelperAuthLoss(value) {
             'agent-target-claim',
             'manual-edit-stash',
             'manual-edit-commit',
+            'poll',
           ].includes(item.route)
             ? item.route
             : 'other',
@@ -502,7 +831,7 @@ const proofFailure = (error) => {
   }
 };
 /** Fixed observation only: does not cancel, retry, authorize or reinterpret errors. */
-export function observeEventAuthority(target, records, closureBoundary) {
+export function observeEventAuthority(target, records, closureBoundary, profile) {
   const original = target.liveEvent;
   if (typeof original !== 'function') throw new Error('PROOF_DIAGNOSTIC_METHOD_INVALID');
   const boundary = () => {
@@ -513,38 +842,42 @@ export function observeEventAuthority(target, records, closureBoundary) {
       return 'unavailable';
     }
   };
-  target.liveEvent = async function (fence, eventId, work) {
-    const began = performance.now();
-    const row = {
-      phase: /^[a-f0-9]{8}$/.test(eventId) ? 'event-turn' : 'canonical-poll',
-      grantedAfterMs: null,
-      elapsedMs: 0,
-      completed: false,
-      closureAtStart: boundary(),
-    };
-    try {
-      const result = await original.call(this, fence, eventId, async () => {
-        row.grantedAfterMs = Math.round(performance.now() - began);
-        const observation = { guard: this, fence, phase: row.phase, active: true };
-        return proofAuthorityContext.run(observation, async () => {
-          try {
-            return await work();
-          } finally {
-            observation.active = false;
-          }
+  target.liveEvent = function (fence, eventId, work) {
+    const invoke = async () => {
+      const began = performance.now();
+      const row = {
+        phase: /^[a-f0-9]{8}$/.test(eventId) ? 'event-turn' : 'canonical-poll',
+        grantedAfterMs: null,
+        elapsedMs: 0,
+        completed: false,
+        closureAtStart: boundary(),
+      };
+      try {
+        const result = await original.call(this, fence, eventId, async () => {
+          row.grantedAfterMs = Math.round(performance.now() - began);
+          profile?.granted?.();
+          const observation = { guard: this, fence, phase: row.phase, active: true };
+          return proofAuthorityContext.run(observation, async () => {
+            try {
+              return await work();
+            } finally {
+              observation.active = false;
+            }
+          });
         });
-      });
-      row.completed = true;
-      return result;
-    } catch (error) {
-      row.failure = proofFailure(error);
-      throw error;
-    } finally {
-      row.elapsedMs = Math.round(performance.now() - began);
-      row.closureAtFinish = boundary();
-      if (records.length === 64) records.shift();
-      records.push(row);
-    }
+        row.completed = true;
+        return result;
+      } catch (error) {
+        row.failure = proofFailure(error);
+        throw error;
+      } finally {
+        row.elapsedMs = Math.round(performance.now() - began);
+        row.closureAtFinish = boundary();
+        if (records.length === 64) records.shift();
+        records.push(row);
+      }
+    };
+    return profile?.trace ? profile.trace(fence, eventId, invoke) : invoke();
   };
 }
 const admissionReasons = new Set([
@@ -701,7 +1034,7 @@ export function cleanupControllerSnapshot(controller) {
 
 /** Existing read-only policy boundaries only. ALS correlates measurements; it
  * never carries readiness, cached observations or dispatch authority. */
-export function observeInstalledPolicyTimings(prototype) {
+export function observeInstalledPolicyTimings(prototype, correlation = () => null) {
   const labels = [
     'policy-total',
     'policy-manager-verify',
@@ -727,6 +1060,8 @@ export function observeInstalledPolicyTimings(prototype) {
       report.counters[label].started++;
       record.sequence = ++sequence;
       record.groupId = scope.getStore() ?? 0;
+      const profileId = correlation();
+      if (/^profile-[0-9]{4}$/.test(profileId ?? '')) record.profileId = profileId;
       record.startedAfterMs = Math.max(0, Math.round(performance.now() - began));
     },
     after(_owner, record) {
@@ -795,7 +1130,11 @@ export function observeInstalledPolicyTimings(prototype) {
 
 /** Proof-only RPC spans. Groups identify an inspection, never cached authority.
  * Resource checks outside inspection use group zero; nested spans are nonadditive. */
-export function observeAdmissionTimings(runtimePrototype, controllerPrototype) {
+export function observeAdmissionTimings(
+  runtimePrototype,
+  controllerPrototype,
+  correlation = () => null,
+) {
   const labels = [
     'admission-inspection',
     'admission-catalog-context',
@@ -823,6 +1162,8 @@ export function observeAdmissionTimings(runtimePrototype, controllerPrototype) {
       report.counters[label].started++;
       record.sequence = ++sequence;
       record.groupId = scope.getStore() ?? 0;
+      const profileId = correlation();
+      if (/^profile-[0-9]{4}$/.test(profileId ?? '')) record.profileId = profileId;
       record.startedAfterMs = Math.max(0, Math.round(performance.now() - began));
     },
     after(_owner, record) {

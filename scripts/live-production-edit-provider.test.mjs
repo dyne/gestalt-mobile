@@ -39,6 +39,7 @@ import {
   observeInstalledPolicyTimings,
   observeAdmissionTimings,
   cleanupControllerSnapshot,
+  createSerialProfile,
   editingSchedule,
   editingRemaining,
   requireEditingBudget,
@@ -52,10 +53,17 @@ import {
   manualLeaseDeadline,
   manualLeaseEstimate,
   boundedHelperAuthLoss,
+  expectedPollProbeResponse,
   ownedProofSequence,
 } from './live-production-edit-diagnostics.mjs';
 import { JSDOM } from 'jsdom';
-import { processBirth, birthCurrent } from './live-production-proof-lanes.mjs';
+import {
+  processBirth,
+  proofPins,
+  birthCurrent,
+  openRecoveryHandoff,
+  editingPhaseBound,
+} from './live-production-proof-lanes.mjs';
 import {
   createProductionEditProvider,
   productionModelWorkload,
@@ -1753,6 +1761,7 @@ test('actual entrypoint manual routing validates owning identity and performs on
         'emitted',
         `
         const proofLane='manual-discard', seed=false, editFlow=true;
+        const serialProfile=undefined;
         const owningThread='thread',owningNativeSession='session';
         let firstPickerEventId,firstPickerObservationStarted,contextCompletion,childThread;
         const roles=new Map();
@@ -2821,7 +2830,6 @@ test('first helper auth-loss evidence is bounded and redacted independently of t
     new URL('./live-production-edit-browser.mjs', import.meta.url),
     'utf8',
   );
-  assert.ok(browser.includes('if (!firstHelperAuthLoss && [401, 403].includes(observed.status))'));
   assert.ok(browser.includes('JSON.stringify({ firstHelperAuthLoss })'));
 });
 
@@ -2844,6 +2852,7 @@ function currentPostSteerHandler(overrides = {}) {
     baselineBirth: {},
     observation: { deadline: Date.now() + 200 },
     editingRemaining: () => 200,
+    editingPhaseRemaining: () => 200,
     editingAnchor: {},
     pendingCanonicalPoll: () => null,
     session: { id: 'session' },
@@ -3391,4 +3400,322 @@ test('actual browser command timeout retires and drains its original readline re
   assert.equal(writes, 1);
   assert.equal(originalSettled, true);
   assert.equal(input.destroyed, true);
+});
+
+test('only the exact explicitly tagged original GET poll403 probe is expected; all other auth loss survives', () => {
+  const origin = 'https://preview.test:9443';
+  const original = { method: () => 'GET', url: () => origin + '/__gestalt_live/poll' };
+  const response = (request, status = 403) => ({ request: () => request, status: () => status });
+  assert.equal(expectedPollProbeResponse(response(original), original, origin), true);
+  for (const [request, status, expected] of [
+    [{ ...original }, 403, original],
+    [original, 401, original],
+    [original, 403, undefined],
+  ])
+    assert.equal(expectedPollProbeResponse(response(request, status), expected, origin), false);
+  for (const mutation of [
+    { method: () => 'POST' },
+    { url: () => origin + '/__gestalt_live/status' },
+    { url: () => origin + '/__gestalt_live/lease' },
+  ]) {
+    const request = { ...original, ...mutation };
+    assert.equal(expectedPollProbeResponse(response(request), request, origin), false);
+  }
+  assert.equal(
+    expectedPollProbeResponse(response(original), original, 'https://other.test'),
+    false,
+  );
+});
+
+function serialBinding() {
+  return {
+    trialId: 'serial-accept-baseline-1',
+    identity: {
+      candidate: 'a'.repeat(40),
+      tree: 'b'.repeat(40),
+      runId: '123',
+      native: 'c'.repeat(64),
+      manager: 'd'.repeat(64),
+      managerTree: 'e'.repeat(40),
+      agents: 'f'.repeat(40),
+    },
+    birth: { pid: 123, start: '1', boot: '0'.repeat(36) },
+    anchor: { boot: '0'.repeat(36), monotonicNs: '0' },
+    phaseA: { phase: 'accepted', startedNs: '0', deadlineNs: '1260000000000' },
+  };
+}
+test('serial profile keeps exact raw operations pending across cancellation and retains the first fixed failure only', async () => {
+  let at = 1_000_000n,
+    release;
+  const profile = createSerialProfile(serialBinding(), () => at);
+  const raw = new Promise((resolve) => {
+    release = resolve;
+  });
+  assert.equal(
+    profile.trace('idempotent-start', () => raw, { generation: 1 }),
+    raw,
+  );
+  assert.equal(profile.report.spans[0].endNs, null);
+  profile.failure('PROOF_DRIVER_PHASE_DEADLINE');
+  profile.failure('PROOF_CANCELLED');
+  profile.failure('private-token-canary');
+  assert.equal(profile.report.spans[0].outcome, 'pending');
+  assert.equal(profile.report.spans[0].endNs, null);
+  at += 10_000_000n;
+  release('original');
+  assert.equal(await raw, 'original');
+  assert.equal(profile.report.spans[0].endNs, at.toString());
+  assert.equal(profile.report.firstFailure.code, 'PROOF_DRIVER_PHASE_DEADLINE');
+  assert.ok(!JSON.stringify(profile.report).includes('canary'));
+});
+test('serial profile rejects payload-shaped bindings, labels, stale clocks and nonexistent or changed attribution without dispatch', () => {
+  let calls = 0;
+  const binding = serialBinding();
+  for (const change of [
+    { credential: 'bearer-canary' },
+    { trialId: 'other' },
+    { identity: { ...binding.identity, token: 'canary' } },
+    { anchor: { ...binding.anchor, boot: '1'.repeat(36) } },
+  ])
+    assert.throws(() => createSerialProfile({ ...binding, ...change }), /PROOF_PROFILE_INVALID/);
+  const profile = createSerialProfile(binding, () => 100n);
+  assert.throws(
+    () =>
+      profile.trace('private-label', () => {
+        calls++;
+      }),
+    /PROOF_PROFILE_INVALID/,
+  );
+  for (const metadata of [
+    { token: 'canary' },
+    { parentId: 'profile-9999' },
+    { generation: 0 },
+    { eventDigest: 'private-value' },
+  ])
+    assert.throws(
+      () =>
+        profile.trace(
+          'idempotent-start',
+          () => {
+            calls++;
+          },
+          metadata,
+        ),
+      /PROOF_PROFILE_INVALID/,
+    );
+  assert.equal(calls, 0);
+  assert.throws(() => profile.begin('browser-close', {}, 101n), /PROOF_PROFILE_INVALID/);
+  const id = profile.begin('browser-close', {}, 80n);
+  profile.end(id, 'completed', 90n);
+  assert.throws(() => profile.end(id, 'completed'), /PROOF_PROFILE_INVALID/);
+  binding.anchor.monotonicNs = '10000000000000';
+  assert.ok(profile.begin('accept-ack'));
+});
+test('actual authority observer profile grants only after original validation and correlates Generate with its actual work', async () => {
+  let permit, finish;
+  const validated = new Promise((resolve) => {
+      permit = resolve;
+    }),
+    raw = new Promise((resolve) => {
+      finish = resolve;
+    });
+  const profile = createSerialProfile(serialBinding()),
+    records = [],
+    eventDigest = 'a'.repeat(64);
+  const target = {
+    async liveEvent(fence, eventId, work) {
+      await validated;
+      return work();
+    },
+  };
+  observeEventAuthority(target, records, () => 'open', {
+    trace: (fence, eventId, work) =>
+      profile.trace('generate-authority', work, { generation: fence.generation, eventDigest }),
+    granted: () => profile.granted(),
+  });
+  const result = target.liveEvent({ generation: 1 }, 'abcdef12', () => raw);
+  assert.equal(profile.report.spans[0].grantedNs, undefined);
+  assert.throws(() => profile.eventParent(eventDigest), /PROOF_PROFILE_INVALID/);
+  permit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(profile.eventParent(eventDigest), profile.report.spans[0].id);
+  const child = profile.begin('root-confinement', { parentId: profile.eventParent(eventDigest) });
+  assert.equal(profile.report.spans[1].parentId, profile.report.spans[0].id);
+  assert.equal(profile.report.spans[0].endNs, null);
+  finish('exact');
+  assert.equal(await result, 'exact');
+  profile.end(child, 'completed');
+  assert.equal(records[0].completed, true);
+});
+test('request attribution survives overlapping actual admission observers without leaking to unrelated calls', async () => {
+  const profile = createSerialProfile(serialBinding());
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const rpc = {
+    request: async () => {
+      await gate;
+      return 'catalog';
+    },
+  };
+  const runtime = {
+    inspectLiveAdmission: () =>
+      rpc.request('mcpServerStatus/list', {
+        serverName: 'context-mode',
+        threadId: 'owning',
+        detail: 'full',
+      }),
+  };
+  const controller = { verifyProjectResources: () => 'resources' };
+  const timing = observeAdmissionTimings(runtime, controller, () => profile.currentId());
+  timing.observeRpc(rpc);
+  const first = profile.trace('idempotent-start', () => runtime.inspectLiveAdmission());
+  const second = profile.trace('poll-authority', () => runtime.inspectLiveAdmission());
+  const unrelated = runtime.inspectLiveAdmission();
+  release();
+  await Promise.all([first, second, unrelated]);
+  for (const id of profile.report.spans.map((row) => row.id)) {
+    const rows = timing.report.calls.filter((row) => row.profileId === id);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      new Set(rows.map((row) => row.operation)),
+      new Set(['admission-inspection', 'admission-catalog-context']),
+    );
+  }
+  assert.equal(timing.report.calls.filter((row) => row.profileId === undefined).length, 2);
+  assert.equal(profile.currentId(), null);
+});
+test('serial instrumentation preserves rejected operation identity and fixed refusal without raw error content', async () => {
+  const profile = createSerialProfile(serialBinding()),
+    sentinel = new Error('private-bearer-canary');
+  const raw = Promise.reject(sentinel);
+  assert.equal(
+    profile.trace('idempotent-start', () => raw),
+    raw,
+  );
+  await assert.rejects(raw, (error) => error === sentinel);
+  assert.equal(profile.report.spans[0].outcome, 'refused');
+  assert.ok(!JSON.stringify(profile.report).includes('canary'));
+});
+
+test('actual source-patch observer ends only after matching original tool output and existing exact-source validation', () => {
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('const editResponse = (body, toolCall) => {'),
+    end = source.indexOf('\nlet seed', start);
+  const profile = createSerialProfile(serialBinding());
+  const pending = { id: profile.begin('first-source-patch'), callId: 'root-6', settled: false };
+  let sourceValid = false;
+  const original = () => {
+    assert.ok(sourceValid, 'ACTUAL_SOURCE_NOT_YET_VALID');
+    return 'exact';
+  };
+  const observe = new Function(
+    'originalEditResponse',
+    'serialProfile',
+    'sourcePatchProfile',
+    source.slice(start, end) + ';return editResponse;',
+  )(original, profile, pending);
+  const exact = {
+    input: [{ call_id: 'root-6', type: 'custom_tool_call_output', output: 'private-canary' }],
+  };
+  assert.throws(() => observe(exact), /ACTUAL_SOURCE_NOT_YET_VALID/);
+  assert.equal(profile.report.spans[0].endNs, null);
+  sourceValid = true;
+  assert.equal(
+    observe({ input: [{ call_id: 'root-5', type: 'custom_tool_call_output' }] }),
+    'exact',
+  );
+  assert.equal(profile.report.spans[0].endNs, null);
+  assert.equal(observe(exact), 'exact');
+  assert.equal(pending.settled, true);
+  assert.equal(profile.report.spans[0].outcome, 'completed');
+  assert.ok(!JSON.stringify(profile.report).includes('canary'));
+});
+
+// Dependency-backed injection test belongs after npm ci, not selection bootstrap.
+async function dependencyPreparedEditingHandoff({
+  left = 5000,
+  onCancel = async () => {},
+  onFailure = () => {},
+} = {}) {
+  const identity = { ...serialBinding().identity, ...proofPins };
+  const directory = mkdtempSync(join(tmpdir(), 'l11-injection-after-deps-')),
+    now = process.hrtime.bigint();
+  const anchor = { boot: processBirth().boot, monotonicNs: (now - 1_310_000_000_000n).toString() };
+  const phaseA = editingPhaseBound(anchor, 'accepted', now - BigInt(1_260_000 - left) * 1_000_000n);
+  const editing = { anchor, phaseA },
+    birth = processBirth();
+  writeFileSync(join(directory, 'launched.json'), JSON.stringify({ identity, birth, editing }), {
+    mode: 0o600,
+  });
+  const handoff = await openRecoveryHandoff({ directory, identity, editing, onCancel, onFailure });
+  return { directory, handoff, expected: handoff.snapshot(), editing, birth };
+}
+test('actual Fastify injection keeps one original request when cancellation joins its retained thenable', async () => {
+  const { default: fastify } = await import('fastify');
+  const mobile = fastify(),
+    editingApiRaw = new Set();
+  let release,
+    enter,
+    calls = 0,
+    stopped = false;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise((resolve) => {
+    enter = resolve;
+  });
+  mobile.post('/pending', async () => {
+    calls++;
+    enter();
+    await gate;
+    return { actual: true };
+  });
+  await mobile.ready();
+  const h = await dependencyPreparedEditingHandoff({
+    left: 120,
+    onCancel: async () => {
+      await Promise.allSettled([...editingApiRaw]);
+      stopped = true;
+    },
+  });
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const begin = source.indexOf('async function api(method, path, payload) {'),
+    end = source.indexOf('\ntry {', begin);
+  const api = new Function(
+    'recoveryHandoff',
+    'mobile',
+    'headers',
+    'report',
+    'editingContinuity',
+    'editingApiRaw',
+    source.slice(begin, end) + '; return api;',
+  )(h.handoff, mobile, {}, {}, true, editingApiRaw);
+  try {
+    const pending = api('POST', '/pending', {}),
+      refused = assert.rejects(pending, /PROOF_DRIVER_PHASE_DEADLINE/);
+    await entered;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(calls, 1);
+    assert.equal(editingApiRaw.size, 1);
+    assert.equal(stopped, false);
+    release();
+    await refused;
+    await h.handoff.close();
+    assert.equal(calls, 1);
+    assert.equal(editingApiRaw.size, 0);
+    assert.equal(stopped, true);
+  } finally {
+    release();
+    await h.handoff.close();
+    await mobile.close();
+    rmSync(h.directory, { recursive: true, force: true });
+  }
 });

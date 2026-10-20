@@ -387,6 +387,8 @@ jobs:
         # Explicit proof allocation A1260+B1020+cleanup180; product caps unchanged.
         timeout-minutes: 21
         env:
+          LIVE_PRODUCTION_SERIAL_PROFILE: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && '1' || '0' }}
+          LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'serial-accept-baseline-1' || '' }}
           LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
           LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ steps.proof-mode.outputs.mode == 'preflight' && '1' || '0' }}
@@ -481,6 +483,7 @@ jobs:
       - name: Validate complete exact-candidate lane evidence
         if: steps.proof-mode.outputs.mode == 'full' || steps.proof-mode.outputs.mode == 'picker-diagnostic' || steps.proof-mode.outputs.mode == 'independent-only'
         env:
+          LIVE_PRODUCTION_SERIAL_PROFILE: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && '1' || '0' }}
           LIVE_PROOF_MODE: ${{ steps.proof-mode.outputs.mode }}
           LIVE_PROOF_VERIFICATION_SCOPE: ${{ needs.proof-selection.outputs.verification-scope }}
 
