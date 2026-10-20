@@ -631,3 +631,72 @@ it('refuses in-place signed capture mutation before any physical or raw settleme
   expect(f.settle).not.toHaveBeenCalled();
   expect(f.guard).not.toHaveBeenCalled();
 });
+
+it.each(['reply', 'reject'] as const)(
+  'revokes pending policy observation before guard dispatch while joining original policy %s',
+  async (outcome) => {
+    const f = await verificationFixture();
+    let release!: () => void, reject!: (error: Error) => void;
+    const policy = new Promise<void>((resolve, fail) => {
+      release = resolve;
+      reject = fail;
+    });
+    f.installed.mockImplementation(async () => {
+      await policy;
+      return f.generation.policy.digests;
+    });
+    let refused = false;
+    const observation = f.controller.verifyLiveRuntime(f.run).catch((error) => {
+      refused = true;
+      return error;
+    });
+    let settlement: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(f.installed).toHaveBeenCalledOnce());
+      const stopping = f.owners.mutate(f.run, { event: 'stop' });
+      Reflect.set(f.controller, 'cleanupGeneration', () => f.generation);
+      await Reflect.get(f.controller, 'revoke').call(f.controller, stopping);
+      await vi.waitFor(() => expect(refused).toBe(true));
+      expect((await observation).message).toBe('LIVE_GENERATION_STALE');
+      expect(f.resources).not.toHaveBeenCalled();
+      expect(f.abort).not.toHaveBeenCalled();
+      const raw = Reflect.get(f.controller, 'verificationFlights').get(f.generation) as Map<
+        AbortController,
+        Promise<void>
+      >;
+      expect(raw.size).toBe(1);
+      let settled = false;
+      const quiescence = vi.fn(async () => {});
+      Reflect.set(f.controller, 'requireBindings', () => ({
+        runtime: {
+          liveOwnerIds: () => [f.input.session.id],
+          settleLiveAdmission: async () => {},
+          inspectLiveQuiescence: quiescence,
+        },
+      }));
+      settlement = (
+        Reflect.get(f.controller, 'settleOwningProcess').call(
+          f.controller,
+          stopping,
+        ) as Promise<void>
+      ).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(quiescence).not.toHaveBeenCalled();
+      if (outcome === 'reply') release();
+      else reject(new Error('LATE_POLICY_REFUSAL'));
+      await settlement;
+      expect(quiescence).toHaveBeenCalledOnce();
+      expect(Reflect.get(f.controller, 'verificationFlights').has(f.generation)).toBe(false);
+      expect(f.resources).not.toHaveBeenCalled();
+      expect(f.abort).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await policy.catch(() => {});
+      await observation;
+      await settlement?.catch(() => {});
+    }
+  },
+);

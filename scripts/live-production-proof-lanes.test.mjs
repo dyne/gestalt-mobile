@@ -48,6 +48,10 @@ import {
   validateEditingPhaseBound,
   phaseBoundRemaining,
   fixedProofFailure,
+  mintEditingStep,
+  completeEditingSetup,
+  readEditingStep,
+  claimEditingLaunch,
 } from './live-production-proof-lanes.mjs';
 
 const identity = { candidate: 'a'.repeat(40), tree: 'b'.repeat(40), runId: '123', ...proofPins };
@@ -2084,7 +2088,7 @@ test('explicit serial profile marker selects one full accept continuity lane wit
   );
   assert.ok(
     phaseA.includes(
-      "LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'serial-accept-baseline-1' || '' }}",
+      "LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'deferred-accept-confinement-1' || '' }}",
     ),
   );
   assert.ok(receipt.includes('LIVE_PRODUCTION_SERIAL_PROFILE:'));
@@ -2313,4 +2317,145 @@ test('generated authority callback refusal records fixed invalidity even if its 
   assert.throws(() => profile.granted(), /PROOF_PROFILE_INVALID/);
   assert.equal(profile.report.firstFailure.code, 'PROOF_PROFILE_INVALID');
   assert.throws(() => validateSerialProfile(profile.report), /PROOF_PROFILE_INVALID/);
+});
+
+test('A step cutoff is minted before fixture setup, never reset at later launch and bound to actual child birth', async () => {
+  const directory = join(temporary(), 'step');
+  const anchor = { boot: processBirth().boot, monotonicNs: process.hrtime.bigint().toString() };
+  const step = mintEditingStep(directory, identity, anchor);
+  let child, exited;
+  try {
+    assert.throws(() => claimEditingLaunch(directory, identity, anchor)); // Failed/incomplete setup has no launch authority.
+    const later = BigInt(step.phaseA.startedNs) + 15_000_000_000n;
+    assert.deepEqual(completeEditingSetup(directory, identity, anchor, later), step);
+    assert.throws(() => completeEditingSetup(directory, identity, anchor, later));
+    const launch = claimEditingLaunch(directory, identity, anchor, later);
+    assert.equal(launch.phaseA.deadlineNs, step.phaseA.deadlineNs);
+    assert.equal(phaseBoundRemaining(launch.phaseA, later), 1_245_000);
+    assert.throws(() => claimEditingLaunch(directory, identity, anchor, later));
+    const module = new URL('./live-production-proof-lanes.mjs', import.meta.url).href;
+    const code = `import{readEditingLaunch}from${JSON.stringify(module)};process.stdout.write('born\\n');process.stdin.once('data',()=>{try{readEditingLaunch(process.argv[1],JSON.parse(process.argv[2]),JSON.parse(process.argv[3]));console.log('clock-bound');}catch{process.exitCode=1;}process.stdin.destroy();});`;
+    child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        code,
+        directory,
+        JSON.stringify(identity),
+        JSON.stringify(anchor),
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    exited = new Promise((resolve) => child.once('exit', resolve));
+    let output = '';
+    child.stdout.on('data', (data) => {
+      output += data;
+    });
+    await new Promise((resolve, reject) => {
+      child.stdout.once('data', resolve);
+      child.once('error', reject);
+    });
+    const birth = processBirth(child.pid);
+    assert.notEqual(birth.pid, process.pid);
+    writeFileSync(
+      join(directory, 'launched.json'),
+      JSON.stringify({ identity, birth, editing: launch }),
+      { mode: 0o600 },
+    );
+    child.stdin.end('read');
+    assert.equal(await exited, 0);
+    assert.ok(output.includes('clock-bound'));
+    assert.throws(
+      () => readEditingStep(directory, { ...identity, tree: 'f'.repeat(40) }, anchor),
+      /PROOF_IDENTITY_CHANGED/,
+    );
+    assert.throws(() => readEditingStep(directory, identity, { ...anchor, boot: 'f'.repeat(36) }));
+    assert.throws(
+      () => readEditingStep(directory, identity, anchor, true, BigInt(step.phaseA.deadlineNs)),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    writeFileSync(
+      join(directory, 'phase-a-step.json'),
+      JSON.stringify({
+        ...step,
+        phaseA: { ...step.phaseA, deadlineNs: (BigInt(step.phaseA.deadlineNs) + 1n).toString() },
+      }),
+      { mode: 0o600 },
+    );
+    assert.throws(
+      () => readEditingStep(directory, identity, anchor),
+      /PROOF_DRIVER_METADATA_CHANGED/,
+    );
+  } finally {
+    if (child?.exitCode === null) {
+      child.kill('SIGTERM');
+      await exited;
+    }
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(join(directory, '..'), { recursive: true, force: true });
+  }
+});
+
+test('A fixture setup expiring at the earlier global cutoff cannot complete or launch', () => {
+  const directory = join(temporary(), 'step');
+  const now = process.hrtime.bigint(),
+    anchor = {
+      boot: processBirth().boot,
+      monotonicNs: (now > 1_300_000_000_000n ? now - 1_300_000_000_000n : 0n).toString(),
+    };
+  try {
+    const step = mintEditingStep(directory, identity, anchor, now);
+    assert.equal(
+      BigInt(step.phaseA.deadlineNs),
+      BigInt(anchor.monotonicNs) + 1_380_000_000_000n < now + 1_260_000_000_000n
+        ? BigInt(anchor.monotonicNs) + 1_380_000_000_000n
+        : now + 1_260_000_000_000n,
+    );
+    const deadline = BigInt(step.phaseA.deadlineNs);
+    assert.throws(
+      () => completeEditingSetup(directory, identity, anchor, deadline),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    assert.throws(
+      () => claimEditingLaunch(directory, identity, anchor, deadline),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+  } finally {
+    rmSync(join(directory, '..'), { recursive: true, force: true });
+  }
+});
+
+test('deferred profile keeps historical serial validation and requires reuse after Generate authority but before source patch', () => {
+  const baseline = profileContract().report;
+  assert.equal(validateSerialProfile(baseline), true);
+  const profile = structuredClone(baseline);
+  profile.binding.trialId = 'deferred-accept-confinement-1';
+  profile.scheduling = 'deferred-reuse-before-source-patch';
+  const reuse = profile.spans.find((row) => row.label === 'idempotent-start');
+  reuse.startNs = '8';
+  reuse.endNs = '11';
+  assert.equal(validateSerialProfile(profile), true);
+  for (const mutate of [
+    (p) => (p.scheduling = 'unchanged-serial'),
+    (p) => (p.spans[0].startNs = '6'),
+    (p) => (p.spans[0].endNs = '13'),
+    (p) => (p.spans[0].generation = 2),
+  ]) {
+    const wrong = structuredClone(profile);
+    mutate(wrong);
+    assert.throws(() => validateSerialProfile(wrong), /PROOF_PROFILE_INVALID/);
+  }
+  const workflow = readFileSync(
+    new URL('../.github/workflows/live-caddy-proof.yml', import.meta.url),
+    'utf8',
+  );
+  const part = workflow.slice(
+    workflow.indexOf("name: 'Accept editing phase A"),
+    workflow.indexOf("name: 'Accept editing phase B"),
+  );
+  assert.ok(part.indexOf('editing-clock') < part.indexOf('node --test'));
+  assert.ok(part.indexOf('editing-setup-complete') > part.indexOf('node --test'));
+  assert.ok(part.indexOf('editing-setup-complete') < part.indexOf('editing-start'));
+  assert.ok(part.includes('timeout-minutes: 21'));
 });

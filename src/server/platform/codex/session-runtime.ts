@@ -384,7 +384,10 @@ export class CodexSessionRuntime {
   }
 
   /** Reads only the already-owned process. Admission must never launch a replacement reader. */
-  async inspectLiveAdmission(session: RelaySessionSnapshot): Promise<{
+  async inspectLiveAdmission(
+    session: RelaySessionSnapshot,
+    cancellation?: AbortSignal,
+  ): Promise<{
     launch: LiveProcessIdentity;
     launchEnvironment: Readonly<{ tmpdir: string; home: string; codexHome: string }> | null;
     configuration: unknown;
@@ -407,7 +410,11 @@ export class CodexSessionRuntime {
     if (resource.admissionRetirementRequired) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
     this.admissionResources.add(resource);
     resource.admissionObservers++;
+    const signal = cancellation
+      ? AbortSignal.any([resource.lifetime.signal, cancellation])
+      : resource.lifetime.signal;
     try {
+      signal.throwIfAborted();
       const before = resource.process.observeLiveLaunch();
       if (
         resource.admissionBirth &&
@@ -424,7 +431,7 @@ export class CodexSessionRuntime {
         let timeout: ReturnType<typeof setTimeout> | undefined;
         let abort: (() => void) | undefined;
         try {
-          resource.lifetime.signal.throwIfAborted();
+          signal.throwIfAborted();
           if (resource.admissionRetirementRequired)
             throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
           if (timeoutMs <= 0) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
@@ -439,14 +446,14 @@ export class CodexSessionRuntime {
             raw,
             new Promise<never>((_resolve, reject) => {
               timeout = setTimeout(() => reject(new Error('LIVE_RUNTIME_UNAVAILABLE')), timeoutMs);
-              abort = () => reject(new Error('LIVE_RUNTIME_UNAVAILABLE'));
-              resource.lifetime.signal.addEventListener('abort', abort, { once: true });
-              if (resource.lifetime.signal.aborted) abort();
+              abort = () => reject(signal.reason);
+              signal.addEventListener('abort', abort, { once: true });
+              if (signal.aborted) abort();
             }),
           ]);
         } finally {
           if (timeout) clearTimeout(timeout);
-          if (abort) resource.lifetime.signal.removeEventListener('abort', abort);
+          if (abort) signal.removeEventListener('abort', abort);
         }
       };
       // Native's broad query creates threadless clients. Only these supported
@@ -473,12 +480,16 @@ export class CodexSessionRuntime {
               page.data.some((server: unknown) => asRecord(server)?.name !== serverName)
             )
               throw new Error('LIVE_MCP_UNAVAILABLE');
+            signal.throwIfAborted();
             const status = asRecord(page.data[0])?.runtimeStatus;
             if (status === 'notStarted' || status === 'starting') {
               if (Date.now() >= mcpDeadline) throw new Error('LIVE_RUNTIME_UNAVAILABLE');
-              await delay(Math.min(250, mcpDeadline - Date.now()), undefined, {
-                signal: resource.lifetime.signal,
-              });
+              try {
+                await delay(Math.min(250, mcpDeadline - Date.now()), undefined, { signal });
+              } catch (error) {
+                signal.throwIfAborted();
+                throw error;
+              }
               continue;
             }
             if (
@@ -510,7 +521,7 @@ export class CodexSessionRuntime {
         includeTurns: false,
       });
       const account = await bounded('account/read', { refreshToken: false });
-      resource.lifetime.signal.throwIfAborted();
+      signal.throwIfAborted();
       if (resource.admissionRetirementRequired) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
       if (
         this.sessions.get(session.id) !== resource ||
@@ -532,7 +543,14 @@ export class CodexSessionRuntime {
         skillsConfig: resource.skillsConfig && structuredClone(resource.skillsConfig),
       };
     } catch (error) {
-      resource.admissionRetirementRequired = true;
+      // A controller-fenced observation cancellation does not retire the owner.
+      // Original raw requests remain strongly owned until their real settlement.
+      if (
+        !cancellation?.aborted ||
+        error !== cancellation.reason ||
+        resource.lifetime.signal.aborted
+      )
+        resource.admissionRetirementRequired = true;
       throw error;
     } finally {
       resource.admissionObservers--;
@@ -895,6 +913,49 @@ export class CodexSessionRuntime {
       resource.process.observeLiveDescendants?.();
     } else if (!resource.admissionBirth) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
     return resource;
+  }
+  /** Stop joins exact original observation RPCs without retiring a valid owner.
+   * The caller's phase fence and the fixed settlement window never grant work. */
+  async settleLiveAdmission(
+    session: RelaySessionSnapshot,
+    authority: Parameters<CodexSessionRuntime['retirementResource']>[1],
+    deadline = Date.now() + 5000,
+  ): Promise<void> {
+    if (!Number.isFinite(deadline) || deadline <= Date.now() || deadline > Date.now() + 5000)
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    const resource = this.retirementResource(session, authority);
+    for (;;) {
+      authority.owners.assert(authority.fence);
+      let observerSettled: (() => void) | undefined;
+      const observers = resource.admissionObservers
+        ? new Promise<void>((resolve) => {
+            observerSettled = resolve;
+            resource.admissionObserverSettlements.add(resolve);
+          })
+        : Promise.resolve();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.allSettled([observers, ...resource.admissionRequests]),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (observerSettled) resource.admissionObserverSettlements.delete(observerSettled);
+      }
+      if (this.retirementResource(session, authority) !== resource)
+        throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+      if (!resource.admissionObservers && !resource.admissionRequests.size) break;
+      if (Date.now() >= deadline) throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    }
+    if (resource.admissionRetirementRequired || resource.lifetime.signal.aborted)
+      throw new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED');
+    this.pruneAdmissionResource(resource);
   }
   /** Non-authorizing interruption only. Raw RPCs remain owned until physical
    * retirement; Stop can now drain its poll without waiting for its own abort. */

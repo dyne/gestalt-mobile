@@ -40,6 +40,11 @@ import {
   observeAdmissionTimings,
   cleanupControllerSnapshot,
   createSerialProfile,
+  createDeferredSourceGate,
+  acceptedLeaseDeadline,
+  boundedAcceptedLeaseCapacityObservations,
+  renewAcceptedPreviewLease,
+  acceptedLeaseEstimate,
   editingSchedule,
   editingRemaining,
   requireEditingBudget,
@@ -816,9 +821,9 @@ test('post-Accept acknowledgement observation is allowlisted and follows acknowl
     new URL('./live-production-edit-browser.mjs', import.meta.url),
     'utf8',
   );
-  const immediate = script.indexOf("await observePicker('after-accept')");
-  const acknowledgement = script.indexOf("await command('accepted', acceptDeadline)", immediate);
-  const afterAck = script.indexOf("await observePicker('after-accept-ack')", acknowledgement);
+  const immediate = script.indexOf("() => observePicker('after-accept')");
+  const acknowledgement = script.indexOf("() => command('accepted', acceptDeadline)", immediate);
+  const afterAck = script.indexOf("() => observePicker('after-accept-ack')", acknowledgement);
   const steer = script.indexOf("await observePicker('before-steer')", afterAck);
   assert.ok(
     immediate > 0 && acknowledgement > immediate && afterAck > acknowledgement && steer > afterAck,
@@ -1761,7 +1766,7 @@ test('actual entrypoint manual routing validates owning identity and performs on
         'emitted',
         `
         const proofLane='manual-discard', seed=false, editFlow=true;
-        const serialProfile=undefined;
+        const serialProfile=undefined, deferredReuse=undefined;
         const owningThread='thread',owningNativeSession='session';
         let firstPickerEventId,firstPickerObservationStarted,contextCompletion,childThread;
         const roles=new Map();
@@ -2915,10 +2920,7 @@ test('current host renewal correlates exact private SQLite row among peers and a
     new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
     'utf8',
   );
-  const start = source.indexOf(
-    "assert.equal(proofLane, 'manual-discard');",
-    source.indexOf("'manual-lease-before-generate'"),
-  );
+  const start = source.indexOf("const acceptedLease = command.startsWith('accepted-lease-');");
   const end = source.indexOf("} else if (command === 'accepted')", start);
   const tokenDigest = 'a'.repeat(64),
     privateSession = 'private-test-session-canary';
@@ -2945,6 +2947,11 @@ test('current host renewal correlates exact private SQLite row among peers and a
   const values = {
     assert,
     proofLane: 'manual-discard',
+    serialProfileRequested: false,
+    editingPhase: 'accepted',
+    acceptedLeaseStages: new Set(),
+    acceptedLeaseReceipts: [],
+    deferredReuse: { assertPassed() {} },
     command: 'manual-lease-before-generate',
     manualLeaseStages: new Set(),
     manualLeaseReceipts: [],
@@ -3074,6 +3081,33 @@ test('current host renewal correlates exact private SQLite row among peers and a
       await assert.rejects(refused(), /PROOF_MANUAL_LEASE_IDENTITY/);
       assert.equal(calls, 2);
     }
+    // Exercise the actual A branch with the same private row among unrelated peers.
+    db.prepare('UPDATE live_leases SET record=? WHERE token_hash=?').run(
+      JSON.stringify(expected),
+      tokenDigest,
+    );
+    values.proofLane = 'accept-steer';
+    values.serialProfileRequested = true;
+    values.command = 'accepted-lease-before-generate';
+    values.source = () => 'Production chosen variant';
+    clock = now;
+    const observed = await runCurrent()();
+    assert.equal(observed.renewed, false);
+    assert.equal(observed.ownerRenewals, 0);
+    assert.equal(calls, 2); // Initial observation can never issue an owner renewal.
+    await assert.rejects(runCurrent()());
+    values.command = 'accepted-lease-before-accept';
+    values.observation = {
+      deadline: now + 30_000,
+      cookie: { tokenDigest, cookieExpiresAt: expected.leaseExpiresAt },
+    };
+    const aRenewed = await runCurrent()();
+    assert.equal(aRenewed.ownerRenewals, 1);
+    assert.equal(aRenewed.tokenDigest, observed.tokenDigest);
+    assert.equal(aRenewed.leaseDigest, observed.leaseDigest);
+    assert.equal(calls, 3);
+    await assert.rejects(runCurrent()());
+    assert.equal(calls, 3);
   } finally {
     db.close();
     rmSync(root, { recursive: true, force: true });
@@ -3736,3 +3770,502 @@ testWithEditingClock(
     }
   },
 );
+
+// Actual production Start branch and actual proof API; Native authority is a
+// controlled port barrier. This asserts ownership, never authentic performance.
+async function deferredStartFixture({ cancelAtDeadline = false } = {}) {
+  const { default: fastify } = await import('fastify');
+  const { ProductionLiveController } =
+    await import('../dist/server/server/platform/live-design/production-controller.js');
+  const mobile = fastify(),
+    rawRequests = new Set();
+  let release,
+    entered,
+    calls = 0,
+    patches = 0,
+    authority = true;
+  const raw = new Promise((resolve) => {
+    release = resolve;
+  });
+  const began = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const owner = {
+    liveId: 'original-live',
+    generation: 1,
+    operationId: 'original-operation',
+    appId: 'app',
+    targetId: 'target',
+    authSessionHash: 'auth',
+    deviceId: 'device',
+  };
+  const controller = Object.create(ProductionLiveController.prototype);
+  Object.assign(controller, {
+    serial: Promise.resolve(),
+    failedPreparations: new Set(),
+    requireBindings: () => ({ sessions: { find: () => ({ id: 'relay' }) } }),
+    verifyHost() {},
+    appFor: () => ({ appId: 'app', targetId: 'target' }),
+    preview: { authentication: { authorized: () => true }, now: () => new Date() },
+    owners: {
+      read: () => owner,
+      assert: (value) => {
+        assert.equal(value, owner);
+        return value;
+      },
+    },
+    verifyLiveRuntime: async (value) => {
+      assert.equal(value, owner);
+      calls++;
+      entered();
+      await raw;
+    },
+  });
+  mobile.post('/api/sessions/relay/live/start', async () =>
+    controller.start({ relayId: 'relay', ...owner }),
+  );
+  await mobile.ready();
+  const h = await dependencyPreparedEditingHandoff({
+    left: cancelAtDeadline ? 120 : 5000,
+    onCancel: () => Promise.allSettled([...rawRequests]),
+  });
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const begin = source.indexOf('async function api(method, path, payload) {'),
+    end = source.indexOf('\ntry {', begin);
+  const api = new Function(
+    'recoveryHandoff',
+    'mobile',
+    'headers',
+    'report',
+    'editingContinuity',
+    'editingApiRaw',
+    source.slice(begin, end) + ';return api;',
+  )(h.handoff, mobile, {}, {}, true, rawRequests);
+  const grant = { eventDigest: 'a'.repeat(64), generation: 1 };
+  const gate = createDeferredSourceGate({
+    assertCurrent: () => {
+      h.handoff.assertCurrent();
+      assert.ok(authority, 'STALE_AUTHORITY');
+    },
+    authorize: (value) => assert.deepEqual(value, grant),
+    work: () => api('POST', '/api/sessions/relay/live/start', {}),
+    validate: (value) => {
+      assert.equal(value.liveId, owner.liveId);
+      assert.equal(value.generation, 1);
+    },
+  });
+  return {
+    h,
+    gate,
+    grant,
+    began,
+    rawRequests,
+    release,
+    get calls() {
+      return calls;
+    },
+    get patches() {
+      return patches;
+    },
+    retire() {
+      authority = false;
+    },
+    async patch() {
+      await gate.beforeSourcePatch();
+      patches++;
+    },
+    async close() {
+      release();
+      await gate.drain();
+      await h.handoff.close();
+      await mobile.close();
+      rmSync(h.directory, { recursive: true, force: true });
+    },
+  };
+}
+
+testWithEditingClock(
+  'deferred original actual Start overlaps required work but gates the first patch until the same raw API settles',
+  async () => {
+    const f = await deferredStartFixture();
+    try {
+      await assert.rejects(f.patch(), /PROOF_REUSE_NOT_STARTED/);
+      assert.equal(f.calls, 0);
+      f.gate.start(f.grant);
+      await f.began;
+      assert.equal(f.calls, 1);
+      assert.equal(f.rawRequests.size, 1);
+      let patched = false;
+      const patch = f.patch().then(() => {
+        patched = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(patched, false);
+      assert.equal(f.patches, 0);
+      assert.throws(() => f.gate.start(f.grant), /PROOF_REUSE_REPLAY/);
+      f.release();
+      await patch;
+      assert.equal(f.patches, 1);
+      assert.equal(f.calls, 1);
+      assert.equal(f.rawRequests.size, 0);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+testWithEditingClock(
+  'actual deferred Start remains raw-owned through phase cancellation and cannot authorize any late source patch',
+  async () => {
+    const f = await deferredStartFixture({ cancelAtDeadline: true });
+    try {
+      f.gate.start(f.grant);
+      const refusal = assert.rejects(f.patch(), /PROOF_DRIVER_PHASE_DEADLINE/);
+      await f.began;
+      await new Promise((resolve) => setTimeout(resolve, 160));
+      assert.equal(f.calls, 1);
+      assert.equal(f.rawRequests.size, 1);
+      assert.equal(f.patches, 0);
+      f.release();
+      await refusal;
+      await f.gate.drain();
+      await assert.rejects(f.patch(), /PROOF_DRIVER_PHASE_DEADLINE/);
+      assert.equal(f.rawRequests.size, 0);
+      assert.equal(f.patches, 0);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test('deferred reuse refuses stale grant, missing grant, changed owner and stale authority without a late patch', async () => {
+  for (const mode of ['missing', 'grant', 'owner', 'authority']) {
+    let resolve,
+      current = true,
+      invocations = 0,
+      patches = 0;
+    const raw = new Promise((done) => {
+      resolve = done;
+    });
+    const gate = createDeferredSourceGate({
+      assertCurrent: () => assert.ok(current, 'STALE_AUTHORITY'),
+      authorize: (a) => assert.equal(a.generation, 1),
+      work: () => {
+        invocations++;
+        return raw;
+      },
+      validate: (v) => assert.equal(v.generation, 1),
+    });
+    if (mode === 'missing') {
+      await assert.rejects(gate.beforeSourcePatch(), /PROOF_REUSE_NOT_STARTED/);
+      assert.equal(invocations, 0);
+      continue;
+    }
+    if (mode === 'grant') {
+      assert.throws(() => gate.start({ generation: 2 }));
+      assert.equal(invocations, 0);
+      assert.throws(() => gate.start({ generation: 1 }), /PROOF_REUSE_REPLAY/);
+      continue;
+    }
+    gate.start({ generation: 1 });
+    if (mode === 'authority') current = false;
+    resolve({ generation: mode === 'owner' ? 2 : 1 });
+    await assert.rejects(
+      gate.beforeSourcePatch().then(() => {
+        patches++;
+      }),
+    );
+    await gate.drain();
+    assert.equal(patches, 0);
+    assert.equal(invocations, 1);
+  }
+});
+
+test('A same-cookie renewal uses actual redelivery and bounded capacity; every identity/expiry/rate refusal remains terminal', async () => {
+  const f = manualRenewalFixture();
+  f.lease.stage = 'before-accept';
+  const renewed = await renewAcceptedPreviewLease({
+    ...f.options,
+    stage: 'before-accept',
+    requiredMs: acceptedLeaseEstimate.accept,
+  });
+  assert.equal(renewed.cookie.tokenDigest, f.cookie.tokenDigest);
+  assert.deepEqual(f.calls, ['owner-renew', 'same-cookie-redelivery', 'actual-browser-cookie']);
+  for (const limit of ['cookie', 'server', 'absolute', 'host']) {
+    const input = {
+      cookie: { ...renewed.cookie },
+      lease: { ...renewed.lease },
+      generation: 1,
+      hostDeadline: f.start + 800_000,
+      requiredMs: acceptedLeaseEstimate.accept,
+      now: f.start,
+    };
+    if (limit === 'cookie')
+      input.cookie.cookieExpiresAt = new Date(f.start + 269_000).toISOString();
+    if (limit === 'server') input.lease.leaseExpiresAt = new Date(f.start + 269_000).toISOString();
+    if (limit === 'absolute')
+      input.lease.absoluteExpiresAt = new Date(f.start + 269_000).toISOString();
+    if (limit === 'host') input.hostDeadline = f.start + 269_000;
+    assert.throws(() => acceptedLeaseDeadline(input), /PROOF_ACCEPTED_LEASE_INSUFFICIENT/);
+  }
+  for (const mutation of [
+    { generation: 2 },
+    { tokenDigest: 'b'.repeat(64) },
+    { absoluteExpiresAt: new Date(f.start + 4_000_000).toISOString() },
+  ]) {
+    const x = manualRenewalFixture();
+    x.lease.stage = 'before-accept';
+    Object.assign(x.lease, mutation);
+    await assert.rejects(
+      renewAcceptedPreviewLease({ ...x.options, stage: 'before-accept', requiredMs: 1 }),
+      /PROOF_ACCEPTED_LEASE_INVALID/,
+    );
+  }
+  const rate = manualRenewalFixture();
+  let calls = 0;
+  await assert.rejects(
+    renewAcceptedPreviewLease({
+      ...rate.options,
+      stage: 'before-accept',
+      renew: async () => {
+        calls++;
+        throw Error('LIVE_RATE_LIMITED');
+      },
+    }),
+    /PROOF_ACCEPTED_LEASE_INVALID/,
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(rate.calls, []);
+});
+
+test('fixed A lease refusal survives redaction without admitting prefixed payloads or cookie canaries', () => {
+  for (const code of [
+    'PROOF_ACCEPTED_LEASE_INSUFFICIENT',
+    'PROOF_ACCEPTED_LEASE_INVALID',
+    'PROOF_ACCEPTED_LEASE_REDELIVERY',
+  ]) {
+    assert.equal(safeBrowserFailure(code), code);
+    const canary = 'a'.repeat(43);
+    const arbitrary = safeBrowserFailure(code + '_' + canary);
+    assert.ok(!arbitrary.includes(canary));
+    assert.notEqual(arbitrary, code);
+    assert.ok(!safeBrowserFailure(code + '\n' + canary).includes(canary));
+  }
+});
+
+test('actual A browser adapter chain retains initial and post-renewal capacity refusal before Generate or Accept', async () => {
+  const source = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  const helpers = source.slice(
+    source.indexOf('  let acceptedLease;'),
+    source.indexOf('  const manualLeaseStages'),
+  );
+  const actionsSource = source.slice(
+    source.indexOf('  const generate = async (label)'),
+    source.indexOf('  const steer = async ()'),
+  );
+  for (const stage of ['before-generate', 'before-accept']) {
+    const start = Date.now(),
+      canary = 'private-cookie-canary-' + 'x'.repeat(43);
+    let cookie = {
+      tokenDigest: 'a'.repeat(64),
+      cookieExpiresAt: new Date(
+        start + (stage === 'before-generate' ? 200_000 : 274_000),
+      ).toISOString(),
+    };
+    const absoluteExpiresAt = new Date(start + 280_000).toISOString();
+    const observations = [],
+      commands = [],
+      edits = [],
+      actions = new Set();
+    const initial = {
+      generation: 1,
+      stage: 'before-generate',
+      renewed: false,
+      tokenDigest: cookie.tokenDigest,
+      leaseExpiresAt: cookie.cookieExpiresAt,
+      absoluteExpiresAt,
+      priorAbsoluteExpiresAt: absoluteExpiresAt,
+    };
+    const renewed = {
+      ...initial,
+      stage: 'before-accept',
+      renewed: true,
+      leaseExpiresAt: absoluteExpiresAt,
+    };
+    const values = {
+      assert,
+      acceptedLeaseCapacityObservations: observations,
+      acceptedLeaseDeadline,
+      acceptedLeaseEstimate,
+      renewAcceptedPreviewLease,
+      ownedProofSequence,
+      proofObservationRemaining,
+      Date,
+      config: {
+        serialProfile: true,
+        editingPhase: 'accepted',
+        generation: 1,
+        observationHostDeadline: start + 900_000,
+      },
+      readPreviewCookie: async () => cookie,
+      command: async (command) => {
+        commands.push(command);
+        return command.endsWith('before-generate') ? initial : renewed;
+      },
+      preview: {
+        evaluate: async () => {
+          cookie = { ...cookie, cookieExpiresAt: renewed.leaseExpiresAt };
+          return renewed;
+        },
+        getByRole: () => ({ waitFor: async () => {} }),
+      },
+      ui: {
+        pickElement: async () => {},
+        setCount: async () => {},
+        clickGo: async () => {
+          edits.push('generate');
+        },
+        waitForCycling: async () => {},
+        clickAccept: async () => {
+          edits.push('accept');
+        },
+        waitForBarHidden: async () => {},
+      },
+      context: { close: async () => {} },
+      actions,
+      checkpoint: () => {},
+      observePicker: async () => {},
+      modelEffectTimeout: 300_000,
+      terminalEffectTimeout: 300_000,
+    };
+    const chain = new Function(
+      ...Object.keys(values),
+      `${helpers}\nlet manualLease;\n${actionsSource}\nreturn {generate,accept};`,
+    )(...Object.values(values));
+    if (stage === 'before-accept') await chain.generate('Production chosen variant');
+    await assert.rejects(
+      stage === 'before-generate' ? chain.generate('variant') : chain.accept(),
+      (error) => error.message === 'PROOF_ACCEPTED_LEASE_INSUFFICIENT',
+    );
+    assert.deepEqual(edits, stage === 'before-generate' ? [] : ['generate']);
+    assert.equal(actions.has('accept'), false);
+    assert.equal(
+      commands.filter((value) => value === 'accepted-lease-before-accept').length,
+      stage === 'before-accept' ? 1 : 0,
+    );
+    const row = observations.at(-1);
+    assert.equal(row.boundary, stage);
+    assert.equal(row.capacityInputsValid, true);
+    assert.equal(
+      row.estimateMs,
+      acceptedLeaseEstimate[stage === 'before-generate' ? 'generate' : 'accept'],
+    );
+    assert.ok(row.remainingMs < row.estimateMs);
+    assert.equal(row.hostDeadline, values.config.observationHostDeadline);
+    assert.equal(row.absoluteExpiresAt, absoluteExpiresAt);
+    // Exercise the actual host failure-artifact allowlist, not a synthetic copy.
+    const host = readFileSync(
+      new URL('./live-production-edit-browser-host.mjs', import.meta.url),
+      'utf8',
+    );
+    const begin = host.indexOf('        input.report.editBrowserFailure = {');
+    const end = host.indexOf('\n      if (', begin);
+    const input = { report: {} };
+    new Function(
+      'input',
+      'value',
+      'safeBrowserFailure',
+      'boundedHelperAuthLoss',
+      'boundedAcceptedLeaseCapacityObservations',
+      host.slice(begin, end),
+    )(
+      input,
+      {
+        failure: {
+          stage: 'picker-generate',
+          code: 'BROWSER_OPERATION_FAILED',
+          diagnostic: 'PROOF_ACCEPTED_LEASE_INSUFFICIENT',
+          acceptedLeaseCapacityObservations: [
+            ...observations,
+            { ...row, boundary: canary },
+            { ...row, cookieExpiresAt: canary },
+            { ...row, extra: canary },
+          ],
+        },
+      },
+      safeBrowserFailure,
+      boundedHelperAuthLoss,
+      boundedAcceptedLeaseCapacityObservations,
+    );
+    assert.deepEqual(
+      input.report.editBrowserFailure.acceptedLeaseCapacityObservations,
+      observations,
+    );
+    assert.equal(input.report.editBrowserFailure.diagnostic, 'PROOF_ACCEPTED_LEASE_INSUFFICIENT');
+    assert.ok(!JSON.stringify(input.report).includes(canary));
+    assert.ok(
+      source
+        .slice(source.indexOf('        acceptedLease,'), source.indexOf("  checkpoint('complete')"))
+        .includes('acceptedLeaseCapacityObservations'),
+    );
+    assert.ok(
+      source
+        .slice(source.indexOf('} catch (error) {', source.indexOf("  checkpoint('complete')")))
+        .includes('acceptedLeaseCapacityObservations'),
+    );
+  }
+});
+
+test('A refusal classification requires the exact local capacity error and records malformed expiry without leaking payloads', async () => {
+  for (const text of [
+    'PROOF_ACCEPTED_LEASE_INSUFFICIENT',
+    'PROOF_ACCEPTED_LEASE_INSUFFICIENT_secret-canary',
+  ]) {
+    const f = manualRenewalFixture(),
+      observations = [];
+    await assert.rejects(
+      renewAcceptedPreviewLease({
+        ...f.options,
+        observeCapacity: (row) => observations.push(row),
+        renew: async () => {
+          throw Error(text);
+        },
+      }),
+      (error) => error.message === 'PROOF_ACCEPTED_LEASE_INVALID',
+    );
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].leaseExpiresAt, null);
+    assert.ok(!JSON.stringify(observations).includes('secret-canary'));
+  }
+  for (const mutation of [
+    { generation: 2 },
+    { cookieExpiresAt: 'malformed-private-cookie-canary' },
+    { cookieExpiresAt: new Date(Date.now() - 1000).toISOString() },
+  ]) {
+    const f = manualRenewalFixture(),
+      observations = [];
+    const input = {
+      cookie: { ...f.cookie, ...mutation },
+      lease: { ...f.lease, tokenDigest: f.cookie.tokenDigest },
+      generation: 1,
+      hostDeadline: f.start + 800_000,
+      requiredMs: 1,
+      now: f.start,
+      observeCapacity: (row) => observations.push(row),
+    };
+    if ('generation' in mutation) input.lease.generation = mutation.generation;
+    assert.throws(
+      () => acceptedLeaseDeadline(input),
+      (error) => error.message === 'PROOF_ACCEPTED_LEASE_INVALID',
+    );
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].capacityInputsValid, false);
+    assert.ok(!JSON.stringify(observations).includes('malformed-private-cookie-canary'));
+  }
+});

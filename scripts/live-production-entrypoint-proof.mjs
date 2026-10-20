@@ -49,6 +49,7 @@ import {
   observeAdmissionTimings,
   cleanupControllerSnapshot,
   createSerialProfile,
+  createDeferredSourceGate,
   validateSerialProfile,
   editingSchedule,
   editingRemaining,
@@ -191,10 +192,11 @@ const serialProfileRequested = process.env.LIVE_PRODUCTION_SERIAL_PROFILE === '1
 if (serialProfileRequested) {
   report.serialProfileTrialRequested = true;
   assert.ok(editingContinuity && !pickerSmoke && !preflightOnly && !recoveryOnly);
-  assert.equal(process.env.LIVE_PRODUCTION_PROFILE_TRIAL, 'serial-accept-baseline-1');
+  assert.equal(process.env.LIVE_PRODUCTION_PROFILE_TRIAL, 'deferred-accept-confinement-1');
   assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
 }
 let serialProfile, rootProfileId, childProfileId, sourcePatchProfile, browserCloseProfileId;
+let deferredReuse;
 const profiled = (label, work, metadata) =>
   serialProfile ? serialProfile.trace(label, work, metadata) : work();
 const profileEventKind = (fence, eventId) => {
@@ -1210,8 +1212,11 @@ async function eventFor(body) {
     const id = serialProfile.begin(role === 'root' ? 'root-confinement' : 'child-confinement', {
       parentId,
     });
-    if (role === 'root') rootProfileId = id;
-    else childProfileId = id;
+    if (role === 'root') {
+      rootProfileId = id;
+      if (deferredReuse)
+        deferredReuse.start({ parentId, eventDigest: hash(liveEventFromRequest(body).id) });
+    } else childProfileId = id;
   }
   roles.set(role, step + 1);
   report.provider.lastCall = { role, step };
@@ -1230,6 +1235,7 @@ async function eventFor(body) {
       name === 'apply_patch' &&
       !sourcePatchProfile
     ) {
+      deferredReuse?.assertPassed();
       sourcePatchProfile = {
         id: serialProfile.begin('first-source-patch', { parentId: rootProfileId }),
         callId: `${role}-${step}`,
@@ -1250,8 +1256,10 @@ async function eventFor(body) {
     editFlow &&
     role === 'root' &&
     (productionModelWorkload(proofLane) === 'owning-edit-only' || step >= 7)
-  )
+  ) {
+    if (deferredReuse) await deferredReuse.beforeSourcePatch();
     return editResponse(body, toolCall);
+  }
   if (step === 1) {
     const output = body.input.find(
       (x) =>
@@ -1411,7 +1419,10 @@ async function eventFor(body) {
     report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
     if (serialProfile) serialProfile.end(rootProfileId, 'completed');
-    if (editFlow) return editResponse(body, toolCall);
+    if (editFlow) {
+      if (deferredReuse) await deferredReuse.beforeSourcePatch();
+      return editResponse(body, toolCall);
+    }
   }
   if (serialProfile && role === 'child') serialProfile.end(childProfileId, 'completed');
   return final(
@@ -1702,7 +1713,9 @@ try {
         stopPreviewProbe();
         if (editingContinuity) {
           await drainEditingFailure({
-            pending: Promise.allSettled([editingRaw, ...editingApiRaw].filter(Boolean)),
+            pending: Promise.allSettled(
+              [editingRaw, deferredReuse?.drain(), ...editingApiRaw].filter(Boolean),
+            ),
             record: (row) => {
               report.editingUnresolved = row;
               writeFileSync(join(evidence, 'editing-unresolved.json'), JSON.stringify(row));
@@ -2480,14 +2493,42 @@ try {
       captureDigest: hash(captureId),
       nativeBirthDigest: hash(JSON.stringify(baselineBirth)),
     };
-  const reused = await profiled(
-    'idempotent-start',
-    () => api('POST', `/api/sessions/${session.id}/live/start`, operation),
-    { generation: started.generation },
-  );
-  assert.equal(reused.liveId, started.liveId);
-  assert.equal(reused.generation, started.generation);
-  report.checks.sameSessionReuseNoReplacement = true;
+  const reuseOriginal = () =>
+    profiled(
+      'idempotent-start',
+      () => api('POST', `/api/sessions/${session.id}/live/start`, operation),
+      { generation: started.generation, ...(rootProfileId ? { parentId: rootProfileId } : {}) },
+    );
+  const validateReuse = (reused) => {
+    recoveryHandoff?.assertCurrent();
+    assert.equal(reused.liveId, started.liveId);
+    assert.equal(reused.generation, started.generation);
+    assert.equal(observedBirthExited(baselineBirth), false);
+    const currentManifest = JSON.parse(readFileSync(join(generationDirectory, 'manifest.json')));
+    assert.deepEqual(currentManifest.generation, manifest.generation);
+    assert.equal(currentManifest.runtimeProvenance.captureId, captureId);
+    assert.equal(
+      signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).captureId,
+      captureId,
+    );
+    // The actual idempotent API verifies fresh Native selection and source identity.
+    assert.deepEqual(currentManifest.runtimeProvenance, manifest.runtimeProvenance);
+    report.checks.sameSessionReuseNoReplacement = true;
+  };
+  if (serialProfileRequested) {
+    deferredReuse = createDeferredSourceGate({
+      assertCurrent: () => recoveryHandoff.assertCurrent(),
+      authorize: ({ parentId, eventDigest }) => {
+        assert.equal(serialProfile.eventParent(eventDigest), parentId);
+        const granted = report.serialProfile.spans.find((row) => row.id === parentId);
+        assert.equal(granted.generation, started.generation);
+        assert.equal(granted.label, 'generate-authority');
+        assert.equal(observedBirthExited(baselineBirth), false);
+      },
+      work: reuseOriginal,
+      validate: validateReuse,
+    });
+  } else validateReuse(await reuseOriginal());
   if (['accept-steer', 'manual-discard'].includes(proofLane)) {
     const readOriginalOwner = () => {
       const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
@@ -2798,6 +2839,8 @@ try {
     let steeredCanonicalAcknowledged = false,
       backgroundFinished = false,
       discardedCanonicalAcknowledged = false;
+    const acceptedLeaseStages = new Set();
+    const acceptedLeaseReceipts = (report.acceptedLeaseStages = []);
     const manualLeaseStages = new Set();
     const manualLeaseReceipts = (report.manualLeaseStages = []);
     let manualWaitDeadline;
@@ -2955,14 +2998,41 @@ try {
               report.manualPollCommitObservation = current;
               return current;
             } else if (
-              ['manual-lease-before-generate', 'manual-lease-before-discard'].includes(command)
+              [
+                'manual-lease-before-generate',
+                'manual-lease-before-discard',
+                'accepted-lease-before-generate',
+                'accepted-lease-before-accept',
+              ].includes(command)
             ) {
-              assert.equal(proofLane, 'manual-discard');
-              const leaseStage =
-                command === 'manual-lease-before-generate' ? 'before-generate' : 'before-discard';
-              assert.equal(manualLeaseStages.has(leaseStage), false);
-              manualLeaseStages.add(leaseStage);
-              assert.ok(manualSource, 'PROOF_MANUAL_ACK_INVALID');
+              const acceptedLease = command.startsWith('accepted-lease-');
+              if (acceptedLease) {
+                assert.ok(
+                  serialProfileRequested &&
+                    editingPhase === 'accepted' &&
+                    proofLane === 'accept-steer',
+                );
+              } else assert.equal(proofLane, 'manual-discard');
+              const stages = acceptedLease ? acceptedLeaseStages : manualLeaseStages;
+              const receipts = acceptedLease ? acceptedLeaseReceipts : manualLeaseReceipts;
+              const leaseStage = command.endsWith('before-generate')
+                ? 'before-generate'
+                : acceptedLease
+                  ? 'before-accept'
+                  : 'before-discard';
+              assert.equal(stages.has(leaseStage), false);
+              stages.add(leaseStage);
+              if (!acceptedLease) assert.ok(manualSource, 'PROOF_MANUAL_ACK_INVALID');
+              if (leaseStage === 'before-accept') {
+                assert.equal(stages.has('before-generate'), true);
+                deferredReuse.assertPassed();
+                await acknowledged(
+                  'generate',
+                  proofObservationRemaining(observation.deadline),
+                  observation.deadline,
+                );
+                assert.ok(source().includes('Production chosen variant'));
+              }
               if (leaseStage === 'before-discard') {
                 assert.equal(manualLeaseStages.has('before-generate'), true);
                 await acknowledged(
@@ -3000,7 +3070,7 @@ try {
                 }
               };
               const before = readActualLease();
-              const prior = manualLeaseReceipts.at(-1);
+              const prior = receipts.at(-1);
               if (prior) {
                 assert.equal(hash(before.leaseId), prior.leaseDigest);
                 assert.equal(before.tokenHash, prior.tokenDigest);
@@ -3009,7 +3079,8 @@ try {
               } else assert.equal(before.renewedAt, null);
               const sinceRenewalMs =
                 Date.now() - Date.parse(before.renewedAt ?? before.exchangedAt);
-              const shouldRenew = sinceRenewalMs >= 60_000;
+              const shouldRenew =
+                (!acceptedLease || leaseStage === 'before-accept') && sinceRenewalMs >= 60_000;
               const renewed = shouldRenew
                 ? await api(
                     'POST',
@@ -3043,11 +3114,13 @@ try {
                 sameLeaseAndToken: true,
                 ownerRenewals: (prior?.ownerRenewals ?? 0) + (shouldRenew ? 1 : 0),
               };
-              assert.ok(receipt.ownerRenewals <= 2);
-              manualLeaseReceipts.push(receipt);
-              report.manualLeaseRenewal = receipt;
+              assert.ok(receipt.ownerRenewals <= (acceptedLease ? 1 : 2));
+              receipts.push(receipt);
+              if (acceptedLease) report.acceptedLeaseRenewal = receipt;
+              else report.manualLeaseRenewal = receipt;
               return receipt;
             } else if (command === 'accepted') {
+              deferredReuse?.assertPassed();
               await acknowledged(
                 'generate',
                 observation
@@ -3195,7 +3268,17 @@ try {
       );
     await runPicker(editingContinuity ? 'accepted' : undefined);
     if (editingContinuity) {
+      deferredReuse?.assertPassed();
       const phaseA = report.editBrowser;
+      if (serialProfileRequested) {
+        assert.deepEqual(phaseA.acceptedLease.stages, acceptedLeaseReceipts);
+        assert.deepEqual(
+          acceptedLeaseReceipts.map((row) => row.stage),
+          ['before-generate', 'before-accept'],
+        );
+        assert.ok(acceptedLeaseReceipts.at(-1).ownerRenewals <= 1);
+        report.checks.authenticAcceptedSameCookieCapacity = true;
+      }
       assert.equal(phaseA.realPickerGenerateAccept, true);
       assert.equal(phaseA.realPickerSteer, false);
       assert.deepEqual(phaseA.postAcceptPollObservation, report.postAcceptPollObservation);

@@ -388,7 +388,7 @@ jobs:
         timeout-minutes: 21
         env:
           LIVE_PRODUCTION_SERIAL_PROFILE: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && '1' || '0' }}
-          LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'serial-accept-baseline-1' || '' }}
+          LIVE_PRODUCTION_PROFILE_TRIAL: ${{ contains(github.event.head_commit.message, '[serial-accept-profile]') && 'deferred-accept-confinement-1' || '' }}
           LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
           LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
           LIVE_PRODUCTION_ADMISSION_PREFLIGHT: ${{ steps.proof-mode.outputs.mode == 'preflight' && '1' || '0' }}
@@ -404,10 +404,12 @@ jobs:
           LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
           LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          /usr/bin/node scripts/live-production-proof-lanes.mjs editing-clock "$RUNNER_TEMP/live-edit-continuity"
           set -Eeuo pipefail
           native_binary="$LIVE_HOST_CODEX_BINARY"
           export PATH="$RUNNER_TEMP/live-proof-bun/node_modules/.bin:$PATH"
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs scripts/live-picker-smoke.test.mjs scripts/live-production-proof-lanes.test.mjs
+          /usr/bin/node scripts/live-production-proof-lanes.mjs editing-setup-complete "$RUNNER_TEMP/live-edit-continuity"
           mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
           PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node scripts/live-production-proof-lanes.mjs editing-start "$RUNNER_TEMP/live-edit-continuity"
       - name: 'Accept editing phase B: one Resume and real Steer on same owner'

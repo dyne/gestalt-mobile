@@ -151,6 +151,8 @@ export class ProductionLiveController {
   private pollFactory?: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => LivePollLoop;
   private readonly scopesBySession = new Map<string, readonly string[]>();
   private readonly generations = new Map<string, Generation>();
+  // Original verification work survives observation cancellation until Stop joins it.
+  private readonly verificationFlights = new Map<Generation, Map<AbortController, Promise<void>>>();
   private readonly preflight = new Set<string>();
   private readonly failedPreparations = new Set<string>();
   private readonly targets = new RegisteredPreviewTargets();
@@ -1064,6 +1066,25 @@ export class ProductionLiveController {
     const g = this.cleanupGeneration(run),
       b = this.requireBindings();
     if (b.runtime.liveOwnerIds().includes(run.relayId)) {
+      const deadline = Date.now() + 5000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.all([
+            Promise.allSettled([...(this.verificationFlights.get(g)?.values() ?? [])]),
+            b.runtime.settleLiveAdmission(g.session, { owners: this.owners, fence: run }, deadline),
+          ]),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+        this.owners.assert(run);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       await b.runtime.inspectLiveQuiescence(g.session);
       return;
     }
@@ -1561,6 +1582,36 @@ export class ProductionLiveController {
     this.owners.assert(run);
   }
   verifyLiveRuntime = async (fence: LiveFence): Promise<void> => {
+    const g = this.generation(this.owners.assert(fence));
+    const cancellation = new AbortController();
+    const raw = this.verifyRuntimeObservation(fence, cancellation.signal);
+    const flights = this.verificationFlights.get(g) ?? new Map<AbortController, Promise<void>>();
+    this.verificationFlights.set(g, flights);
+    flights.set(cancellation, raw);
+    const settled = () => {
+      flights.delete(cancellation);
+      if (!flights.size && this.verificationFlights.get(g) === flights)
+        this.verificationFlights.delete(g);
+    };
+    raw.then(settled, settled);
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        raw,
+        new Promise<never>((_resolve, reject) => {
+          abort = () => reject(cancellation.signal.reason);
+          cancellation.signal.addEventListener('abort', abort, { once: true });
+          if (cancellation.signal.aborted) abort();
+        }),
+      ]);
+    } finally {
+      if (abort) cancellation.signal.removeEventListener('abort', abort);
+    }
+  };
+  private async verifyRuntimeObservation(
+    fence: LiveFence,
+    cancellation: AbortSignal,
+  ): Promise<void> {
     const run = this.owners.assert(fence),
       g = this.generation(run),
       b = this.requireBindings();
@@ -1576,7 +1627,9 @@ export class ProductionLiveController {
       )
         throw new Error('LIVE_RUNTIME_UNAVAILABLE');
       stage = 'owning-observation';
-      const observed = await b.runtime.inspectLiveAdmission(session);
+      const observed = await b.runtime.inspectLiveAdmission(session, cancellation);
+      cancellation.throwIfAborted();
+      this.owners.assert(fence);
       stage = 'source-inventory';
       assertProductionSourceObservation(g.policy, observed);
       stage = 'owning-selection';
@@ -1602,12 +1655,16 @@ export class ProductionLiveController {
         g.policy.bootstrapPath,
         g.policy.files,
       );
+      cancellation.throwIfAborted();
+      this.owners.assert(fence);
       if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
       stage = 'project-resources';
       await this.verifyProjectResources(g);
+      cancellation.throwIfAborted();
       stage = 'generation-fence';
       this.owners.assert(fence);
     } catch (error) {
+      if (cancellation.aborted) throw cancellation.reason;
       // Stop may revoke admission while its old poll is still verifying. Stop
       // owns that exact generation's drain; never turn its expected refusal
       // into a second recovery transition or grant the old poll authority.
@@ -1650,7 +1707,7 @@ export class ProductionLiveController {
       if (!revoked || !retired) throw new Error('LIVE_CLEANUP_REQUIRED', { cause: error });
       throw error;
     }
-  };
+  }
   private async prepareOwner(run: LiveRun): Promise<void> {
     const g = this.generation(run),
       b = this.requireBindings();
@@ -1777,6 +1834,8 @@ export class ProductionLiveController {
       this.revokeCapture(g.policy.capture),
       this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation }),
     ]);
+    for (const cancellation of this.verificationFlights.get(g)?.keys() ?? [])
+      cancellation.abort(new Error('LIVE_GENERATION_STALE'));
     if (results.some((result) => result.status === 'rejected'))
       throw new Error('LIVE_CLEANUP_REQUIRED');
   }

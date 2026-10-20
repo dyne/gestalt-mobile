@@ -14,6 +14,7 @@ import {
   boundedPickerObservation,
   boundedManualCommitObservation,
   boundedHelperAuthLoss,
+  boundedAcceptedLeaseCapacityObservations,
 } from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
@@ -201,6 +202,9 @@ export async function productionEditBrowser(input) {
           stage: value.failure.stage,
           code: value.failure.code,
           diagnostic: safeBrowserFailure(value.failure.diagnostic),
+          acceptedLeaseCapacityObservations: boundedAcceptedLeaseCapacityObservations(
+            value.failure.acceptedLeaseCapacityObservations,
+          ),
           callsite:
             Number.isSafeInteger(value.failure.callsite?.line) &&
             Number.isSafeInteger(value.failure.callsite?.column)
@@ -385,6 +389,8 @@ export async function productionEditBrowser(input) {
                   'manual-poll-observed',
                   'manual-commit-observed',
                   'manual-applied',
+                  'accepted-lease-before-generate',
+                  'accepted-lease-before-accept',
                   'manual-lease-before-generate',
                   'manual-lease-before-discard',
                   'discarded',
@@ -412,8 +418,20 @@ export async function productionEditBrowser(input) {
                 assert.equal(observation.hostDeadline, observationHostDeadline);
                 assert.ok(observation.deadline <= observationHostDeadline);
               }
-              if (value.command.startsWith('manual-lease-')) {
-                assert.equal(input.browser.proofLane, 'manual-discard');
+              if (
+                value.command.startsWith('manual-lease-') ||
+                value.command.startsWith('accepted-lease-')
+              ) {
+                if (value.command.startsWith('accepted-lease-')) {
+                  assert.equal(input.browser.proofLane, 'accept-steer');
+                  assert.equal(input.browser.editingPhase, 'accepted');
+                  assert.equal(input.browser.serialProfile, true);
+                  assert.equal(observation.hostDeadline, observationHostDeadline);
+                  assert.ok(
+                    Number.isSafeInteger(observation.startedAt) &&
+                      observation.startedAt <= Date.now(),
+                  );
+                } else assert.equal(input.browser.proofLane, 'manual-discard');
                 assert.match(observation.cookie?.tokenDigest ?? '', /^[a-f0-9]{64}$/);
                 assert.ok(Date.parse(observation.cookie.cookieExpiresAt) > Date.now());
                 assert.ok(observation.deadline <= observationHostDeadline);

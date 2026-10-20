@@ -26,6 +26,9 @@ import {
   renewManualPreviewLease,
   manualLeaseDeadline,
   manualLeaseEstimate,
+  acceptedLeaseEstimate,
+  acceptedLeaseDeadline,
+  renewAcceptedPreviewLease,
   ownedProofSequence,
   expectedPollProbeResponse,
 } from './live-production-edit-diagnostics.mjs';
@@ -53,6 +56,7 @@ let firstHelperAuthLoss, lastAuthenticatedHelper, expectedPollProbeRequest;
 let pollProbeArmed = false;
 const pollProbeTag = createHash('sha256').update(String(process.hrtime.bigint())).digest('hex');
 const editRequests = [];
+const acceptedLeaseCapacityObservations = [];
 let manualEntryDigest, manualCommit, manualCommitDeadline;
 const emitManualCommitObservation = (boundary) => {
   if (!manualCommit) return;
@@ -684,6 +688,62 @@ try {
   };
   const actions = new Set();
   let manualLease;
+  let acceptedLease;
+  const acceptedLeaseStages = new Set();
+  const recordAcceptedCapacity = (row) => {
+    assert.ok(acceptedLeaseCapacityObservations.length < 8);
+    acceptedLeaseCapacityObservations.push(row);
+  };
+  const acceptedCapacity = async (boundary) => {
+    const cookie = await readPreviewCookie();
+    const deadline = acceptedLeaseDeadline({
+      cookie,
+      lease: acceptedLease.lease,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: acceptedLeaseEstimate[boundary],
+      boundary,
+      observeCapacity: recordAcceptedCapacity,
+    });
+    return deadline;
+  };
+  const observeAcceptedLeaseStage = async (stage) => {
+    assert.equal(acceptedLeaseStages.has(stage), false);
+    acceptedLeaseStages.add(stage);
+    const cookie = await readPreviewCookie();
+    const previous = acceptedLease;
+    const current = await renewAcceptedPreviewLease({
+      cookie,
+      stage,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: acceptedLeaseEstimate[stage === 'before-generate' ? 'generate' : 'accept'],
+      observeCapacity: recordAcceptedCapacity,
+      renew: (actual, deadline) =>
+        command(`accepted-lease-${stage}`, deadline, {
+          cookie: actual,
+          startedAt: Date.now(),
+          hostDeadline: config.observationHostDeadline,
+        }),
+      redeliver: () =>
+        preview.evaluate(async () => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) throw new Error('PROOF_ACCEPTED_LEASE_REDELIVERY');
+          return response.json();
+        }),
+      readCookie: readPreviewCookie,
+    });
+    acceptedLease = {
+      ...current,
+      capacityObservations: acceptedLeaseCapacityObservations,
+      stages: [...(previous?.stages ?? []), current.lease],
+    };
+  };
   const manualLeaseStages = new Set();
   const readPreviewCookie = async () =>
     previewCookieObservation(await context.cookies(config.previewOrigin), config.previewOrigin);
@@ -755,7 +815,13 @@ try {
     };
   };
   const generate = async (label) => {
-    const deadline = manualLease ? await requireManualCapacity('generate') : undefined;
+    if (config.serialProfile && config.editingPhase === 'accepted')
+      await observeAcceptedLeaseStage('before-generate');
+    const deadline = acceptedLease
+      ? await acceptedCapacity('generate')
+      : manualLease
+        ? await requireManualCapacity('generate')
+        : undefined;
     checkpoint('picker-generate');
     const steps = [
       () => ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true }),
@@ -772,29 +838,33 @@ try {
           timeout: deadline ? proofObservationRemaining(deadline) : modelEffectTimeout,
         }),
     ];
-    if (deadline) await runManualSequence(steps, deadline, 'generate');
+    if (acceptedLease) await ownedProofSequence({ steps, deadline, abort: () => context.close() });
+    else if (deadline) await runManualSequence(steps, deadline, 'generate');
     else for (const step of steps) await step();
     actions.add('generate');
   };
   let acceptContinuity, resumedSteerDeadline;
   const accept = async () => {
+    if (acceptedLease) await observeAcceptedLeaseStage('before-accept');
     // Starts BEFORE the first Accept observation/click, never reset by acknowledgement/navigation.
     const acceptDeadline = Math.min(
       Date.now() + terminalEffectTimeout,
       config.observationHostDeadline,
+      acceptedLease ? await acceptedCapacity('accept') : Infinity,
     );
-    await observePicker('before-accept');
-    await withinProofObservation(
+    const acceptSteps = [
+      () => observePicker('before-accept'),
       () => ui.clickAccept(preview, { expectedVariant: 1 }),
-      acceptDeadline,
-    );
-    await withinProofObservation(
       () => ui.waitForBarHidden(preview, { timeout: Math.max(1, acceptDeadline - Date.now()) }),
-      acceptDeadline,
-    );
-    await observePicker('after-accept');
-    await command('accepted', acceptDeadline);
-    await observePicker('after-accept-ack');
+      () => observePicker('after-accept'),
+      () => command('accepted', acceptDeadline),
+      () => observePicker('after-accept-ack'),
+    ];
+    await ownedProofSequence({
+      steps: acceptSteps,
+      deadline: acceptDeadline,
+      abort: () => context.close(),
+    });
     if (!config.pickerSmoke && config.editingPhase !== 'accepted')
       acceptContinuity = await observePickerContinuity(preview, {
         deadline: acceptDeadline,
@@ -988,7 +1058,11 @@ try {
     const phaseA = config.editingPhase === 'accepted';
     if (!phaseA) assert.ok(actions.has('steer') && actions.has('background'));
     checkpoint(phaseA ? 'post-accept-poll-dispatch' : 'post-steer-poll-dispatch');
-    const deadline = Math.min(Date.now() + 300_000, config.observationHostDeadline);
+    const deadline = Math.min(
+      Date.now() + 300_000,
+      config.observationHostDeadline,
+      acceptedLease ? await acceptedCapacity('post-accept') : Infinity,
+    );
     const observed = await command(
       phaseA ? 'accepted-poll-observed' : 'steered-poll-observed',
       deadline,
@@ -1020,6 +1094,8 @@ try {
         postSteerPollObservation,
         postDiscardPollObservation,
         manualLease,
+        acceptedLease,
+        acceptedLeaseCapacityObservations,
         firstHelperAuthLoss,
         observedGeneration: config.generation,
         pickerSmoke: config.pickerSmoke === true,
@@ -1087,6 +1163,7 @@ try {
           helperResponses,
           firstHelperAuthLoss,
           editRequests,
+          acceptedLeaseCapacityObservations,
         },
       }) + '\n',
     );

@@ -25,7 +25,7 @@ export function createSerialProfile(binding, now = () => process.hrtime.bigint()
     'disconnect-revoke',
   ]);
   if (
-    binding?.trialId !== 'serial-accept-baseline-1' ||
+    !['serial-accept-baseline-1', 'deferred-accept-confinement-1'].includes(binding?.trialId) ||
     !/^[0-9]{1,24}$/.test(binding.anchor?.monotonicNs ?? '')
   )
     throw Error('PROOF_PROFILE_INVALID');
@@ -65,7 +65,10 @@ export function createSerialProfile(binding, now = () => process.hrtime.bigint()
     throw Error('PROOF_PROFILE_INVALID');
   const report = {
     schemaVersion: 1,
-    scheduling: 'unchanged-serial',
+    scheduling:
+      binding.trialId === 'serial-accept-baseline-1'
+        ? 'unchanged-serial'
+        : 'deferred-reuse-before-source-patch',
     attempt: 1,
     binding: structuredClone(binding),
     spans: [],
@@ -181,6 +184,46 @@ export function createSerialProfile(binding, now = () => process.hrtime.bigint()
   };
 }
 
+/** One existing API operation, admitted only by a real Generate grant. Observation
+ * cancellation never retires its lifetime or releases a later source mutation. */
+export function createDeferredSourceGate({ assertCurrent, authorize, work, validate }) {
+  let raw,
+    joined,
+    passed = false,
+    started = false;
+  return {
+    start(authority) {
+      if (started) throw new Error('PROOF_REUSE_REPLAY');
+      started = true;
+      assertCurrent();
+      authorize(authority);
+      raw = work(authority);
+      if (!raw || typeof raw.then !== 'function') throw new Error('PROOF_REUSE_INVALID');
+      joined = raw.then((value) => {
+        assertCurrent();
+        validate(value);
+        passed = true;
+        return value;
+      });
+      joined.catch(() => {});
+      return raw;
+    },
+    async beforeSourcePatch() {
+      assertCurrent();
+      if (!joined) throw new Error('PROOF_REUSE_NOT_STARTED');
+      await joined;
+      this.assertPassed();
+    },
+    assertPassed() {
+      assertCurrent();
+      if (!passed) throw new Error('PROOF_REUSE_UNVERIFIED');
+    },
+    async drain() {
+      if (raw) await Promise.allSettled([raw, joined]);
+    },
+  };
+}
+
 /** Profile-trial acceptance only. Ordinary lane assertions remain independent. */
 export function validateSerialProfile(report) {
   const check = (value) => {
@@ -188,7 +231,10 @@ export function validateSerialProfile(report) {
   };
   check(
     report?.schemaVersion === 1 &&
-      report.scheduling === 'unchanged-serial' &&
+      report.scheduling ===
+        (report.binding?.trialId === 'serial-accept-baseline-1'
+          ? 'unchanged-serial'
+          : 'deferred-reuse-before-source-patch') &&
       report.attempt === 1 &&
       report.firstFailure === null,
   );
@@ -295,8 +341,11 @@ export function validateSerialProfile(report) {
   );
   check(root.parentId === generate.id && child.parentId === root.id && patch.parentId === root.id);
   check(
-    BigInt(required['idempotent-start'].endNs) <= BigInt(generate.grantedNs) &&
-      BigInt(generate.grantedNs) <= BigInt(root.startNs),
+    BigInt(generate.grantedNs) <= BigInt(root.startNs) &&
+      (report.scheduling === 'unchanged-serial'
+        ? BigInt(required['idempotent-start'].endNs) <= BigInt(generate.grantedNs)
+        : BigInt(required['idempotent-start'].startNs) >= BigInt(root.startNs) &&
+          BigInt(required['idempotent-start'].endNs) <= BigInt(patch.startNs)),
   );
   check(
     BigInt(root.startNs) <= BigInt(child.startNs) &&
@@ -402,6 +451,160 @@ export function assertOldPreviewCookieDenied(response) {
 
 // Measured next-poll + Generate + exit-poll PROXY for Discard + UI reserve.
 // This is a refusal threshold, never a promise of Discard timing or a new cap.
+// Actual run39499281719 proxy costs, not guaranteed upper bounds. Initial Generate
+// reserve includes its browser prelude/UI; post-close keeps both existing30s caps.
+export const acceptedLeaseEstimate = Object.freeze({
+  generate: 304_719 - 80_958 + 30_000,
+  accept: 80_958 + 113_678 + 60_000 + 15_000,
+  'post-accept': 113_678 + 60_000 + 15_000,
+});
+export function acceptedLeaseDeadline(input) {
+  const now = input.now ?? Date.now();
+  const epoch = (value) => {
+    const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  };
+  const cookie = epoch(input.cookie?.cookieExpiresAt);
+  const server = epoch(input.lease?.leaseExpiresAt);
+  const absolute = epoch(input.lease?.absoluteExpiresAt);
+  const host = Number.isSafeInteger(input.hostDeadline) ? input.hostDeadline : null;
+  const valid =
+    Number.isSafeInteger(now) &&
+    now >= 0 &&
+    Number.isSafeInteger(input.requiredMs) &&
+    input.requiredMs > 0 &&
+    Number.isSafeInteger(input.generation) &&
+    input.generation > 0 &&
+    input.lease?.generation === input.generation &&
+    /^[a-f0-9]{64}$/.test(input.cookie?.tokenDigest ?? '') &&
+    input.lease?.tokenDigest === input.cookie.tokenDigest &&
+    [cookie, server, absolute].every((value) => value !== null && value > now) &&
+    host !== null;
+  const deadline = [cookie, server, absolute, host].every((value) => value !== null)
+    ? Math.min(cookie, server, absolute, host) - 15_000
+    : null;
+  // Payload-free observations precede every identity/capacity refusal. No caller
+  // strings, tokens or raw errors cross this existing browser reporting path.
+  input.observeCapacity?.({
+    boundary: ['before-generate', 'before-accept', 'generate', 'accept', 'post-accept'].includes(
+      input.boundary,
+    )
+      ? input.boundary
+      : 'invalid',
+    sampledAt: Number.isSafeInteger(now) && now >= 0 ? now : null,
+    cookieExpiresAt: cookie === null ? null : new Date(cookie).toISOString(),
+    leaseExpiresAt: server === null ? null : new Date(server).toISOString(),
+    absoluteExpiresAt: absolute === null ? null : new Date(absolute).toISOString(),
+    hostDeadline: host,
+    deadline,
+    estimateMs:
+      Number.isSafeInteger(input.requiredMs) && input.requiredMs > 0 ? input.requiredMs : null,
+    remainingMs:
+      deadline === null || !Number.isSafeInteger(now) ? null : Math.max(0, deadline - now),
+    capacityInputsValid: valid,
+    costsAreMeasuredProxies: true,
+  });
+  if (!valid) throw new Error('PROOF_ACCEPTED_LEASE_INVALID');
+  if (deadline - now < input.requiredMs) throw new Error('PROOF_ACCEPTED_LEASE_INSUFFICIENT');
+  return deadline;
+}
+export function boundedAcceptedLeaseCapacityObservations(rows) {
+  const keys = [
+    'boundary',
+    'sampledAt',
+    'cookieExpiresAt',
+    'leaseExpiresAt',
+    'absoluteExpiresAt',
+    'hostDeadline',
+    'deadline',
+    'estimateMs',
+    'remainingMs',
+    'capacityInputsValid',
+    'costsAreMeasuredProxies',
+  ];
+  const number = (v) => v === null || (Number.isSafeInteger(v) && v >= 0);
+  const date = (v) =>
+    v === null ||
+    (typeof v === 'string' &&
+      Number.isFinite(Date.parse(v)) &&
+      new Date(Date.parse(v)).toISOString() === v);
+  return (Array.isArray(rows) ? rows : [])
+    .slice(0, 8)
+    .filter(
+      (row) =>
+        row &&
+        Object.keys(row).sort().join(',') === [...keys].sort().join(',') &&
+        [
+          'before-generate',
+          'before-accept',
+          'generate',
+          'accept',
+          'post-accept',
+          'invalid',
+        ].includes(row.boundary) &&
+        ['sampledAt', 'hostDeadline', 'deadline', 'estimateMs', 'remainingMs'].every((key) =>
+          number(row[key]),
+        ) &&
+        ['cookieExpiresAt', 'leaseExpiresAt', 'absoluteExpiresAt'].every((key) => date(row[key])) &&
+        typeof row.capacityInputsValid === 'boolean' &&
+        row.costsAreMeasuredProxies === true,
+    )
+    .map((row) => Object.fromEntries(keys.map((key) => [key, row[key]])));
+}
+export async function renewAcceptedPreviewLease(input) {
+  let capacityRefusal,
+    lastLease,
+    lastCookie = input.cookie;
+  try {
+    return await renewManualPreviewLease({
+      ...input,
+      renew: async (...args) => {
+        lastLease = await input.renew(...args);
+        return lastLease;
+      },
+      readCookie: async () => {
+        lastCookie = await input.readCookie();
+        return lastCookie;
+      },
+      capacity: (observed) => {
+        try {
+          return acceptedLeaseDeadline({
+            ...observed,
+            boundary: input.stage,
+            observeCapacity: input.observeCapacity,
+          });
+        } catch (error) {
+          capacityRefusal = error;
+          throw error;
+        }
+      },
+    });
+  } catch (error) {
+    if (!capacityRefusal) {
+      // Preserve the last actual observations even when identity/redelivery
+      // validation refuses before the final capacity check can run.
+      try {
+        acceptedLeaseDeadline({
+          cookie: lastCookie,
+          lease: lastLease,
+          generation: input.generation,
+          hostDeadline: input.hostDeadline,
+          requiredMs: input.requiredMs ?? manualLeaseEstimate.generate,
+          now: (input.now ?? Date.now)(),
+          boundary: input.stage,
+          observeCapacity: input.observeCapacity,
+        });
+      } catch {
+        /* Observation never converts the original refusal into authority. */
+      }
+    }
+    // Only our exact local validator's insufficient-capacity error qualifies.
+    // An adapter throwing the same message (or a payload-bearing prefix) does not.
+    if (error === capacityRefusal && error?.message === 'PROOF_ACCEPTED_LEASE_INSUFFICIENT')
+      throw error;
+    throw new Error('PROOF_ACCEPTED_LEASE_INVALID');
+  }
+}
 export const manualLeaseEstimate = Object.freeze({
   generate: 87_260 + 79_394 + 30_000,
   discard: 74_270 + 87_260 + 30_000,
@@ -527,6 +730,7 @@ export async function renewManualPreviewLease({
   requiredMs = manualLeaseEstimate.generate,
   stage = 'before-generate',
   now = Date.now,
+  capacity = manualLeaseDeadline,
 }) {
   const deadline = Math.min(now() + 30_000, hostDeadline, Date.parse(cookie.cookieExpiresAt));
   const lease = await withinProofObservation(() => renew(cookie, deadline), deadline, now);
@@ -552,7 +756,7 @@ export async function renewManualPreviewLease({
     Date.parse(lease.leaseExpiresAt) - now() > 300_000
   )
     throw new Error('PROOF_MANUAL_LEASE_IDENTITY');
-  manualLeaseDeadline({
+  capacity({
     cookie: current,
     lease,
     generation,
@@ -673,6 +877,16 @@ export async function observePreviewExchange({
 
 /** Controlled proof errors only. Never retain URLs, cookie values or bearer-shaped strings. */
 export function safeBrowserFailure(message) {
+  // Preserve only these exact payload-free A refusals; token redaction otherwise
+  // erases the insufficient-capacity outcome needed to decide this one trial.
+  if (
+    [
+      'PROOF_ACCEPTED_LEASE_INSUFFICIENT',
+      'PROOF_ACCEPTED_LEASE_INVALID',
+      'PROOF_ACCEPTED_LEASE_REDELIVERY',
+    ].includes(message)
+  )
+    return message;
   return String(message ?? '')
     .split('\n')[0]
     .replace(/(?:https?|wss?):\/\/[^\s"'<>]+/g, '[url]')

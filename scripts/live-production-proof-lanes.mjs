@@ -73,6 +73,61 @@ export function validateEditingPhaseBound(bound, anchor, phase, now = process.hr
   );
   return bound;
 }
+export function mintEditingStep(directory, identity, anchor, now = process.hrtime.bigint()) {
+  privateDirectory(directory, true);
+  assert.equal(anchor.boot, processBirth().boot, 'PROOF_BIRTH_CHANGED');
+  const record = {
+    schemaVersion: 1,
+    identity,
+    anchor,
+    phaseA: editingPhaseBound(anchor, 'accepted', now),
+  };
+  writeFileSync(join(directory, 'phase-a-step.json'), JSON.stringify(record), {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  return record;
+}
+export function readEditingStep(
+  directory,
+  identity,
+  anchor,
+  setupRequired = false,
+  now = process.hrtime.bigint(),
+) {
+  privateDirectory(directory);
+  const record = privateJson(join(directory, 'phase-a-step.json'));
+  assert.deepEqual(Object.keys(record).sort(), ['anchor', 'identity', 'phaseA', 'schemaVersion']);
+  assert.equal(record.schemaVersion, 1);
+  assertIdentity(record.identity, identity);
+  assert.deepEqual(record.anchor, anchor, 'PROOF_DRIVER_METADATA_CHANGED');
+  assert.equal(record.anchor.boot, processBirth().boot, 'PROOF_BIRTH_CHANGED');
+  validateEditingPhaseBound(record.phaseA, anchor, 'accepted', now);
+  assert.ok(phaseBoundRemaining(record.phaseA, now) > 0, 'PROOF_DRIVER_PHASE_DEADLINE');
+  if (setupRequired)
+    assert.deepEqual(
+      privateJson(join(directory, 'setup-complete.json')),
+      record,
+      'PROOF_DRIVER_METADATA_CHANGED',
+    );
+  return record;
+}
+export function completeEditingSetup(directory, identity, anchor, now = process.hrtime.bigint()) {
+  const record = readEditingStep(directory, identity, anchor, false, now);
+  writeFileSync(join(directory, 'setup-complete.json'), JSON.stringify(record), {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  return record;
+}
+export function claimEditingLaunch(directory, identity, anchor, now = process.hrtime.bigint()) {
+  const record = readEditingStep(directory, identity, anchor, true, now);
+  writeFileSync(join(directory, 'launch-claim.json'), JSON.stringify(record), {
+    mode: 0o600,
+    flag: 'wx',
+  });
+  return { anchor: record.anchor, phaseA: record.phaseA };
+}
 export function phaseBoundRemaining(bound, now = process.hrtime.bigint()) {
   return Math.max(0, Number((BigInt(bound.deadlineNs) - now) / 1_000_000n));
 }
@@ -798,7 +853,9 @@ export function writeLaneReceipt(
       : mode === 'independent-only'
         ? { mode, partialL11AdmissionEvidence: true, fullExactCandidateStillRequired: true }
         : {}),
-    ...(serialProfileTrial ? { profilingTrial: 'serial-accept-baseline-1' } : {}),
+    ...(serialProfileTrial
+      ? { profilingTrial: reports[files[0]].serialProfile.binding.trialId }
+      : {}),
     passed: true,
     cleanupComplete: true,
     reports: Object.fromEntries(
@@ -1383,6 +1440,13 @@ function boundDriver(directory, identity, originalLaunch, originalMetadata) {
 export function readEditingLaunch(directory, identity, anchor) {
   const { launched } = boundDriver(directory, identity);
   assert.ok(launched.editing, 'PROOF_DRIVER_METADATA_CHANGED');
+  const step = readEditingStep(directory, identity, launched.editing.anchor, true);
+  assert.deepEqual(launched.editing.phaseA, step.phaseA, 'PROOF_DRIVER_METADATA_CHANGED');
+  assert.deepEqual(
+    privateJson(join(directory, 'launch-claim.json')),
+    step,
+    'PROOF_DRIVER_METADATA_CHANGED',
+  );
   if (anchor) assert.deepEqual(launched.editing.anchor, anchor, 'PROOF_DRIVER_METADATA_CHANGED');
   assert.deepEqual(launched.birth, processBirth(), 'PROOF_BIRTH_CHANGED');
   return launched.editing;
@@ -1597,10 +1661,8 @@ async function driver(command, directory) {
     requireEditingBudget(anchor, 'cleanup', 2_460_000);
   }
   if (command === 'start') {
-    privateDirectory(directory, true);
-    const editingMetadata = editing
-      ? { anchor, phaseA: editingPhaseBound(anchor, 'accepted') }
-      : undefined;
+    privateDirectory(directory, !editing);
+    const editingMetadata = editing ? claimEditingLaunch(directory, identity, anchor) : undefined;
     const child = spawn(process.execPath, ['scripts/live-production-entrypoint-proof.mjs'], {
       env: {
         ...process.env,
@@ -1686,6 +1748,13 @@ async function driver(command, directory) {
 }
 async function main() {
   const [command, argument, output] = process.argv.slice(2);
+  if (['editing-clock', 'editing-setup-complete'].includes(command)) {
+    const identity = candidateIdentity(),
+      anchor = readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR);
+    return command === 'editing-clock'
+      ? mintEditingStep(resolve(argument), identity, anchor)
+      : completeEditingSetup(resolve(argument), identity, anchor);
+  }
   if (
     [
       'start',
