@@ -12,6 +12,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { PassThrough } from 'node:stream';
+import { createInterface } from 'node:readline';
 import {
   safeBrowserFailure,
   observePreviewExchange,
@@ -43,6 +46,13 @@ import {
   editingLeaseCapacity,
   observeEditingSteer,
   assertOldPreviewCookieDenied,
+  previewCookieObservation,
+  assertPreviewLeaseIdentity,
+  renewManualPreviewLease,
+  manualLeaseDeadline,
+  manualLeaseEstimate,
+  boundedHelperAuthLoss,
+  ownedProofSequence,
 } from './live-production-edit-diagnostics.mjs';
 import { JSDOM } from 'jsdom';
 import { processBirth, birthCurrent } from './live-production-proof-lanes.mjs';
@@ -2539,4 +2549,846 @@ test('post-Accept readiness never resets expired A or accepts a read finishing a
     );
     assert.equal(reads, kind === 'already-expired' ? 0 : 1);
   }
+});
+
+test('manual cookie observation binds actual host/port/Secure/HttpOnly/expiry and exposes no bearer', () => {
+  const now = Date.now(),
+    token = 'a'.repeat(43);
+  const cookie = {
+    name: '__Host-gestalt_live_p9443',
+    domain: 'preview.test',
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    value: token,
+    expires: (now + 150_000) / 1000,
+  };
+  const actual = previewCookieObservation([cookie], 'https://preview.test:9443', now);
+  assert.equal(actual.tokenDigest, createHash('sha256').update(token).digest('hex'));
+  assert.ok(!JSON.stringify(actual).includes(token));
+  for (const change of [
+    { domain: 'peer.test' },
+    { name: '__Host-gestalt_live_p9444' },
+    { path: '/peer' },
+    { secure: false },
+    { httpOnly: false },
+    { value: 'bad' },
+    { expires: now / 1000 },
+    { expires: -1 },
+  ])
+    assert.throws(
+      () => previewCookieObservation([{ ...cookie, ...change }], 'https://preview.test:9443', now),
+      /PROOF_MANUAL_COOKIE_INVALID/,
+    );
+  assert.throws(() => previewCookieObservation([cookie, cookie], 'https://preview.test:9443', now));
+});
+
+test('private lease correlation rejects every wrong audience field and peer token, not merely first listed lease', () => {
+  const now = Date.now(),
+    audience = {
+      relayId: 'relay',
+      appId: 'app',
+      liveId: 'live',
+      generation: 3,
+      previewOrigin: 'https://preview.test:9443',
+      authSessionHash: 'auth',
+      deviceId: 'device',
+    };
+  const cookie = {
+    tokenDigest: 'a'.repeat(64),
+    cookieExpiresAt: new Date(now + 100_000).toISOString(),
+  };
+  const lease = {
+    ...audience,
+    tokenHash: cookie.tokenDigest,
+    leaseExpiresAt: new Date(now + 100_000).toISOString(),
+    absoluteExpiresAt: new Date(now + 600_000).toISOString(),
+  };
+  assertPreviewLeaseIdentity(lease, cookie, audience, now);
+  for (const field of Object.keys(audience))
+    assert.throws(
+      () =>
+        assertPreviewLeaseIdentity(
+          { ...lease, [field]: field === 'generation' ? 2 : 'peer' },
+          cookie,
+          audience,
+          now,
+        ),
+      /PROOF_MANUAL_LEASE_IDENTITY/,
+    );
+  for (const change of [
+    { tokenHash: 'b'.repeat(64) },
+    { leaseExpiresAt: new Date(now).toISOString() },
+    { absoluteExpiresAt: 'invalid' },
+  ])
+    assert.throws(() => assertPreviewLeaseIdentity({ ...lease, ...change }, cookie, audience, now));
+  assert.throws(() => assertPreviewLeaseIdentity(null, cookie, audience, now));
+});
+
+function manualRenewalFixture() {
+  let clock = Date.now();
+  const start = clock;
+  const cookie = {
+    tokenDigest: 'a'.repeat(64),
+    cookieExpiresAt: new Date(start + 160_000).toISOString(),
+  };
+  const lease = {
+    generation: 1,
+    stage: 'before-generate',
+    renewed: true,
+    tokenDigest: cookie.tokenDigest,
+    leaseExpiresAt: new Date(start + 300_000).toISOString(),
+    absoluteExpiresAt: new Date(start + 3_000_000).toISOString(),
+    priorAbsoluteExpiresAt: new Date(start + 3_000_000).toISOString(),
+  };
+  const current = { ...cookie, cookieExpiresAt: lease.leaseExpiresAt };
+  const calls = [];
+  const options = {
+    cookie,
+    generation: 1,
+    hostDeadline: start + 800_000,
+    now: () => clock,
+    renew: async (observed) => {
+      assert.equal(observed, cookie);
+      calls.push('owner-renew');
+      return lease;
+    },
+    redeliver: async () => {
+      calls.push('same-cookie-redelivery');
+      return lease;
+    },
+    readCookie: async () => {
+      calls.push('actual-browser-cookie');
+      return current;
+    },
+  };
+  return {
+    options,
+    cookie,
+    lease,
+    current,
+    calls,
+    start,
+    advance: (ms) => {
+      clock += ms;
+    },
+  };
+}
+
+test('manual renewal observes one owner operation then same-token redelivery and actual cookie before Generate', async () => {
+  const f = manualRenewalFixture();
+  const actual = await renewManualPreviewLease(f.options);
+  assert.equal(actual.cookie, f.current);
+  assert.deepEqual(f.calls, ['owner-renew', 'same-cookie-redelivery', 'actual-browser-cookie']);
+  assert.equal(manualLeaseEstimate.generate, 87_260 + 79_394 + 30_000);
+  assert.equal(manualLeaseEstimate.discard, 74_270 + 87_260 + 30_000);
+  const deadline = manualLeaseDeadline({
+    ...actual,
+    generation: 1,
+    hostDeadline: f.start + 800_000,
+    requiredMs: manualLeaseEstimate.generate,
+    now: f.start,
+  });
+  assert.equal(deadline, f.start + 285_000); //300s TTL, existing15s safety reserve.
+  assert.equal(deadline - f.start - manualLeaseEstimate.generate, 88_346);
+});
+
+test('manual renewal never substitutes a grant, peer cookie, generation, absolute cap or hoped-for expiry', async () => {
+  for (const kind of [
+    'generation',
+    'owner-token',
+    'absolute',
+    'redelivery-expiry',
+    'peer-cookie',
+    'no-redelivery',
+    'cookie-after-server',
+    'ttl-widened',
+    'absolute-capacity',
+  ]) {
+    const f = manualRenewalFixture();
+    if (kind === 'generation') f.lease.generation = 2;
+    if (kind === 'owner-token') f.lease.tokenDigest = 'b'.repeat(64);
+    if (kind === 'absolute')
+      f.lease.absoluteExpiresAt = new Date(f.start + 3_100_000).toISOString();
+    if (kind === 'redelivery-expiry')
+      f.options.redeliver = async () => ({
+        ...f.lease,
+        leaseExpiresAt: new Date(f.start + 299_000).toISOString(),
+      });
+    if (kind === 'peer-cookie') f.current.tokenDigest = 'b'.repeat(64);
+    if (kind === 'no-redelivery') f.current.cookieExpiresAt = f.cookie.cookieExpiresAt;
+    if (kind === 'cookie-after-server')
+      f.current.cookieExpiresAt = new Date(f.start + 302_000).toISOString();
+    if (kind === 'ttl-widened') {
+      f.lease.leaseExpiresAt = new Date(f.start + 301_000).toISOString();
+      f.current.cookieExpiresAt = f.lease.leaseExpiresAt;
+    }
+    if (kind === 'absolute-capacity') {
+      f.lease.absoluteExpiresAt = f.lease.priorAbsoluteExpiresAt = new Date(
+        f.start + 60_000,
+      ).toISOString();
+    }
+    await assert.rejects(
+      renewManualPreviewLease(f.options),
+      /PROOF_MANUAL_LEASE_(IDENTITY|INSUFFICIENT)/,
+      kind,
+    );
+    assert.equal(f.calls.filter((v) => v === 'owner-renew').length, 1);
+  }
+});
+
+test('manual renewal refusal and original deadline crossing cannot retry or proceed to edit dispatch', async () => {
+  for (const kind of [
+    'owner-refusal',
+    'redelivery-refusal',
+    'before',
+    'owner-race',
+    'cookie-race',
+  ]) {
+    const f = manualRenewalFixture();
+    if (kind === 'owner-refusal')
+      f.options.renew = async () => {
+        f.calls.push('owner-renew');
+        throw Error('REFUSED');
+      };
+    if (kind === 'redelivery-refusal')
+      f.options.redeliver = async () => {
+        throw Error('REFUSED');
+      };
+    if (kind === 'before') f.options.hostDeadline = f.start;
+    if (kind === 'owner-race')
+      f.options.renew = async () => {
+        f.calls.push('owner-renew');
+        f.advance(30_000);
+        return f.lease;
+      };
+    if (kind === 'cookie-race')
+      f.options.readCookie = async () => {
+        f.advance(30_000);
+        return f.current;
+      };
+    await assert.rejects(renewManualPreviewLease(f.options), /REFUSED|PROOF_OBSERVATION_DEADLINE/);
+    assert.ok(f.calls.filter((v) => v === 'owner-renew').length <= 1);
+    if (kind === 'owner-refusal' || kind === 'before' || kind === 'owner-race')
+      assert.ok(!f.calls.includes('same-cookie-redelivery'));
+  }
+});
+
+test('manual Generate and Discard capacity use minimum real cookie/server/absolute/host expiry with no future renew assumption', () => {
+  for (const boundary of ['generate', 'discard']) {
+    const f = manualRenewalFixture(),
+      requiredMs = manualLeaseEstimate[boundary];
+    const args = {
+      cookie: f.current,
+      lease: f.lease,
+      generation: 1,
+      hostDeadline: f.start + 800_000,
+      requiredMs,
+      now: f.start,
+    };
+    assert.ok(manualLeaseDeadline(args) > f.start);
+    for (const limiting of ['cookie', 'server', 'absolute', 'host']) {
+      const input = structuredClone(args),
+        end = f.start + requiredMs + 14_999;
+      if (limiting === 'cookie') input.cookie.cookieExpiresAt = new Date(end).toISOString();
+      if (limiting === 'server') input.lease.leaseExpiresAt = new Date(end).toISOString();
+      if (limiting === 'absolute') input.lease.absoluteExpiresAt = new Date(end).toISOString();
+      if (limiting === 'host') input.hostDeadline = end;
+      assert.throws(() => manualLeaseDeadline(input), /PROOF_MANUAL_LEASE_INSUFFICIENT/, limiting);
+    }
+    assert.throws(() => manualLeaseDeadline({ ...args, now: f.start + 300_000 }), /INSUFFICIENT/);
+  }
+});
+
+test('first helper auth-loss evidence is bounded and redacted independently of the rolling tail', () => {
+  const first = {
+    elapsedMs: 301_000,
+    status: 401,
+    route: 'status',
+    cookiePresent: false,
+    helperTokenMatches: true,
+    cookie: 'private-bearer-canary',
+  };
+  const observed = boundedHelperAuthLoss({
+    previous: { ...first, elapsedMs: 299_000, status: 200, cookiePresent: true },
+    first,
+  });
+  assert.equal(observed.previous.status, 200);
+  assert.equal(observed.first.elapsedMs, 301_000);
+  assert.ok(!JSON.stringify(observed).includes('canary'));
+  assert.equal(boundedHelperAuthLoss({ first: { ...first, status: 200 } }), null);
+  const browser = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.ok(browser.includes('if (!firstHelperAuthLoss && [401, 403].includes(observed.status))'));
+  assert.ok(browser.includes('JSON.stringify({ firstHelperAuthLoss })'));
+});
+
+function currentPostSteerHandler(overrides = {}) {
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf("const phaseA = command === 'accepted-poll-observed';");
+  const end = source.indexOf("} else if (command === 'steered')", start);
+  const body = source.slice(start, end);
+  const values = {
+    command: 'steered-poll-observed',
+    editingPhase: 'steer',
+    acceptedCanonicalAcknowledged: true,
+    steeredCanonicalAcknowledged: true,
+    backgroundFinished: true,
+    assert,
+    observedBirthExited: () => false,
+    baselineBirth: {},
+    observation: { deadline: Date.now() + 200 },
+    editingRemaining: () => 200,
+    editingAnchor: {},
+    pendingCanonicalPoll: () => null,
+    session: { id: 'session' },
+    started: { generation: 3 },
+    observePostAcceptPollDispatch,
+    report: { checks: {} },
+    ...overrides,
+  };
+  return {
+    run: new Function(...Object.keys(values), 'return async () => {' + body + '}')(
+      ...Object.values(values),
+    ),
+    report: values.report,
+  };
+}
+
+test('current B handler waits through pending authority for the original signed poll after Steer/background', async () => {
+  const flight = {
+    sequence: 33,
+    commandIpcDispatched: true,
+    workerBirthsCurrent: true,
+    postAuthority: true,
+    pending: true,
+    generationMatches: true,
+    foregroundChildBirthObserved: false,
+  };
+  let reads = 0;
+  const h = currentPostSteerHandler({
+    pendingCanonicalPoll: (session, generation) => {
+      assert.equal(session, 'session');
+      assert.equal(generation, 3);
+      return ++reads < 3 ? null : flight;
+    },
+  });
+  assert.equal(await h.run(), flight);
+  assert.equal(reads, 3);
+  assert.equal(h.report.checks.authenticPostSteerPollDispatchedBeforeBrowserClose, true);
+});
+
+test('current B handler refuses missing canonical/background authority, exited owner, stale IPC and exhausted B cutoff', async () => {
+  for (const changed of [
+    { steeredCanonicalAcknowledged: false },
+    { backgroundFinished: false },
+    { observedBirthExited: () => true },
+    { editingPhase: 'accepted' },
+    { observation: { deadline: Date.now() - 1 } },
+    { pendingCanonicalPoll: () => ({ sequence: 1, postAuthority: false }) },
+  ]) {
+    const h = currentPostSteerHandler(changed);
+    await assert.rejects(h.run());
+    assert.equal(h.report.checks.authenticPostSteerPollDispatchedBeforeBrowserClose, undefined);
+  }
+});
+
+test('current host renewal correlates exact private SQLite row among peers and attempts authenticated API once', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'l11-exact-cookie-renew-'));
+  mkdirSync(join(root, '.codex-gestalt/gestalt-mobile'), { recursive: true });
+  const db = new DatabaseSync(join(root, '.codex-gestalt/gestalt-mobile/live-auth.sqlite'));
+  const source = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf(
+    "assert.equal(proofLane, 'manual-discard');",
+    source.indexOf("'manual-lease-before-generate'"),
+  );
+  const end = source.indexOf("} else if (command === 'accepted')", start);
+  const tokenDigest = 'a'.repeat(64),
+    privateSession = 'private-test-session-canary';
+  const hash = (v) => createHash('sha256').update(v).digest('hex');
+  const now = Date.now();
+  let clock = now;
+  const expected = {
+    relayId: 'relay',
+    appId: 'owning-app',
+    liveId: 'live',
+    generation: 1,
+    previewOrigin: 'https://preview.test:9443',
+    authSessionHash: hash(privateSession),
+    deviceId: 'fixture-device',
+    leaseId: 'actual',
+    tokenHash: tokenDigest,
+    exchangedAt: new Date(now - 135_000).toISOString(),
+    renewedAt: null,
+    leaseExpiresAt: new Date(now + 160_000).toISOString(),
+    absoluteExpiresAt: new Date(now + 3_000_000).toISOString(),
+  };
+  const report = {};
+  let calls = 0;
+  const values = {
+    assert,
+    proofLane: 'manual-discard',
+    command: 'manual-lease-before-generate',
+    manualLeaseStages: new Set(),
+    manualLeaseReceipts: [],
+    source: () => 'Production discarded variant',
+    acknowledged: async (kind) => {
+      assert.equal(kind, 'generate');
+    },
+    manualSource: 'canonical acknowledged manual edit',
+    proofObservationRemaining,
+    observation: {
+      deadline: now + 30_000,
+      cookie: { tokenDigest, cookieExpiresAt: expected.leaseExpiresAt },
+    },
+    observedBirthExited: () => false,
+    baselineBirth: {},
+    session: { id: 'relay' },
+    started: { liveId: 'live', generation: 1 },
+    preview: expected.previewOrigin,
+    previewSecrets: { hash },
+    browserSession: privateSession,
+    DatabaseSync,
+    join,
+    home: root,
+    assertPreviewLeaseIdentity: (lease, cookie, audience) =>
+      assertPreviewLeaseIdentity(lease, cookie, audience, clock),
+    Date: { now: () => clock, parse: Date.parse },
+    hash,
+    report,
+    api: async (method, url, body) => {
+      calls++;
+      assert.equal(method, 'POST');
+      assert.equal(url, '/api/sessions/relay/live/leases/actual/renew');
+      assert.deepEqual(body, { liveId: 'live', generation: 1 });
+      const after = {
+        ...JSON.parse(
+          db.prepare('SELECT record FROM live_leases WHERE token_hash=?').get(tokenDigest).record,
+        ),
+        renewedAt: new Date(clock).toISOString(),
+        leaseExpiresAt: new Date(clock + 300_000).toISOString(),
+      };
+      db.prepare('UPDATE live_leases SET record=? WHERE token_hash=?').run(
+        JSON.stringify(after),
+        tokenDigest,
+      );
+      return { leaseExpiresAt: after.leaseExpiresAt, absoluteExpiresAt: after.absoluteExpiresAt };
+    },
+  };
+  try {
+    db.exec('CREATE TABLE live_leases (token_hash TEXT PRIMARY KEY, record TEXT)');
+    db.prepare('INSERT INTO live_leases VALUES (?, ?)').run(
+      'b'.repeat(64),
+      JSON.stringify({ ...expected, leaseId: 'peer', tokenHash: 'b'.repeat(64) }),
+    );
+    db.prepare('INSERT INTO live_leases VALUES (?, ?)').run(tokenDigest, JSON.stringify(expected));
+    const run = new Function(
+      ...Object.keys(values),
+      'return async () => {' + source.slice(start, end) + '}',
+    )(...Object.values(values));
+    const actual = await run();
+    assert.equal(calls, 1);
+    assert.equal(actual.ownerRenewals, 1);
+    assert.equal(actual.sameLeaseAndToken, true);
+    assert.equal(actual.leaseDigest, hash('actual'));
+    assert.ok(!JSON.stringify(report).includes(privateSession));
+    await assert.rejects(run());
+    assert.equal(calls, 1);
+    assert.equal(
+      JSON.parse(
+        db.prepare('SELECT record FROM live_leases WHERE token_hash=?').get('b'.repeat(64)).record,
+      ).renewedAt,
+      null,
+    );
+    const runCurrent = () =>
+      new Function(...Object.keys(values), 'return async () => {' + source.slice(start, end) + '}')(
+        ...Object.values(values),
+      );
+    values.command = 'manual-lease-before-discard';
+    values.manualLeaseStages = new Set(['before-generate']);
+    values.manualLeaseReceipts = [actual];
+    clock = now + 20_000;
+    values.observation = {
+      deadline: clock + 30_000,
+      cookie: { tokenDigest, cookieExpiresAt: actual.leaseExpiresAt },
+    };
+    const retained = await runCurrent()();
+    assert.equal(retained.renewed, false);
+    assert.equal(retained.ownerRenewals, 1);
+    assert.equal(calls, 1);
+    // Independent later-stage branch under the measured elapsed time; not a retry.
+    values.manualLeaseStages = new Set(['before-generate']);
+    values.manualLeaseReceipts = [actual];
+    clock = now + 166_654;
+    values.observation = {
+      deadline: clock + 30_000,
+      cookie: { tokenDigest, cookieExpiresAt: actual.leaseExpiresAt },
+    };
+    const second = runCurrent();
+    const renewedSecond = await second();
+    assert.equal(renewedSecond.renewed, true);
+    assert.equal(renewedSecond.ownerRenewals, 2);
+    assert.equal(renewedSecond.leaseDigest, actual.leaseDigest);
+    assert.equal(calls, 2);
+    await assert.rejects(second());
+    assert.equal(calls, 2);
+    values.command = 'manual-lease-before-generate';
+    clock = now;
+    values.observation = {
+      deadline: now + 30_000,
+      cookie: { tokenDigest, cookieExpiresAt: expected.leaseExpiresAt },
+    };
+    for (const mutation of [
+      { generation: 2 },
+      { deviceId: 'peer' },
+      { authSessionHash: 'peer' },
+      { previewOrigin: 'https://preview.test:9444' },
+    ]) {
+      db.prepare('UPDATE live_leases SET record=? WHERE token_hash=?').run(
+        JSON.stringify({ ...expected, ...mutation }),
+        tokenDigest,
+      );
+      values.manualLeaseStages = new Set();
+      values.manualLeaseReceipts = [];
+      const refused = new Function(
+        ...Object.keys(values),
+        'return async () => {' + source.slice(start, end) + '}',
+      )(...Object.values(values));
+      await assert.rejects(refused(), /PROOF_MANUAL_LEASE_IDENTITY/);
+      assert.equal(calls, 2);
+    }
+  } finally {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('named second stage can retain sufficient real capacity before60s without any owner renewal/redelivery', async () => {
+  const f = manualRenewalFixture();
+  f.lease.stage = 'before-discard';
+  f.lease.renewed = false;
+  f.current.cookieExpiresAt = f.cookie.cookieExpiresAt = new Date(f.start + 270_000).toISOString();
+  f.lease.leaseExpiresAt = f.current.cookieExpiresAt;
+  const result = await renewManualPreviewLease({
+    ...f.options,
+    stage: 'before-discard',
+    requiredMs: manualLeaseEstimate.discard,
+  });
+  assert.equal(result.lease.renewed, false);
+  assert.deepEqual(f.calls, ['owner-renew', 'actual-browser-cookie']); // Callback observes host receipt; no API dispatch.
+  assert.ok(!f.calls.includes('same-cookie-redelivery'));
+  f.current.cookieExpiresAt = f.cookie.cookieExpiresAt = new Date(f.start + 200_000).toISOString();
+  await assert.rejects(
+    renewManualPreviewLease({
+      ...f.options,
+      stage: 'before-discard',
+      requiredMs: manualLeaseEstimate.discard,
+    }),
+    /PROOF_MANUAL_LEASE_INSUFFICIENT/,
+  );
+});
+
+test('renewal stage mismatch cannot substitute first-stage authority for the second named stage', async () => {
+  const f = manualRenewalFixture();
+  await assert.rejects(
+    renewManualPreviewLease({
+      ...f.options,
+      stage: 'before-discard',
+      requiredMs: manualLeaseEstimate.discard,
+    }),
+    /PROOF_MANUAL_LEASE_IDENTITY/,
+  );
+  assert.deepEqual(f.calls, ['owner-renew']);
+});
+
+test('owned manual sequence timeout closes actual action port and stays pending until original work drains; no late edit', async () => {
+  let release,
+    abortCalled = false,
+    returned = false;
+  const pending = new Promise((resolve) => {
+    release = resolve;
+  });
+  const calls = [],
+    observations = [];
+  const run = ownedProofSequence({
+    deadline: Date.now() + 30,
+    steps: [
+      () => {
+        calls.push('prepare');
+        return pending;
+      },
+      () => {
+        calls.push('edit');
+      },
+    ],
+    abort: async () => {
+      abortCalled = true;
+    },
+    observe: (v) => observations.push(v),
+  }).finally(() => {
+    returned = true;
+  });
+  const rejected = assert.rejects(run, /PROOF_OBSERVATION_DEADLINE/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(abortCalled, true);
+  assert.equal(returned, false);
+  assert.deepEqual(calls, ['prepare']);
+  assert.equal(observations[0].pendingOwned, true);
+  assert.equal(observations[0].drained, false);
+  release();
+  await rejected;
+  assert.deepEqual(calls, ['prepare']);
+  assert.equal(returned, true);
+  assert.deepEqual(observations.at(-1), {
+    timedOut: true,
+    pendingOwned: false,
+    drained: true,
+    contextClosed: true,
+  });
+});
+
+test('owned sequence propagates exact active command refusal and fences later steps or an expired initial dispatch', async () => {
+  const refusal = Error('EXACT_ACTIVE_REFUSAL');
+  let later = 0,
+    aborts = 0;
+  await assert.rejects(
+    ownedProofSequence({
+      deadline: Date.now() + 1000,
+      steps: [
+        async () => {
+          throw refusal;
+        },
+        () => {
+          later++;
+        },
+      ],
+      abort: async () => {
+        aborts++;
+      },
+    }),
+    (error) => error === refusal,
+  );
+  await assert.rejects(
+    ownedProofSequence({
+      deadline: Date.now() - 1,
+      steps: [
+        () => {
+          later++;
+        },
+      ],
+      abort: async () => {
+        aborts++;
+      },
+    }),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+  let now = Date.now();
+  const deadline = now + 1000;
+  await assert.rejects(
+    ownedProofSequence({
+      deadline,
+      now: () => now,
+      steps: [
+        async () => {
+          now = deadline;
+        },
+        () => {
+          later++;
+        },
+      ],
+      abort: async () => {
+        aborts++;
+      },
+    }),
+    /PROOF_OBSERVATION_DEADLINE/,
+  );
+  assert.equal(later, 0);
+  assert.equal(aborts, 0);
+});
+
+test('owned sequence does not call cleanup complete while context closure is pending after work settles', async () => {
+  let close,
+    settle,
+    returned = false;
+  const work = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const closed = new Promise((resolve) => {
+    close = resolve;
+  });
+  const run = ownedProofSequence({
+    deadline: Date.now() + 25,
+    steps: [() => work],
+    abort: () => closed,
+  }).finally(() => {
+    returned = true;
+  });
+  const rejected = assert.rejects(run, /PROOF_OBSERVATION_DEADLINE/);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  settle();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(returned, false);
+  close();
+  await rejected;
+  assert.equal(returned, true);
+});
+
+test('post-Discard observer uses current exact original flight only after canonical Discard and stage2 evaluation', async () => {
+  const flight = {
+    sequence: 44,
+    commandIpcDispatched: true,
+    workerBirthsCurrent: true,
+    postAuthority: true,
+    pending: true,
+    generationMatches: true,
+    foregroundChildBirthObserved: false,
+  };
+  const defaults = {
+    command: 'discarded-poll-observed',
+    editingPhase: undefined,
+    proofLane: 'manual-discard',
+    discardedCanonicalAcknowledged: true,
+    manualLeaseStages: new Set(['before-generate', 'before-discard']),
+    source: () => 'restored-manual-source',
+    manualSource: 'restored-manual-source',
+  };
+  // Reuse the current handler extraction; supply the manual branch's actual environment.
+  const current = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = current.indexOf("const phaseA = command === 'accepted-poll-observed';");
+  const end = current.indexOf("} else if (command === 'steered')", start);
+  for (const mutation of [
+    {},
+    { discardedCanonicalAcknowledged: false },
+    { manualLeaseStages: new Set(['before-generate']) },
+    { source: () => 'wrong-source' },
+    { observation: { deadline: Date.now() - 1 } },
+    { pendingCanonicalPoll: () => ({ ...flight, generationMatches: false }) },
+  ]) {
+    let reads = 0;
+    const values = {
+      ...defaults,
+      assert,
+      observedBirthExited: () => false,
+      baselineBirth: {},
+      observation: { deadline: Date.now() + 1000 },
+      editingAnchor: null,
+      editingRemaining: () => 1000,
+      pendingCanonicalPoll: (relay, generation) => {
+        assert.equal(relay, 'relay');
+        assert.equal(generation, 1);
+        return ++reads < 2 ? null : flight;
+      },
+      session: { id: 'relay' },
+      started: { generation: 1 },
+      observePostAcceptPollDispatch,
+      report: { checks: {} },
+      ...mutation,
+    };
+    const run = new Function(
+      ...Object.keys(values),
+      'return async () => {' + current.slice(start, end) + '}',
+    )(...Object.values(values));
+    if (Object.keys(mutation).length) await assert.rejects(run());
+    else {
+      assert.equal(await run(), flight);
+      assert.equal(reads, 2);
+    }
+  }
+});
+
+test('actual host-finally command join remains owned across browser timeout until the original callback settles', async () => {
+  const source = readFileSync(
+    new URL('./live-production-edit-browser-host.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('input.report.editBrowserCommandsDrained = false;');
+  const last = 'input.report.editBrowserCommandsDrained = true;';
+  const body = source.slice(start, source.indexOf(last, start) + last.length);
+  assert.ok(start > 0);
+  let finish;
+  const commands = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const input = { report: {} };
+  const join = new Function('input', 'commands', 'return async () => {' + body + '}')(
+    input,
+    commands,
+  );
+  let returned = false;
+  const waiting = join().then(() => {
+    returned = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(returned, false);
+  assert.equal(input.report.editBrowserCommandsDrained, false);
+  finish();
+  await waiting;
+  assert.equal(input.report.editBrowserCommandsDrained, true);
+  const failed = { report: {} };
+  await new Function('input', 'commands', 'return async () => {' + body + '}')(
+    failed,
+    Promise.reject(Error('EXACT_REPLY_REFUSAL')),
+  )();
+  assert.equal(failed.report.editBrowserCommandDrainFailed, true);
+  assert.equal(failed.report.editBrowserCommandsDrained, true);
+});
+
+test('actual browser command timeout retires and drains its original readline reply without reissuing the command', async () => {
+  const source = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  const start = source.indexOf('async function command(value, deadline, details) {');
+  const end = source.indexOf('\ntry {', start);
+  const input = new PassThrough(),
+    replyLines = createInterface({ input });
+  const raw = replyLines[Symbol.asyncIterator]();
+  let originalSettled = false,
+    reads = 0,
+    writes = 0;
+  const replies = {
+    next: () => {
+      reads++;
+      return raw.next().finally(() => {
+        originalSettled = true;
+      });
+    },
+  };
+  const command = new Function(
+    'process',
+    'replyLines',
+    'replies',
+    'withinProofObservation',
+    'assert',
+    source.slice(start, end) + '; return command;',
+  )(
+    {
+      stdin: input,
+      stdout: {
+        write: () => {
+          writes++;
+        },
+      },
+    },
+    replyLines,
+    replies,
+    withinProofObservation,
+    assert,
+  );
+  await assert.rejects(command('discarded', Date.now() + 25), /PROOF_OBSERVATION_DEADLINE/);
+  assert.equal(reads, 1);
+  assert.equal(writes, 1);
+  assert.equal(originalSettled, true);
+  assert.equal(input.destroyed, true);
 });

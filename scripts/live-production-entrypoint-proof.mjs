@@ -53,6 +53,7 @@ import {
   requireEditingBudget,
   drainEditingFailure,
   assertOldPreviewCookieDenied,
+  assertPreviewLeaseIdentity,
 } from './live-production-edit-diagnostics.mjs';
 import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
 import { PollLiveEvents } from '../dist/server/server/features/live-design/application/poll-events.js';
@@ -2647,6 +2648,11 @@ try {
     let manualSource,
       observedManualPoll,
       acceptedCanonicalAcknowledged = false;
+    let steeredCanonicalAcknowledged = false,
+      backgroundFinished = false,
+      discardedCanonicalAcknowledged = false;
+    const manualLeaseStages = new Set();
+    const manualLeaseReceipts = (report.manualLeaseStages = []);
     let manualWaitDeadline;
     let backgroundSourceDigest, backgroundRequestCount;
     const manualHistorySnapshot = () => {
@@ -2785,6 +2791,99 @@ try {
               );
               report.manualPollCommitObservation = current;
               return current;
+            } else if (
+              ['manual-lease-before-generate', 'manual-lease-before-discard'].includes(command)
+            ) {
+              assert.equal(proofLane, 'manual-discard');
+              const leaseStage =
+                command === 'manual-lease-before-generate' ? 'before-generate' : 'before-discard';
+              assert.equal(manualLeaseStages.has(leaseStage), false);
+              manualLeaseStages.add(leaseStage);
+              assert.ok(manualSource, 'PROOF_MANUAL_ACK_INVALID');
+              if (leaseStage === 'before-discard') {
+                assert.equal(manualLeaseStages.has('before-generate'), true);
+                await acknowledged(
+                  'generate',
+                  proofObservationRemaining(observation.deadline),
+                  observation.deadline,
+                );
+                assert.ok(source().includes('Production discarded variant'));
+              }
+              proofObservationRemaining(observation.deadline);
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const audience = {
+                relayId: session.id,
+                appId: 'owning-app',
+                liveId: started.liveId,
+                generation: started.generation,
+                previewOrigin: preview,
+                authSessionHash: previewSecrets.hash(browserSession),
+                deviceId: 'fixture-device',
+              };
+              const readActualLease = () => {
+                const db = new DatabaseSync(
+                  join(home, '.codex-gestalt', 'gestalt-mobile', 'live-auth.sqlite'),
+                  { readOnly: true },
+                );
+                try {
+                  const row = db
+                    .prepare('SELECT record FROM live_leases WHERE token_hash = ?')
+                    .get(observation.cookie.tokenDigest);
+                  const lease = row ? JSON.parse(row.record) : null;
+                  assertPreviewLeaseIdentity(lease, observation.cookie, audience);
+                  return lease;
+                } finally {
+                  db.close();
+                }
+              };
+              const before = readActualLease();
+              const prior = manualLeaseReceipts.at(-1);
+              if (prior) {
+                assert.equal(hash(before.leaseId), prior.leaseDigest);
+                assert.equal(before.tokenHash, prior.tokenDigest);
+                assert.equal(before.exchangedAt, prior.exchangedAt);
+                assert.equal(before.absoluteExpiresAt, prior.absoluteExpiresAt);
+              } else assert.equal(before.renewedAt, null);
+              const sinceRenewalMs =
+                Date.now() - Date.parse(before.renewedAt ?? before.exchangedAt);
+              const shouldRenew = sinceRenewalMs >= 60_000;
+              const renewed = shouldRenew
+                ? await api(
+                    'POST',
+                    `/api/sessions/${session.id}/live/leases/${before.leaseId}/renew`,
+                    { liveId: started.liveId, generation: started.generation },
+                  )
+                : before;
+              // Too early: retain only actual sufficient capacity, never try/retry429.
+
+              proofObservationRemaining(observation.deadline);
+              const after = readActualLease();
+              assert.equal(after.leaseId, before.leaseId);
+              assert.equal(after.exchangedAt, before.exchangedAt);
+              assert.equal(after.absoluteExpiresAt, before.absoluteExpiresAt);
+              assert.equal(after.leaseExpiresAt, renewed.leaseExpiresAt);
+              assert.equal(after.absoluteExpiresAt, renewed.absoluteExpiresAt);
+              assert.ok(Date.parse(after.leaseExpiresAt) - Date.now() <= 300_000);
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const receipt = {
+                generation: started.generation,
+                stage: leaseStage,
+                renewed: shouldRenew,
+                sinceRenewalMs,
+                exchangedAt: after.exchangedAt,
+                renewedAt: after.renewedAt,
+                tokenDigest: observation.cookie.tokenDigest,
+                leaseDigest: hash(after.leaseId),
+                leaseExpiresAt: after.leaseExpiresAt,
+                absoluteExpiresAt: after.absoluteExpiresAt,
+                priorAbsoluteExpiresAt: before.absoluteExpiresAt,
+                sameLeaseAndToken: true,
+                ownerRenewals: (prior?.ownerRenewals ?? 0) + (shouldRenew ? 1 : 0),
+              };
+              assert.ok(receipt.ownerRenewals <= 2);
+              manualLeaseReceipts.push(receipt);
+              report.manualLeaseRenewal = receipt;
+              return receipt;
             } else if (command === 'accepted') {
               await acknowledged(
                 'generate',
@@ -2803,23 +2902,47 @@ try {
               assert.ok(source().includes('Production chosen variant'));
               assert.ok(!source().includes('impeccable-variants-start'));
               acceptedCanonicalAcknowledged = true;
-            } else if (command === 'accepted-poll-observed') {
-              assert.equal(editingPhase, 'accepted');
-              assert.equal(acceptedCanonicalAcknowledged, true);
+            } else if (
+              [
+                'accepted-poll-observed',
+                'steered-poll-observed',
+                'discarded-poll-observed',
+              ].includes(command)
+            ) {
+              const phaseA = command === 'accepted-poll-observed';
+              const manualFinal = command === 'discarded-poll-observed';
+              if (manualFinal) {
+                assert.equal(proofLane, 'manual-discard');
+                assert.equal(discardedCanonicalAcknowledged, true);
+                assert.equal(manualLeaseStages.has('before-discard'), true);
+                assert.equal(source(), manualSource);
+              } else assert.equal(editingPhase, phaseA ? 'accepted' : 'steer');
+              if (phaseA) assert.equal(acceptedCanonicalAcknowledged, true);
+              else if (!manualFinal) assert.ok(steeredCanonicalAcknowledged && backgroundFinished);
               // Read-only observation of the existing signed/birth-fenced helper
               // IPC flight. The same Native/session remains alive; never poll here.
               assert.equal(observedBirthExited(baselineBirth), false);
               const deadline = Math.min(
                 observation.deadline,
-                Date.now() + editingRemaining(editingAnchor, 'accepted'),
+                editingAnchor
+                  ? Date.now() + editingRemaining(editingAnchor, phaseA ? 'accepted' : 'action')
+                  : Infinity,
               );
               const current = await observePostAcceptPollDispatch({
                 sample: () => pendingCanonicalPoll(session.id, started.generation),
                 deadline,
               });
               assert.equal(observedBirthExited(baselineBirth), false);
-              report.postAcceptPollObservation = current;
-              report.checks.authenticPostAcceptPollDispatchedBeforeBrowserClose = true;
+              if (phaseA) {
+                report.postAcceptPollObservation = current;
+                report.checks.authenticPostAcceptPollDispatchedBeforeBrowserClose = true;
+              } else if (manualFinal) {
+                report.postDiscardPollObservation = current;
+                report.checks.authenticPostDiscardPollDispatchedBeforeBrowserClose = true;
+              } else {
+                report.postSteerPollObservation = current;
+                report.checks.authenticPostSteerPollDispatchedBeforeBrowserClose = true;
+              }
               return current;
             } else if (command === 'steered') {
               await acknowledged(
@@ -2832,6 +2955,7 @@ try {
               assert.ok(
                 readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"),
               );
+              steeredCanonicalAcknowledged = true;
             } else if (command === 'manual-applied') {
               await observeManualAcknowledgement(
                 () =>
@@ -2881,8 +3005,15 @@ try {
                 ),
               );
             } else if (command === 'discarded') {
-              await acknowledged('discard');
+              await acknowledged(
+                'discard',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
               assert.equal(source(), manualSource);
+              discardedCanonicalAcknowledged = true;
             } else if (command === 'background-begin') {
               backgroundSourceDigest = hash(source());
               backgroundRequestCount = report.provider.requestCount;
@@ -2892,6 +3023,7 @@ try {
               const status = await api('GET', `/api/sessions/${session.id}/live`);
               assert.ok(['active', 'recoveryRequired'].includes(status.state));
               report.background = { state: status.state, noModelOrSourceEffect: true };
+              backgroundFinished = true;
             } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
           },
         }),
@@ -3062,10 +3194,39 @@ try {
       report.stage = 'editing-resumed-steer';
       await runPicker('steer');
       report.editingContinuity.phaseB = report.editBrowser;
+      assert.deepEqual(
+        report.editBrowser.postSteerPollObservation,
+        report.postSteerPollObservation,
+      );
+      assert.equal(report.postSteerPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postSteerPollObservation.postAuthority, true);
       report.editBrowser = {
         ...report.editBrowser,
         realPickerGenerateAccept: phaseA.realPickerGenerateAccept,
       };
+    }
+    if (proofLane === 'manual-discard') {
+      assert.deepEqual(report.editBrowser.manualLease.lease, report.manualLeaseRenewal);
+      assert.ok(report.manualLeaseRenewal.ownerRenewals <= 2);
+      assert.deepEqual(report.editBrowser.manualLease.stages, report.manualLeaseStages);
+      assert.deepEqual(
+        report.manualLeaseStages.map((item) => item.stage),
+        ['before-generate', 'before-discard'],
+      );
+      assert.deepEqual(
+        report.editBrowser.postDiscardPollObservation,
+        report.postDiscardPollObservation,
+      );
+      assert.equal(report.postDiscardPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postDiscardPollObservation.postAuthority, true);
+      assert.equal(
+        report.editBrowser.manualLease.cookie.tokenDigest,
+        report.manualLeaseRenewal.tokenDigest,
+      );
+      assert.deepEqual(
+        report.editBrowser.manualLease.capacityObservations.map((item) => item.boundary),
+        ['generate', 'discard', 'post-discard'],
+      );
     }
     finishBrowserProfile();
     if (proofLane || pickerDiagnostic) {

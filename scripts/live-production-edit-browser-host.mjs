@@ -13,6 +13,7 @@ import {
   safeBrowserFailure,
   boundedPickerObservation,
   boundedManualCommitObservation,
+  boundedHelperAuthLoss,
 } from './live-production-edit-diagnostics.mjs';
 
 export async function productionEditBrowser(input) {
@@ -62,6 +63,9 @@ export async function productionEditBrowser(input) {
   };
   const sudo = (args) => run('sudo', ['--non-interactive', ...args]);
   let browser;
+  let commands = Promise.resolve();
+  let lines,
+    commandsRetired = false;
   let networkCreated = false;
   try {
     input.report.editBrowserStage = 'network-setup';
@@ -153,8 +157,10 @@ export async function productionEditBrowser(input) {
       input.report.editBrowserStartupCodes = fixed.filter((code) => String(chunk).includes(code));
     });
     let commandFailure = false;
-    let commands = Promise.resolve();
-    const lines = createInterface({ input: browser.stdout });
+    browser.stdin.on('error', () => {
+      commandFailure = true;
+    });
+    lines = createInterface({ input: browser.stdout });
     lines.on('line', (line) => {
       let value;
       try {
@@ -319,6 +325,24 @@ export async function productionEditBrowser(input) {
             cookiePresent: item.cookiePresent === true,
           })),
         };
+      if (value.manualSequenceObservation) {
+        const item = value.manualSequenceObservation;
+        if (['generate', 'discard'].includes(item.boundary)) {
+          if ((input.report.manualSequenceObservations?.length ?? 0) === 8)
+            input.report.manualSequenceObservations.shift();
+          (input.report.manualSequenceObservations ??= []).push({
+            boundary: item.boundary,
+            timedOut: item.timedOut === true,
+            pendingOwned: item.pendingOwned === true,
+            drained: item.drained === true,
+            contextClosed: item.contextClosed === true,
+          });
+        }
+      }
+      if (value.firstHelperAuthLoss && !input.report.firstHelperAuthLoss) {
+        const loss = boundedHelperAuthLoss(value.firstHelperAuthLoss);
+        if (loss) input.report.firstHelperAuthLoss = loss;
+      }
       if (value.pickerObservation) {
         const observed = boundedPickerObservation(value.pickerObservation);
         if (observed) {
@@ -344,10 +368,15 @@ export async function productionEditBrowser(input) {
                 [
                   'accepted',
                   'accepted-poll-observed',
+                  'steered-poll-observed',
+                  'discarded-poll-observed',
                   'steered',
                   'manual-poll-observed',
                   'manual-commit-observed',
                   'manual-applied',
+                  'manual-lease-before-generate',
+                  'manual-lease-before-discard',
+                  'discarded',
                 ].includes(value.command),
               );
               assert.ok(
@@ -355,9 +384,27 @@ export async function productionEditBrowser(input) {
                   observation.deadline > Date.now() &&
                   observation.deadline <= Date.now() + 300_000,
               );
-              if (value.command === 'accepted-poll-observed') {
-                assert.equal(input.browser.editingPhase, 'accepted');
+              if (
+                [
+                  'accepted-poll-observed',
+                  'steered-poll-observed',
+                  'discarded-poll-observed',
+                ].includes(value.command)
+              ) {
+                if (value.command === 'discarded-poll-observed')
+                  assert.equal(input.browser.proofLane, 'manual-discard');
+                else
+                  assert.equal(
+                    input.browser.editingPhase,
+                    value.command === 'accepted-poll-observed' ? 'accepted' : 'steer',
+                  );
                 assert.equal(observation.hostDeadline, observationHostDeadline);
+                assert.ok(observation.deadline <= observationHostDeadline);
+              }
+              if (value.command.startsWith('manual-lease-')) {
+                assert.equal(input.browser.proofLane, 'manual-discard');
+                assert.match(observation.cookie?.tokenDigest ?? '', /^[a-f0-9]{64}$/);
+                assert.ok(Date.parse(observation.cookie.cookieExpiresAt) > Date.now());
                 assert.ok(observation.deadline <= observationHostDeadline);
               }
               if (value.command.startsWith('manual-') && value.command !== 'manual-applied') {
@@ -368,8 +415,14 @@ export async function productionEditBrowser(input) {
                 );
               }
             }
+            assert.ok(
+              !commandsRetired && browser.exitCode === null && !browser.stdin.destroyed,
+              'PROOF_BROWSER_COMMAND_RETIRED',
+            );
+            assert.ok(Date.now() < observationHostDeadline, 'PROOF_OBSERVATION_DEADLINE');
             const result = await input.command(value.command, observation);
-            browser.stdin.write(JSON.stringify({ ok: true, observation: result }) + '\n');
+            if (!browser.stdin.destroyed && browser.exitCode === null)
+              browser.stdin.write(JSON.stringify({ ok: true, observation: result }) + '\n');
           } catch (error) {
             commandFailure = true;
             const observationFailures = [
@@ -378,6 +431,9 @@ export async function productionEditBrowser(input) {
               'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
               'PROOF_MANUAL_CHAIN_BUDGET',
               'PROOF_MANUAL_ACK_INVALID',
+              'PROOF_MANUAL_LEASE_IDENTITY',
+              'PROOF_MANUAL_LEASE_INSUFFICIENT',
+              'PROOF_MANUAL_COOKIE_INVALID',
             ];
             input.report.editBrowserCommandFailureCode = observationFailures.includes(
               error?.message,
@@ -390,7 +446,8 @@ export async function productionEditBrowser(input) {
                   : error?.code === 'ERR_ASSERTION'
                     ? 'ERR_ASSERTION'
                     : 'EDIT_BROWSER_COMMAND_FAILED';
-            browser.stdin.write(JSON.stringify({ ok: false }) + '\n');
+            if (!browser.stdin.destroyed && browser.exitCode === null)
+              browser.stdin.write(JSON.stringify({ ok: false }) + '\n');
           }
         });
     });
@@ -417,42 +474,54 @@ export async function productionEditBrowser(input) {
     assert.equal(result.separateBrowserNetwork, true);
     input.report.editBrowser = result;
   } finally {
-    if (networkCreated) {
-      const namespacePids = () =>
-        sudo(['ip', 'netns', 'pids', namespace]).toString().trim().split(/\s+/).filter(Boolean);
-      for (const signal of ['-TERM', '-KILL']) {
-        const pids = namespacePids();
-        assert.ok(pids.every((pid) => /^[1-9][0-9]*$/.test(pid)));
-        if (!pids.length) break;
-        try {
-          sudo(['kill', signal, '--', ...pids]);
-        } catch {
-          // Processes can exit between the namespace inventory and the signal.
+    commandsRetired = true;
+    lines?.close();
+    try {
+      if (networkCreated) {
+        const namespacePids = () =>
+          sudo(['ip', 'netns', 'pids', namespace]).toString().trim().split(/\s+/).filter(Boolean);
+        for (const signal of ['-TERM', '-KILL']) {
+          const pids = namespacePids();
+          assert.ok(pids.every((pid) => /^[1-9][0-9]*$/.test(pid)));
+          if (!pids.length) break;
+          try {
+            sudo(['kill', signal, '--', ...pids]);
+          } catch {
+            // Processes can exit between the namespace inventory and the signal.
+          }
+          await new Promise((done) => setTimeout(done, 500));
         }
-        await new Promise((done) => setTimeout(done, 500));
+        input.report.editBrowserRemainingProcesses = namespacePids().length;
+        assert.equal(input.report.editBrowserRemainingProcesses, 0);
       }
-      input.report.editBrowserRemainingProcesses = namespacePids().length;
-      assert.equal(input.report.editBrowserRemainingProcesses, 0);
-    }
-    if (browser && browser.exitCode === null && browser.signalCode === null) {
-      browser.kill('SIGTERM');
-      await Promise.race([
-        new Promise((done) => browser.once('close', done)),
-        new Promise((done) => setTimeout(done, 1000)),
-      ]);
-      if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
-      browser.stdout.destroy();
-      browser.stderr.destroy();
-    }
-    if (networkCreated) {
-      const pids = sudo(['ip', 'netns', 'pids', namespace])
-        .toString()
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-      assert.equal(pids.length, 0);
-      sudo(['ip', 'link', 'delete', hostInterface]);
-      sudo(['ip', 'netns', 'delete', namespace]);
+      if (browser && browser.exitCode === null && browser.signalCode === null) {
+        browser.kill('SIGTERM');
+        await Promise.race([
+          new Promise((done) => browser.once('close', done)),
+          new Promise((done) => setTimeout(done, 1000)),
+        ]);
+        if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
+        browser.stdout.destroy();
+        browser.stderr.destroy();
+      }
+      if (networkCreated) {
+        const pids = sudo(['ip', 'netns', 'pids', namespace])
+          .toString()
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean);
+        assert.equal(pids.length, 0);
+        sudo(['ip', 'link', 'delete', hostInterface]);
+        sudo(['ip', 'netns', 'delete', namespace]);
+      }
+    } finally {
+      // The original callback chain remains owned even when the browser's
+      // immutable deadline rejects. No cleanup caller can outrun its settlement.
+      input.report.editBrowserCommandsDrained = false;
+      await commands.catch(() => {
+        input.report.editBrowserCommandDrainFailed = true;
+      });
+      input.report.editBrowserCommandsDrained = true;
     }
   }
 }

@@ -84,6 +84,212 @@ export function assertOldPreviewCookieDenied(response) {
     throw new Error('PROOF_OLD_COOKIE_NOT_DENIED');
 }
 
+// Measured next-poll + Generate + exit-poll PROXY for Discard + UI reserve.
+// This is a refusal threshold, never a promise of Discard timing or a new cap.
+export const manualLeaseEstimate = Object.freeze({
+  generate: 87_260 + 79_394 + 30_000,
+  discard: 74_270 + 87_260 + 30_000,
+  'post-discard': 87_260 + 30_000,
+});
+export function boundedHelperAuthLoss(value) {
+  const sample = (item) =>
+    item &&
+    Number.isSafeInteger(item.elapsedMs) &&
+    item.elapsedMs >= 0 &&
+    Number.isSafeInteger(item.status) &&
+    item.status >= 100 &&
+    item.status <= 599
+      ? {
+          elapsedMs: item.elapsedMs,
+          status: item.status,
+          route: [
+            'live.js',
+            'events',
+            'status',
+            'lease',
+            'agent-target-claim',
+            'manual-edit-stash',
+            'manual-edit-commit',
+          ].includes(item.route)
+            ? item.route
+            : 'other',
+          cookiePresent: item.cookiePresent === true,
+          helperTokenMatches:
+            typeof item.helperTokenMatches === 'boolean' ? item.helperTokenMatches : null,
+        }
+      : null;
+  const first = sample(value?.first);
+  return first && [401, 403].includes(first.status)
+    ? { previous: sample(value.previous), first }
+    : null;
+}
+export function previewCookieObservation(cookies, origin, now = Date.now()) {
+  const url = new URL(origin);
+  const name = `__Host-gestalt_live_p${url.port || '443'}`;
+  const matches = cookies.filter((item) => item.name === name);
+  const cookie = matches[0];
+  if (
+    url.protocol !== 'https:' ||
+    matches.length !== 1 ||
+    cookie.domain !== url.hostname ||
+    cookie.path !== '/' ||
+    cookie.secure !== true ||
+    cookie.httpOnly !== true ||
+    !/^[A-Za-z0-9_-]{43}$/.test(cookie.value) ||
+    !Number.isFinite(cookie.expires) ||
+    cookie.expires * 1000 <= now
+  )
+    throw new Error('PROOF_MANUAL_COOKIE_INVALID');
+  return {
+    tokenDigest: createHash('sha256').update(cookie.value).digest('hex'),
+    cookieExpiresAt: new Date(Math.floor(cookie.expires * 1000)).toISOString(),
+  };
+}
+export function assertPreviewLeaseIdentity(lease, cookie, audience, now = Date.now()) {
+  if (
+    !lease ||
+    !/^[a-f0-9]{64}$/.test(cookie?.tokenDigest ?? '') ||
+    lease.tokenHash !== cookie.tokenDigest ||
+    Object.entries(audience).some(([key, value]) => lease[key] !== value) ||
+    !Number.isFinite(Date.parse(cookie.cookieExpiresAt)) ||
+    Math.min(
+      Date.parse(cookie.cookieExpiresAt),
+      Date.parse(lease.leaseExpiresAt),
+      Date.parse(lease.absoluteExpiresAt),
+    ) <= now ||
+    !Number.isFinite(Date.parse(lease.leaseExpiresAt)) ||
+    !Number.isFinite(Date.parse(lease.absoluteExpiresAt))
+  )
+    throw new Error('PROOF_MANUAL_LEASE_IDENTITY');
+}
+export function manualLeaseDeadline({
+  cookie,
+  lease,
+  generation,
+  hostDeadline,
+  requiredMs,
+  now = Date.now(),
+}) {
+  const deadline =
+    Math.min(
+      hostDeadline,
+      Date.parse(cookie?.cookieExpiresAt),
+      Date.parse(lease?.leaseExpiresAt),
+      Date.parse(lease?.absoluteExpiresAt),
+    ) - 15_000;
+  if (
+    lease?.generation !== generation ||
+    lease?.tokenDigest !== cookie?.tokenDigest ||
+    !Number.isSafeInteger(requiredMs) ||
+    requiredMs <= 0 ||
+    !Number.isFinite(deadline) ||
+    deadline - now < requiredMs
+  )
+    throw new Error('PROOF_MANUAL_LEASE_INSUFFICIENT');
+  return deadline;
+}
+export async function renewManualPreviewLease({
+  cookie,
+  renew,
+  redeliver,
+  readCookie,
+  generation,
+  hostDeadline,
+  requiredMs = manualLeaseEstimate.generate,
+  stage = 'before-generate',
+  now = Date.now,
+}) {
+  const deadline = Math.min(now() + 30_000, hostDeadline, Date.parse(cookie.cookieExpiresAt));
+  const lease = await withinProofObservation(() => renew(cookie, deadline), deadline, now);
+  if (
+    lease?.generation !== generation ||
+    lease?.stage !== stage ||
+    typeof lease?.renewed !== 'boolean' ||
+    lease?.tokenDigest !== cookie.tokenDigest ||
+    lease.absoluteExpiresAt !== lease.priorAbsoluteExpiresAt
+  )
+    throw new Error('PROOF_MANUAL_LEASE_IDENTITY');
+  const actual =
+    lease.renewed === false ? lease : await withinProofObservation(redeliver, deadline, now);
+  const current = await withinProofObservation(readCookie, deadline, now);
+  proofObservationRemaining(deadline, now());
+  if (
+    current.tokenDigest !== cookie.tokenDigest ||
+    actual.leaseExpiresAt !== lease.leaseExpiresAt ||
+    actual.absoluteExpiresAt !== lease.absoluteExpiresAt ||
+    (lease.renewed !== false &&
+      Date.parse(current.cookieExpiresAt) <= Date.parse(cookie.cookieExpiresAt)) ||
+    Date.parse(current.cookieExpiresAt) > Date.parse(lease.leaseExpiresAt) + 1000 ||
+    Date.parse(lease.leaseExpiresAt) - now() > 300_000
+  )
+    throw new Error('PROOF_MANUAL_LEASE_IDENTITY');
+  manualLeaseDeadline({
+    cookie: current,
+    lease,
+    generation,
+    hostDeadline,
+    requiredMs,
+    now: now(),
+  });
+  return { cookie: current, lease };
+}
+
+/** A timed-out UI step stays owned until it and context closure actually settle.
+ * Every later step is fenced; Promise.race alone cannot prevent a late click. */
+export async function ownedProofSequence({
+  steps,
+  deadline,
+  abort,
+  observe = () => {},
+  now = Date.now,
+}) {
+  const remaining = proofObservationRemaining(deadline, now());
+  let expired = false,
+    timer;
+  const check = () => {
+    if (expired) throw new Error('PROOF_OBSERVATION_DEADLINE');
+    proofObservationRemaining(deadline, now());
+  };
+  const pending = (async () => {
+    for (const step of steps) {
+      check();
+      await step();
+      check();
+    }
+  })();
+  const settled = pending.then(
+    () => ({ ok: true }),
+    (error) => ({ error }),
+  );
+  try {
+    const result = await Promise.race([
+      settled,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          expired = true;
+          resolve({ timeout: true });
+        }, remaining);
+      }),
+    ]);
+    if (result.timeout) {
+      observe({ timedOut: true, pendingOwned: true, drained: false });
+      // Closing the actual context cancels an in-flight Playwright action. Do
+      // not release ownership or begin later editing steps while it is pending.
+      const [closed] = await Promise.allSettled([Promise.resolve().then(abort), settled]);
+      observe({
+        timedOut: true,
+        pendingOwned: false,
+        drained: true,
+        contextClosed: closed.status === 'fulfilled',
+      });
+      throw new Error('PROOF_OBSERVATION_DEADLINE');
+    }
+    if (result.error) throw result.error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Observe one real grant/exchange under one fixed deadline. The exchange's
  * navigation response body is deliberately never consumed: Chromium may retire
  * its document before body delivery. Identity comes from the stable opener's

@@ -22,6 +22,11 @@ import {
   manualObservationDeadline,
   proofObservationRemaining,
   boundedManualCommitObservation,
+  previewCookieObservation,
+  renewManualPreviewLease,
+  manualLeaseDeadline,
+  manualLeaseEstimate,
+  ownedProofSequence,
 } from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
@@ -43,6 +48,7 @@ const resourcePending = {};
 const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
+let firstHelperAuthLoss, lastAuthenticatedHelper;
 const editRequests = [];
 let manualEntryDigest, manualCommit, manualCommitDeadline;
 const emitManualCommitObservation = (boundary) => {
@@ -73,7 +79,8 @@ const checkpoint = (value) => {
     JSON.stringify({ checkpoint: value, elapsedMs: Date.now() - browserStarted }) + '\n',
   );
 };
-const replies = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+const replyLines = createInterface({ input: process.stdin });
+const replies = replyLines[Symbol.asyncIterator]();
 async function command(value, deadline, details) {
   process.stdout.write(
     JSON.stringify({
@@ -81,9 +88,20 @@ async function command(value, deadline, details) {
       observation: deadline ? { deadline, ...details } : undefined,
     }) + '\n',
   );
-  const reply = deadline
-    ? await withinProofObservation(() => replies.next(), deadline)
-    : await replies.next();
+  const pendingReply = replies.next();
+  let reply;
+  try {
+    reply = deadline
+      ? await withinProofObservation(() => pendingReply, deadline)
+      : await pendingReply;
+  } catch (error) {
+    // Terminal observation failure: close IPC and join the exact original read.
+    // The host independently retains its callback until actual settlement.
+    replyLines.close();
+    process.stdin.destroy();
+    await pendingReply.catch(() => {});
+    throw error;
+  }
   const result = JSON.parse(reply.value);
   assert.equal(result.ok, true);
   return result.observation;
@@ -327,7 +345,7 @@ try {
       }
       const requestToken = url.searchParams.get('token');
       if (helperResponses.length === 24) helperResponses.shift();
-      helperResponses.push({
+      const observed = {
         elapsedMs: Date.now() - browserStarted,
         method: ['GET', 'POST'].includes(response.request().method())
           ? response.request().method()
@@ -340,7 +358,14 @@ try {
             ? null
             : createHash('sha256').update(requestToken).digest('hex') === config.helperTokenSha256,
         cookiePresent: String(headers.cookie ?? '').includes('__Host-gestalt_live_p'),
-      });
+      };
+      if (!firstHelperAuthLoss && [401, 403].includes(observed.status)) {
+        firstHelperAuthLoss = { previous: lastAuthenticatedHelper ?? null, first: observed };
+        process.stdout.write(JSON.stringify({ firstHelperAuthLoss }) + '\n');
+      }
+      if (observed.status >= 200 && observed.status < 300 && observed.cookiePresent)
+        lastAuthenticatedHelper = observed;
+      helperResponses.push(observed);
     }
     if (
       url.origin === config.previewOrigin &&
@@ -620,13 +645,97 @@ try {
     );
   };
   const actions = new Set();
+  let manualLease;
+  const manualLeaseStages = new Set();
+  const readPreviewCookie = async () =>
+    previewCookieObservation(await context.cookies(config.previewOrigin), config.previewOrigin);
+  const requireManualCapacity = async (boundary) => {
+    const cookie = await readPreviewCookie();
+    const deadline = manualLeaseDeadline({
+      cookie,
+      lease: manualLease.lease,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: manualLeaseEstimate[boundary],
+    });
+    manualLease.capacityObservations.push({
+      boundary,
+      sampledAt: Date.now(),
+      cookieExpiresAt: cookie.cookieExpiresAt,
+      deadline,
+      estimateMs: manualLeaseEstimate[boundary],
+      discardCostIsProxy: true,
+    });
+    return deadline;
+  };
+  const runManualSequence = (steps, deadline, boundary) =>
+    ownedProofSequence({
+      steps,
+      deadline,
+      abort: () => context.close(),
+      observe: (observation) =>
+        process.stdout.write(
+          JSON.stringify({
+            manualSequenceObservation: { boundary, ...observation },
+          }) + '\n',
+        ),
+    });
+  const observeManualLeaseStage = async (leaseStage) => {
+    assert.equal(manualLeaseStages.has(leaseStage), false);
+    manualLeaseStages.add(leaseStage);
+    const cookie = await readPreviewCookie();
+    const previous = manualLease;
+    const current = await renewManualPreviewLease({
+      cookie,
+      stage: leaseStage,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: manualLeaseEstimate[leaseStage === 'before-generate' ? 'generate' : 'discard'],
+      renew: (actual, deadline) =>
+        command(`manual-lease-${leaseStage}`, deadline, {
+          cookie: actual,
+          startedAt: Date.now(),
+          hostDeadline: config.observationHostDeadline,
+        }),
+      redeliver: () =>
+        preview.evaluate(async () => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) throw new Error('PROOF_MANUAL_LEASE_REDELIVERY');
+          return response.json();
+        }),
+      readCookie: readPreviewCookie,
+    });
+    manualLease = {
+      ...current,
+      capacityObservations: previous?.capacityObservations ?? [],
+      stages: [...(previous?.stages ?? []), current.lease],
+    };
+  };
   const generate = async (label) => {
+    const deadline = manualLease ? await requireManualCapacity('generate') : undefined;
     checkpoint('picker-generate');
-    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-    await ui.setCount(preview, 2);
-    await ui.clickGo(preview);
-    await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-    await preview.getByRole('heading', { name: label, exact: true }).waitFor();
+    const steps = [
+      () => ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true }),
+      () => ui.setCount(preview, 2),
+      () => ui.clickGo(preview),
+      () =>
+        ui.waitForCycling(preview, 2, {
+          timeout: deadline
+            ? Math.min(modelEffectTimeout, proofObservationRemaining(deadline))
+            : modelEffectTimeout,
+        }),
+      () =>
+        preview.getByRole('heading', { name: label, exact: true }).waitFor({
+          timeout: deadline ? proofObservationRemaining(deadline) : modelEffectTimeout,
+        }),
+    ];
+    if (deadline) await runManualSequence(steps, deadline, 'generate');
+    else for (const step of steps) await step();
     actions.add('generate');
   };
   let acceptContinuity, resumedSteerDeadline;
@@ -753,9 +862,20 @@ try {
   const discard = async () => {
     checkpoint('picker-discard');
     await generate('Production discarded variant');
-    await ui.clickDiscard(preview);
-    await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
-    await command('discarded');
+    if (manualLease) await observeManualLeaseStage('before-discard');
+    const deadline = manualLease ? await requireManualCapacity('discard') : undefined;
+    const steps = [
+      () => ui.clickDiscard(preview),
+      () =>
+        ui.waitForBarHidden(preview, {
+          timeout: deadline
+            ? Math.min(terminalEffectTimeout, proofObservationRemaining(deadline))
+            : terminalEffectTimeout,
+        }),
+      () => command('discarded', deadline),
+    ];
+    if (deadline) await runManualSequence(steps, deadline, 'discard');
+    else for (const step of steps) await step();
     assert.equal(
       await preview
         .getByRole('heading', { name: 'Production manual approved', exact: true })
@@ -786,6 +906,8 @@ try {
   assert.ok(['', 'accept-steer', 'manual-discard'].includes(config.proofLane ?? ''));
   if (config.proofLane === 'manual-discard') {
     await manual();
+    checkpoint('manual-before-generate-lease');
+    await observeManualLeaseStage('before-generate');
     await discard();
   } else if (config.editingPhase === 'steer') {
     assert.equal(config.proofLane, 'accept-steer');
@@ -809,17 +931,38 @@ try {
   }
   await preview.screenshot({ path: config.screenshot });
   let postAcceptPollObservation;
-  if (config.editingPhase === 'accepted') {
-    // Keep the real preview/SSE alive until the next owning poll has actually
-    // dispatched after authority validation. This read cannot reset phase A.
-    checkpoint('post-accept-poll-dispatch');
-    const deadline = Math.min(Date.now() + 300_000, config.observationHostDeadline);
-    postAcceptPollObservation = await command('accepted-poll-observed', deadline, {
+  let postSteerPollObservation;
+  let postDiscardPollObservation;
+  if (config.proofLane === 'manual-discard') {
+    assert.ok(actions.has('discard'));
+    checkpoint('post-discard-poll-dispatch');
+    const deadline = await requireManualCapacity('post-discard');
+    postDiscardPollObservation = await command('discarded-poll-observed', deadline, {
       hostDeadline: config.observationHostDeadline,
     });
-    assert.equal(postAcceptPollObservation.commandIpcDispatched, true);
-    assert.equal(postAcceptPollObservation.postAuthority, true);
-    assert.equal(postAcceptPollObservation.pending, true);
+    assert.equal(postDiscardPollObservation.commandIpcDispatched, true);
+    assert.equal(postDiscardPollObservation.postAuthority, true);
+    assert.equal(postDiscardPollObservation.pending, true);
+  }
+  if (['accepted', 'steer'].includes(config.editingPhase)) {
+    // Keep the real preview/SSE alive until the next owning poll has actually
+    // dispatched after authority validation. This read cannot reset phase A.
+    const phaseA = config.editingPhase === 'accepted';
+    if (!phaseA) assert.ok(actions.has('steer') && actions.has('background'));
+    checkpoint(phaseA ? 'post-accept-poll-dispatch' : 'post-steer-poll-dispatch');
+    const deadline = Math.min(Date.now() + 300_000, config.observationHostDeadline);
+    const observed = await command(
+      phaseA ? 'accepted-poll-observed' : 'steered-poll-observed',
+      deadline,
+      {
+        hostDeadline: config.observationHostDeadline,
+      },
+    );
+    assert.equal(observed.commandIpcDispatched, true);
+    assert.equal(observed.postAuthority, true);
+    assert.equal(observed.pending, true);
+    if (phaseA) postAcceptPollObservation = observed;
+    else postSteerPollObservation = observed;
   }
   await writeFile(
     config.resultFile,
@@ -836,6 +979,10 @@ try {
         proofLane: config.proofLane || undefined,
         editingPhase: config.editingPhase,
         postAcceptPollObservation,
+        postSteerPollObservation,
+        postDiscardPollObservation,
+        manualLease,
+        firstHelperAuthLoss,
         observedGeneration: config.generation,
         pickerSmoke: config.pickerSmoke === true,
         realPickerSteer: actions.has('steer'),
@@ -900,6 +1047,7 @@ try {
           pageErrors,
           helperBridge,
           helperResponses,
+          firstHelperAuthLoss,
           editRequests,
         },
       }) + '\n',
