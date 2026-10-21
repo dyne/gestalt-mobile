@@ -8,10 +8,11 @@ import { once } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import WebSocket from 'ws';
 
@@ -1701,7 +1702,7 @@ describe('production composition', () => {
         coordinator!.registerProactiveWait(fixture.sessionId, {
           id: 'pre-checkpoint-report',
           leaseId: 'pre-checkpoint-lease',
-          wakeConditions: ['executorChanged'],
+          wakeConditions: ['executorChanged', 'processExited'],
           maxWaitMs: 60_000,
         }),
       ).toBe(true);
@@ -1761,6 +1762,22 @@ describe('production composition', () => {
       afterWriteDatabase.close();
       expect(afterWrite.resolved_at).toEqual(expect.any(String));
       expect(checkpointEvents.count).toBe(1);
+      // Checkpoint ownership has priority over a process result that arrives
+      // after acknowledgement but before the matching root final.
+      handle.notify!({
+        method: 'item/completed',
+        params: {
+          threadId,
+          turnId: active.active_turn_id,
+          item: {
+            id: 'checkpoint-process',
+            type: 'commandExecution',
+            status: 'completed',
+            exitCode: 1,
+          },
+        },
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(timers).toHaveLength(schedulesBeforeCheckpoint);
       expect(coordinator!.snapshot(fixture.sessionId).health).not.toMatchObject({
         phase: 'waitingForAgentEvent',
@@ -3029,6 +3046,447 @@ describe('production composition', () => {
       expect(new Set(controls.map((control) => control.control_id)).size).toBe(controls.length);
       expect(controls).toHaveLength(2);
       await fixture.app.close();
+    });
+
+    it.each([
+      'completion-before-deadline',
+      'deadline-before-completion',
+      'registration-after-final',
+      'manual-off',
+      'human-turn',
+      'restored-wait',
+      'owned-ci-watcher',
+      'process-error',
+      'restored-scheduled',
+      'restored-accepted',
+    ] as const)('production wake coalescing: %s', async (scenario) => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      let coordinator!: import('./features/autopilot/application/service.js').AutopilotCoordinator;
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        onAutopilotCoordinator: (value) => {
+          coordinator = value;
+        },
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const starts = () =>
+        fixture.handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      const runUntilStarts = async (count: number) => {
+        for (let attempt = 0; attempt < 10 && starts().length < count; attempt += 1) {
+          await vi.waitFor(() =>
+            expect(
+              timers.some((timer) => !timer.cancelled && !timer.fired) || starts().length >= count,
+            ).toBe(true),
+          );
+          if (starts().length >= count) break;
+          const timer = timers.find((entry) => !entry.cancelled && !entry.fired)!;
+          timer.fired = true;
+          timer.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(starts()).toHaveLength(count));
+      };
+      await runUntilStarts(1);
+      const session = (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json();
+      const threadId = session.threadId as string;
+      const turnId = session.activeTurnId as string;
+      const handle = fixture.handles.find((candidate) =>
+        candidate.requests.some((request) => request.method === 'turn/start'),
+      )!;
+      let rootActive = true;
+      handle.respond = (method, params) =>
+        method === 'thread/read'
+          ? {
+              thread: {
+                id: (params as { threadId: string }).threadId,
+                status: { type: rootActive ? 'active' : 'idle' },
+                turns: [],
+              },
+            }
+          : undefined;
+      handle.notify!({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+      const finish = () => {
+        rootActive = false;
+        const completion = {
+          method: 'turn/completed',
+          params: { threadId, turn: { id: turnId, status: 'completed' } },
+        };
+        handle.notify!(completion);
+        handle.notify!(completion);
+      };
+      const register = async (id: number) => {
+        const response = (await handle.request!({
+          id,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_autopilot_wait_lease',
+            arguments: {
+              version: 2,
+              reportId: 'race-report',
+              leaseId: 'race-lease',
+              wakeConditions: ['processExited'],
+              maxWaitMs: 60_000,
+            },
+          },
+        })) as { contentItems: Array<{ text: string }> };
+        return JSON.parse(response.contentItems[0]!.text) as { accepted: boolean; reason?: string };
+      };
+      const completedProcess = () =>
+        handle.notify!({
+          method: 'item/completed',
+          params: {
+            threadId,
+            turnId,
+            item: {
+              id: 'race-process',
+              type: 'commandExecution',
+              status: 'completed',
+              exitCode: scenario === 'process-error' ? 1 : 0,
+            },
+          },
+        });
+      const audit = () => {
+        const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+        try {
+          return database
+            .prepare(
+              'SELECT type,payload_json FROM session_events WHERE session_id = ? ORDER BY sequence',
+            )
+            .all(fixture.sessionId) as Array<{ type: string; payload_json: string }>;
+        } finally {
+          database.close();
+        }
+      };
+      if (scenario === 'registration-after-final') {
+        finish();
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+          ).toBeNull(),
+        );
+        expect(await register(9100)).toMatchObject({
+          accepted: false,
+          reason: 'automaticContinuationUnavailable',
+        });
+        await runUntilStarts(2);
+        expect(audit().filter((event) => event.type === 'autopilot.wait-registered')).toHaveLength(
+          0,
+        );
+      } else {
+        expect(await register(9100)).toMatchObject({ accepted: true });
+        if (scenario !== 'owned-ci-watcher')
+          expect(await register(9101)).toMatchObject({ accepted: false });
+        let deadline = timers.at(-1)!;
+        // A fresh timestamp and repeated active observations cannot consume a process lease.
+        const revision = coordinator.snapshot(fixture.sessionId).supervisionDelta!.revision;
+        vi.useFakeTimers({ toFake: ['Date'] });
+        onTestFinished(() => {
+          vi.useRealTimers();
+        });
+        vi.setSystemTime(Date.now() + 1_000);
+        for (let index = 0; index < 3; index += 1)
+          await fixture.app.inject({
+            method: 'POST',
+            url: `/api/sessions/${fixture.sessionId}/activity/refresh`,
+          });
+        expect(coordinator.snapshot(fixture.sessionId).supervisionDelta!.revision).toBe(revision);
+        expect(starts()).toHaveLength(1);
+        finish();
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${fixture.sessionId}`)).json().activeTurnId,
+          ).toBeNull(),
+        );
+        expect(coordinator.snapshot(fixture.sessionId).health.phase).toBe('waitingForAgentEvent');
+        if (scenario === 'restored-wait') {
+          coordinator.dispose(fixture.sessionId);
+          coordinator.restore(fixture.sessionId);
+          deadline = timers.at(-1)!;
+        }
+        if (scenario === 'manual-off') {
+          await fixture.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${fixture.sessionId}/autopilot`,
+            payload: { enabled: false },
+          });
+        } else if (scenario === 'human-turn') {
+          rootActive = true;
+          expect(
+            (
+              await fixture.app.inject({
+                method: 'POST',
+                url: `/api/sessions/${fixture.sessionId}/turns`,
+                payload: { text: 'user continues work', clientUserMessageId: 'human-race' },
+              })
+            ).statusCode,
+          ).toBe(202);
+        }
+        if (scenario === 'owned-ci-watcher') {
+          const gh = join(fixture.root, 'gh');
+          const pollFile = join(fixture.root, 'polls');
+          const evidenceDirectory = join(fixture.root, 'ci-evidence');
+          await writeFile(
+            gh,
+            `#!${process.execPath}\nconst fs=require('fs');let polls=0;try{polls=Number(fs.readFileSync(${JSON.stringify(pollFile)},'utf8'))}catch{};fs.writeFileSync(${JSON.stringify(pollFile)},String(++polls));console.log(JSON.stringify({databaseId:123,attempt:2,headSha:'${'a'.repeat(40)}',status:polls<10?'in_progress':'completed',conclusion:polls<10?null:'success',jobs:[],updatedAt:'2026-10-21T08:00:00Z'}));`,
+            { mode: 0o700 },
+          );
+          const script = `import {watchGithubRun} from ${JSON.stringify(pathToFileURL(join(process.cwd(), 'scripts/watch-github-run.mjs')).href)};process.exitCode=await watchGithubRun({repository:'dyne/gestalt-mobile',runId:'123',attempt:2,candidate:'${'a'.repeat(40)}',evidenceDirectory:${JSON.stringify(evidenceDirectory)},gh:${JSON.stringify(gh)},pollIntervalMs:1});`;
+          const { stdout } = await promisify(execFile)(process.execPath, [
+            '--input-type=module',
+            '-e',
+            script,
+          ]);
+          expect(stdout.trim().split('\n')).toHaveLength(3);
+          const summary = JSON.parse(
+            await readFile(join(evidenceDirectory, 'summary.json'), 'utf8'),
+          );
+          expect(summary).toMatchObject({
+            exitCode: 0,
+            completeness: 'complete',
+            counts: { polls: 10, changes: 2 },
+            processExitedAt: null,
+          });
+          // No polling observation becomes a model turn. Only this owned
+          // process's terminal command notification consumes the one lease.
+          expect(starts()).toHaveLength(1);
+        }
+        vi.setSystemTime(Date.now() + 60_000);
+        if (scenario === 'deadline-before-completion') deadline.callback();
+        completedProcess();
+        completedProcess();
+        if (scenario === 'restored-scheduled') {
+          // Reach the durable scheduled boundary first. Merely receiving a
+          // command notification can still have an unfired quiescence timer.
+          for (
+            let attempt = 0;
+            attempt < 5 && coordinator.snapshot(fixture.sessionId).state !== 'backoff';
+            attempt += 1
+          ) {
+            const pending = timers.find((timer) => !timer.cancelled && !timer.fired);
+            expect(pending).toBeDefined();
+            pending!.fired = true;
+            pending!.callback();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+          expect(coordinator.snapshot(fixture.sessionId).state).toBe('backoff');
+          coordinator.dispose(fixture.sessionId);
+          coordinator.restore(fixture.sessionId);
+        }
+        // Delivery of an already-canceled deadline must be harmless too.
+        deadline.callback();
+        deadline.callback();
+        if (scenario === 'manual-off' || scenario === 'human-turn') {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(starts()).toHaveLength(scenario === 'manual-off' ? 1 : 2);
+        } else {
+          await runUntilStarts(2);
+          if (scenario === 'restored-accepted') {
+            const acknowledgement = coordinator.snapshot(fixture.sessionId).supervisionDelta;
+            coordinator.dispose(fixture.sessionId);
+            coordinator.restore(fixture.sessionId);
+            expect(coordinator.snapshot(fixture.sessionId).supervisionDelta).toEqual(
+              acknowledgement,
+            );
+          }
+          const delivered = timers.filter((timer) => timer.fired);
+          for (const timer of delivered) timer.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(starts()).toHaveLength(2);
+        }
+        const events = audit();
+        expect(events.filter((event) => event.type === 'autopilot.wait-registered')).toHaveLength(
+          1,
+        );
+        expect(
+          events.filter(
+            (event) =>
+              event.type === 'autopilot.wait-woken' || event.type === 'autopilot.wait-expired',
+          ),
+        ).toHaveLength(scenario === 'manual-off' || scenario === 'human-turn' ? 0 : 1);
+      }
+      const events = audit();
+      const accepted = events
+        .filter((event) => event.type === 'autopilot.turn-started')
+        .map(
+          (event) =>
+            JSON.parse(event.payload_json) as {
+              controlId: string;
+              turnId: string;
+              trafficClass: string;
+            },
+        );
+      expect(accepted).toHaveLength(scenario === 'manual-off' || scenario === 'human-turn' ? 1 : 2);
+      expect(new Set(accepted.map((event) => event.controlId)).size).toBe(accepted.length);
+      expect(new Set(accepted.map((event) => event.turnId)).size).toBe(accepted.length);
+      expect(accepted.every((event) => event.trafficClass === 'acceptedRootTurn')).toBe(true);
+      expect(
+        events.filter((event) => event.type === 'autopilot.continuation-scheduled'),
+      ).toHaveLength(accepted.length);
+      expect(events.filter((event) => event.type === 'autopilot.control-issued')).toHaveLength(
+        accepted.length,
+      );
+    });
+
+    it('isolates identical process IDs and wait lease IDs across production sessions', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean; fired: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture({
+        activitySchedule: () => () => {},
+        autopilotSchedule: (callback) => {
+          const timer = { callback, cancelled: false, fired: false };
+          timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      });
+      onTestFinished(() => fixture.app.close());
+      const peer = await createComposedSession(fixture.app);
+      await installAutopilotPlan(fixture.app, peer, fixture.workspacePath, 'peer-plan');
+      const starts = () =>
+        fixture.handles
+          .flatMap((handle) => handle.requests)
+          .filter((request) => request.method === 'turn/start');
+      const drainTo = async (count: number) => {
+        for (let attempt = 0; attempt < 12 && starts().length < count; attempt += 1) {
+          const pending = timers.find((timer) => !timer.cancelled && !timer.fired);
+          expect(pending).toBeDefined();
+          pending!.fired = true;
+          pending!.callback();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await vi.waitFor(() => expect(starts()).toHaveLength(count));
+      };
+      await drainTo(2);
+      const actors: Array<{
+        sessionId: string;
+        handle: LiveServerHandle;
+        threadId: string;
+        turnId: string;
+      }> = [];
+      for (const sessionId of [fixture.sessionId, peer]) {
+        const session = (await fixture.app.inject(`/api/sessions/${sessionId}`)).json();
+        const threadId = session.threadId as string;
+        const turnId = session.activeTurnId as string;
+        const handle = fixture.handles.find((candidate) =>
+          candidate.requests.some(
+            (request) =>
+              request.method === 'turn/start' &&
+              (request.params as { threadId?: string }).threadId === threadId,
+          ),
+        )!;
+        const response = (await handle.request!({
+          id: 9300,
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId,
+            tool: 'gestalt_autopilot_wait_lease',
+            arguments: {
+              version: 2,
+              reportId: 'same-report',
+              leaseId: 'same-lease',
+              wakeConditions: ['processExited'],
+              maxWaitMs: 60_000,
+            },
+          },
+        })) as { contentItems: Array<{ text: string }> };
+        expect(JSON.parse(response.contentItems[0]!.text)).toMatchObject({ accepted: true });
+        handle.notify!({
+          method: 'turn/completed',
+          params: { threadId, turn: { id: turnId, status: 'completed' } },
+        });
+        actors.push({ sessionId, handle, threadId, turnId });
+      }
+      expect(new Set(actors.map((actor) => actor.threadId)).size).toBe(2);
+      for (const actor of actors)
+        await vi.waitFor(async () =>
+          expect(
+            (await fixture.app.inject(`/api/sessions/${actor.sessionId}`)).json().autopilot.health
+              .phase,
+          ).toBe('waitingForAgentEvent'),
+        );
+      const complete = (actor: (typeof actors)[number]) =>
+        actor.handle.notify!({
+          method: 'item/completed',
+          params: {
+            threadId: actor.threadId,
+            turnId: actor.turnId,
+            item: {
+              id: 'same-process',
+              type: 'commandExecution',
+              status: 'completed',
+              exitCode: 1,
+            },
+          },
+        });
+      complete(actors[0]!);
+      complete(actors[0]!);
+      await drainTo(3);
+      expect((await fixture.app.inject(`/api/sessions/${peer}`)).json()).toMatchObject({
+        activeTurnId: null,
+        autopilot: { health: { phase: 'waitingForAgentEvent' } },
+      });
+      const database = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        const eventsFor = (sessionId: string, type: string) =>
+          (
+            database
+              .prepare(
+                'SELECT count(*) AS count FROM session_events WHERE session_id = ? AND type = ?',
+              )
+              .get(sessionId, type) as { count: number }
+          ).count;
+        expect(eventsFor(peer, 'autopilot.root-process-observed')).toBe(0);
+        expect(eventsFor(peer, 'autopilot.wait-woken')).toBe(0);
+        complete(actors[1]!);
+        await drainTo(4);
+        for (const actor of actors) {
+          expect(eventsFor(actor.sessionId, 'autopilot.wait-registered')).toBe(1);
+          expect(eventsFor(actor.sessionId, 'autopilot.wait-woken')).toBe(1);
+          expect(eventsFor(actor.sessionId, 'autopilot.control-issued')).toBe(2);
+          expect(eventsFor(actor.sessionId, 'autopilot.turn-started')).toBe(2);
+          const rows = database
+            .prepare(
+              "SELECT sequence,type,payload_json FROM session_events WHERE session_id = ? AND type IN ('autopilot.root-process-observed','autopilot.wait-woken','autopilot.continuation-scheduled','autopilot.control-issued','autopilot.turn-started') ORDER BY sequence",
+            )
+            .all(actor.sessionId) as Array<{
+            sequence: number;
+            type: string;
+            payload_json: string;
+          }>;
+          const woken = rows.find((row) => row.type === 'autopilot.wait-woken')!;
+          const afterWake = rows.filter(
+            (row) =>
+              row.sequence > woken.sequence && row.type !== 'autopilot.root-process-observed',
+          );
+          expect(afterWake.map((row) => row.type)).toEqual([
+            'autopilot.continuation-scheduled',
+            'autopilot.control-issued',
+            'autopilot.turn-started',
+          ]);
+          expect(new Set(afterWake.map((row) => JSON.parse(row.payload_json).controlId)).size).toBe(
+            1,
+          );
+          expect(JSON.parse(afterWake.at(-1)!.payload_json)).toMatchObject({
+            trafficClass: 'acceptedRootTurn',
+            turnId: expect.any(String),
+            wakeReason: 'processExited',
+          });
+        }
+      } finally {
+        database.close();
+      }
     });
 
     it('production child-idle transition wakes an idle supervised autopilot', async () => {

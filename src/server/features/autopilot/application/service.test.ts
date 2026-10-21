@@ -747,10 +747,12 @@ describe('AutopilotCoordinator', () => {
       reason: 'autopilot',
     });
     await timer?.();
-    expect(events.filter((event) => event.type === 'autopilot.control-issued')[0]!.payload).toEqual(
-      { controlId: scheduled },
-    );
-    expect(events.filter((event) => event.type === 'autopilot.turn-started')[0]!.payload).toEqual({
+    expect(
+      events.filter((event) => event.type === 'autopilot.control-issued')[0]!.payload,
+    ).toMatchObject({ controlId: scheduled });
+    expect(
+      events.filter((event) => event.type === 'autopilot.turn-started')[0]!.payload,
+    ).toMatchObject({
       controlId: scheduled,
     });
     coordinator.manualSend('s');

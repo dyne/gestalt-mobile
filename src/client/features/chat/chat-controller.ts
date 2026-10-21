@@ -186,6 +186,7 @@ export class ChatController {
   #authoritativeGeneration = -1;
   #socket: WebSocket | null = null;
   #resyncSocket = false;
+  #resyncSequence: number | null = null;
   #snapshot: { id: string; generation: number; promise: Promise<void> } | null = null;
   #historyRetry: Timer | null = null;
   #historyFailures = 0;
@@ -449,6 +450,12 @@ export class ChatController {
     socket.onclose = () => {
       if (!this.#current(id, generation) || this.#socket !== socket) return;
       this.#socket = null;
+      // Resync owns the replacement until its required snapshot is available.
+      // A competing reconnect would open again from the obsolete cursor.
+      if (this.#resyncSocket) {
+        void this.#takeSnapshot(id, generation);
+        return;
+      }
       this.#reconnect = this.#options.setTimeout(
         () => this.#open(id, generation),
         Math.min(1000 * 2 ** this.#attempt++, 10_000),
@@ -457,7 +464,7 @@ export class ChatController {
   }
   #receive(id: string, generation: number, raw: string): void {
     if (!this.#current(id, generation)) return;
-    let envelope: { type?: unknown; event?: unknown };
+    let envelope: { type?: unknown; event?: unknown; currentSequence?: unknown };
     try {
       envelope = JSON.parse(raw) as typeof envelope;
     } catch {
@@ -466,6 +473,12 @@ export class ChatController {
     if (envelope.type === 'relay.resyncRequired') {
       this.#transport.resyncs++;
       this.#resyncSocket = true;
+      if (
+        typeof envelope.currentSequence === 'number' &&
+        Number.isSafeInteger(envelope.currentSequence) &&
+        envelope.currentSequence >= 0
+      )
+        this.#resyncSequence = Math.max(this.#resyncSequence ?? 0, envelope.currentSequence);
       void this.#takeSnapshot(id, generation);
       return;
     }
@@ -571,6 +584,11 @@ export class ChatController {
           this.#set({ ...this.#projection, snapshotting: false, lifecycle: 'recoverable' });
           return;
         }
+        // A request already in flight when resync arrived can legitimately
+        // carry an older lower-bound cut. Reuse bounded history recovery, not
+        // a socket from that cut which would immediately need another resync.
+        if (this.#resyncSequence !== null && decoded.baseSequence < this.#resyncSequence)
+          throw new Error('CHAT_SNAPSHOT_BEHIND_RESYNC');
         this.#historyFailures = 0;
         this.#historyErrorReported = false;
         if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);
@@ -582,6 +600,7 @@ export class ChatController {
             this.#options.onHistoryPromptAccepted?.(id, item.operationId);
         if (recovering || this.#resyncSocket) {
           this.#resyncSocket = false;
+          this.#resyncSequence = null;
           this.#replaceSocket(id, generation);
         }
       })
@@ -674,6 +693,7 @@ export class ChatController {
   #stop(): void {
     this.#transport = { attempts: 0, coalesced: 0, resyncs: 0, socketOpens: 0 };
     this.#resyncSocket = false;
+    this.#resyncSequence = null;
     if (this.#reconnect) this.#options.clearTimeout(this.#reconnect);
     this.#reconnect = null;
     if (this.#historyRetry) this.#options.clearTimeout(this.#historyRetry);

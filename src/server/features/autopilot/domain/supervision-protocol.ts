@@ -184,6 +184,9 @@ function compareBy<Key extends string>(key: Key) {
 }
 
 export type SupervisionProtocolState = Readonly<{
+  /** Runtime acceptance acknowledges observation, never task completion or provider usage. */
+  acknowledgedRevision?: Readonly<{ revision: string; controlId: string; turnId: string }>;
+  wakeCause?: Readonly<{ condition: ObservableWakeCondition | 'deadline'; leaseId: string }> | null;
   outcome:
     'active' | 'probeRequired' | 'parked' | 'retrying' | 'attentionRequired' | 'safetyPaused';
   progressKey: string;
@@ -431,6 +434,44 @@ export function parseSupervisionProtocolState(
     return undefined;
   const waitLease = parseWaitLease(candidate.waitLease);
   if (waitLease === undefined) return undefined;
+  const acknowledgement = candidate.acknowledgedRevision;
+  const wakeCause = candidate.wakeCause;
+  let parsedWake: SupervisionProtocolState['wakeCause'];
+  let parsedAcknowledgement: SupervisionProtocolState['acknowledgedRevision'];
+  if (wakeCause !== undefined && wakeCause !== null) {
+    if (typeof wakeCause !== 'object') return undefined;
+    const wake = wakeCause as Record<string, unknown>;
+    if (
+      ![...observableWakeConditions, 'deadline'].includes(
+        wake.condition as ObservableWakeCondition,
+      ) ||
+      typeof wake.leaseId !== 'string' ||
+      !wake.leaseId ||
+      wake.leaseId.length > 256
+    )
+      return undefined;
+    parsedWake = {
+      condition: wake.condition as ObservableWakeCondition | 'deadline',
+      leaseId: wake.leaseId,
+    };
+  }
+  if (acknowledgement !== undefined) {
+    if (!acknowledgement || typeof acknowledgement !== 'object') return undefined;
+    const value = acknowledgement as Record<string, unknown>;
+    if (
+      typeof value.revision !== 'string' ||
+      !/^sha256:[a-f0-9]{64}$/.test(value.revision) ||
+      ![value.controlId, value.turnId].every(
+        (id) => typeof id === 'string' && id.length > 0 && id.length <= 256,
+      )
+    )
+      return undefined;
+    parsedAcknowledgement = {
+      revision: value.revision,
+      controlId: value.controlId as string,
+      turnId: value.turnId as string,
+    };
+  }
   if (
     candidate.safetyPauseReason !== null &&
     candidate.safetyPauseReason !== 'retryRecurrence' &&
@@ -439,6 +480,8 @@ export function parseSupervisionProtocolState(
     return undefined;
   return {
     ...base,
+    ...(wakeCause !== undefined ? { wakeCause: parsedWake ?? null } : {}),
+    ...(parsedAcknowledgement ? { acknowledgedRevision: parsedAcknowledgement } : {}),
     outcome: candidate.outcome,
     unchangedContinuations,
     probeKey,
