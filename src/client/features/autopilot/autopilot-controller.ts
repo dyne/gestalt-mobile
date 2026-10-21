@@ -43,6 +43,8 @@ const toggleErrorMessage = (error: unknown): string => {
     return 'An incomplete supervised plan is required before Autopilot can start.';
   if (code === 'AUTOPILOT_PLAN_COMPLETE')
     return 'This plan is complete, so Autopilot is unavailable.';
+  if (code === 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE')
+    return 'Autopilot cannot verify this plan’s executor settings. Automatic execution is unavailable; manual review and repair remain available.';
   if (code === 'AUTOPILOT_SESSION_UNAVAILABLE') return 'This session is unavailable for Autopilot.';
   return error instanceof Error ? error.message : 'Could not update Autopilot.';
 };

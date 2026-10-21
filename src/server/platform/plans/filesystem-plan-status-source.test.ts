@@ -632,3 +632,94 @@ it('persists explicit attachments across a new source, watches edits, and permit
   });
   third.closeAll();
 });
+
+it('retains mandatory admission failure over an older legacy projection across refresh and restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mobile-policy-publication-'));
+  temporaryPaths.push(root);
+  const path = join(root, 'legacy.org');
+  await writeFile(path, org('Readable legacy'));
+  const session = { id: 's', workspacePath: root };
+  const source = new FilesystemPlanStatusSource(join(root, 'state'));
+  const registry = new SupervisedPlanRegistry();
+  await source.attach(session, path, (update) => registry.accept('s', update));
+  const lease = await source.open(session, (update) => registry.accept('s', update));
+  const incompatible = join(lease.statusDirectory, 'incompatible.plan-status.json');
+  try {
+    await writeFile(
+      incompatible,
+      JSON.stringify({
+        schemaVersion: 1,
+        planPath: join(root, 'future.org'),
+        reason: 'resync',
+        updatedAt: '2026-10-21T16:00:00Z',
+        modelPolicyVersion: 2,
+        requiredCapabilities: ['l1-model-policy-v2'],
+      }),
+    );
+    await source.refresh('s');
+    expect(registry.modelPolicyStatus('s')).toBe('unavailable');
+    expect(registry.find('s')?.title).toBe('Readable legacy');
+    await source.refresh('s');
+    expect(registry.modelPolicyStatus('s')).toBe('unavailable');
+    source.closeAll();
+    const restarted = new FilesystemPlanStatusSource(join(root, 'state'));
+    const recovered = new SupervisedPlanRegistry();
+    try {
+      await restarted.open(session, (update) => recovered.accept('s', update));
+      expect(recovered.modelPolicyStatus('s')).toBe('unavailable');
+      expect(recovered.find('s')).toBeNull();
+      await restarted.attach(session, path, (update) => recovered.accept('s', update));
+      expect(recovered.find('s')?.title).toBe('Readable legacy');
+      expect(recovered.modelPolicyStatus('s')).toBe('legacy');
+    } finally {
+      restarted.closeAll();
+    }
+  } finally {
+    source.closeAll();
+  }
+});
+
+it('does not let an older in-flight legacy read clear a newer mandatory-policy rejection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mobile-policy-read-race-'));
+  temporaryPaths.push(root);
+  const path = join(root, 'legacy.org');
+  await writeFile(path, org('Last valid plan'));
+  let pause = false;
+  let release: (() => void) | undefined;
+  const source = new FilesystemPlanStatusSource(join(root, 'state'), undefined, {
+    readFile: (async (requested, options) => {
+      if (pause && requested === path) {
+        pause = false;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return readFile(requested, options as never);
+    }) as typeof readFile,
+    realpath: (async (requested) =>
+      String(requested)) as typeof import('node:fs/promises').realpath,
+  });
+  const registry = new SupervisedPlanRegistry();
+  const session = { id: 's', workspacePath: root };
+  await source.attach(session, path, (update) => registry.accept('s', update));
+  const lease = await source.open(session, (update) => registry.accept('s', update));
+  pause = true;
+  const oldRead = source.refresh('s');
+  try {
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await writeFile(
+      join(lease.statusDirectory, 'future.plan-status.json'),
+      JSON.stringify({ modelPolicyVersion: 2 }),
+    );
+    await source.refresh('s');
+    expect(registry.modelPolicyStatus('s')).toBe('unavailable');
+    release?.();
+    await oldRead;
+    expect(registry.modelPolicyStatus('s')).toBe('unavailable');
+    expect(registry.find('s')?.title).toBe('Last valid plan');
+  } finally {
+    release?.();
+    await oldRead;
+    source.closeAll();
+  }
+});

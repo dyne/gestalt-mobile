@@ -9,6 +9,24 @@ export type PlanPriority = 'A' | 'B' | 'C';
 export type PlanLevel = 1 | 2;
 export type PlanReviewStatus = 'UNREVIEWED' | 'REVIEWED';
 
+export type PlanModelId = 'gpt-6-luna' | 'gpt-6-sol' | 'gpt-6.1-sol';
+export type PlanModelPolicy = Readonly<{
+  version: 1;
+  model: PlanModelId;
+  reasoningEffort: 'medium' | 'high' | 'xhigh';
+  rationale: string;
+  allowedFallbacks: readonly PlanModelId[];
+  escalationTrigger: string;
+  necessity: Readonly<{
+    kind: 'unresolved-correctness' | 'specific-reasoning';
+    whyMediumInadequate: string;
+    evidence: string;
+    affectedScope: string;
+    returnToMedium: string;
+    scopeReassessment?: string;
+  }> | null;
+}>;
+
 export type PlanStepDescription = Readonly<{
   effort?: string;
   goal?: string;
@@ -46,6 +64,7 @@ export type PlanStep = Readonly<{
   skills?: readonly string[];
   description: PlanStepDescription;
   measurement?: PlanStepMeasurement;
+  modelPolicy?: PlanModelPolicy;
   children: readonly PlanStep[];
 }>;
 
@@ -55,6 +74,8 @@ export type SupervisedPlan = Readonly<{
   subtitle?: string;
   date?: string;
   keywords?: string;
+  /** Absent for legacy plans; v1 promises retention, not runtime admission. */
+  modelPolicyVersion?: 1;
   steps: readonly PlanStep[];
   totalSteps: number;
   doneSteps: number;
@@ -73,6 +94,7 @@ export type PlanProgressed = Readonly<{
 export type PlanUnavailableReason =
   | 'PATH_OUTSIDE_WORKSPACE'
   | 'MISSING_TITLE'
+  | 'INVALID_MODEL_POLICY'
   | 'MALFORMED_ORG'
   | 'DUPLICATE_ID'
   | 'MULTIPLE_WIP'

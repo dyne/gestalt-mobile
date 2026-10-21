@@ -13,6 +13,12 @@
     "session-verdict",
     "acknowledgement-safe-composer",
     "org-plan-contract",
-    "suspension-v1"
-  ]
+    "suspension-v1",
+    "l1-model-policy-v1"
+  ],
+  "modelPolicyContract": {
+    "version": 1,
+    "scope": "schema-and-retention",
+    "runtimeEnforcement": false
+  }
 }

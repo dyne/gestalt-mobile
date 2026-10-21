@@ -6,21 +6,36 @@
 
 import type { PlanStatusUpdate } from './ports.js';
 import type { SupervisedPlan } from '../domain/supervised-plan.js';
+import type { ModelPolicyStatus } from '../domain/model-policy-admission.js';
 
 /** Retains at most one validated plan projection for each relay session. */
 export class SupervisedPlanRegistry {
+  private readonly policyUnavailable = new Set<string>();
   private readonly plans = new Map<
     string,
     Readonly<{ plan: SupervisedPlan; identity: string; publicationReason: string | null }>
   >();
 
   accept(sessionId: string, update: PlanStatusUpdate): void {
-    if (update.kind === 'updated')
+    if (update.kind === 'updated') {
       this.plans.set(sessionId, {
         plan: update.plan,
         identity: update.identity,
         publicationReason: update.reason,
       });
+      this.policyUnavailable.delete(sessionId);
+    } else if (update.modelPolicyRequired || this.find(sessionId)?.modelPolicyVersion === 1) {
+      this.policyUnavailable.add(sessionId);
+    }
+  }
+
+  /** An invalid mandatory publication cannot silently reuse a legacy execution policy. */
+  modelPolicyStatus(sessionId: string): ModelPolicyStatus {
+    return this.policyUnavailable.has(sessionId)
+      ? 'unavailable'
+      : this.find(sessionId)?.modelPolicyVersion === 1
+        ? 'required'
+        : 'legacy';
   }
 
   find(sessionId: string): SupervisedPlan | null {
@@ -37,5 +52,6 @@ export class SupervisedPlanRegistry {
 
   clear(sessionId: string): void {
     this.plans.delete(sessionId);
+    this.policyUnavailable.delete(sessionId);
   }
 }

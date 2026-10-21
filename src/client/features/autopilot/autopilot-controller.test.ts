@@ -387,6 +387,27 @@ describe('AutopilotController', () => {
     );
   });
 
+  it('reports unavailable model-policy admission through the shared error pipeline', async () => {
+    let published = capture();
+    const controller = new AutopilotController(
+      {
+        getSession: async () => ({}),
+        setAutopilot: async () => {
+          throw Object.assign(new Error('private runtime detail'), {
+            code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
+          });
+        },
+        resolveAttention: async () => ({}),
+      },
+      (state) => (published = capture(state)),
+    );
+    controller.bootstrap([{ id: 'a', autopilot: snapshot('disabled') }]);
+    await controller.toggle('a', true);
+    expect(published.errors.get('a')).toBe(
+      'Autopilot cannot verify this plan’s executor settings. Automatic execution is unavailable; manual review and repair remain available.',
+    );
+  });
+
   it('accepts the exact server attention envelope and its resolved event form', () => {
     let published = capture();
     const controller = new AutopilotController(

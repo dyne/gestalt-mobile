@@ -5,6 +5,7 @@
  */
 
 import { isAbsolute, relative, resolve } from 'node:path';
+import { parseModelPolicy } from './parse-model-policy.js';
 
 import type {
   PlanLevel,
@@ -47,10 +48,22 @@ export function parseSupervisedPlan(input: {
   const lines = input.source.replace(/\r\n?/g, '\n').split('\n');
   const metadata = new Map<string, string>();
   const headings: ParsedHeading[] = [];
+  const declarations = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^#\+MODEL_POLICY_VERSION:/i.test(line));
+  const firstHeading = lines.findIndex((line) => line.startsWith('*'));
+  if (
+    declarations.length > 1 ||
+    declarations.some(
+      ({ line, index }) => line !== '#+MODEL_POLICY_VERSION: 1' || index >= firstHeading,
+    )
+  )
+    return unavailable('INVALID_MODEL_POLICY');
+  const modelPolicyVersion = declarations.length ? 1 : undefined;
 
   for (let index = 0; index < lines.length;) {
     const line = lines[index]!;
-    const metadataMatch = /^#\+([A-Z]+):(?:[ \t](.*))?$/.exec(line);
+    const metadataMatch = /^#\+([A-Z_]+):(?:[ \t](.*))?$/.exec(line);
     if (metadataMatch) {
       metadata.set(metadataMatch[1]!, metadataMatch[2] ?? '');
       index += 1;
@@ -128,9 +141,20 @@ export function parseSupervisedPlan(input: {
   if (new Set(headings.map((heading) => heading.id)).size !== headings.length)
     return unavailable('DUPLICATE_ID');
 
+  const modelPolicies = new Map<string, ReturnType<typeof parseModelPolicy>>();
+  try {
+    for (const heading of headings)
+      modelPolicies.set(
+        heading.id,
+        parseModelPolicy(heading.properties, heading.level, modelPolicyVersion),
+      );
+  } catch {
+    return unavailable('INVALID_MODEL_POLICY');
+  }
+
   if (!hasValidSuspension(headings)) return unavailable('MALFORMED_ORG');
   if (!hasValidWipPath(headings)) return unavailable('MULTIPLE_WIP');
-  const built = buildSteps(headings);
+  const built = buildSteps(headings, modelPolicies);
   if (!built) return unavailable('MISSING_REQUIRED_FIELD');
 
   const allSteps = headings;
@@ -151,6 +175,7 @@ export function parseSupervisedPlan(input: {
       ...(metadata.has('SUBTITLE') ? { subtitle: metadata.get('SUBTITLE') } : {}),
       ...(metadata.has('DATE') ? { date: metadata.get('DATE') } : {}),
       ...(metadata.has('KEYWORDS') ? { keywords: metadata.get('KEYWORDS') } : {}),
+      ...(modelPolicyVersion ? { modelPolicyVersion } : {}),
       steps: built,
       totalSteps: allSteps.length,
       doneSteps: allSteps.filter((step) => step.state === 'DONE').length,
@@ -170,14 +195,18 @@ export function isPlanPathWithinWorkspace(planPath: string, workspacePath: strin
   );
 }
 
-function buildSteps(headings: readonly ParsedHeading[]): readonly PlanStep[] | null {
+function buildSteps(
+  headings: readonly ParsedHeading[],
+  modelPolicies: ReadonlyMap<string, ReturnType<typeof parseModelPolicy>>,
+): readonly PlanStep[] | null {
   const parents: PlanStep[] = [];
   for (let index = 0; index < headings.length; index += 1) {
     const heading = headings[index]!;
     if (heading.level === 1) {
       const step = makeStep(heading);
       if (!step) return null;
-      parents.push(step);
+      const modelPolicy = modelPolicies.get(heading.id);
+      parents.push(modelPolicy ? { ...step, modelPolicy } : step);
       continue;
     }
     const parent = parents.at(-1);

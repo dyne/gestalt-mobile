@@ -136,6 +136,8 @@ import {
 } from '../shared/contracts/autopilot-wait-lease.js';
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
+import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
+import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
@@ -272,6 +274,11 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   >();
   const checkpointHandoffRecoveries = new Set<string>();
   const supervisedPlans = new SupervisedPlanRegistry();
+  const requireOrgExecutionAdmission = (sessionId: string) =>
+    requireModelPolicyAdmission(
+      supervisedPlans.find(sessionId),
+      supervisedPlans.modelPolicyStatus(sessionId),
+    );
   const planStatusSource = new FilesystemPlanStatusSource(join(dirname(databasePath), 'plans'));
   const planMeasurementHelperPath =
     options.planMeasurementHelperPath ?? process.env.GESTALT_MOBILE_ORG_PLAN_HELPER;
@@ -422,6 +429,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
     },
   );
   const autopilot = new AutopilotCoordinator({
+    modelPolicyStatus: (sessionId) => supervisedPlans.modelPolicyStatus(sessionId),
     store: autopilotStore,
     now: () => new Date().toISOString(),
     policy: defaultAutopilotPolicy,
@@ -475,6 +483,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const session = sessions.find(sessionId);
         if (!session || !runtime || session.activeTurnId || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        requireOrgExecutionAdmission(sessionId);
+        if (
+          !current() ||
+          sessions.find(sessionId)?.activeTurnId ||
+          blockingInteractions(sessionId).length
+        )
+          throw new Error('AUTOPILOT_START_UNAVAILABLE');
         // A relay restart can leave a durable, otherwise eligible session without this
         // process's writer. Reacquire through the normal ownership boundary before a
         // synthetic start; never bypass its single-writer and replacement semantics.
@@ -482,6 +497,13 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         if (!current() || writer.session.activeTurnId || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
+        requireOrgExecutionAdmission(sessionId);
+        if (
+          !current() ||
+          sessions.find(sessionId)?.activeTurnId ||
+          blockingInteractions(sessionId).length
+        )
+          throw new Error('AUTOPILOT_START_UNAVAILABLE');
         const continuationPrompt = launchIdentity
           ? autopilotExecutorLaunchPrompt(launchIdentity)
           : AUTOPILOT_CONTINUATION_PROMPT;
@@ -521,6 +543,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const session = sessions.find(sessionId);
         if (!session || !runtime || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
+        requireOrgExecutionAdmission(sessionId);
         const writer = await runtime.ensureWriter(session, new Date().toISOString());
         if (blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_EXECUTOR_UNAVAILABLE');
@@ -944,6 +967,26 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
   let kimiRuntime: KimiSessionRuntime | null = null;
+  const executorModelEvidence = new ExecutorModelEvidenceReader(
+    (sessionId) => {
+      const session = sessions.find(sessionId);
+      const plan = supervisedPlans.find(sessionId);
+      if (!session || session.provider !== 'codex' || plan?.modelPolicyVersion !== 1) return null;
+      return {
+        sessionId,
+        provider: session.provider,
+        rootThreadId: session.threadId ?? null,
+        planIdentity: supervisedPlans.identity(sessionId),
+        plan,
+        executor: autopilotStore.find(sessionId)?.executor ?? null,
+      };
+    },
+    {
+      read: (input) =>
+        runtime?.readExecutorConfiguration(input) ??
+        Promise.resolve({ kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' }),
+    },
+  );
   /**
    * Shared acceptance path for a provider-neutral pending interaction: it
    * enters the durable store, requests human attention, and notifies autopilot.
@@ -1182,6 +1225,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           if (!session) return false;
           if (isOrgPlanHealthCall(request)) {
             const snapshot = autopilot.snapshot(sessionId);
+            const modelPolicy = await executorModelEvidence.read(sessionId);
             return (
               runtime?.resolveServerRequest(sessionId, String(request.id), {
                 success: true,
@@ -1193,6 +1237,10 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                       enabled: snapshot.enabled,
                       health: snapshot.health,
                       reason: snapshot.reason,
+                      ...(snapshot.executionAdmission
+                        ? { executionAdmission: snapshot.executionAdmission }
+                        : {}),
+                      ...(modelPolicy ? { modelPolicy } : {}),
                     }),
                   },
                 ],
@@ -1494,6 +1542,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           },
           verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
         },
+        requireOrgExecutionAdmission,
       )
     : null;
   const handleKimiNotification = (

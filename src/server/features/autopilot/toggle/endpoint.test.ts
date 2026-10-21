@@ -8,6 +8,45 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerAutopilotToggle } from './endpoint.js';
 
 describe('autopilot toggle endpoint', () => {
+  it('returns a bounded policy conflict while preserving explicit Off', async () => {
+    const app = fastify();
+    registerAutopilotToggle(app, {
+      enable: () => ({
+        allowed: false,
+        code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
+        reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
+        action: 'Manual review and repair remain available.',
+      }),
+      disable: () => ({
+        state: 'disabled',
+        enabled: false,
+        retry: { position: 0, limit: 3 },
+        updatedAt: 't',
+      }),
+    } as never);
+    try {
+      const blocked = await app.inject({
+        method: 'PUT',
+        url: '/api/sessions/s/autopilot',
+        payload: { enabled: true },
+      });
+      expect(blocked.statusCode).toBe(409);
+      expect(blocked.json()).toMatchObject({
+        code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
+        reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
+      });
+      expect(Buffer.byteLength(blocked.body)).toBeLessThanOrEqual(2048);
+      const off = await app.inject({
+        method: 'PUT',
+        url: '/api/sessions/s/autopilot',
+        payload: { enabled: false },
+      });
+      expect(off.statusCode).toBe(200);
+      expect(off.json()).toMatchObject({ autopilot: { enabled: false } });
+    } finally {
+      await app.close();
+    }
+  });
   it('uses typed safe conflicts and rejects malformed enabled values', async () => {
     const app = fastify();
     registerAutopilotToggle(app, {

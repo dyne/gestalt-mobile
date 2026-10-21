@@ -20,7 +20,7 @@ export type PlanStatusUpdate =
       planPath: string;
       reason: PlanSignalReason | null;
     }>
-  | Readonly<{ kind: 'unavailable'; code: 'PLAN_STATUS_UNAVAILABLE' }>;
+  | Readonly<{ kind: 'unavailable'; code: 'PLAN_STATUS_UNAVAILABLE'; modelPolicyRequired?: true }>;
 
 export type { PlanSignalReason } from '../../../../shared/contracts/plan-signal.js';
 
