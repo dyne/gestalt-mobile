@@ -23,6 +23,7 @@ on:
       - scripts/live-production-edit-*.mjs
       - scripts/live-production-proof-lanes*.mjs
       - scripts/live-production-recovery-proof.mjs
+      - scripts/live-production-cold-catalog*.mjs
       - scripts/live-picker-smoke*.mjs
   workflow_dispatch:
     inputs:
@@ -61,7 +62,7 @@ jobs:
         with:
           node-version: 24.21.0
       - name: Verify proof selection and orchestration before provisioning
-        run: node --test scripts/live-production-proof-lanes.test.mjs scripts/live-picker-smoke.test.mjs
+        run: node --test scripts/live-production-proof-lanes.test.mjs scripts/live-picker-smoke.test.mjs scripts/live-production-cold-catalog.test.mjs
       - id: select
         env:
           REQUEST_PREFLIGHT: ${{ inputs.preflight }}
@@ -86,7 +87,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Anchor immutable editing job clock before checkout
-        if: matrix.lane == 'accept-steer'
+        if: matrix.lane == 'accept-steer' || matrix.lane == 'cold-catalog'
         run: |
           node --input-type=module <<'NODE'
           import {writeFileSync,readFileSync} from 'node:fs';
@@ -110,9 +111,9 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import {readFileSync,appendFileSync} from 'node:fs';
-          import {proofMode} from './scripts/live-picker-smoke.mjs';
+          import {selectedLanes} from './scripts/live-production-proof-lanes.mjs';
           const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-          const mode=proofMode({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true',independentOnly:process.env.REQUEST_INDEPENDENT_ONLY==='true'});
+          const {mode}=selectedLanes({eventName:process.env.GITHUB_EVENT_NAME,message:event.head_commit?.message??'',preflight:process.env.REQUEST_PREFLIGHT==='true',pickerSmoke:process.env.REQUEST_PICKER_SMOKE==='true',pickerDiagnostic:process.env.REQUEST_PICKER_DIAGNOSTIC==='true',independentOnly:process.env.REQUEST_INDEPENDENT_ONLY==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`mode=${mode}\n`);
           NODE
       - run: npm ci
@@ -357,7 +358,7 @@ jobs:
           set -Eeuo pipefail
           node scripts/live-remote-proof.mjs
       - name: Sole production admission and real picker editing through Native
-        if: matrix.lane != 'independent' && matrix.lane != 'recovery' && matrix.lane != 'accept-steer'
+        if: matrix.lane != 'independent' && matrix.lane != 'recovery' && matrix.lane != 'accept-steer' && matrix.lane != 'cold-catalog'
         # Installed-source phase budgets are bounded in the adapter; this is a
         # separate aggregate hosted-proof cap, not permission to retry phases.
         timeout-minutes: 30
@@ -382,6 +383,79 @@ jobs:
           node --test scripts/live-proof-cleanup.test.mjs scripts/live-project-metadata-diagnostics.test.mjs scripts/live-production-edit-provider.test.mjs scripts/live-picker-smoke.test.mjs scripts/live-production-proof-lanes.test.mjs
           mkdir -p "$LIVE_PRODUCTION_EVIDENCE"
           PATH=/usr/bin:/bin LIVE_HOST_CODEX_BINARY="$native_binary" /usr/bin/node --cpu-prof --cpu-prof-dir="$LIVE_PRODUCTION_EVIDENCE" scripts/live-production-entrypoint-proof.mjs
+      - name: Prepare exact unseeded no-inference cold catalog owner
+        if: matrix.lane == 'cold-catalog'
+        timeout-minutes: 30
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_COLD_CATALOG: '1'
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '0'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: '0'
+          LIVE_PRODUCTION_ADMISSION_SEED: '0'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_PROOF_LANE: ''
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          node --test scripts/live-production-cold-catalog.test.mjs
+          PATH=/usr/bin:/bin /usr/bin/node scripts/live-production-proof-lanes.mjs catalog-start "$RUNNER_TEMP/live-cold-catalog"
+      - name: Observe one original-owner cold catalog lifecycle
+        if: matrix.lane == 'cold-catalog'
+        timeout-minutes: 13
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_COLD_CATALOG: '1'
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '0'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: '0'
+          LIVE_PRODUCTION_ADMISSION_SEED: '0'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_PROOF_LANE: ''
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          PATH=/usr/bin:/bin /usr/bin/node scripts/live-production-proof-lanes.mjs catalog-continue "$RUNNER_TEMP/live-cold-catalog"
+      - name: Always retain and settle exact cold catalog driver
+        if: always() && matrix.lane == 'cold-catalog'
+        timeout-minutes: 4
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_COLD_CATALOG: '1'
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '0'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: '0'
+          LIVE_PRODUCTION_ADMISSION_SEED: '0'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_PROOF_LANE: ''
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -f "$RUNNER_TEMP/live-cold-catalog/launched.json" ]]; then
+            cleanup_status=0
+            PATH=/usr/bin:/bin /usr/bin/node scripts/live-production-proof-lanes.mjs catalog-cleanup "$RUNNER_TEMP/live-cold-catalog" || cleanup_status=$?
+            if [[ -f "$RUNNER_TEMP/live-cold-catalog/cleanup.json" ]]; then
+              cp "$RUNNER_TEMP/live-cold-catalog/cleanup.json" test-results/live-caddy-proof/catalog-driver-cleanup.json
+            fi
+            exit "$cleanup_status"
+          fi
+      - name: Validate diagnostic only cold catalog evidence
+        if: matrix.lane == 'cold-catalog'
+        env:
+          LIVE_PRODUCTION_ENTRYPOINT_PROOF: '1'
+          LIVE_PRODUCTION_COLD_CATALOG: '1'
+          LIVE_EDIT_JOB_ANCHOR: ${{ runner.temp }}/live-edit-job-anchor.json
+          LIVE_PRODUCTION_EDIT_FLOW_PROOF: '0'
+          LIVE_PRODUCTION_ADMISSION_PREFLIGHT: '0'
+          LIVE_PRODUCTION_ADMISSION_SEED: '0'
+          LIVE_PRODUCTION_RECOVERY_ONLY: '0'
+          LIVE_PRODUCTION_PROOF_LANE: ''
+          LIVE_PRODUCTION_EVIDENCE: test-results/live-caddy-proof/production-entrypoint
+          LIVE_PROOF_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/live-production-proof-lanes.mjs catalog-receipt test-results/live-caddy-proof
       - name: 'Accept editing phase A: authentic admission Generate Accept and disconnect'
         if: matrix.lane == 'accept-steer'
         # Explicit proof allocation A1260+B1020+cleanup180; product caps unchanged.

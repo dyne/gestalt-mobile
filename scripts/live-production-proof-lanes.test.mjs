@@ -2459,3 +2459,214 @@ test('deferred profile keeps historical serial validation and requires reuse aft
   assert.ok(part.indexOf('editing-setup-complete') < part.indexOf('editing-start'));
   assert.ok(part.includes('timeout-minutes: 21'));
 });
+
+// Real owned child and original raw/cleanup barriers; no provider/model timing claim.
+async function cancelledOwnedDriver(run) {
+  const directory = temporary();
+  const url = new URL('./live-production-proof-lanes.mjs', import.meta.url).href;
+  const code = `import {openRecoveryHandoff,processBirth,editingPhaseBound} from ${JSON.stringify(url)};
+    import {writeFileSync} from 'node:fs';import {join} from 'node:path';
+    const directory=${JSON.stringify(directory)},identity=${JSON.stringify(identity)},birth=processBirth(),now=process.hrtime.bigint();
+    const anchor={boot:birth.boot,monotonicNs:now.toString()},editing={anchor,phaseA:editingPhaseBound(anchor,'accepted',now)};
+    writeFileSync(join(directory,'launched.json'),JSON.stringify({identity,birth,editing}),{mode:0o600});
+    let releaseRaw,releaseCleanup,finish;
+    const raw=new Promise(r=>releaseRaw=r),cleanup=new Promise(r=>releaseCleanup=r),done=new Promise(r=>finish=r);
+    const h=await openRecoveryHandoff({directory,identity,editing,onCancel:async()=>{await raw;process.send({raw:true});await cleanup;process.send({cleanup:true});}});
+    let cancellation;
+    process.on('message',m=>{if(m==='cancel'){cancellation=h.cancel('PROOF_DRIVER_PHASE_DEADLINE');process.send({cancelled:true});}if(m==='raw')releaseRaw();if(m==='cleanup')releaseCleanup();if(m==='finish')finish();});
+    try{process.send({ready:true});await h.boundary();process.send({continued:true});await done;await cancellation;}
+    finally{releaseRaw();releaseCleanup();await h.cancel();await h.close();process.disconnect();}`;
+  const child = spawn(process.execPath, ['--input-type=module', '--eval', code], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  const exited = new Promise((done) => child.once('close', done)),
+    messages = [];
+  child.on('message', (row) => messages.push(row));
+  const wait = async (key) => {
+    const began = performance.now();
+    while (!messages.some((row) => row[key])) {
+      assert.ok(performance.now() - began < 5000, 'FIXTURE_CHILD_DEADLINE');
+      await waitFor(5);
+    }
+  };
+  try {
+    await wait('ready');
+    const expected = JSON.parse(readFileSync(join(directory, 'driver.json')));
+    const phaseB = editingPhaseBound(expected.editing.anchor, 'action');
+    writeFileSync(
+      join(directory, 'continuation.json'),
+      JSON.stringify({ identity, birth: expected.birth, phaseB }),
+      { mode: 0o600 },
+    );
+    await handoffRequest(directory, 'continue', expected);
+    await wait('continued');
+    child.send('cancel');
+    await wait('cancelled');
+    await run({ directory, child, exited, wait, birth: expected.birth, phaseB });
+  } finally {
+    if (child.connected) {
+      child.send('raw');
+      child.send('cleanup');
+      child.send('finish');
+    }
+    await exited;
+    assert.equal(child.exitCode, 0);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('explicit cancelled state never passes observation and original raw/cleanup remain owned until real child exit', async () => {
+  await cancelledOwnedDriver(async ({ directory, child, wait, birth, phaseB }) => {
+    await assert.rejects(
+      observeRecoveryPhase(directory, () => true, 1000, identity, phaseB),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    await assert.rejects(
+      settleRecoveryDriver(directory, identity, 100, true),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    const held = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+    assert.equal(held.firstFailure, 'PROOF_DRIVER_PHASE_DEADLINE');
+    assert.equal(held.cleanupFailure, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
+    assert.equal(held.driverExited, false);
+    assert.equal(held.lockRetained, true);
+    assert.equal(held.operationSettlementUnverified, true);
+    assert.equal(held.failedButDrained, undefined);
+    assert.equal(held.cancelAttempted, false);
+    assert.equal(birthCurrent(birth), true);
+    child.send('raw');
+    await wait('raw');
+    assert.equal(birthCurrent(birth), true);
+    const draining = settleRecoveryDriver(directory, identity, 3000, true);
+    void draining.catch(() => {});
+    child.send('cleanup');
+    await wait('cleanup');
+    child.send('finish');
+    await assert.rejects(draining, /PROOF_DRIVER_PHASE_DEADLINE/);
+    const final = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+    assert.equal(final.driverExited, true);
+    assert.equal(final.failedButDrained, true);
+    assert.equal(final.firstFailure, 'PROOF_DRIVER_PHASE_DEADLINE');
+    assert.equal(final.finalDriverVerified, undefined);
+  });
+});
+
+for (const mode of [
+  'missing-driver',
+  'malformed-driver',
+  'changed-launch',
+  'malformed-observation',
+]) {
+  test(`cancelled child retains original birth/cleanup despite ${mode} and never claims early release`, async () => {
+    await cancelledOwnedDriver(async ({ directory, child, wait, birth, phaseB }) => {
+      await assert.rejects(
+        observeRecoveryPhase(directory, () => false, 1000, identity, phaseB),
+        /PROOF_DRIVER_PHASE_DEADLINE/,
+      );
+      const mutate = () => {
+        if (mode === 'missing-driver') rmSync(join(directory, 'driver.json'));
+        if (mode === 'malformed-driver')
+          writeFileSync(join(directory, 'driver.json'), '{private-bearer-canary', { mode: 0o600 });
+        if (mode === 'changed-launch') {
+          const p = join(directory, 'launched.json'),
+            row = JSON.parse(readFileSync(p));
+          row.birth.start = '0';
+          writeFileSync(p, JSON.stringify(row), { mode: 0o600 });
+        }
+        if (mode === 'malformed-observation')
+          writeFileSync(join(directory, 'observation.json'), 'private-bearer-canary', {
+            mode: 0o600,
+          });
+      };
+      const timer = setTimeout(mutate, 20);
+      const began = performance.now();
+      try {
+        await assert.rejects(
+          settleRecoveryDriver(directory, identity, 180, true),
+          /PROOF_DRIVER_PHASE_DEADLINE/,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+      const row = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+      assert.ok(performance.now() - began >= 150);
+      assert.equal(row.driverExited, false);
+      assert.equal(row.operationSettlementUnverified, true);
+      assert.equal(row.lockRetained, true);
+      assert.deepEqual(row.birth, birth);
+      assert.equal(birthCurrent(birth), true);
+      assert.equal(row.firstFailure, 'PROOF_DRIVER_PHASE_DEADLINE');
+      assert.equal(row.cleanupFailure, 'PROOF_DRIVER_CLEANUP_UNVERIFIED');
+      assert.equal(row.finalDriverVerified, undefined);
+      assert.ok(!JSON.stringify(row).includes('canary'));
+      child.send('raw');
+      await wait('raw');
+      assert.equal(birthCurrent(birth), true);
+    });
+  });
+}
+
+test('cancelled final receipt never accepts arbitrary first-failure payload or claims a verified drain', async () => {
+  await cancelledOwnedDriver(async ({ directory, child, wait, exited, phaseB }) => {
+    await assert.rejects(
+      observeRecoveryPhase(directory, () => true, 1000, identity, phaseB),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    child.send('raw');
+    await wait('raw');
+    child.send('cleanup');
+    await wait('cleanup');
+    child.send('finish');
+    await exited;
+    const path = join(directory, 'final-driver.json'),
+      row = JSON.parse(readFileSync(path));
+    row.firstFailure = 'PROOF_DRIVER_PHASE_DEADLINE private-bearer-canary';
+    writeFileSync(path, JSON.stringify(row), { mode: 0o600 });
+    await assert.rejects(
+      settleRecoveryDriver(directory, identity, 1000, true),
+      /PROOF_DRIVER_PHASE_DEADLINE/,
+    );
+    const cleanup = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+    assert.equal(cleanup.driverExited, true);
+    assert.equal(cleanup.failedButDrained, undefined);
+    assert.equal(cleanup.finalDriverVerified, undefined);
+    assert.equal(cleanup.operationSettlementUnverified, true);
+    assert.equal(cleanup.lockRetained, true);
+    assert.ok(!JSON.stringify(cleanup).includes('canary'));
+  });
+});
+
+for (const mode of ['schema-downgrade', 'contradictory-natural-success']) {
+  test(`cancelled original child refuses ${mode} terminal metadata without accepting a drain`, async () => {
+    await cancelledOwnedDriver(async ({ directory, child, wait, exited, phaseB }) => {
+      await assert.rejects(
+        observeRecoveryPhase(directory, () => true, 1000, identity, phaseB),
+        /PROOF_DRIVER_PHASE_DEADLINE/,
+      );
+      child.send('raw');
+      await wait('raw');
+      child.send('cleanup');
+      await wait('cleanup');
+      child.send('finish');
+      await exited;
+      const path = join(directory, 'final-driver.json'),
+        row = JSON.parse(readFileSync(path));
+      if (mode === 'schema-downgrade') row.schemaVersion = 1;
+      else {
+        row.cancelled = false;
+        row.phase = 'complete';
+        row.firstFailure = null;
+      }
+      writeFileSync(path, JSON.stringify(row), { mode: 0o600 });
+      await assert.rejects(
+        settleRecoveryDriver(directory, identity, 1000, true),
+        /PROOF_DRIVER_PHASE_DEADLINE/,
+      );
+      const cleanup = JSON.parse(readFileSync(join(directory, 'cleanup.json')));
+      assert.equal(cleanup.failedButDrained, undefined);
+      assert.equal(cleanup.finalDriverVerified, undefined);
+      assert.equal(cleanup.operationSettlementUnverified, true);
+      assert.equal(cleanup.lockRetained, true);
+    });
+  });
+}

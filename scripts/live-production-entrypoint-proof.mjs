@@ -70,6 +70,14 @@ import {
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
+import {
+  catalogProviderProbe,
+  catalogReceiptObserver,
+  correlateCatalogReceipts,
+  coldCatalogLifecycle,
+  drainCatalogCancellation,
+  validateColdCatalog,
+} from './live-production-cold-catalog.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
 import {
   candidateIdentity,
@@ -78,6 +86,8 @@ import {
   productionLane,
   readEditingAnchor,
   readEditingLaunch,
+  readCatalogObservation,
+  phaseBoundRemaining,
   fixedProofFailure,
 } from './live-production-proof-lanes.mjs';
 import {
@@ -118,6 +128,7 @@ import {
 } from './live-production-helper-diagnostics.mjs';
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
+const coldCatalog = process.env.LIVE_PRODUCTION_COLD_CATALOG === '1';
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
 const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
 const pickerSmoke = process.env.LIVE_PRODUCTION_PICKER_SMOKE === '1';
@@ -142,6 +153,15 @@ assert.equal(eventObservationBudgetMs, 300_000);
 assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
+assert.ok(
+  !coldCatalog ||
+    (!editFlow &&
+      !recoveryOnly &&
+      !preflightOnly &&
+      !pickerSmoke &&
+      !seededPreflight &&
+      !process.env.LIVE_PRODUCTION_SERIAL_PROFILE),
+);
 const proofLane = productionLane(process.env.LIVE_PRODUCTION_PROOF_LANE);
 const editingContinuity = process.env.LIVE_PRODUCTION_EDIT_CONTINUITY === '1';
 assert.equal(editingContinuity, proofLane === 'accept-steer');
@@ -162,7 +182,7 @@ assert.ok(!proofLane || (!pickerSmoke && !preflightOnly));
 assert.ok(!proofLane || (proofLane === 'recovery' ? recoveryOnly : editFlow));
 assert.equal(
   Boolean(process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL),
-  proofLane === 'recovery' || editingContinuity,
+  proofLane === 'recovery' || editingContinuity || coldCatalog,
 );
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
@@ -249,6 +269,20 @@ if (recoveryOnly) {
   report.proofKind = 'recovery-only-diagnostic-no-picker-or-model-child-claim';
   report.limitations.push(
     'Renewal diagnostic only; full real-picker and owning model-child proof remains mandatory.',
+  );
+}
+if (coldCatalog) {
+  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+  report.proofKind = 'cold-catalog-diagnostic';
+  report.coldCatalog = {
+    trialId: 'cold-catalog-baseline-1',
+    attempt: 1,
+    fullAcceptance: false,
+    inferenceRefusals: 0,
+    preparationProbes: [],
+  };
+  report.limitations.push(
+    'Provider-free inference diagnostic only. Non-inference loopback preparation probes are counted separately. No editing/integration acceptance; Manager internal passes and worker import remain unobserved.',
   );
 }
 if (proofLane) report.proofKind = `controlled-full-${proofLane}`;
@@ -720,12 +754,18 @@ report.policyVerificationTimings = observeInstalledPolicyTimings(
   InstalledLivePolicy.prototype,
   () => serialProfile?.currentId(),
 );
+const admissionOriginBefore = performance.now();
 const admissionTimings = observeAdmissionTimings(
   CodexSessionRuntime.prototype,
   ProductionLiveController.prototype,
   () => serialProfile?.currentId(),
 );
 report.admissionVerificationTimings = admissionTimings.report;
+if (coldCatalog)
+  report.coldCatalog.admissionOriginBoundsMs = [
+    Math.floor(admissionOriginBefore),
+    Math.ceil(performance.now()),
+  ];
 const cleanupOperations = (report.cleanupOperations = []);
 const lifecycle = (boundary, owner) => {
   const rows = (report.cleanupLifecycle ??= []);
@@ -858,6 +898,8 @@ const checkpoint = setInterval(() => {
 checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
 let recoveryHandoff, mobileClose, failureCleanupStop;
+let catalogTimer, catalogObserver, sampleCatalogReceipts, catalogDeadlineTimer;
+const catalogApiRaw = new Set();
 let editingRaw, editingActionTimer, editingCleanupTimer, editingStopped, editingLatestCaptureId;
 let editingStopSettled = false;
 const editingApiRaw = new Set();
@@ -1439,6 +1481,30 @@ async function eventFor(body) {
   );
 }
 const provider = createServer(async (req, res) => {
+  if (coldCatalog) {
+    try {
+      const probe = catalogProviderProbe(req.method, req.url, req.headers);
+      let row = report.coldCatalog.preparationProbes.find((row) => row.method === probe.method);
+      if (!row) report.coldCatalog.preparationProbes.push((row = { ...probe, count: 0 }));
+      row.count++;
+      assert.ok(row.count <= 64);
+      res.writeHead(
+        probe.status,
+        probe.status === 200 ? { 'content-type': 'application/json' } : { allow: 'POST' },
+      );
+      res.end(
+        probe.status === 200
+          ? JSON.stringify({ data: [{ id: 'gpt-6-sol', object: 'model', owned_by: 'controlled' }] })
+          : undefined,
+      );
+    } catch {
+      report.coldCatalog.inferenceRefusals++;
+      providerFailure = true;
+      res.writeHead(403);
+      res.end();
+    }
+    return;
+  }
   if (providerFailure) {
     res.writeHead(503);
     res.end();
@@ -1694,7 +1760,7 @@ try {
     managerTree: '349182948619bbbeab892c9884cfb06badf13997',
     manager: LIVE_MANAGER_SHA256,
   };
-  if (proofLane === 'recovery' || editingContinuity)
+  if (proofLane === 'recovery' || editingContinuity || coldCatalog)
     recoveryHandoff = await openRecoveryHandoff({
       directory: process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
       socketDirectory: privateRoot,
@@ -1728,7 +1794,8 @@ try {
             },
           });
         }
-        await closeMobileOnce();
+        if (coldCatalog) await drainCatalogCancellation(catalogApiRaw, closeMobileOnce);
+        else await closeMobileOnce();
       },
     });
   if (serialProfileRequested) {
@@ -2310,7 +2377,7 @@ try {
   assert.equal(session.state, 'ready');
   assert.equal(typeof session.threadId, 'string');
   report.checks.actualOwningStartupAdmitted = true;
-  if (preflightOnly && !seededPreflight) {
+  if (coldCatalog || (preflightOnly && !seededPreflight)) {
     owningThread = session.threadId;
     report.projectMetadata.afterSeed = report.projectMetadata.afterSessionCreate;
     report.preflightSeedSkipped = true;
@@ -2675,7 +2742,7 @@ try {
       }));
   }
 
-  if (preflightOnly) {
+  if (preflightOnly || coldCatalog) {
     assert.equal(report.provider.requestCount, seededPreflight ? 1 : 0);
     const catalogs = report.nativeLaunchLifetimes.flatMap((launch) => launch.owningCatalogs ?? []);
     const sameThread = catalogs.filter((row) => row.threadIdDigest === hash(session.threadId));
@@ -2723,19 +2790,21 @@ try {
       actualProductionStartActive: true,
       modelRequests: report.provider.requestCount,
     };
-    report.stage = 'preflight-revoke-and-shutdown';
-    await mobile.close();
-    mobile = undefined;
-    assert.equal(
-      signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
-      'revoked',
-    );
-    assert.equal(observedBirthExited(baselineBirth), true);
-    assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
-    assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
-    report.checks.preflightRevokeCloseAndOriginalConfigurationPreserved = true;
-    report.cleanupComplete = true;
-    throw new Error('ADMISSION_PREFLIGHT_COMPLETE');
+    if (preflightOnly) {
+      report.stage = 'preflight-revoke-and-shutdown';
+      await mobile.close();
+      mobile = undefined;
+      assert.equal(
+        signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
+        'revoked',
+      );
+      assert.equal(observedBirthExited(baselineBirth), true);
+      assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
+      assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+      report.checks.preflightRevokeCloseAndOriginalConfigurationPreserved = true;
+      report.cleanupComplete = true;
+      throw new Error('ADMISSION_PREFLIGHT_COMPLETE');
+    }
   }
   report.stage = 'authenticated-preview-exchange';
   const verifier = previewSecrets.token();
@@ -2812,6 +2881,218 @@ try {
     }, 20000);
   }
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
+  if (coldCatalog) {
+    let catalogBound,
+      catalogActionsFinished = false;
+    const catalogIdentity = candidateIdentity(),
+      catalogBirth = recoveryHandoff.snapshot().birth,
+      catalogAnchor = readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR);
+    const assertCatalogClock = () => {
+      readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR, catalogAnchor);
+      if (catalogBound) {
+        readCatalogObservation(
+          process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+          catalogIdentity,
+          catalogBirth,
+          catalogBound,
+        );
+        if (!catalogActionsFinished && phaseBoundRemaining(catalogBound) === 0) {
+          report.firstFixedFailure ??= { stage: report.stage, code: 'PROOF_DRIVER_PHASE_DEADLINE' };
+          void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+        }
+      }
+      if (catalogActionsFinished) requireEditingBudget(catalogAnchor, 'cleanup', 1);
+      recoveryHandoff.assertCurrent();
+    };
+    const catalogApi = (...args) => {
+      assertCatalogClock();
+      const original = api(...args);
+      catalogApiRaw.add(original);
+      return original
+        .then((value) => {
+          assertCatalogClock();
+          return value;
+        })
+        .finally(() => catalogApiRaw.delete(original));
+    };
+    const prefix = `/api/sessions/${session.id}/live`;
+    const fencePath = join(controller, `runtime-admission-${hash(appRoot)}.json`);
+    const capture = (run) => {
+      const fence = signed(fencePath);
+      assert.equal(fence.generation.sessionId, session.id);
+      assert.equal(fence.generation.generation, run.generation);
+      const matches = readdirSync(controller)
+        .filter((name) => name.startsWith('owner-'))
+        .map((name) => join(controller, name))
+        .filter(
+          (path) =>
+            JSON.parse(readFileSync(join(path, 'manifest.json'))).runtimeProvenance.captureId ===
+            fence.captureId,
+        );
+      assert.equal(matches.length, 1);
+      const manifestBytes = readFileSync(join(matches[0], 'manifest.json'));
+      const currentManifest = JSON.parse(manifestBytes);
+      assert.equal(currentManifest.appRoot, appRoot);
+      assert.equal(currentManifest.generation.sessionId, session.id);
+      assert.equal(currentManifest.generation.generation, run.generation);
+      const sealed = signed(join(matches[0], `runtime-${fence.captureId}.json`));
+      assert.deepEqual(currentManifest.originalLaunchSources, [originalLaunchSource]);
+      assert.equal(
+        signed(join(matches[0], 'policy-receipt.json')).manifestDigest,
+        hash(manifestBytes),
+      );
+      assert.ok(sealed.inventory.sources.some((item) => item.kind === 'installed-launch-source'));
+      assert.equal(observedBirthExited(baselineBirth), false);
+      return {
+        captureId: fence.captureId,
+        birth: sealed.runtime.process,
+        accountDigest: sealed.inventory.observation.accountDigest,
+        selection: sealed.inventory.observation.sessionFlags,
+      };
+    };
+    // Existing authenticated receipts supply NEW interval-censored command
+    // stages alongside the existing request-correlated admission timings.
+    const seen = new Map();
+    catalogObserver = catalogReceiptObserver({ origin: 0 });
+    report.coldCatalog.receipts = catalogObserver.report;
+    sampleCatalogReceipts = () => {
+      const scanStartedAt = performance.now();
+      const receipts = [];
+      try {
+        for (const name of readdirSync(controller).filter((name) => name.startsWith('owner-'))) {
+          const directory = join(controller, name),
+            manifestPath = join(directory, 'manifest.json');
+          if (!existsSync(manifestPath)) continue;
+          const bytes = readFileSync(manifestPath),
+            item = JSON.parse(bytes);
+          if (
+            item.generation.sessionId !== session.id ||
+            item.generation.generation <= started.generation
+          )
+            continue;
+          assert.equal(item.appRoot, appRoot);
+          for (const file of readdirSync(directory).filter((name) =>
+            /^process-[a-f0-9-]{36}\.json$/.test(name),
+          )) {
+            const path = join(directory, file),
+              info = lstatSync(path);
+            assert.ok(
+              info.isFile() &&
+                !info.isSymbolicLink() &&
+                info.uid === process.getuid() &&
+                info.size <= 2 * 1024 * 1024,
+            );
+            const version = `${info.ino}:${info.mtimeMs}:${info.size}`;
+            if (seen.get(path) === version) continue;
+            const receipt = signed(path);
+            if (receipt.commandId !== 'context-mode-call') continue;
+            assert.equal(file, `process-${receipt.launchId}.json`);
+            receipts.push({
+              receipt,
+              manifestDigest: hash(bytes),
+              generation: item.generation.generation,
+              captureId: item.runtimeProvenance.captureId,
+            });
+            seen.set(path, version);
+          }
+        }
+        catalogObserver.sample(receipts, { startedAt: scanStartedAt, endedAt: performance.now() });
+      } catch {
+        catalogObserver.sample([{}], { startedAt: scanStartedAt, endedAt: performance.now() });
+      }
+    };
+    report.stage = 'cold-catalog-ready';
+    await recoveryHandoff.boundary();
+    catalogBound = readCatalogObservation(
+      process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+      catalogIdentity,
+      catalogBirth,
+    );
+    assert.deepEqual(catalogBound.anchor, catalogAnchor, 'PROOF_DRIVER_METADATA_CHANGED');
+    assertCatalogClock();
+    report.coldCatalog.bound = {
+      startedNs: catalogBound.startedNs,
+      deadlineNs: catalogBound.deadlineNs,
+    };
+    catalogDeadlineTimer = setTimeout(() => {
+      report.firstFixedFailure ??= { stage: report.stage, code: 'PROOF_DRIVER_PHASE_DEADLINE' };
+      void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+    }, phaseBoundRemaining(catalogBound));
+    report.stage = 'cold-catalog-survivor-renewal';
+    sampleCatalogReceipts();
+    catalogTimer = setInterval(sampleCatalogReceipts, 100);
+    const resumed = await coldCatalogLifecycle({
+      api: catalogApi,
+      until,
+      prefix,
+      original: started,
+      capture,
+      source: () => withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8')),
+      providerCount: () => report.provider.requestCount,
+      closeStream: () => stream.destroy(),
+      signedRevoked: () => signed(fencePath).status === 'revoked',
+      assertCurrent: assertCatalogClock,
+      report: report.coldCatalog,
+    });
+    const selected = await catalogApi('GET', `/api/sessions/${session.id}`);
+    assert.equal(selected.threadId, owningThread);
+    assert.equal(selected.provider, session.provider);
+    assert.equal(selected.model, session.model);
+    assert.deepEqual(selected.modelSettings, session.modelSettings);
+    assert.deepEqual(selected.executionPolicy, session.executionPolicy);
+    assertCatalogClock();
+    recoveryHandoff.finishActions();
+    catalogActionsFinished = true;
+    clearTimeout(catalogDeadlineTimer);
+    report.coldCatalog.actionFinishedNs = process.hrtime.bigint().toString();
+    report.stage = 'cold-catalog-stop-and-restore';
+    const stopped = await catalogApi('POST', `${prefix}/stop`, {
+      liveId: resumed.liveId,
+      generation: resumed.generation,
+    });
+    assert.equal(stopped.state, 'idle');
+    const stoppedDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+    try {
+      assert.equal(
+        JSON.parse(
+          stoppedDb.prepare('SELECT record FROM live_runs WHERE liveId=?').get(stopped.liveId)
+            .record,
+        ).controlsRestored,
+        true,
+      );
+    } finally {
+      stoppedDb.close();
+    }
+    assert.equal(signed(fencePath).status, 'revoked');
+    assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
+    assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
+    for (const name of ['inject-journal.json', 'server.json'])
+      assert.equal(existsSync(join(appRoot, '.impeccable/live', name)), false);
+    assert.ok(
+      [...projectProcesses.keys()].every((process) => {
+        const row = process.diagnostics();
+        return row.namespaceExited && row.pipeDescriptorsClosed;
+      }),
+    );
+    assert.notEqual(
+      await remote('/').then(
+        (response) => response.status,
+        () => 0,
+      ),
+      200,
+    );
+    report.coldCatalog.restorationVerified = true;
+    sampleCatalogReceipts();
+    catalogObserver.assertValid();
+    await closeMobileOnce();
+    assertCatalogClock();
+    clearTimeout(catalogDeadlineTimer);
+    assert.equal(observedBirthExited(baselineBirth), true);
+    assert.equal(report.provider.requestCount, 0);
+    assert.equal(report.coldCatalog.inferenceRefusals, 0);
+    report.cleanupComplete = true;
+    throw new Error('COLD_CATALOG_COMPLETE');
+  }
   report.stage = 'production-owning-model-tools';
   if (editFlow) {
     const requestsBeforeWriterProbes = report.provider.requestCount;
@@ -3737,16 +4018,19 @@ try {
   retainManualFailureEvidence?.('production-failure');
   finishBrowserProfile();
   if (
+    (coldCatalog && error?.message === 'COLD_CATALOG_COMPLETE') ||
     (preflightOnly && error?.message === 'ADMISSION_PREFLIGHT_COMPLETE') ||
     (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') ||
     (constructionOnly && error?.message === 'CONSTRUCTION_ONLY_COMPLETE')
   ) {
     report.passed = true;
-    report.stage = preflightOnly
-      ? 'admission-preflight-complete'
-      : installationOnly
-        ? 'installation-only-complete'
-        : 'construction-only-complete';
+    report.stage = coldCatalog
+      ? 'cold-catalog-complete'
+      : preflightOnly
+        ? 'admission-preflight-complete'
+        : installationOnly
+          ? 'installation-only-complete'
+          : 'construction-only-complete';
   } else {
     try {
       report.nativeActivity = nativeActivity();
@@ -3941,6 +4225,11 @@ try {
       process.exitCode = 1;
     }
   }
+  clearInterval(catalogTimer);
+  clearTimeout(catalogDeadlineTimer);
+  sampleCatalogReceipts?.();
+  if (catalogObserver)
+    correlateCatalogReceipts(report.coldCatalog, report.admissionVerificationTimings);
   if (!report.shutdownFailure) {
     try {
       removeOwnedProofTree(root, rootIdentity, {
@@ -3993,6 +4282,15 @@ try {
     }
   }
   report.cleanupStage = 'settled';
+  if (coldCatalog && report.passed) {
+    try {
+      validateColdCatalog(report, candidateIdentity());
+    } catch {
+      report.passed = false;
+      report.coldCatalog.evidenceFailure = 'COLD_CATALOG_EVIDENCE_INVALID';
+      process.exitCode = 1;
+    }
+  }
   clearInterval(checkpoint);
   clearTimeout(editingActionTimer);
   clearTimeout(editingCleanupTimer);
