@@ -6,6 +6,7 @@
 
 // Fixture contract tests; these do not claim actual Native model execution.
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,6 +18,8 @@ import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import {
   safeBrowserFailure,
+  observePopupHmr,
+  boundedStopHttpResponse,
   observePreviewExchange,
   pickerChromeSnapshot,
   boundedPickerObservation,
@@ -4267,5 +4270,241 @@ test('A refusal classification requires the exact local capacity error and recor
     assert.equal(observations.length, 1);
     assert.equal(observations[0].capacityInputsValid, false);
     assert.ok(!JSON.stringify(observations).includes('malformed-private-cookie-canary'));
+  }
+});
+
+test('popup HMR owns the exact returned Page including actual event delivery before acquisition', () => {
+  const context = new EventEmitter(),
+    unrelated = new EventEmitter(),
+    preview = new EventEmitter();
+  const observer = observePopupHmr(context);
+  context.emit('page', unrelated);
+  const otherSocket = new EventEmitter();
+  unrelated.emit('websocket', otherSocket);
+  otherSocket.emit('framereceived', { payload: '{"type":"update"}' });
+  context.emit('page', preview);
+  const socket = new EventEmitter();
+  preview.emit('websocket', socket);
+  socket.emit('framereceived', { payload: '{"type":"connected"}' });
+  socket.emit('framereceived', { payload: '{"type":"update"}' });
+  const read = observer.select(preview);
+  assert.equal(read(), 1);
+  assert.equal(context.listenerCount('page'), 0);
+  assert.equal(unrelated.listenerCount('websocket'), 0);
+  assert.equal(otherSocket.listenerCount('framereceived'), 0);
+  otherSocket.emit('framereceived', { payload: '{"type":"update"}' });
+  socket.emit('framereceived', { payload: '{"type":"update"}' });
+  socket.emit('framereceived', { payload: 'bearer-canary' });
+  assert.equal(read(), 2);
+  observer.dispose();
+  observer.dispose();
+  assert.equal(preview.listenerCount('websocket'), 0);
+  assert.equal(socket.listenerCount('framereceived'), 0);
+  assert.throws(read, /PROOF_HMR_OBSERVER_INVALID/);
+});
+
+test('popup HMR observes ordinary future sockets and refuses wrong Page, duplicate acquisition/page/socket', () => {
+  const ordinary = new EventEmitter(),
+    page = new EventEmitter();
+  const observer = observePopupHmr(ordinary);
+  ordinary.emit('page', page);
+  const read = observer.select(page);
+  assert.equal(read(), 0);
+  const socket = new EventEmitter();
+  page.emit('websocket', socket);
+  socket.emit('framereceived', { payload: '{"type":"update"}' });
+  assert.equal(read(), 1);
+  assert.throws(() => observer.select(page), /PROOF_HMR_OBSERVER_INVALID/);
+  assert.equal(socket.listenerCount('framereceived'), 0);
+  for (const mode of ['wrong-page', 'duplicate-page', 'duplicate-socket']) {
+    const context = new EventEmitter(),
+      exact = new EventEmitter(),
+      peer = new EventEmitter();
+    const watched = observePopupHmr(context),
+      ws = new EventEmitter();
+    context.emit('page', exact);
+    exact.emit('websocket', ws);
+    if (mode === 'duplicate-page') context.emit('page', exact);
+    if (mode === 'duplicate-socket') exact.emit('websocket', ws);
+    assert.throws(
+      () => watched.select(mode === 'wrong-page' ? peer : exact),
+      /PROOF_HMR_OBSERVER_INVALID/,
+    );
+    assert.equal(context.listenerCount('page'), 0);
+    assert.equal(exact.listenerCount('websocket'), 0);
+    assert.equal(ws.listenerCount('framereceived'), 0);
+  }
+});
+
+test('popup HMR disposes all temporary listeners when popup opening/acquisition fails', async () => {
+  const context = new EventEmitter(),
+    page = new EventEmitter(),
+    socket = new EventEmitter();
+  const watched = observePopupHmr(context);
+  try {
+    context.emit('page', page);
+    page.emit('websocket', socket);
+    await assert.rejects(Promise.reject(new Error('popup-refused')), /popup-refused/);
+  } finally {
+    watched.dispose();
+  }
+  assert.equal(context.listenerCount('page'), 0);
+  assert.equal(page.listenerCount('websocket'), 0);
+  assert.equal(socket.listenerCount('framereceived'), 0);
+  context.emit('page', new EventEmitter());
+  assert.throws(() => watched.select(page), /PROOF_HMR_OBSERVER_INVALID/);
+  const script = readFileSync(
+    new URL('./live-production-edit-browser.mjs', import.meta.url),
+    'utf8',
+  );
+  const arm = script.indexOf('popupHmr = observePopupHmr(context)');
+  const open = script.indexOf("name: 'Open preview'", arm);
+  const acquire = script.indexOf('const preview = await withinProofObservation', open);
+  assert.ok(arm > 0 && open > arm && acquire > open);
+  assert.ok(script.includes('const readHmrUpdates = popupHmr.select(preview)'));
+  assert.ok(script.includes('assert.ok(readHmrUpdates() > 0)'));
+  assert.ok(script.includes('} finally {\n  popupHmr?.dispose();'));
+});
+
+test('Stop HTTP evidence retains only fixed safe status/code before the success assertion', () => {
+  const canary = 'bearer-canary https://credential.test/private';
+  assert.deepEqual(
+    boundedStopHttpResponse({
+      statusCode: 503,
+      json: () => ({
+        code: 'LIVE_STOP_RECOVERY_REQUIRED',
+        detail: canary,
+        token: canary,
+      }),
+    }),
+    { statusCode: 503, code: 'LIVE_STOP_RECOVERY_REQUIRED' },
+  );
+  for (const code of [canary, 'LIVE_STOP_RECOVERY_REQUIRED ' + canary, undefined]) {
+    const observed = boundedStopHttpResponse({
+      statusCode: 403,
+      json: () => ({ code, detail: canary }),
+    });
+    assert.deepEqual(observed, { statusCode: 403, code: 'UNCLASSIFIED' });
+    assert.ok(!JSON.stringify(observed).includes('canary'));
+  }
+  assert.deepEqual(boundedStopHttpResponse({ statusCode: 200, json: () => ({ token: canary }) }), {
+    statusCode: 200,
+    code: null,
+  });
+  assert.deepEqual(
+    boundedStopHttpResponse({
+      statusCode: 503,
+      json: () => {
+        throw new Error(canary);
+      },
+    }),
+    { statusCode: 503, code: 'UNCLASSIFIED' },
+  );
+  const script = readFileSync(
+    new URL('./live-production-entrypoint-proof.mjs', import.meta.url),
+    'utf8',
+  );
+  const record = script.indexOf('report.failureStopHttp = boundedStopHttpResponse(response)');
+  assert.ok(
+    record > 0 && script.indexOf('assert.equal(response.statusCode, 200)', record) > record,
+  );
+});
+
+test('cleanup observers retain both original phases, pending raw ownership and fixed refusal without payloads', async () => {
+  for (const refused of [false, true]) {
+    let finish, reject;
+    const raw = new Promise((resolve, no) => {
+      finish = resolve;
+      reject = no;
+    });
+    const records = [];
+    const target = {
+      reconcileInbox() {
+        return raw;
+      },
+      restoreOriginal() {
+        return 'restored';
+      },
+    };
+    observeProofMethod(target, 'reconcileInbox', 'helper-reconcile', records);
+    observeProofMethod(target, 'restoreOriginal', 'owning-restore', records);
+    const original = target.reconcileInbox();
+    assert.equal(original, raw);
+    assert.deepEqual(records, [{ operation: 'helper-reconcile', result: 'started', elapsedMs: 0 }]);
+    try {
+      if (refused) reject(new Error('LIVE_INBOX_RECONCILIATION_REQUIRED'));
+      else finish('reconciled');
+      if (refused) await assert.rejects(original, /LIVE_INBOX_RECONCILIATION_REQUIRED/);
+      else assert.equal(await original, 'reconciled');
+    } finally {
+      finish();
+      await Promise.allSettled([raw]);
+    }
+    assert.equal(records[0].result, refused ? 'failed' : 'completed');
+    if (refused) assert.equal(records[0].failure, 'LIVE_INBOX_RECONCILIATION_REQUIRED');
+    assert.equal(target.restoreOriginal(), 'restored');
+    assert.equal(records[1].operation, 'owning-restore');
+    assert.equal(records[1].result, 'completed');
+  }
+  for (const message of ['LIVE_ORIGINAL_CONFIGURATION_UNVERIFIED', 'private bearer-canary']) {
+    const records = [],
+      error = new Error(message);
+    const target = {
+      restoreOriginal() {
+        throw error;
+      },
+    };
+    observeProofMethod(target, 'restoreOriginal', 'owning-restore', records);
+    assert.throws(
+      () => target.restoreOriginal(),
+      (e) => e === error,
+    );
+    assert.equal(records[0].failure, message.startsWith('LIVE_') ? message : 'UNCLASSIFIED');
+    assert.ok(!JSON.stringify(records).includes('canary'));
+  }
+});
+
+test('actual public Stop recovery response remains observable before proof assertion refusal', async () => {
+  const { default: fastify } = await import('fastify');
+  const { registerLiveStop } =
+    await import('../dist/server/server/features/live-design/stop/endpoint.js');
+  const { registerLiveHttpBoundary } =
+    await import('../dist/server/server/features/live-design/http/boundary.js');
+  const mobile = fastify();
+  const report = {};
+  let calls = 0;
+  registerLiveHttpBoundary(mobile);
+  registerLiveStop(mobile, {
+    mobileOrigin: 'https://mobile.test',
+    now: () => new Date(),
+    store: { attempt: () => true },
+    authentication: {
+      identity: () => ({ authSessionHash: 'auth', deviceId: 'device' }),
+      authorized: () => true,
+    },
+    control: {
+      stop: async () => {
+        calls++;
+        throw new Error('private bearer-canary https://credential.test/secret');
+      },
+    },
+  });
+  try {
+    const response = await mobile.inject({
+      method: 'POST',
+      url: '/api/sessions/relay/live/stop',
+      headers: { origin: 'https://mobile.test' },
+      payload: { liveId: 'live', generation: 3 },
+    });
+    report.failureStopHttp = boundedStopHttpResponse(response);
+    assert.throws(() => assert.equal(response.statusCode, 200));
+    assert.equal(calls, 1);
+    assert.deepEqual(report, {
+      failureStopHttp: { statusCode: 503, code: 'LIVE_STOP_RECOVERY_REQUIRED' },
+    });
+    assert.ok(!JSON.stringify(report).includes('canary'));
+    assert.ok(!JSON.stringify(report).includes('credential'));
+  } finally {
+    await mobile.close();
   }
 });

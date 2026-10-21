@@ -14,6 +14,7 @@ import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import {
   safeBrowserFailure,
+  observePopupHmr,
   observePreviewExchange,
   observeEditingSteer,
   pickerChromeSnapshot,
@@ -36,6 +37,7 @@ import {
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
 let browser;
+let popupHmr;
 let browserProcess;
 let browserExit;
 const chromeStartupMarkers = new Set();
@@ -556,6 +558,7 @@ try {
     timeout: proofObservationRemaining(previewDeadline),
   });
   void exchangeResponse.catch(() => {});
+  popupHmr = observePopupHmr(context);
   const popup = mobile.waitForEvent('popup', {
     timeout: proofObservationRemaining(previewDeadline),
   });
@@ -565,17 +568,8 @@ try {
     timeout: proofObservationRemaining(previewDeadline),
   });
   const preview = await withinProofObservation(() => popup, previewDeadline);
+  const readHmrUpdates = popupHmr.select(preview);
   await preview.setViewportSize({ width: 1440, height: 900 });
-  let hmrUpdates = 0;
-  preview.on('websocket', (socket) =>
-    socket.on('framereceived', (message) => {
-      try {
-        if (JSON.parse(String(message.payload)).type === 'update') hmrUpdates++;
-      } catch {
-        /* Ignore non-HMR frames. */
-      }
-    }),
-  );
   checkpoint('preview-exchange');
   const exchangedLease = await observePreviewExchange({
     grantResponse,
@@ -893,7 +887,7 @@ try {
           ? Math.min(modelEffectTimeout, proofObservationRemaining(resumedSteerDeadline))
           : modelEffectTimeout,
       });
-      assert.ok(hmrUpdates > 0);
+      assert.ok(readHmrUpdates() > 0);
       await command('steered', resumedSteerDeadline);
       actions.add('steer');
     };
@@ -1104,7 +1098,7 @@ try {
         realPickerDiscard: actions.has('discard'),
         actualTabHiddenBeyondEightSeconds: actions.has('background'),
         playwrightFocusOverrideDisabled: true,
-        hmrUpdates,
+        hmrUpdates: readHmrUpdates(),
         extraPollOwnerDenied: true,
         initialPreviewGetRetried,
         exchangePosts: exchangeStatuses.filter((item) => item.path === '/__gestalt_live/exchange')
@@ -1171,6 +1165,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  popupHmr?.dispose();
   emitManualCommitObservation('browser-finally');
   if (config.serialProfile) checkpoint('profile-browser-close-start');
   await browser?.close();

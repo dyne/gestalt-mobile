@@ -875,6 +875,103 @@ export async function observePreviewExchange({
   return { liveId, generation };
 }
 
+/** Arm before opening the popup: existing sockets cannot be observed retroactively. */
+export function observePopupHmr(context) {
+  const pages = new Map();
+  let selected,
+    invalid = false,
+    disposed = false;
+  const refuse = () => {
+    throw new Error('PROOF_HMR_OBSERVER_INVALID');
+  };
+  const detach = (page, row) => {
+    page.off('websocket', row.open);
+    for (const [socket, receive] of row.sockets) socket.off('framereceived', receive);
+  };
+  const created = (page) => {
+    if (pages.has(page)) {
+      invalid = true;
+      return;
+    }
+    const row = { updates: 0, sockets: new Map() };
+    row.open = (socket) => {
+      if (row.sockets.has(socket)) {
+        invalid = true;
+        return;
+      }
+      const receive = (message) => {
+        try {
+          if (JSON.parse(String(message.payload)).type === 'update') row.updates++;
+        } catch {
+          /* Ignore non-HMR frames; never retain their payload. */
+        }
+      };
+      row.sockets.set(socket, receive);
+      socket.on('framereceived', receive);
+    };
+    pages.set(page, row);
+    page.on('websocket', row.open);
+  };
+  context.on('page', created);
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    context.off('page', created);
+    for (const [page, row] of pages) detach(page, row);
+    pages.clear();
+  };
+  return {
+    // Only the exact Page returned by the armed popup wait is supplied by caller.
+    select(page) {
+      if (disposed || invalid || selected || !pages.has(page)) {
+        dispose();
+        refuse();
+      }
+      selected = page;
+      context.off('page', created);
+      for (const [other, row] of pages) {
+        if (other !== page) {
+          detach(other, row);
+          pages.delete(other);
+        }
+      }
+      return () => {
+        if (disposed || invalid) refuse();
+        return pages.get(page).updates;
+      };
+    },
+    dispose,
+  };
+}
+
+const stopProblemCodes = new Set([
+  'LIVE_STOP_RECOVERY_REQUIRED',
+  'LIVE_AUTH_REQUIRED',
+  'LIVE_AUTH_UNAVAILABLE',
+  'LIVE_GENERATION_STALE',
+  'LIVE_STATE_CONFLICT',
+  'LIVE_RATE_LIMITED',
+  'LIVE_INVALID_REQUEST',
+  'ORIGIN_NOT_ALLOWED',
+]);
+/** No response payload, message, URL, header or bearer crosses this boundary. */
+export function boundedStopHttpResponse(response) {
+  const statusCode =
+    Number.isInteger(response.statusCode) &&
+    response.statusCode >= 100 &&
+    response.statusCode <= 599
+      ? response.statusCode
+      : null;
+  let code = null;
+  try {
+    const value = response.json()?.code;
+    if (statusCode !== 200) code = stopProblemCodes.has(value) ? value : 'UNCLASSIFIED';
+  } catch {
+    if (statusCode !== 200) code = 'UNCLASSIFIED';
+  }
+  return { statusCode, code };
+}
+
 /** Controlled proof errors only. Never retain URLs, cookie values or bearer-shaped strings. */
 export function safeBrowserFailure(message) {
   // Preserve only these exact payload-free A refusals; token redaction otherwise
@@ -1008,10 +1105,14 @@ const operations = new Set([
   'helper-forget-record',
   'owning-settle',
   'owning-abort',
+  'helper-reconcile',
+  'owning-restore',
   'project-stop',
 ]);
 const failures = new Set([
   'LIVE_CLEANUP_REQUIRED',
+  'LIVE_INBOX_RECONCILIATION_REQUIRED',
+  'LIVE_ORIGINAL_CONFIGURATION_UNVERIFIED',
   'LIVE_ADMISSION_UNAVAILABLE',
   'LIVE_INSTALLED_SOURCE_UNVERIFIED',
   'LIVE_RUNTIME_PROVENANCE_UNAVAILABLE',

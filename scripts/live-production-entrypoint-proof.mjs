@@ -35,6 +35,7 @@ import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import {
   observeProofMethod,
+  boundedStopHttpResponse,
   observeEventAuthority,
   proofObservationRemaining,
   observeCanonicalPollDispatch,
@@ -748,6 +749,8 @@ for (const [target, key, operation] of [
   [IsolatedLiveHelper.prototype, 'forgetExitedServerRecord', 'helper-forget-record'],
   [CodexSessionRuntime.prototype, 'settleLiveWork', 'owning-settle'],
   [CodexSessionRuntime.prototype, 'abortLiveOwner', 'owning-abort'],
+  [ProductionLiveController.prototype, 'reconcileInbox', 'helper-reconcile'],
+  [ProductionLiveController.prototype, 'restoreOriginal', 'owning-restore'],
 ])
   observeProofMethod(target, key, operation, cleanupOperations);
 observeProofMethod(IsolatedProjectProcess.prototype, 'stop', 'project-stop', cleanupOperations, {
@@ -2634,6 +2637,7 @@ try {
               headers,
               payload: fence,
             });
+            report.failureStopHttp = boundedStopHttpResponse(response);
             assert.equal(response.statusCode, 200);
             return response.json();
           },
