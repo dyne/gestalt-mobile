@@ -77,5 +77,14 @@ describe('publishable package manifest', () => {
     await expect(readFile('gestalt-supervision-capabilities.json', 'utf8')).resolves.toContain(
       '"suspension-v1"',
     );
+    const capabilities = JSON.parse(
+      await readFile('gestalt-supervision-capabilities.json', 'utf8'),
+    );
+    expect(capabilities.capabilities).toContain('l1-model-policy-v1');
+    expect(capabilities.modelPolicyContract).toEqual({
+      version: 1,
+      scope: 'schema-and-retention',
+      runtimeEnforcement: false,
+    });
   });
 });

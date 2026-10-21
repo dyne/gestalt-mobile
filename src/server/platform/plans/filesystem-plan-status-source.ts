@@ -27,6 +27,7 @@ import type {
 } from '../../features/plans/application/ports.js';
 import { parseSupervisedPlan } from '../../features/plans/application/parse-supervised-plan.js';
 import { isPlanPathWithinWorkspace } from '../../features/plans/application/parse-supervised-plan.js';
+import { ORG_PLAN_CAPABILITIES } from './org-plan-capabilities.js';
 
 const statusFileSuffix = '.plan-status.json';
 
@@ -104,19 +105,38 @@ export class FilesystemPlanStatusSource implements PlanStatusSource {
     try {
       await writeFile(
         candidate,
-        JSON.stringify({ schemaVersion: 1, planPath, reason, updatedAt: new Date().toISOString() }),
+        JSON.stringify({
+          schemaVersion: 1,
+          planPath,
+          reason,
+          updatedAt: new Date().toISOString(),
+          ...(parsed.plan.modelPolicyVersion
+            ? {
+                modelPolicyVersion: parsed.plan.modelPolicyVersion,
+                requiredCapabilities: ['l1-model-policy-v1'],
+              }
+            : {}),
+        }),
         { mode: 0o600 },
       );
       await rename(candidate, statusPath);
     } finally {
       await rm(candidate, { force: true }).catch(() => {});
     }
+    // Explicit validated attachment supersedes incompatible pointer hints in
+    // this session only. Plan files are never removed or rewritten here.
+    for (const filename of await readdir(directory)) {
+      const stalePath = join(directory, filename);
+      if (stalePath === statusPath || !filename.endsWith(statusFileSuffix)) continue;
+      const stale = await this.planReadFilesystem.readFile(stalePath, 'utf8').catch(() => '');
+      if (declaresModelPolicy(stale) && !parseSignal(stale)) await rm(stalePath, { force: true });
+    }
     const identity = createHash('sha256').update(planPath).digest('hex');
     const dismissed = new Set(await this.dismissed(session.id));
     if (dismissed.delete(identity)) await this.saveDismissals(session.id, dismissed);
     const lease = this.leases.get(session.id);
-    if (lease) await lease.refreshLatest();
-    else await this.open(session, listener);
+    if (!lease) await this.open(session, listener);
+    await this.leases.get(session.id)?.selectAttachment(statusPath);
   }
 
   closeAll(): void {
@@ -241,6 +261,9 @@ class ActiveLease implements PlanStatusLease {
   private activeStatusPath: string | undefined;
   private activePlanPath: string | undefined;
   private lastEmittedUpdate: string | undefined;
+  private policyBlockedStatusPath: string | undefined;
+  /** Retire older reads when mandatory rejection or explicit recovery changes admission. */
+  private policySelectionRevision = 0;
 
   constructor(
     readonly statusDirectory: string,
@@ -339,10 +362,22 @@ class ActiveLease implements PlanStatusLease {
   }
 
   async refreshCurrent(): Promise<PlanStatusUpdate | null> {
-    return this.activeStatusPath ? this.refreshPath(this.activeStatusPath) : this.refreshLatest();
+    // Admission/checkpoint reads must see mandatory publications even while the
+    // directory watcher is debouncing an update to a different status path.
+    return this.refreshLatest();
+  }
+
+  async selectAttachment(statusPath: string): Promise<void> {
+    this.policySelectionRevision += 1;
+    const blocked = this.policyBlockedStatusPath;
+    const update = await this.refreshPath(statusPath, undefined, true);
+    if (update?.kind !== 'updated') throw new Error('PLAN_UNAVAILABLE');
+    if (update?.kind === 'updated' && blocked && blocked !== statusPath)
+      await rm(blocked, { force: true });
   }
 
   async refreshLatest(): Promise<PlanStatusUpdate | null> {
+    const policyRevision = this.policySelectionRevision;
     try {
       const candidates = (await readdir(this.statusDirectory))
         .filter((filename) => filename.endsWith(statusFileSuffix))
@@ -353,14 +388,17 @@ class ActiveLease implements PlanStatusLease {
             this.planReadFilesystem.readFile(statusPath, 'utf8').catch(() => ''),
             stat(statusPath).catch(() => undefined),
           ]);
-          return { statusPath, signal: parseSignal(source), modifiedAt: metadata?.mtimeMs ?? 0 };
+          return {
+            statusPath,
+            signal: parseSignal(source),
+            modifiedAt: metadata?.mtimeMs ?? 0,
+            policyRequired: declaresModelPolicy(source),
+          };
         }),
       );
       const latest = signals
         .filter(
-          (
-            candidate,
-          ): candidate is { statusPath: string; signal: PlanStatusSignal; modifiedAt: number } =>
+          (candidate): candidate is typeof candidate & { signal: PlanStatusSignal } =>
             candidate.signal !== null,
         )
         .sort(
@@ -368,7 +406,19 @@ class ActiveLease implements PlanStatusLease {
             right.signal.updatedAt.localeCompare(left.signal.updatedAt) ||
             right.modifiedAt - left.modifiedAt,
         )[0];
-      return latest ? this.refreshPath(latest.statusPath, latest.signal) : null;
+      if (policyRevision !== this.policySelectionRevision) return null;
+      const invalidPolicy = signals
+        .filter((candidate) => !candidate.signal && candidate.policyRequired)
+        .sort((a, b) => b.modifiedAt - a.modifiedAt)[0];
+      if (invalidPolicy && (!latest || invalidPolicy.modifiedAt >= latest.modifiedAt)) {
+        this.policyBlockedStatusPath = invalidPolicy.statusPath;
+        return !this.closed ? this.emitUnavailable(true) : null;
+      }
+      return latest
+        ? this.refreshPath(latest.statusPath, latest.signal, true)
+        : this.activeStatusPath
+          ? this.refreshPath(this.activeStatusPath, undefined, true)
+          : null;
     } catch {
       return !this.closed ? this.emitUnavailable() : null;
     }
@@ -377,10 +427,22 @@ class ActiveLease implements PlanStatusLease {
   private async refreshPath(
     statusPath: string,
     parsedSignal?: PlanStatusSignal,
+    selectedLatest = false,
   ): Promise<PlanStatusUpdate | null> {
+    if (
+      this.policyBlockedStatusPath &&
+      !selectedLatest &&
+      statusPath !== this.policyBlockedStatusPath
+    )
+      return this.refreshLatest();
+    let policyRequired = parsedSignal?.modelPolicyVersion === 1;
+    const policyRevision = this.policySelectionRevision;
     try {
-      const signal =
-        parsedSignal ?? parseSignal(await this.planReadFilesystem.readFile(statusPath, 'utf8'));
+      const source = parsedSignal
+        ? null
+        : await this.planReadFilesystem.readFile(statusPath, 'utf8');
+      policyRequired ||= source !== null && declaresModelPolicy(source);
+      const signal = parsedSignal ?? parseSignal(source!);
       if (!signal) throw new Error('INVALID_PLAN_STATUS');
       const [planPath, workspacePath] = await Promise.all([
         this.planReadFilesystem.realpath(signal.planPath),
@@ -396,8 +458,13 @@ class ActiveLease implements PlanStatusLease {
         workspacePath,
       });
       if (result.kind === 'available') {
+        policyRequired ||= result.plan.modelPolicyVersion === 1;
+        if (result.plan.modelPolicyVersion !== signal.modelPolicyVersion)
+          throw new Error('MODEL_POLICY_PUBLICATION_MISMATCH');
         if (!this.closed && !(await this.isDismissed(identity)) && !this.closed) {
+          if (policyRevision !== this.policySelectionRevision) return null;
           const previousStatusPath = this.activeStatusPath;
+          this.policyBlockedStatusPath = undefined;
           this.activeStatusPath = statusPath;
           this.watchActivePlan(planPath);
           this.onActiveStatusPath(statusPath);
@@ -418,31 +485,47 @@ class ActiveLease implements PlanStatusLease {
           return update;
         }
       } else if (!this.closed) {
-        return this.emitUnavailable();
+        if (policyRevision !== this.policySelectionRevision) return null;
+        policyRequired ||= result.reason === 'INVALID_MODEL_POLICY';
+        if (policyRequired) this.policyBlockedStatusPath = statusPath;
+        return this.emitUnavailable(policyRequired);
       }
       return null;
     } catch (error) {
+      if (policyRevision !== this.policySelectionRevision) return null;
       if (
         (error as NodeJS.ErrnoException).code === 'ENOENT' &&
         this.activeStatusPath !== undefined &&
         statusPath !== this.activeStatusPath
       )
         return null;
-      return !this.closed ? this.emitUnavailable() : null;
+      if (policyRequired) this.policyBlockedStatusPath = statusPath;
+      return !this.closed ? this.emitUnavailable(policyRequired) : null;
     }
   }
 
-  private emitUnavailable(): PlanStatusUpdate {
+  private emitUnavailable(modelPolicyRequired = false): PlanStatusUpdate {
+    if (modelPolicyRequired) this.policySelectionRevision += 1;
     this.lastEmittedUpdate = undefined;
-    const update = { kind: 'unavailable', code: 'PLAN_STATUS_UNAVAILABLE' } as const;
+    const update = {
+      kind: 'unavailable',
+      code: 'PLAN_STATUS_UNAVAILABLE',
+      ...(modelPolicyRequired ? { modelPolicyRequired: true as const } : {}),
+    } as const;
     this.listener(update);
     return update;
   }
 }
 
+/** Recognize mandatory policy even when its version/capability envelope cannot be parsed. */
+function declaresModelPolicy(source: string): boolean {
+  return /"modelPolicyVersion"\s*:|"l1-model-policy[^"\r\n]*"/.test(source);
+}
+
 type PlanStatusSignal = Readonly<{
   planPath: string;
   updatedAt: string;
+  modelPolicyVersion?: 1;
   reason: import('../../features/plans/application/ports.js').PlanSignalReason | null;
 }>;
 
@@ -453,9 +536,34 @@ function parseSignal(source: string): PlanStatusSignal | null {
     const signal = value as Record<string, unknown>;
     if (signal.schemaVersion !== 1 || typeof signal.planPath !== 'string') return null;
     if (typeof signal.reason !== 'string' || !isRfc3339Utc(signal.updatedAt)) return null;
+    const required = signal.requiredCapabilities;
+    if (
+      required !== undefined &&
+      (!Array.isArray(required) ||
+        required.some(
+          (capability) =>
+            typeof capability !== 'string' ||
+            !ORG_PLAN_CAPABILITIES.split(',').includes(capability),
+        ))
+    )
+      return null;
+    if (
+      signal.modelPolicyVersion !== undefined &&
+      (signal.modelPolicyVersion !== 1 ||
+        !Array.isArray(required) ||
+        !required.includes('l1-model-policy-v1'))
+    )
+      return null;
+    if (
+      Array.isArray(required) &&
+      required.includes('l1-model-policy-v1') &&
+      signal.modelPolicyVersion !== 1
+    )
+      return null;
     return {
       planPath: signal.planPath,
       updatedAt: signal.updatedAt as string,
+      ...(signal.modelPolicyVersion === 1 ? { modelPolicyVersion: 1 } : {}),
       reason: isPlanSignalReason(signal.reason) ? signal.reason : null,
     };
   } catch {

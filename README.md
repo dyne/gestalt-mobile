@@ -100,6 +100,25 @@ current task. Opening a
 catalog entry reads it relative to the application root; chat links retain their
 session-relative interpretation.
 
+### Versioned model policy
+
+The `l1-model-policy-v1` capability and packaged `modelPolicyContract` describe
+schema validation and retention. `runtimeEnforcement` is `false`. When a
+versioned plan has a retained canonical executor, `gestalt_org_plan_health`
+can compare its configured thread model and effort with the requested L1 policy.
+This uses bounded thread metadata and the owning runtime's model catalog, with
+no transcript retrieval or extra model-probe turn. Missing values stay unknown;
+matching configuration does not admit automatic execution.
+
+Mobile rejects unsupported versioned-policy automation at enable,
+supervision-start, automatic root dispatch, and direct executor resume. Manual
+review, repair input and model selection remain available; unrelated legacy
+sessions retain their existing behavior. Native child creation inside manual or
+already-running turns is outside this guarantee. Strict runtime attestation,
+runtime-issued settings revisions and native child pre-spawn enforcement require
+separate integration work. They are deferred capabilities, not installation
+prerequisites, and package presence does not establish them.
+
 ## Skill profiles
 
 Global profiles live in `~/.gestalt/skill-profiles/<name>.yml` and use version 1 YAML:

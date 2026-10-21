@@ -4,5 +4,5 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-/** Compiled host assertion; never supplied by config, request or ambient env. */
-export const ORG_PLAN_CAPABILITIES = 'suspension-v1,nested-suspension-v1';
+/** Schema/retention support only; never asserts effective runtime enforcement. */
+export const ORG_PLAN_CAPABILITIES = 'suspension-v1,nested-suspension-v1,l1-model-policy-v1';

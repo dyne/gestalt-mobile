@@ -5,6 +5,7 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import { assessModelPolicyAdmission } from '../../plans/domain/model-policy-admission.js';
 import type { ProviderFailure } from '../../../../shared/contracts/provider-failure.js';
 import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
 import { AutopilotStateError } from '../domain/persisted-state-error.js';
@@ -76,6 +77,9 @@ import type {
 } from './ports.js';
 
 export type AutopilotDependencies = Readonly<{
+  modelPolicyStatus?(
+    sessionId: string,
+  ): import('../../plans/domain/model-policy-admission.js').ModelPolicyStatus;
   store: AutopilotStore;
   now(): string;
   policy: AutopilotPolicy;
@@ -188,6 +192,7 @@ export class AutopilotCoordinator {
     // coordinator. The plan-status watcher is authoritative and asynchronous,
     // so retaining enabled durable state until it supplies the projection is
     // safer than interpreting this short bootstrap gap as plan removal.
+    if (this.rejectModelPolicyExecution(sessionId)) return;
     const retained = this.deps.plan(sessionId);
     if (!retained) return;
     if (state.supervision?.outcome === 'parked') {
@@ -506,11 +511,15 @@ export class AutopilotCoordinator {
       .digest('hex');
     return this.observableWake(sessionId, { leaseId: lease.id, condition, progressKey });
   }
-  enable(sessionId: string): AutopilotSnapshot | { code: string } {
+  enable(
+    sessionId: string,
+  ): AutopilotSnapshot | { code: string; reason?: string; action?: string } {
     const session = this.deps.session(sessionId);
     if (!session || !session.threadId || !['ready', 'turnActive'].includes(session.state))
       return { code: 'AUTOPILOT_SESSION_UNAVAILABLE' };
     const currentPlan = this.deps.plan(sessionId);
+    const admission = this.modelPolicyAdmission(sessionId);
+    if (!admission.allowed) return admission;
     if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
@@ -713,6 +722,7 @@ export class AutopilotCoordinator {
   evaluate(sessionId: string): AutopilotSnapshot {
     const prior = this.deps.store.find(sessionId);
     if (!prior) return this.snapshot(sessionId);
+    if (this.rejectModelPolicyExecution(sessionId)) return this.snapshot(sessionId);
     const session = this.deps.session(sessionId);
     const decision = this.decision(sessionId, prior);
     const now = this.deps.now();
@@ -1297,6 +1307,7 @@ export class AutopilotCoordinator {
   planStatusChanged(sessionId: string): void {
     const prior = this.deps.store.find(sessionId);
     if (!prior) return;
+    if (this.rejectModelPolicyExecution(sessionId)) return;
     const plan = this.deps.plan(sessionId);
     if (!plan) {
       if (prior.requestedEnabled) this.cancel(sessionId, 'planRemoved');
@@ -1409,6 +1420,8 @@ export class AutopilotCoordinator {
    */
   supervisionStarted(sessionId: string): AutopilotSnapshot | { code: string } {
     const currentPlan = this.deps.plan(sessionId);
+    const admission = this.modelPolicyAdmission(sessionId);
+    if (!admission.allowed) return admission;
     if (!currentPlan) return { code: 'AUTOPILOT_PLAN_REQUIRED' };
     const now = this.deps.now();
     const prior = this.deps.store.find(sessionId) ?? disabledAutopilot(sessionId, now);
@@ -1747,6 +1760,7 @@ export class AutopilotCoordinator {
     this.timers.delete(sessionId);
     const current = this.deps.store.find(sessionId);
     if (!current || current.generation !== generation || !current.requestedEnabled) return;
+    if (this.rejectModelPolicyExecution(sessionId)) return;
     if (
       current.executor?.replacement &&
       !this.validReplacement(sessionId, current.executor.replacement)
@@ -2038,6 +2052,7 @@ export class AutopilotCoordinator {
     sessionId: string,
     event: SupervisedLifecycleEvent,
   ): Promise<boolean> {
+    if (this.rejectModelPolicyExecution(sessionId)) return true;
     const controller = this.deps.executorController;
     const retained = this.deps.plan(sessionId);
     const state = this.deps.store.find(sessionId);
@@ -3081,6 +3096,7 @@ export class AutopilotCoordinator {
         }
         delivered = true;
         this.enqueue(sessionId, async () => {
+          if (this.rejectModelPolicyExecution(sessionId)) return;
           const current = this.deps.store.find(sessionId);
           const latestPlan = this.deps.plan(sessionId);
           const activity = this.deps.activity(sessionId);
@@ -3379,6 +3395,7 @@ export class AutopilotCoordinator {
     const plan = this.deps.plan(next.sessionId);
     const activity = this.deps.activity(next.sessionId);
     const now = this.deps.now();
+    const admission = this.modelPolicyAdmission(next.sessionId);
     const control =
       prospectiveControl ??
       (next.lastControlId ? this.deps.store.findControl(next.sessionId, next.lastControlId) : null);
@@ -3397,7 +3414,44 @@ export class AutopilotCoordinator {
         observedAt: now,
       }),
       supervisionDelta: this.supervisionDelta(next),
+      ...(!admission.allowed ? { executionAdmission: admission } : {}),
     };
+  }
+
+  private modelPolicyAdmission(sessionId: string) {
+    return assessModelPolicyAdmission(
+      this.deps.plan(sessionId)?.plan ?? null,
+      this.deps.modelPolicyStatus?.(sessionId),
+    );
+  }
+
+  /** Retire future automatic authority without interrupting an already-running/manual turn. */
+  private rejectModelPolicyExecution(sessionId: string): boolean {
+    const admission = this.modelPolicyAdmission(sessionId);
+    if (admission.allowed) return false;
+    const prior = this.deps.store.find(sessionId);
+    if (!prior?.requestedEnabled) return true;
+    const now = this.deps.now();
+    const cancelled = this.cancelScheduledControl(prior, now);
+    this.cancelTimer(sessionId);
+    this.cancelWaitTimer(sessionId);
+    this.parkedSubscriptions.delete(sessionId);
+    const current = this.deps.store.find(sessionId) ?? prior;
+    this.persist(
+      {
+        ...current,
+        state: 'safetyPaused',
+        requestedEnabled: false,
+        generation: current.generation + 1,
+        stopReason: 'safetyPaused',
+        nextEvaluationAt: null,
+        ...(cancelled ? { lastControlId: null } : {}),
+        updatedAt: now,
+      },
+      cancelled,
+      [{ sessionId, type: 'autopilot.model-policy-rejected', payload: admission, occurredAt: now }],
+    );
+    return true;
   }
   private supervisionRevision(state: AutopilotSession): string {
     return `sha256:${createHash('sha256')

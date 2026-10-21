@@ -5,6 +5,7 @@
  */
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
+import { readExecutorConfiguration } from './executor-configuration.js';
 
 import {
   RelaySession,
@@ -148,6 +149,8 @@ class SessionResource {
   readonly capabilities = new Map<string, boolean>();
   readonly spawnedAgentModels = new Map<string, string>();
   readonly attemptedAgentModelRecovery = new Set<string>();
+  /** Local race fence only; never presented as a runtime-issued settings revision. */
+  readonly configurationChanges = new Map<string, number>();
   readonly ownedChildProcesses = new Map<string, OwnedChildProcess>();
   /** Retries from a durable Autopilot issued command reuse this opaque action id. */
   readonly completedProcessActions = new Map<string, boolean>();
@@ -201,6 +204,34 @@ class SessionResource {
 }
 
 export class CodexSessionRuntime {
+  /** Trusted read-only port for the current controller-bound child on its owning process. */
+  async readExecutorConfiguration(
+    input: Readonly<{
+      sessionId: string;
+      rootThreadId: string;
+      threadId: string;
+      taskPath: string;
+    }>,
+  ) {
+    const resource = this.sessions.get(input.sessionId);
+    if (!resource || !resource.active || resource.threadId !== input.rootThreadId)
+      return { kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' } as const;
+    if (!resource.configurationChanges.has(input.threadId)) {
+      if (resource.configurationChanges.size >= 256)
+        return { kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' } as const;
+      resource.configurationChanges.set(input.threadId, 0);
+    }
+    const changes = resource.configurationChanges.get(input.threadId);
+    return readExecutorConfiguration(
+      resource.process.rpc,
+      input,
+      () =>
+        resource.active &&
+        this.sessions.get(input.sessionId) === resource &&
+        resource.threadId === input.rootThreadId &&
+        resource.configurationChanges.get(input.threadId) === changes,
+    );
+  }
   private readonly serverResponseListeners = new Set<
     (
       sessionId: string,
@@ -249,6 +280,7 @@ export class CodexSessionRuntime {
       ): Promise<CodexRetrievalState>;
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
+    private readonly requireExecutorAdmission?: (sessionId: string) => void,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -411,6 +443,7 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId: string,
   ): Promise<string> {
+    this.requireExecutorAdmission?.(session.id);
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const params = {
@@ -438,7 +471,9 @@ export class CodexSessionRuntime {
         error.message !== `thread not found: ${childThreadId}`
       )
         throw error;
+      this.requireExecutorAdmission?.(session.id);
       await resource.process.rpc.request('thread/resume', { threadId: childThreadId });
+      this.requireExecutorAdmission?.(session.id);
       response = await resource.process.rpc.request('turn/start', params);
     }
     const result = decodeTurnStart(response);
@@ -1205,6 +1240,21 @@ export class CodexSessionRuntime {
       }
       const notificationUnsubscribe = process.rpc.onNotification((notification) => {
         if (!resource.active) return;
+        if (
+          notification.method === 'thread/settings/updated' ||
+          notification.method === 'turn/started'
+        ) {
+          const threadId = boundedString(asRecord(notification.params)?.threadId, 256);
+          if (
+            threadId &&
+            (resource.configurationChanges.has(threadId) ||
+              resource.configurationChanges.size < 256)
+          )
+            resource.configurationChanges.set(
+              threadId,
+              (resource.configurationChanges.get(threadId) ?? 0) + 1,
+            );
+        }
         if (notification.method === 'mcpServer/statusUpdated') {
           const status = notification.params as { name?: string; status?: string } | null;
           if (
