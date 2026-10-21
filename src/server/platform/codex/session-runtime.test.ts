@@ -1855,7 +1855,7 @@ describe('CodexSessionRuntime', () => {
         cwd: '/workspace',
         environment: {
           GESTALT_MOBILE_ORG_PLAN_STATUS_DIRECTORY: '/private/session-1.json',
-          GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1',
+          GESTALT_MOBILE_ORG_PLAN_CAPABILITIES: 'suspension-v1,nested-suspension-v1',
         },
       },
     ]);

@@ -5,7 +5,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -18,12 +18,28 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { promisify } from 'node:util';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
 import { LIVE_CODEX_SHA256 } from './native-contract.js';
+import {
+  LIVE_MANAGER_OBSERVATION_MS,
+  ORIGINAL_INSTALLED_SOURCE_EXTENSION,
+  originalInstalledSourceSchema,
+  type InstalledSourceObservation,
+} from './installed-launch-contract.js';
 export { LIVE_CODEX_SHA256 } from './native-contract.js';
 
 const runFile = promisify(execFile);
+// Fixed controller operation: only the pinned observer module is imported.
+// Source walks run outside Mobile's event loop and have their own phase budget.
+const observeInstalledSources = `
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const { observeOriginalLaunchSources } = await import(pathToFileURL(process.argv[2]).href);
+const observed = observeOriginalLaunchSources(JSON.parse(readFileSync(process.argv[1], 'utf8')), JSON.parse(process.argv[3]));
+process.stdout.write(JSON.stringify(observed));
+`;
 // Fixed refusal vocabulary from the pinned Manager v2 and Agents contracts.
 // Never retain command stdout/stderr or copy an arbitrary reason into evidence.
 const admissionReasons = new Set(
@@ -159,7 +175,7 @@ export class InstalledLiveAdmissionError extends Error {
   }
 }
 export const LIVE_MANAGER_SHA256 =
-  '17dcb8d57591c00032c23f0af3de67e83da4abe4c21e0c632bd48bd6fa5c281e';
+  'b95df8ed30a5d3355502a85fabe8e5aa2d75fe415f8ebc68979e2847028dda42';
 const hash = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const pin = z.object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const packagePin = z
@@ -270,6 +286,260 @@ export class InstalledLivePolicy {
   validateInstallation(): void {
     this.verifyInstallation();
   }
+  /** The pinned Agents observer independently reads executable/package/runtime
+   * identity. Nothing from the original launcher is imported or executed. */
+  async observeOriginalSources(
+    manifestPath: string,
+  ): Promise<readonly InstalledSourceObservation[]> {
+    this.verifyInstallation();
+    const before = readLiveConfigFile(manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (!Object.hasOwn(manifest, 'originalLaunchSources')) return [];
+    const descriptor = z
+      .tuple([originalInstalledSourceSchema])
+      .parse(manifest.originalLaunchSources);
+    if (descriptor[0].interpreter.path !== realpathSync(process.execPath))
+      throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+    const gestalt = this.installation.packages.find((p) => p.name === 'gestalt')!;
+    let stdout: string;
+    try {
+      ({ stdout } = await runFile(
+        this.installation.node.path,
+        [
+          '--input-type=module',
+          '--eval',
+          observeInstalledSources,
+          manifestPath,
+          join(gestalt.root, 'live-installed-source.mjs'),
+          JSON.stringify(this.installation),
+        ],
+        {
+          cwd: dirname(manifestPath),
+          env: {
+            PATH: [...new Set([dirname(this.installation.node.path), '/usr/bin', '/bin'])].join(
+              ':',
+            ),
+            HOME: z.string().parse(manifest.runtimeHome),
+            LANG: 'C.UTF-8',
+          },
+          timeout: LIVE_MANAGER_OBSERVATION_MS + 5_000,
+          maxBuffer: 262144,
+        },
+      ));
+    } catch {
+      throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+    }
+    const observations = z
+      .array(
+        z
+          .object({
+            kind: z.literal('installed-launch-source'),
+            descriptor: originalInstalledSourceSchema,
+            observation: z.record(z.string(), z.unknown()),
+          })
+          .strict(),
+      )
+      .length(1)
+      .parse(JSON.parse(stdout));
+    this.verifyInstallation();
+    if (
+      !isDeepStrictEqual(
+        observations.map((p) => p.descriptor),
+        descriptor,
+      ) ||
+      !isDeepStrictEqual(readLiveConfigFile(manifestPath), before)
+    )
+      throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+    return structuredClone(observations);
+  }
+  assertOriginalSourceReply(
+    reply: Record<string, unknown>,
+    observations: readonly InstalledSourceObservation[],
+  ): void {
+    if (
+      observations.length &&
+      (!Array.isArray(reply.extensions) ||
+        !reply.extensions.includes(ORIGINAL_INSTALLED_SOURCE_EXTENSION) ||
+        !isDeepStrictEqual(reply.originalLaunchSources, observations))
+    )
+      throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+  }
+  /** Renewal stdout intentionally lacks observation authority. Authenticate its
+   * signed birth and compare against initial and freshly observed source pins. */
+  async assertOriginalSourceBirth(
+    manifestPath: string,
+    captureId: string,
+    initial: readonly InstalledSourceObservation[],
+  ): Promise<void> {
+    if (!initial.length) return;
+    z.uuid({ version: 'v4' }).parse(captureId);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const path = join(dirname(manifestPath), `birth-${captureId}.json`);
+    const pin = readLiveConfigFile(path),
+      record = JSON.parse(readFileSync(path, 'utf8'));
+    const info = lstatSync(path);
+    const body = record.body;
+    const expected = createHmac('sha256', readFileSync(manifest.keyFile))
+      .update(stable(body))
+      .digest();
+    const mac =
+      typeof record.mac === 'string' && /^[a-f0-9]{64}$/.test(record.mac)
+        ? Buffer.from(record.mac, 'hex')
+        : Buffer.alloc(0);
+    if (
+      info.uid !== process.getuid?.() ||
+      info.mode & 0o077 ||
+      mac.length !== expected.length ||
+      !timingSafeEqual(mac, expected) ||
+      body?.schemaVersion !== 2 ||
+      body.kind !== 'before-runtime-birth' ||
+      body.captureId !== captureId ||
+      !isDeepStrictEqual(body.originalLaunchSources, initial) ||
+      !isDeepStrictEqual(await this.observeOriginalSources(manifestPath), initial) ||
+      !isDeepStrictEqual(readLiveConfigFile(path), pin)
+    )
+      throw new Error('LIVE_INSTALLED_SOURCE_UNVERIFIED');
+  }
+  /** Exact cwd expected from the pinned Manager's private exec. Renewal stdout
+   * is not authority: follow authenticated birth/seal links to the original cwd.
+   * Manager independently validates the complete contract before it execs. */
+  owningRuntimeCwd(manifestPath: string, captureId: string): string {
+    try {
+      const pins = new Map<string, LiveConfigFile>();
+      const read = (path: string) => {
+        const pin = readLiveConfigFile(path),
+          info = lstatSync(path);
+        if (info.uid !== process.getuid?.() || info.mode & 0o077) throw new Error();
+        const value = JSON.parse(readFileSync(path, 'utf8'));
+        if (!isDeepStrictEqual(readLiveConfigFile(path), pin)) throw new Error();
+        pins.set(path, pin);
+        return value;
+      };
+      const manifest = read(manifestPath);
+      const keyPin = readLiveConfigFile(manifest.keyFile),
+        keyInfo = lstatSync(manifest.keyFile);
+      if (keyInfo.uid !== process.getuid?.() || keyInfo.mode & 0o077) throw new Error();
+      const key = readFileSync(manifest.keyFile);
+      if (key.length !== 32) throw new Error();
+      const signed = (path: string) => {
+        const record = read(path);
+        const mac =
+          typeof record.mac === 'string' && /^[a-f0-9]{64}$/.test(record.mac)
+            ? Buffer.from(record.mac, 'hex')
+            : Buffer.alloc(0);
+        const expected = createHmac('sha256', key).update(stable(record.body)).digest();
+        if (mac.length !== expected.length || !timingSafeEqual(mac, expected)) throw new Error();
+        return record.body;
+      };
+      const resolve = (
+        path: string,
+        id: string,
+        current: ReturnType<typeof read>,
+        depth: number,
+      ): string => {
+        if (depth >= 16 || current.keyFile !== manifest.keyFile) throw new Error();
+        z.uuid({ version: 'v4' }).parse(id);
+        const birth = signed(join(dirname(path), `birth-${id}.json`));
+        if (
+          birth.schemaVersion !== 2 ||
+          birth.kind !== 'before-runtime-birth' ||
+          birth.captureId !== id ||
+          typeof birth.basisDigest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(birth.basisDigest)
+        )
+          throw new Error();
+        if (!birth.renewal) return canonical(dirname(path), true);
+        const link = birth.renewal;
+        if (!['survivor', 'replacement'].includes(link.mode)) throw new Error();
+        const previousPath = canonical(link.previousManifest),
+          previous = read(previousPath);
+        if (
+          pins.get(previousPath)!.sha256 !== link.manifestDigest ||
+          previous.generation?.sessionId !== current.generation?.sessionId ||
+          !Number.isSafeInteger(current.generation?.generation) ||
+          !Number.isSafeInteger(previous.generation?.generation) ||
+          previous.generation.generation >= current.generation.generation ||
+          !isDeepStrictEqual(previous.controller, current.controller)
+        )
+          throw new Error();
+        z.uuid({ version: 'v4' }).parse(link.previousCaptureId);
+        const sealed = signed(
+          join(dirname(previousPath), `runtime-${link.previousCaptureId}.json`),
+        );
+        const before = signed(join(dirname(previousPath), `birth-${link.previousCaptureId}.json`));
+        const beforeDigest = hash(stable(before));
+        if (
+          sealed.schemaVersion !== 2 ||
+          sealed.kind !== 'owning-runtime-provenance' ||
+          sealed.captureId !== link.previousCaptureId ||
+          hash(stable(sealed)) !== link.sealDigest ||
+          beforeDigest !== link.beforeDigest ||
+          sealed.beforeDigest !== beforeDigest ||
+          sealed.basisDigest !== before.basisDigest
+        )
+          throw new Error();
+        const originalCwd = resolve(previousPath, link.previousCaptureId, previous, depth + 1);
+        if (sealed.runtime?.cwd !== originalCwd) throw new Error();
+        return originalCwd;
+      };
+      const cwd = resolve(canonical(manifestPath), captureId, manifest, 0);
+      if (!isDeepStrictEqual(readLiveConfigFile(manifest.keyFile), keyPin)) throw new Error();
+      for (const [path, pin] of pins)
+        if (!isDeepStrictEqual(readLiveConfigFile(path), pin)) throw new Error();
+      return cwd;
+    } catch {
+      throw new Error('LIVE_NATIVE_HANDOFF_CWD_UNVERIFIED');
+    }
+  }
+  contextLaunchIds(manifestPath: string): readonly string[] {
+    return readdirSync(dirname(manifestPath)).filter((name) =>
+      /^process-[a-f0-9-]{36}\.json$/.test(name),
+    );
+  }
+  /** Successful tool stdout is not readiness. Require a new authenticated
+   * current-generation launch that reached signed post-spawn validation. */
+  assertCompletedContextLaunch(
+    manifestPath: string,
+    prior: readonly string[],
+    policyDigest: string,
+  ): void {
+    const manifestPin = readLiveConfigFile(manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const key = readFileSync(manifest.keyFile);
+    const valid = this.contextLaunchIds(manifestPath)
+      .filter((name) => !prior.includes(name))
+      .some((name) => {
+        const path = join(dirname(manifestPath), name),
+          pin = readLiveConfigFile(path);
+        const record = JSON.parse(readFileSync(path, 'utf8')),
+          body = record.body;
+        const expected = createHmac('sha256', key).update(stable(body)).digest('hex');
+        if (
+          record.mac !== expected ||
+          lstatSync(path).uid !== process.getuid?.() ||
+          lstatSync(path).mode & 0o077
+        )
+          throw new Error('LIVE_CONTEXT_RECEIPT_UNVERIFIED');
+        return (
+          isDeepStrictEqual(readLiveConfigFile(path), pin) &&
+          body?.kind === 'process-launch' &&
+          name === `process-${body.launchId}.json` &&
+          body.commandId === 'context-mode-call' &&
+          body.postSpawnValidated === true &&
+          body.status === 'exited' &&
+          body.termination === 'leader-exit' &&
+          body.policy?.policyDigest === policyDigest &&
+          body.policy?.manifestDigest === manifestPin.sha256 &&
+          isDeepStrictEqual(body.policy?.authority?.generation, manifest.generation) &&
+          isDeepStrictEqual(
+            body.policy?.commands?.['context-mode-call'],
+            manifest.commands?.['context-mode-call'],
+          )
+        );
+      });
+    if (!valid || !isDeepStrictEqual(readLiveConfigFile(manifestPath), manifestPin))
+      throw new Error('LIVE_CONTEXT_RECEIPT_UNVERIFIED');
+  }
   /** Manager signs only for its direct elected-controller parent. These typed
    * operations never accept a command, environment, or project-provided argv. */
   private async runtimeCommand(
@@ -362,7 +632,7 @@ export class InstalledLivePolicy {
             HOME: z.string().parse(manifest.runtimeHome),
             LANG: 'C.UTF-8',
           },
-          timeout: 30000,
+          timeout: LIVE_MANAGER_OBSERVATION_MS + 5_000,
           maxBuffer: 16384,
         },
       );
@@ -388,7 +658,8 @@ export class InstalledLivePolicy {
           HOME: home,
           LANG: 'C.UTF-8',
         },
-        timeout: 30000,
+        timeout:
+          (binary === this.installation.manager.path ? 1 : 2) * LIVE_MANAGER_OBSERVATION_MS + 5_000,
         maxBuffer: 16384,
       });
       const result = replySchema.parse(JSON.parse(stdout));
@@ -580,6 +851,7 @@ export class InstalledLivePolicy {
         before.directory,
         before.home,
       );
+      this.assertOriginalSourceReply(manager, await this.observeOriginalSources(manifestPath));
       const gestalt = this.installation.packages.find((entry) => entry.name === 'gestalt')!;
       phase = 'agents-verification';
       const agents = await this.command(

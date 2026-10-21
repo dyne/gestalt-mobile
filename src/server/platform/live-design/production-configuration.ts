@@ -11,6 +11,7 @@ import { installationSchema } from './installed-policy.js';
 import { readLiveConfigFile, type LiveConfigFile } from './effective-config.js';
 import { LIVE_CODEX_BWRAP_SHA256, LIVE_CODEX_SHA256 } from './native-contract.js';
 import { LIVE_HELPER_BINARY_SHA256 } from './helper-process.js';
+import { originalInstalledSourceSchema } from './installed-launch-contract.js';
 
 const pin = z
   .object({ path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) })
@@ -115,6 +116,7 @@ const schema = z
                 sandboxState: nativeState,
                 configFiles: z.array(pin).min(1).max(64),
                 instructionFiles: z.array(z.string()).max(64).default([]),
+                originalLaunchSources: z.tuple([originalInstalledSourceSchema]).optional(),
               })
               .strict()
               .optional(),

@@ -3343,6 +3343,183 @@ ${index === 10 ? ':SUSPENDED_FOR: l9\n' : ''}:END:
       }
     });
 
+    it('hands accepted L9 through a nested stack to one root turn and the same L11 while L13 stays paused', async () => {
+      const fixture = subject();
+      const directory = await mkdtemp(join(tmpdir(), 'suspended-checkpoint-handoff-'));
+      const path = join(directory, 'plan.org');
+      const source =
+        `#+TITLE: Dependency handoff
+#+SUBTITLE: Regression
+#+DATE: 2026-10-13
+#+KEYWORDS: suspension
+` +
+        Array.from(
+          { length: 13 },
+          (_, index) => `* ${[10, 12].includes(index) ? 'SUSPENDED' : 'DONE'} [#A] L${index + 1}
+:PROPERTIES:
+:ID: l${index + 1}
+:SKILLS: $vertical-slice-architecture
+:REVIEW_STATUS: ${[10, 12].includes(index) ? 'UNREVIEWED' : 'REVIEWED'}
+${index === 10 ? ':SUSPENDED_FOR: l9\n' : index === 12 ? ':SUSPENDED_FOR: l11\n' : ''}:END:
+- Effort :: Small
+- Goal :: Dependency correction
+- Notes :: Preserve owning thread
+${index === 10 ? '** SUSPENDED [#A] L11.1\n:PROPERTIES:\n:ID: l11-1\n:END:\n- Why :: Preserve owner\n- Change :: Resume correction\n- Tests :: One owner\n- Done when :: Reviewed\n' : ''}`,
+        ).join('') +
+        `** SUSPENDED [#A] L13.1
+:PROPERTIES:
+:ID: l13-1
+:END:
+- Why :: Resume after review
+- Change :: Preserve progress
+- Tests :: Checkpoint handoff
+- Done when :: One owning executor
+`;
+      const parse = (text: string) => {
+        const result = parseSupervisedPlan({
+          source: text,
+          planPath: path,
+          workspacePath: directory,
+        });
+        if (result.kind !== 'available') throw new Error(result.reason);
+        return result.plan;
+      };
+      try {
+        await writeFile(path, source);
+        fixture.plan = parse(source);
+        fixture.activity = {
+          ...fixture.activity,
+          aggregateSubagents: 'disconnected',
+          subagents: [
+            {
+              ...fixture.activity.subagents[0]!,
+              id: 'thread-l9',
+              threadId: 'thread-l9',
+              taskPath: '/root/l9',
+              canonicalTaskName: 'l9',
+              canonicalPosition: 'L9',
+              state: 'disconnected',
+            },
+            {
+              ...fixture.activity.subagents[0]!,
+              id: 'thread-l11',
+              threadId: 'thread-l11',
+              taskPath: '/root/l11',
+              canonicalTaskName: 'l11',
+              canonicalPosition: 'L11',
+            },
+          ],
+        };
+        fixture.activity = {
+          ...fixture.activity,
+          subagents: [
+            ...fixture.activity.subagents,
+            {
+              ...fixture.activity.subagents[1]!,
+              id: 'thread-l13',
+              threadId: 'thread-l13',
+              taskPath: '/root/l13',
+              canonicalTaskName: 'l13',
+              canonicalPosition: 'L13',
+            },
+          ],
+        };
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: 'accepted-l9-turn' };
+        const checkpoint = {
+          version: 1 as const,
+          kind: 'l1Accepted' as const,
+          planIdentity: 'p',
+          l1Id: 'l9',
+          position: 'L9',
+          verdict: 'ACCEPT' as const,
+          commit: { kind: 'notRequired' as const },
+        };
+        fixture.state = {
+          ...fixture.state!,
+          checkpoints: {
+            protocolVersion: 1,
+            planIdentity: 'p',
+            reportedL1Ids: [
+              ...Array.from({ length: 8 }, (_, index) => `l${index + 1}`),
+              'l10',
+              'l12',
+            ],
+            reportedL2Ids: [],
+            acceptedKeys: [],
+            pendingTurnId: null,
+            terminalReviewAccepted: false,
+          },
+        };
+        expect(
+          fixture.coordinator.checkpointAccepted('s', checkpoint, 'accepted-l9-turn', now),
+        ).toBe('recorded');
+        expect(fixture.timers).toHaveLength(0);
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: null };
+        expect(fixture.coordinator.turnCompleted('s', 'accepted-l9-turn')).toBe(true);
+        const rootTimer = fixture.timers.find((timer) => !timer.cancelled && !timer.fired)!;
+        fixture.rootStart.mockImplementation(async () => {
+          fixture.session = {
+            state: 'ready',
+            threadId: 'root',
+            activeTurnId: 'resume-l11-root-turn',
+          };
+        });
+        await fixture.runNext();
+        rootTimer.callback(); // Duplicate delivery cannot start another root.
+        await Promise.resolve();
+        expect(fixture.rootStart).toHaveBeenCalledTimes(1);
+        expect(fixture.rootStart).toHaveBeenCalledWith(
+          's',
+          'root-control',
+          expect.any(Number),
+          undefined,
+        );
+        expect(fixture.resume).not.toHaveBeenCalled();
+        expect(fixture.state?.checkpoints?.rootContinuationFromTurnId).toBeUndefined();
+        fixture.coordinator.evaluate('s');
+        expect(fixture.timers.filter((timer) => !timer.cancelled && !timer.fired)).toHaveLength(0);
+        // Native CI runs the same coordinator regression with projection data.
+        // Workspace integration additionally invokes the reviewed actual helper
+        // on this disposable file, never on a retained session plan.
+        const helper = process.env.GESTALT_TEST_ORG_PLAN_HELPER;
+        if (helper) {
+          await promisify(execFile)(helper, ['resume', path, 'l11'], {
+            env: { PATH: process.env.PATH },
+            timeout: 15000,
+          });
+        } else {
+          await writeFile(
+            path,
+            source
+              .replace('* SUSPENDED [#A] L11\n', '* WIP [#A] L11\n')
+              .replace('** SUSPENDED [#A] L11.1\n', '** WIP [#A] L11.1\n')
+              .replace(':SUSPENDED_FOR: l9\n', ''),
+          );
+        }
+        fixture.plan = parse(await readFile(path, 'utf8'));
+        expect(fixture.plan.currentStepId).toBe('l11-1');
+        expect(fixture.plan.steps[12]?.state).toBe('SUSPENDED');
+        fixture.session = { state: 'ready', threadId: 'root', activeTurnId: null };
+        fixture.coordinator.planStatusChanged('s');
+        await vi.waitFor(() =>
+          expect(fixture.timers.some((timer) => !timer.cancelled && !timer.fired)).toBe(true),
+        );
+        await fixture.runNext();
+        await vi.waitFor(() => expect(fixture.resume).toHaveBeenCalledOnce());
+        expect(fixture.resume).toHaveBeenCalledWith('s', 'thread-l11', 3, { kind: 'partial' });
+        expect(fixture.rootStart).toHaveBeenCalledOnce();
+        expect(fixture.state?.executor).toMatchObject({
+          canonicalPosition: 'L11',
+          taskPath: '/root/l11',
+          threadId: 'thread-l11',
+          continuationGeneration: 1,
+        });
+      } finally {
+        fixture.coordinator.dispose('s');
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
     it('fences a queued continuation on suspension and resumes the same physical owner after restoration', async () => {
       const fixture = subject();
       const running = fixture.plan;

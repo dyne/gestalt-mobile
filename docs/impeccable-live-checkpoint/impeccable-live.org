@@ -1,0 +1,1179 @@
+#+TITLE: Native Impeccable Live in Gestalt
+#+SUBTITLE: Execution specification — authenticated remote browser previews, existing Caddy, exclusive session control
+#+DATE: 2026-10-08
+#+KEYWORDS: gestalt impeccable live caddy authentication exclusive-session remote-preview
+
+This is an active supervised execution plan. Use this exact plan path on
+resumption; read current lifecycle properties rather than assuming initial TODO
+states. Execution and the bounded admission revision below are authorized.
+No merge, deployment, release, service installation/restart or /etc changes are
+authorized by continuation alone.
+
+Fresh-session handoff and managed launch correction — 2026-10-14
+---------------------------------------------------------------
+Read .gestalt/impeccable-live-fresh-session-prompt.txt for the current handoff.
+The user requests a fresh session without this session's physical subagents.
+Historical references below to reusing l9/l10/l11 mean retain canonical milestone
+ownership, not assume old physical agents exist in the fresh session. Inspect
+authoritative session/control state before assigning work. Create exactly one
+fresh canonical executor per needed milestone, task_name l9, l10 or l11, only
+when its work is actionable; never create an L2-specific executor. If durable
+state still assigns an old physical executor, use supported reconciliation and
+Mobile's replacement authorization; never invent a generation or edit its store.
+
+All operator/agent Codex invocations must go through the managed Gestalt command:
+use gestalt cli -- <Codex arguments>, never bare codex or a resolved Codex binary.
+This includes plugin management and any future session launch/resume commands.
+Use gestalt mobile -- <Mobile arguments> for managed Mobile launch. Preserve the
+existing trusted host/controller launch contract and runtime pins; this correction
+does not authorize launching a controller from inside a model sandbox. Inspect
+current gestalt help/source before prescribing installation or launch commands.
+Earlier chat instructions invoking codex plugin directly are superseded.
+
+At this handoff, L1–L8 are DONE + REVIEWED; L9 is DONE + UNREVIEWED following
+a persisted review reset; L10 is DONE + REVIEWED with required corrections pending;
+L11/L11.1 remain WIP; L12–L15 remain TODO. L9's revised admission contract has
+not been implemented. Workspace suspension tooling candidates have been tested
+and reviewed, but that does not establish activation in the running installation.
+The installed projection previously rejected concurrent L9 review and L11 WIP.
+Recheck current installed capability before attempting supported suspension and
+reopening; never insert SUSPENDED manually or fake acceptance to repair projection.
+Preserve all dirty Mobile and Agents work and existing evidence. If compatible
+activation is still required outside the sandbox, report that narrow prerequisite;
+do not present root/chmod or an unapproved deployment as the admission fix.
+
+Latest upstream patch constraints — user instruction 2026-10-08
+--------------------------------------------------------------
+For L2, reuse the upstream test suite and existing framework fixtures. Do not
+add a new test framework, broad test expansion or duplicate demo fixture.
+At most add a small focused regression for the remote public URL use case.
+Protocol inventories, toolchain provenance and temporary fixture lockfile
+preparation can remain workspace-local evidence rather than upstream patch
+files. This supersedes earlier L2 wording requesting added demo/protocol
+fixtures. No rustfmt/cargo fmt and no unrelated reformatting. Retain existing
+upstream test gates and minimal implementation scope.
+
+Approved upstream E2E limitations — user instruction 2026-10-09
+--------------------------------------------------------------
+For L2 acceptance only, record these two unchanged failures as known upstream
+limitations and keep the remote-URL patch focused:
+- astro-vite7 core: Astro stylesheet HTTP 500 after accept, dev-server error
+  "No Astro CSS at index 1".
+- vite8-react-plain React headless manual Apply hard batch: expected edited
+  mapped-data copy remains original; visible-text timeout.
+Both identifiers reproduce on pristine pin sources with the preserved baseline
+binary. Full opt-in suite result remains 44 passed, 2 failed, 1 upstream skip;
+never report it as all green. This explicit exception supersedes the general
+all-gates-pass requirement only for these two cases at this pinned baseline.
+Do not suppress/skip them or repair unrelated code. Any new/different failure
+remains blocking. Retain all other upstream tests, full Rust workspace, builds,
+remote URL proof, minimal patch scope and independent review requirements.
+Record this disposition in milestone evidence and the upstream proposal as
+known limitations. Later integration milestones retain their own verification
+gates; this is not a blanket exception for Gestalt's end-to-end behavior.
+
+L3 execution prerequisite disposition — 2026-10-09
+-------------------------------------------------
+Fresh manager baseline reproduces four native Serena test failures caused by
+nested Codex sandbox startup: the outer managed sandbox protects its daemon
+socket directory and the nested runtime fails ownership/mode validation.
+Safe temp/runtime/Git-root changes and both tested Codex versions did not
+resolve it. Preserve .gestalt/live-evidence/l3/baseline-summary.json; do not
+retry unchanged inputs or broaden permissions. This is not a test waiver.
+Local installer implementation and isolated fixture verification may proceed;
+L3 acceptance still requires the full suite on a supported native/CI host.
+Distribution revision authorized by user — 2026-10-09: patched Impeccable
+binaries must be built in CI and released as artifacts. Supersede the local
+binary publication proposal and operator upload helper; do not publish the
+locally built candidate. Add a dedicated build/test/artifact workflow, separate
+from manager versioning and Pages deployment. Reconstruct accepted L2 from a
+pinned upstream commit and checked-in checksum-pinned patch; pin build inputs,
+retain license/source/provenance, and produce archive plus checksums in CI.
+Unprivileged PR builds upload CI artifacts; only a trusted explicitly selected
+release path may publish immutable release assets. Never publish from PR code
+with write credentials. Preserve the initial Linux x86_64 scope. Validate CI
+outputs before updating manager pins; local binary hashes are not CI evidence.
+Provide a test-only hosted job for unchanged full manager npm test using the
+existing disposable-runner sandbox prerequisites, without deploying Pages or
+committing/tagging manager versions. No test waiver or host sandbox bypass.
+No public patched binary currently exists. Do not invent a live download URL or
+silently use pristine upstream. Default runtime availability and final acceptance
+remain pending verified CI distribution and the required full manager-suite result.
+
+Impeccable CI scope override authorized by user — 2026-10-10: Gestalt CI must
+only build the patched Impeccable runtime and verify that it starts. Do not run
+the full upstream Rust, npm, or opt-in browser suites in Gestalt CI. Keep source
+and patch integrity, build, binary identity/protocol probes, bounded real startup
+and clean shutdown smoke evidence, and artifact checksums/provenance. Remove
+test-only browser dependencies and obsolete full-suite publication claims.
+Accepted L2 upstream test evidence remains historical evidence; no upstream
+tests are deleted. The unchanged full Gestalt manager suite remains required.
+
+Release activation refinement — 2026-10-10: the GitHub Action owns tag and
+release creation. Support the exact release/impeccable-gestalt-live-1 branch
+push as an authenticated connector-triggerable alternative to the runtime tag.
+Root may create that branch at the reviewed green implementation commit under
+the existing runtime publication authorization. Retain same-run build/start,
+full manager checks, release environment and immutable tag/asset validation.
+PR events remain read-only; no arbitrary branch publication or Gestalt deployment.
+
+Host-side launch revision — user authorized 2026-10-12
+-----------------------------------------------------
+The user authorized continuing and updating this plan after the host-side proof.
+Retain all original product, authorization, exclusivity and isolation requirements.
+This revision changes sequencing and makes repository ownership explicit; it does
+not waive a gate or authorize production deployment, sandbox removal, changes to
+unowned IPC, or publishing new runtime releases.
+
+Evidence: .gestalt/live-evidence/l8/socket-directory-diagnosis/findings.json;
+.gestalt/live-evidence/l8/host-controller-investigation/findings.json;
+.gestalt/live-evidence/l8/host-controller-proof/proof-result.json and
+verified-final-artifact/host-controller-proof.json. Codex 0.161.0 masks its fixed
+canonical(/tmp)/codex-daemon-<euid> directory as read-only mode000 in tool sandboxes;
+nested app-server/sandbox startup then fails its mode0700 validation. Changing
+TMPDIR, CODEX_HOME or the advertised --listen path does not relocate that directory.
+Do not repeat the disproved outer-app-server arrangement or chmod its mask.
+
+The actual Mobile private-stdio launcher, started directly on an isolated hosted
+runner with a trusted named native permission profile, passed all nine host-proof
+checks at 2facdae77f2b807798aa02a5d63a12d9161aebc6, run38252423273,
+artifact11749206185 (ZIP SHA256
+1556c0e8e928a077108c9b31d2448c29a89e165a9fbb27fd1014cf247871dd46).
+Ordinary command/public-read success coexists with same-UID private-file/socket
+denial, daemon masking and tested proc/FD alias denial; controller access and
+owned shutdown work. Companion Quality, Vitest and package smoke passed;
+browser/auth/stress jobs were not exercised. This is a narrow proof, not production
+MCP, native model-tool, child-agent, helper/devserver or Live E2E acceptance.
+
+Use genuinely host-started Mobile as the trusted controller, with private stdio
+RPC and tool-level native restrictions. Starting or detaching a controller from
+inside an agent sandbox does not create host authority. No new host broker or
+Codex fork is presumed necessary. Trusted controller fs/config/command RPC must
+never be forwarded as an unrestricted browser, project or agent API.
+
+Current L8 keeps its identity, executor l8, uncommitted diff and review status.
+Its reviewable deliverable is the lifecycle adapters, elected store/controller,
+generation-safe revocation/Resume, canonical loop and validated host-launch
+foundation. Production admission and owning-session integration are explicitly
+assigned to new L11; accepting L8 will not enable Start or declare Live ready.
+L9 owns manager-side policy/bootstrap and a native sandbox launcher contract;
+L10 owns Agents-side MCP/config confinement and packaging; L11 owns the final
+Mobile production construction plus original picker/edit/accept, Stop/Resume and
+native descendant proof obligations. Existing future milestones move to L12–L15
+without changing their IDs or requirements. No executor has yet been assigned
+to these future positions. L1–L7 remain accepted and unchanged.
+
+Local stdio MCP servers are not automatically confined by a Codex thread profile.
+The current context-mode interpreter and Org MCP launch paths must be covered;
+the manager's existing native-state-aware Serena shim is a reuse reference.
+Establish one trusted launch/policy contract before wiring packages. Reject
+unverified project/plugin MCP commands, hooks, effective config or preexisting
+processes for Live admission rather than silently broadening authority or
+disabling normal non-Live workflows. Preserve genuinely required trusted
+controller actions as narrow authenticated capabilities, not unrestricted
+filesystem or process access. Do not treat sandbox metadata alone as enforcement.
+
+Approved admission provenance revision — user authorized 2026-10-13
+-------------------------------------------------------------------
+Reopen L9 and its existing L9.1/L9.2 through supported lifecycle transitions;
+preserve all canonical positions, IDs and labels. Reuse assigned executor l9.
+L11.1 remains WIP and its uncommitted Mobile changes are preserved. Its assigned
+executor l11 must not consume the revised contract until L9 is reviewed again
+and supported-host evidence is accepted. One implementation writer at a time.
+
+Read .gestalt/live-evidence/l11/l11.1/admission-contract-gap.md and
+.gestalt/live-evidence/l11/l11.1/run-38371556053/admission-contract-gap.json.
+Extend Manager first admission to support only strictly verified pre-existing
+metadata created by the actual owning Native runtime. Require trusted elected
+controller authority, original runtime birth/executable/parent lifetime,
+absence-before-owned-birth provenance and canonical directory device/inode/UID
+identity. PID-only adoption, unsigned marker registries and current directory
+emptiness are insufficient. Inventory every actual effective configuration
+source; represent directory sources explicitly, never as regular config files
+or mutable copied directory snapshots. Unknown or incomplete provenance fails
+closed. Preserve normal non-Live behavior.
+
+The contract must prevent config/hooks/rules/agents injection, symlinks,
+replacement, races, stale ownership and competing sessions. Bind attestations
+to the current generation, revalidate at admission and use, and revoke before
+further work on owner, content, identity, policy or configuration change.
+Preserve model/helper/devserver/child confinement and private-state protections.
+Do not delete metadata, skip project instructions, broaden sandbox permissions,
+accept empty-looking directories by default. Runtime changes remain prohibited
+except for the narrowly authorized Native mask-composition revision below.
+
+Native mask-composition revision — user authorized 2026-10-14
+------------------------------------------------------------
+The user resolved the planChange attention request with "authorized!" after
+review of .gestalt/live-evidence/l9/l9.2/provenance-v2/pinned-native-mask-constraint.md.
+L9.2 may implement and validate the smallest Native sandbox-builder correction
+for the observed missing protected metadata directory / explicit deny file-mask
+collision (EISDIR), and establish verified replacement source/binary/helper pins.
+This supersedes the runtime-pin prohibition only for this documented defect.
+Preserve canonical L9/L9.1/L9.2 positions, titles, IDs and labels; L9.2 remains
+WIP until current supported-host proof and unchanged full Manager gates pass.
+
+The existing l9 executor is the sole writer for this bounded prerequisite,
+sequencing an isolated workspace-local Native source checkout/patch and Manager
+integration; Agents and Mobile remain read-only. Preserve original upstream
+source identity, attributable minimal patch, build inputs, binary/helper hashes,
+and regression evidence. Do not modify installed/protected runtime artifacts.
+Use the existing authorized isolated test-only CI snapshot/artifact workflow to
+build and verify the candidate before adopting its pins in the reviewable source.
+No service restart, deployment, merge, public release, or activation of the
+running installation is authorized by this revision.
+
+The fix must compose directory protection with enforced unreadability without
+weakening explicit denies, project instruction discovery, user restrictions,
+private-state/proc/FD protection, or model/helper/devserver/child confinement.
+No metadata deletion/precreation, Skip workaround, empty-directory default trust,
+unsigned provenance or PID-only adoption. Require focused Native regression
+coverage for missing/existing metadata, directory/file types, symlinks, replacement
+and races, then actual original owning-runtime startup/admission and the complete
+L9.2 positive/negative proof on the supported host. Record exact tested candidate
+and retain previous failed runs. Source fixes or successful builds alone are not
+acceptance. Root reviews the runtime change and pins as part of L9 acceptance;
+later L10 compatibility correction and L11 resumption retain their existing gates.
+
+L9.1 implements the precise versioned source/provenance contract and focused
+positive/negative tests. L9.2 proves it on the supported pinned host, including
+Native-born metadata admission and all injection/race/lifetime/session rejection
+cases, plus unchanged full Manager gates and actual descendant confinement.
+Record exact candidate tree, runtime identities, commands and artifact hashes.
+Explicitly review accepted L10 compatibility against the new schema, prepared
+runtime inventories, receipts and per-call checks. L10 remains accepted only
+if that compatibility is evidenced without code changes; if material correction
+is required, reopen its affected existing milestones through supported tooling
+and reuse l10 before L11 resumes. No cross-repository edits by an L9 executor.
+Read-only compatibility assessment on 2026-10-13 found that accepted L10
+plugins/gestalt/live-admission.mjs rejects every ancestral .codex in readBootstrap
+and requires manifest and Manager verification schemaVersion 1. Consequently
+the L10 admission implementation requires correction for this extension; retain
+historical acceptance only as evidence of the previous contract. Reopen affected
+L10 children through supported tooling and use canonical l10 after L9 acceptance.
+Genuine-provider proof remains separately pending; deterministic-provider proof
+cannot satisfy it. This approval authorizes the bounded contract revision and
+its review, not merge, deployment, release or a runtime-pin shortcut.
+
+Approved Org lifecycle prerequisite repair — 2026-10-13
+-------------------------------------------------------
+After the supported L9 reopen failed with multiple WIP L1s, the user resolved
+the attention request with approval to proceed. Implement the bounded Org
+tooling prerequisite in gestalt-agents under canonical executor l10, with l9
+idle until reviewed transitions can reopen its work. This is an explicit
+bootstrap exception to dependency execution order, not milestone acceptance.
+Extend helper transitions, validation, projection/publication and focused tests
+to suspend dependent work honestly and reopen/resume dependency work without
+renumbering, erasing prior WIP progress, fabricating DONE or bypassing review.
+Validate projection before persisting lifecycle mutations. Preserve one active
+implementation writer. Review existing Mobile consumer compatibility before
+choosing the wire representation; no unrelated Mobile changes are authorized.
+Read-only design established that Mobile independently parses the Org source
+and rejects either multiple WIP paths or unknown states. Include the necessary
+bounded consumer compatibility repair under canonical l11 ownership: truthful
+suspended-state parsing/contracts/presentation, active-step selection and
+persisted supervision validation, with regressions excluding suspended work
+from dispatch and checkpoints. Sequence repository writers, never overlap them.
+Source verification is not activation of the running Mobile consumer; do not
+apply new syntax to this active plan until consumer compatibility is established.
+Root must review and test the transition before applying it to this plan.
+Use reviewed repository tooling within the workspace; do not modify installed
+protected caches or restart running services. The repair remains part of L10's
+eventual reviewed change and full gates, with no separate completion claim.
+Then reopen L9 through that supported transition, finish its admission contract
+and supported-host proof, correct L10 compatibility, and resume L11. Existing
+canonical IDs, labels and positions and all Mobile uncommitted work are retained.
+
+Scope and product contract
+--------------------------
+L3 CI bootstrap exception authorized by user — 2026-10-10: provisional scoped
+commits and a draft PR are permitted before L3 acceptance to run hosted CI and
+obtain verified artifact pins. Consolidate the L3 implementation into one final
+conventional commit before acceptance. This exception does not authorize merging
+or deploying Gestalt and does not waive any test, artifact or review gate.
+
+Whole-plan CI exception authorized by user — 2026-10-10: extend the provisional
+scoped commit and test-only branch/draft PR publication permission above to
+every milestone in this plan when needed for hosted CI. Consolidate each
+milestone into one final conventional commit after review and before acceptance.
+This does not authorize merging or deploying Gestalt, changing immutable runtime
+releases, or waiving any test, artifact or review gate.
+
+A user starts Live for a running development app in a Gestalt workspace, opens
+an authenticated HTTPS preview in their own browser, and uses Impeccable's
+existing picker, variants, steering, acceptance and discard flow. The helper
+and development server run on the Gestalt server. Caddy is an existing,
+operator-managed installation and owns certificates. DNS/hostname setup stays
+with the operator. Gestalt supplies installation, capability health, runtime
+integration, session lifecycle and Mobile controls out of the box once those
+external prerequisites are configured. Playwright MCP is NOT a runtime
+prerequisite; repository Playwright is allowed for automated verification.
+
+Live takes exclusive ownership of the relay session. Only Live-driven model
+turns can edit during Live; ordinary chat, Autopilot, Org continuations and
+other writers cannot run concurrently. Starting Live must quiesce any active
+writer before ownership transfers. Stopping, diagnosis and recovery controls
+must work without asking the model. A project-scoped lock also prevents two
+relay sessions from running Live against the same canonical app root.
+
+Decisions fixed for executors
+-----------------------------
+- Use a dedicated preview hostname by default, separate from Mobile's exact
+  public origin. Operator supplies DNS; Caddy supplies TLS. Multiple Live
+  sessions use separate preview ports on that dedicated hostname initially,
+  bounded by an operator-configured port range. Same hostname as Mobile on
+  another port is unsupported initially: cookies are not port-scoped. The
+  auth milestone must verify Mobile cookies are host-only; if not, correct
+  their scope without invalidating passkeys. Preview cookies must also carry
+  a server-checked Live/port audience. Strip unrelated cookies before proxying
+  to application servers. Never send Mobile credentials to project content.
+- Configure a small bounded pool of preview ports, with explicit firewall instructions; do not bind an unbounded port range. Persist an origin-to-canonical-app assignment and do not recycle that origin for another app: service workers and browser storage can outlive Stop. Multiple apps must never share an origin. Report pool exhaustion explicitly; a future per-app-hostname design may expand capacity. Keep the dev app at / on its preview origin. Reserve /__gestalt_live/ for
+  helper and authorization endpoints; reject apps that collide with it.
+  Inject an explicit HTTPS public helper base URL; browser code must not call
+  localhost. Same-origin helper routing avoids third-party cookie reliance.
+- Preview authorization uses a short-lived, single-use launch grant obtained
+  through authenticated Mobile. Exchange it at the preview origin for a
+  Secure, HttpOnly, host-only cookie scoped to that Live instance and port.
+  Prefer a URL fragment followed by POST exchange; never put bearer grants
+  in query strings, logs, analytics or Referrer. Exchange page has no external
+  assets and uses no-store + no-referrer. Grant replay/wrong origin/expiry
+  fails closed. Every proxied request, including assets, SSE and WebSocket
+  handshake, checks the current authorization and instance state.
+- Revoke preview access on Stop, logout/device revocation, expiry and owner
+  loss. Bound open SSE/WebSocket lifetimes and actively close owned streams
+  on revocation; handshake-only checks are insufficient. Do not add passkey
+  export, recovery or a second hosted auth database administration surface.
+- Put the Caddy admin endpoint on a restricted Unix socket. Browser code,
+  project processes and ordinary agent tools must not reach it. A socket mode
+  alone is insufficient if the controller and agent share a UID: integrate
+  the existing managed permission boundary or a narrowly authorized broker,
+  and test denial from an actual project process. If isolation cannot be
+  proved, fail capability readiness; do not claim that localhost is safe.
+- Manual Caddy bootstrap documentation is REQUIRED. An automatic
+  'gestalt caddy install' editor is deferred; do not silently modify the
+  operator Caddyfile. Provide an include/snippet and exact validation/reload
+  instructions. Manage only explicitly namespaced Gestalt servers/routes via
+  the local API, with conflict detection and reconciliation after reload.
+- Canonical Impeccable state remains .impeccable/live under its supported app
+  root initially. IMPECCABLE_LIVE_CONFIG only overrides config, not all state.
+  Gestalt controller metadata belongs below workspace .gestalt/live; secrets
+  belong in private controller state, outside project-readable files.
+- Set IMPECCABLE_LIVE_COPY_AGENT=chat for every owned helper. Never auto-spawn
+  authenticated external Codex/Claude processes. Reuse the relay provider,
+  model, thinking depth and effective permissions. No unconditional sandbox
+  escalation copied from upstream skill instructions.
+- Initial implementation supports Codex Live dispatch. Kimi is explicitly unavailable with a
+  capability reason until its equivalent exclusive dispatch is implemented;
+  do not accidentally launch a Codex child for a Kimi session. Preserve
+  normal Kimi chat. This keeps existing provider capability boundaries.
+- Do not rebuild Impeccable's overlay editor. Mobile owns Start/Open, status,
+  Resume and Stop. Starting requires a registered loopback dev-server target,
+  not an arbitrary proxy URL. Reuse existing dev servers without killing them;
+  terminate only verified Gestalt-owned helper/child processes.
+
+Workspace map and prerequisites
+-------------------------------
+Workspace: /home/gestalt-dyne/gestalt-workspace. Each L1 owns ONE repository;
+other repositories are read-only inputs for that L1. There is one implementation
+writer at a time. No implicit permission to deploy or publish a release.
+
+Repositories and authoring bases (planning branch plan/impeccable-live in each):
+- gestalt: 5d9d3ac39988eb053352fe88e04e3943174ffad3; includes PR101,
+  https://github.com/dyne/gestalt/pull/101. Manager public/gestalt; tests/;
+  README.md. No repository AGENTS.md found at authoring.
+- gestalt-mobile: f5e0133eff01413d9110bc367ee98f99bd4292bd; includes PR99,
+  https://github.com/dyne/gestalt-mobile/pull/99. Read AGENTS.md first.
+- gestalt-agents: 4c4f4566ac968e1b7d425e825ba2ad9a8d9f8f1f; includes PR54,
+  https://github.com/dyne/gestalt-agents/pull/54. Read AGENTS.md first.
+- Upstream research: https://github.com/pbakaus/impeccable at
+  778c8a7b71ccd5bfe3ca6ac68c15d9d872d0f87d. /tmp/gestalt-impeccable-study is
+  disposable research only. During L2 create a durable workspace checkout
+  impeccable-live-upstream on feat/remote-live-base-url at the verified pin;
+  verify remote identity and pin before editing. Do not rely on /tmp surviving.
+
+Before first implementation, verify these bases and clean status. If upstream
+PRs merged, rebase clean topic branches onto their merged equivalents and
+record the new bases; preserve earlier unrelated commits. Do not reset dirty
+work. If an expected source anchor moved, locate its current equivalent,
+record the mapping in milestone evidence, then continue with equivalent scope.
+
+Mobile starting anchors: src/server/composition.ts (sole concrete constructor),
+src/server/app.ts (cross-cutting HTTP policy and registration),
+src/server/features/auth/{application/ports.ts,http/cookies.ts,register-routes.ts},
+src/server/features/sessions/{application/writer-acquisition.ts,application/ports.ts,lifecycle/use-case.ts,register-routes.ts},
+src/server/features/autopilot/{application/service.ts,application/policy.ts,domain/autopilot-session.ts},
+src/server/platform/codex/session-runtime.ts,
+src/client/RelayApp.svelte, src/client/components/AppHeader.svelte,
+src/client/features/sessions/relay-client.ts.
+New vertical slices belong in src/server/features/live-design/; external IO
+adapters in src/server/platform/live-design/; client in
+src/client/features/live-design/; shared wire schemas in src/shared/contracts/.
+Use narrow outbound ports. Do not import filesystem, Fastify or process APIs
+into domain/application code. Use the existing toast pipeline for failures.
+
+Upstream anchors: crates/live/src/{live_server.rs,browser_assets.rs,live_poll.rs,
+paths.rs,browser_open.rs,copy_edit_agent.rs,accept_verify.rs},
+crates/live/src/inject/, skill/scripts/live-browser.js, skill/reference/live.md.
+Search every served live asset for localhost assumptions, not only that JS file.
+Pinned source discovery may reveal filenames differ: record exact equivalents.
+The canonical poll command does more than HTTP polling: leases, preflight,
+accept/discard side effects and acknowledgements must survive integration.
+Observed events: generate, steer, accept, discard, prefetch, manual_edit_apply,
+variant_mount_failed, carbonize_cleanup, timeout, exit. Verify actual schema at
+pin and fixture it before writing adapters. Upstream SSE disconnection can
+trigger exit after about eight seconds: test mobile background/resume explicitly.
+
+Execution recipe for a fresh agent
+----------------------------------
+1. Read this preamble, assigned L1, its declared optional skills and repository
+   AGENTS.md. Do not read the whole workspace. Read named source anchors and
+   prior milestone deliverables. Confirm exact branch and git status.
+2. Read canonical installed org-plan execution instructions. Root owns
+   lifecycle/projection; executor owns one L1 diff. Start L1/L2 using helper,
+   never hand-edit statuses. Follow all children in order and report evidence.
+3. Implement each smallest behavior with meaningful regression tests, run
+   focused checks, inspect diff, then request the next lifecycle transition.
+   Do not mark DONE because code exists or a mocked test passes.
+4. Each L1 runs its owning repository's full mandatory gates below before
+   review. Record commands, exit codes, affected files, logs, screenshots if
+   applicable and unresolved limitations in workspace .gestalt/live-evidence/.
+   Redact secrets and content; evidence must not contain prompts/model output.
+5. After root ACCEPT, exactly one conventional commit per changed L1. Check
+   staged filenames immediately before committing; exclude this plan and all
+   .gestalt/*.org. Corrections before acceptance stay in that L1 diff.
+6. Do not proceed past a failed dependency, unproven security requirement or
+   unavailable external prerequisite by weakening a gate. Diagnose safe local
+   failures first. If genuinely blocked, root uses the canonical attention
+   protocol with a bounded request. Upstream merge is not a prerequisite:
+   an attributed pinned downstream patch is supported.
+
+Mandatory gates (run from owning repository; discover focused test scripts
+from package.json/Cargo.toml/tests rather than inventing test names):
+- Mobile: Node >=24; npm run format:check; npm run license:check;
+  npm run check; npm test; npm run lint; npm run build. Also npm run test:e2e
+  for browser-visible changes or end-to-end relay flows. Run each separately
+  when diagnosing failures. Formatting/license repair only after inspecting
+  resulting scope. Browser evidence must exercise real production auth too.
+- Manager: npm test (tests/run.sh) and git diff --check; run syntax/ShellCheck
+  gates from that suite. New install/lifecycle fixtures must avoid real home
+  and /etc mutations and prove rollback, paths with spaces and offline errors.
+- Agents: bash tests/run.sh and git diff --check; run changed installer/package
+  smoke gates declared by tests/ci.sh, manifests, checksum/frontmatter and
+  clean temporary distributable npx skills discovery with exact skill set.
+- Upstream: read Cargo workspace/package names. User instruction on
+  2026-10-08 supersedes every earlier formatting gate: do NOT run rustfmt or
+  cargo fmt at all. This is a focused patch, not a reformat. Preserve surrounding
+  style manually and avoid unrelated whitespace churn. Existing baseline
+  formatting diagnostics are historical evidence only, not an acceptance gate.
+  Retain all upstream tests and git diff --check; no test coverage is waived.
+  Run
+  cargo test for changed crates and full supported upstream test scripts;
+  exercise browser assets and each touched framework injection fixture.
+- Rust baseline runtime: the prepared serial workspace suite exceeded the
+  initial 600-second diagnostic cap while still progressing (240 passes, no
+  failed blocks). A timeout is incomplete evidence, not a source failure.
+  Allow a longer bounded run (initially 3600 seconds), monitor actual progress
+  and terminate only owned stalled processes after diagnosis. All required
+  upstream tests must still finish successfully; do not skip slow tests. Use
+  the prepared environment in .gestalt/live-evidence/l2/build-env.sh to avoid
+  repeating resolved temporary-root, browser, font and toolchain problems.
+- Network proof: isolated test Caddy with temporary config, restricted socket,
+  loopback upstreams, separate browser network namespace/container or remote
+  device, and a trusted test certificate. Never use the browser host's
+  localhost as a stand-in for the remote server. Local mock transport tests
+  supplement but cannot replace this proof. If host cannot create the test
+  topology, use CI with explicit prerequisites, retaining the gate as pending.
+
+Known historical baseline limitations (must refresh during execution): manager
+full suite previously had native Serena sandbox failures reproduced at clean
+HEAD; agents full suite previously failed context-mode checksum verification
+at unchanged HEAD. Mobile's previous full checks and 252 e2e tests passed.
+These are not waivers. Diagnose prerequisite/state problems before coding;
+fix a baseline regression in a separately authorized/reviewed prerequisite
+change, or block milestone acceptance. Never mark an L1 accepted on a red full
+suite. Authoring-run results are recorded below after fresh checks finish.
+Use npm_config_cache=/tmp/gestalt-npm-cache if home npm cache is read-only.
+This environment's browser library workaround was
+LD_LIBRARY_PATH=/tmp/mobile-upgrade-browser-libs/usr/lib/x86_64-linux-gnu;
+it is environment evidence, not a product dependency or durable CI assumption.
+
+Authoring baseline evidence — 2026-10-08
+----------------------------------------
+At the recorded repository heads, with no source modifications:
+- gestalt: npm test exited 1. Native Serena CLI cases dual-profile-child and
+  serena-only-resume failed with "Serena native sandbox exited". This matches
+  the previously reproduced baseline issue; current full suite is NOT green.
+  Log: /tmp/impeccable-plan-gestalt.log.
+- gestalt-agents: initial bash tests/run.sh stopped at skills discovery;
+  retry with npm_config_cache=/tmp/gestalt-npm-cache progressed through that
+  gate and exited 1 at tests/plugins/context-mode/test-upstream-vendor.sh.
+  Five vendor files differ from the checksum fixture: tests/core/deny-policy.test.ts,
+  tests/adapters/cursor-external-mcp-routing.test.ts, scripts/prepare-runtime.mjs,
+  tests/session/extract-transcript-usage-since.test.ts and
+  tests/integration/cross-project-attribution.test.ts. Do not regenerate checksums
+  blindly; establish intended vendor provenance first.
+  Log: /tmp/impeccable-plan-gestalt-agents-retry.log.
+- gestalt-mobile: format:check, license:check, check, npm test, lint, build and
+  test:e2e all passed (combined exit 0). Unit: 307 files passed, 2 skipped;
+  2,151 tests passed, 2 skipped. Browser: 252 passed. Browser library workaround
+  above was required in this environment. Log: /tmp/impeccable-plan-gestalt-mobile.log.
+- All three repository working trees were clean before the baseline. Generated
+  browser screenshots were restored/removed after the run; no implementation
+  edits were made. Topic branches plan/impeccable-live preserve prior PR heads.
+- Logs in /tmp are temporary diagnostics. This bounded summary is the durable
+  authoring evidence. Re-run owning-repository gates during execution.
+
+Acceptance checklist for the root
+--------------------------------
+Before terminal acceptance, inspect evidence for each item rather than inferring
+success from the number of tests:
+[ ] Runtime and skill install cleanly with pinned, compatible provenance.
+[ ] Existing Caddy sites survive route addition/removal, reload and restart.
+[ ] Operator controls DNS and Caddy controls valid HTTPS certificates.
+[ ] Preview app HTML, helper, assets, source, SSE and HMR all require auth.
+[ ] Same-host/different-port cookie risk is tested and unsafe setup rejected.
+[ ] Project/agent processes cannot access Caddy admin or Mobile credentials.
+[ ] Browser on a separate network side completes the real Live workflow.
+[ ] Live owns the entire session and canonical app root, with one poll owner.
+[ ] Ordinary chat, Autopilot and Org continuations are blocked server-side.
+[ ] Start/Stop/restart races preserve source journals and manual control intent.
+[ ] Existing dev servers are never killed unless Gestalt owns their process.
+[ ] No unmanaged external agent or Playwright MCP runtime dependency appears.
+[ ] Upstream issue/PR URL and exact downstream adaptation are recorded.
+[ ] UI screenshots cover both viewports and font scales; all mandatory gates pass.
+[ ] Independent review inherits root model/depth and has no unresolved P0/P1.
+
+Independent final review
+------------------------
+After every L1 is REVIEWED and the last executor has terminated, spawn one
+fresh depth-one final reviewer: agent_type=default, task_name=final_review,
+fork_turns=none. OMIT model and reasoning_effort so both inherit root settings.
+This explicit user requirement overrides the installed 2.16.1 skill's stale
+hard-coded org-plan-reviewer/Sol instruction. Supply the plan, repository bases,
+commit ranges, threat boundary, evidence and all known limitations. Review all
+repository branches and the upstream adaptation. Require severity-ranked
+findings and no unresolved P0/P1. Follow canonical sole-writer correction and
+retest rules, a separate conventional correction commit in each affected repository if needed. Do not
+claim completion from L1 checks alone. Publish PRs/releases only when separately
+authorized; the upstream issue/PR in L2 is already explicitly requested.
+
+Reference sources (recheck against pinned versions during execution)
+------------------------------------------------------------------
+https://caddyserver.com/docs/api
+https://caddyserver.com/docs/caddyfile/options#admin
+https://caddyserver.com/docs/caddyfile/directives/reverse_proxy
+https://caddyserver.com/docs/caddyfile/directives/forward_auth
+https://github.com/pbakaus/impeccable
+
+* DONE [#A] Freeze integration contracts and threat boundaries
+:PROPERTIES:
+:ID: live-contracts
+:SKILLS: $vertical-slice-architecture $security-threat-model
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-08T20:15:22.937Z
+:UPDATED_AT: 2026-10-08T20:45:57.301Z
+:COMPLETED_AT: 2026-10-08T20:45:57.301Z
+:ELAPSED_SECONDS: 1834
+:END:
+- Effort :: Large; one fresh executor, 3 sequential L2 tasks.
+- Goal :: Make subsequent work mechanical and falsifiable.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: None. Allowed scope: docs/impeccable-live-design.md and contract fixtures under test/; read existing auth, writer acquisition and Autopilot anchors. No production implementation. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): freeze integration contracts and threat boundaries.
+
+** DONE [#A] Specify origin and authorization protocol
+:PROPERTIES:
+:ID: live-contracts-origins
+:STARTED_AT: 2026-10-08T20:16:28.540Z
+:UPDATED_AT: 2026-10-08T20:22:14.798Z
+:COMPLETED_AT: 2026-10-08T20:22:14.798Z
+:ELAPSED_SECONDS: 346
+:END:
+- Why :: Preview code is untrusted relative to Mobile controls.
+- Change :: Write request/sequence tables for launch grant, exchange, proxy authorization, revocation and logout. Specify cookie names/attributes/audiences, 60-second single-use grant lifetime and bounded preview lease renewal while owner remains authorized. Check host-only Mobile cookies, Origin/CSRF requirements and same-host-port rejection. Map each trust boundary to a later named test.
+- Tests :: Review protocol examples for unauthenticated HTML/source/assets/HMR, cross-session access, stolen/replayed/expired grants, different ports, sibling host cookies and Caddy admin access.
+- Done when :: ADR fixes concrete fields, statuses, expiry/renewal rules and negative cases; no unspecified auth choice remains.
+
+** DONE [#A] Specify durable Live state and ownership
+:PROPERTIES:
+:ID: live-contracts-state-contract
+:STARTED_AT: 2026-10-08T20:23:39.735Z
+:UPDATED_AT: 2026-10-08T20:33:24.735Z
+:COMPLETED_AT: 2026-10-08T20:33:24.735Z
+:ELAPSED_SECONDS: 585
+:END:
+- Why :: A UI flag cannot prevent concurrent writers.
+- Change :: Define idle -> starting -> active -> stopping -> idle; interrupted recoveryRequired/error states retain blocking ownership until reconciliation. Store owner relay/app identity, generation fence, process ownership, route IDs, prior control state and journal references. List every user/Autopilot/Org/tool dispatch entry point and gate. Normal chat receives 409 LIVE_MODE_ACTIVE; no hidden prompt queue. Start during busy work returns an explicit busy result until safe quiescence.
+- Tests :: Table-test legal transitions and simultaneous start/stop/restart cases using contract fixtures; verify a manually disabled Autopilot can never be re-enabled from an old snapshot.
+- Done when :: All dispatch entry points and recovery outcomes are listed, with one authoritative state owner and no ambiguous resume semantics.
+
+** DONE [#A] Record compatibility and acceptance matrix
+:PROPERTIES:
+:ID: live-contracts-baseline
+:STARTED_AT: 2026-10-08T20:34:59.957Z
+:UPDATED_AT: 2026-10-08T20:43:48.584Z
+:COMPLETED_AT: 2026-10-08T20:43:48.584Z
+:ELAPSED_SECONDS: 528
+:END:
+- Why :: Later agents need exact tested inputs.
+- Change :: Record tested Node/Caddy/Impeccable/Rust requirements, repository bases and provider support; choose Caddy API minimum features, supported OS architectures and first framework fixture. Capture fresh full baseline results without altering unrelated code.
+- Tests :: Run owning repository mandatory gates; inspect manager/agents baseline logs from authoring and assign any blocking prerequisite explicitly.
+- Done when :: Contract document contains source paths, endpoint/wire examples, dependency versions and a test-to-requirement matrix; baseline failures remain visible blockers.
+
+* DONE [#A] Adapt Impeccable for an explicit remote public URL
+:PROPERTIES:
+:ID: upstream-remote-live
+:SKILLS: $impeccable
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-08T20:46:35.339Z
+:UPDATED_AT: 2026-10-09T02:10:29.097Z
+:COMPLETED_AT: 2026-10-09T02:10:29.097Z
+:ELAPSED_SECONDS: 19433
+:END:
+- Effort :: Large; one fresh executor, 3 sequential L2 tasks.
+- Goal :: Remove browser-localhost assumptions without forking the editor.
+- Notes :: Owner repository: impeccable-live-upstream. Dependencies: L1 contract document. Allowed scope: Upstream Rust live crate, canonical live browser assets, live reference docs and upstream tests; no Gestalt repository changes. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): adapt impeccable for an explicit remote public url.
+
+** DONE [#A] Create reproducible upstream checkout and fixtures
+:PROPERTIES:
+:ID: upstream-remote-live-pin
+:STARTED_AT: 2026-10-08T20:53:20.569Z
+:UPDATED_AT: 2026-10-08T21:39:39.566Z
+:COMPLETED_AT: 2026-10-08T21:39:39.566Z
+:ELAPSED_SECONDS: 2778
+:END:
+- Why :: A temporary study clone is not an execution dependency.
+- Change :: Clone verified upstream into workspace, checkout recorded pin and create topic branch. Capture actual CLI version, protocol/event schemas and command help. Add a tiny supported demo fixture suitable for remote proof; record license and build commands.
+- Tests :: Run clean upstream baseline; verify all served assets and CLI output correspond to the pin.
+- Done when :: A durable checkout, clean baseline and exact event/CLI fixtures exist.
+
+** DONE [#A] Implement configurable public helper base URL
+:PROPERTIES:
+:ID: upstream-remote-live-public-url
+:STARTED_AT: 2026-10-08T21:41:02.577Z
+:UPDATED_AT: 2026-10-08T22:02:09.635Z
+:COMPLETED_AT: 2026-10-08T22:02:09.635Z
+:ELAPSED_SECONDS: 1267
+:END:
+- Why :: Remote browsers cannot use the server localhost address.
+- Change :: Add one validated explicit public-base-URL setting threaded through Rust injection and ALL browser helper/asset/SSE/fetch URLs. Preserve local defaults; support HTTPS origin plus reserved path prefix and correct trailing slash handling. Keep bind address loopback. Add remote launch behavior that reports URL rather than opening a server browser. Do not weaken token checks, CSP or CORS.
+- Tests :: Test local default, HTTPS prefix, trailing slashes, invalid/userinfo/non-http URLs, all browser asset requests, SSE reconnect and framework injection. Search generated assets for hardcoded localhost dependencies.
+- Done when :: One documented setting supports the complete overlay workflow from a remote origin; existing local behavior still passes upstream tests.
+
+** DONE [#A] Publish minimal upstream compatibility proposal
+:PROPERTIES:
+:ID: upstream-remote-live-upstream-proposal
+:STARTED_AT: 2026-10-08T22:03:50.956Z
+:UPDATED_AT: 2026-10-09T02:05:25Z
+:COMPLETED_AT: 2026-10-09T02:05:25Z
+:ELAPSED_SECONDS: 14494
+:END:
+- Why :: An attributable upstream patch reduces maintenance.
+- Change :: Write and submit a focused upstream issue or PR for configurable public URL and remote browser launch using the tested patch. Include reproduction, API contract and no-Playwright-runtime explanation. Record URL and pin/patch hash. Do not wait for merge to proceed; package downstream adaptation explicitly if necessary.
+- Tests :: Run complete upstream gates; verify proposal contains no deployment secrets and downstream can reproduce patch against the pin.
+- Done when :: Upstream issue or PR URL and a reproducible tested patch are recorded; publication permission failure is reported without pretending submission succeeded.
+
+* DONE [#A] Install and diagnose a managed Impeccable runtime
+:PROPERTIES:
+:ID: live-runtime
+:SKILLS: $bash-defensive-patterns
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-09T02:11:00.435Z
+:UPDATED_AT: 2026-10-09T02:11:00.435Z
+:ELAPSED_SECONDS: 0
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Provide a pinned helper without unmanaged first-run downloads.
+- Notes :: Owner repository: gestalt. Dependencies: L2 tested pin and patch; L1 contracts. Allowed scope: public/gestalt, tests/, README.md, dedicated .github/workflows/ runtime build/release and test-only workflows, scripts/ runtime packaging helpers, and vendor/impeccable/ pinned patch/provenance inputs; follow existing component installer and private state conventions. Preserve existing Pages deployment workflow. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): install and diagnose a managed impeccable runtime.
+
+** DONE [#A] Add managed runtime install/update lifecycle
+:PROPERTIES:
+:ID: live-runtime-install
+:STARTED_AT: 2026-10-09T02:15:28.049Z
+:UPDATED_AT: 2026-10-10T10:53:19.783Z
+:COMPLETED_AT: 2026-10-10T10:53:19.783Z
+:ELAPSED_SECONDS: 117471
+:END:
+- Why :: Bundled skills alone do not install a compatible executable.
+- Change :: Add impeccable install/status/doctor/uninstall commands following existing manager component patterns. Build accepted patched Impeccable from pinned source in dedicated CI, verify bounded actual startup and clean shutdown, upload archive/checksum/provenance artifacts, and provide trusted immutable release publication. Install the verified CI-produced compatible binary and adaptation atomically with SHA256/provenance/license; define supported platform mapping and report unsupported architectures. Reuse shared manager install flow for out-of-box availability without executing project hooks. Supersede the local-candidate upload procedure.
+- Tests :: Fixture tests cover successful install, idempotence, corrupt checksum, interrupted upgrade rollback, offline download, spaces, no sudo and unsupported platform. Validate workflow syntax, pinned source/patch reconstruction, build/start smoke and packaging/provenance checks. Do not run full upstream Impeccable suites in Gestalt CI. Verify published CI bytes and installer behavior against those bytes. Run unchanged full manager suite in a test-only hosted job; no release or Pages side effects for PR builds.
+- Done when :: Managed install yields the exact compatible executable; failures preserve prior healthy version and never silently use a random PATH binary.
+
+** DONE [#A] Expose bounded machine-readable capability health
+:PROPERTIES:
+:ID: live-runtime-doctor
+:STARTED_AT: 2026-10-10T11:35:31.479Z
+:UPDATED_AT: 2026-10-10T11:38:01.038Z
+:COMPLETED_AT: 2026-10-10T11:38:01.038Z
+:ELAPSED_SECONDS: 149
+:END:
+- Why :: Mobile needs reliable prerequisites rather than guesswork.
+- Change :: Add JSON health/version/capability output, including public URL support, chat-copy mode and protocol compatibility. Keep runtime health distinct from Caddy/DNS/app readiness. Document default disable/uninstall behavior and preserve user project state.
+- Tests :: Test missing binary, incompatible protocol, failed health probe, disabled component and clean uninstall; assert no secrets or environment dump.
+- Done when :: Mobile can distinguish absent/incompatible/ready runtime without starting Live; manager full gates pass.
+
+* DONE [#A] Document and diagnose integration with existing Caddy
+:PROPERTIES:
+:ID: caddy-bootstrap
+:SKILLS: $bash-defensive-patterns
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-10T17:26:29Z
+:UPDATED_AT: 2026-10-10T18:46:53Z
+:COMPLETED_AT: 2026-10-10T18:46:53Z
+:ELAPSED_SECONDS: 4824
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Give operators exact setup instructions without replacing their server configuration.
+- Notes :: Owner repository: gestalt. Dependencies: L1 trust contract; L3 manager doctor structure. Allowed scope: README.md, new docs/caddy-live.md and examples/, public/gestalt diagnostic-only additions, tests/. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): document and diagnose integration with existing caddy.
+
+** DONE [#A] Provide validated manual Caddy bootstrap
+:PROPERTIES:
+:ID: caddy-bootstrap-snippet
+:END:
+- Why :: Existing sites must survive installation and runtime reloads.
+- Change :: Write a minimal import/snippet plus exact /etc/caddy/Caddyfile integration, restricted admin socket ownership, preview hostname/port range and firewall/TLS instructions. Explain Caddyfile vs JSON admin configuration persistence, reload reconciliation, DNS responsibility and rollback. No automatic /etc edits; no public admin listener.
+- Tests :: Run caddy adapt and validate in isolated temp fixtures with an unrelated site; validate snippet standalone in its documented enclosing context and repeated import diagnostics.
+- Done when :: Copyable instructions preserve unrelated sites and specify controller socket access without granting project processes access.
+
+** DONE [#A] Diagnose safe prerequisites without mutation
+:PROPERTIES:
+:ID: caddy-bootstrap-caddy-health
+:END:
+- Why :: Unclear bootstrap errors otherwise surface as broken browser links.
+- Change :: Add read-only caddy health checks for version/admin transport/access, configured preview hostname and permitted ports; separate DNS/TLS reachability from runtime checks. Detect insecure TCP admin configuration or absent process isolation as not ready. Document service reload/restart recovery ownership.
+- Tests :: Test absent Caddy, inaccessible socket, permissive/insecure config, wrong host, port conflict and valid isolated fixture; assert doctor never loads/replaces config.
+- Done when :: Actionable bounded readiness output is available; full manager suite and diff checks pass.
+
+* DONE [#A] Implement authenticated preview grants and authorization
+:PROPERTIES:
+:ID: preview-auth
+:SKILLS: $vertical-slice-architecture $security-best-practices
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-10T19:00:10Z
+:UPDATED_AT: 2026-10-10T19:31:01Z
+:COMPLETED_AT: 2026-10-10T19:31:01Z
+:ELAPSED_SECONDS: 1851
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Protect app content as well as helper endpoints before exposing routes.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L1 contract, L3 runtime capability, L4 configuration shape. Allowed scope: features/live-design launch/exchange/authorize slices, platform adapters, auth integration and shared contracts; composition/app registration only as needed. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): implement authenticated preview grants and authorization.
+
+** DONE [#A] Implement one-time launch and preview session grants
+:PROPERTIES:
+:ID: preview-auth-grant
+:STARTED_AT: 2026-10-10T19:00:10Z
+:UPDATED_AT: 2026-10-10T19:02:02Z
+:COMPLETED_AT: 2026-10-10T19:02:02Z
+:ELAPSED_SECONDS: 112
+:END:
+- Why :: HTML can contain the Impeccable bearer token.
+- Change :: Implement authenticated owner-scoped launch and fragment-to-POST exchange using L1 schema; private durable hashed token storage, single-use atomic consumption, audience/session/port binding, bounded lease and renewal. Apply no-store/no-referrer and strict origin validation; sanitize return destinations.
+- Tests :: Endpoint tests for unauthenticated, unauthorized owner, replay, concurrent exchange, expiry, wrong origin/port/session, logout and no secrets in URL/logs.
+- Done when :: Valid owner gets a private preview cookie; all negative cases fail closed without exposing app HTML.
+
+** DONE [#A] Authorize every stream and proxied path
+:PROPERTIES:
+:ID: preview-auth-authorize
+:STARTED_AT: 2026-10-10T19:03:15Z
+:UPDATED_AT: 2026-10-10T19:24:04Z
+:COMPLETED_AT: 2026-10-10T19:24:04Z
+:ELAPSED_SECONDS: 1249
+:END:
+- Why :: Static assets and long-lived connections also leak data.
+- Change :: Provide an internal narrow authorization adapter for preview proxy requests with validated instance/path metadata. Revoke on owner logout/device removal/Stop; track owned connections so revocation closes streams. Fix host-only Mobile cookie scope if necessary without changing RP ID. Strip unrelated cookies and control credentials before app forwarding.
+- Tests :: Test HTML, source, assets, SSE, HMR websocket, forged headers, cross-session ports and existing Mobile auth regressions. Prove revoked open connections close within documented bound.
+- Done when :: Proxy adapter authorizes all request types and cannot act as an open authentication oracle; Mobile mandatory gates pass.
+
+* DONE [#A] Manage isolated Caddy routes and prove remote access
+:PROPERTIES:
+:ID: caddy-routes
+:SKILLS: $vertical-slice-architecture $playwright
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-10T19:36:20Z
+:UPDATED_AT: 2026-10-10T21:34:20.966Z
+:COMPLETED_AT: 2026-10-10T21:34:20.966Z
+:ELAPSED_SECONDS: 7080
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Demonstrate authenticated remote preview before investing in Mobile controls.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L2 patched helper, L4 bootstrap, L5 auth. Allowed scope: platform/live-design Caddy adapter and preview proxy, live-design application ports, isolated integration fixtures. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): manage isolated caddy routes and prove remote access.
+
+** DONE [#A] Create owned routes with conflict-safe reconciliation
+:PROPERTIES:
+:ID: caddy-routes-routes
+:END:
+- Why :: Caddy is shared with unrelated applications.
+- Change :: Create only namespaced dynamic server/route IDs for configured hostname+port leases; route reserved helper prefix and app root to explicitly registered loopback targets via an authenticated gateway. Keep Caddy admin interaction in controller/broker boundary. Use ETag/If-Match or documented equivalent compare/retry; bounded conflict retries. Reconcile after Caddy reload/restart from durable desired state, never full config replacement.
+- Tests :: Real temp Caddy tests preserve unrelated routes; concurrent updates, malformed config rollback, missing ID, port collision/pool exhaustion, persisted app-origin assignment, Caddyfile reload, restart and repeated teardown. Verify a stopped app service worker cannot intercept a different app because origins are never reassigned. Assert app targets cannot choose arbitrary localhost services.
+- Done when :: Owned route create/read/delete and recovery are idempotent and never erase another site; actual project process cannot use admin socket.
+
+** DONE [#A] Prove browser and server are different machines
+:PROPERTIES:
+:ID: caddy-routes-remote-proof
+:STARTED_AT: 2026-10-10T21:14:31.811Z
+:UPDATED_AT: 2026-10-10T21:29:15.912Z
+:COMPLETED_AT: 2026-10-10T21:29:15.912Z
+:ELAPSED_SECONDS: 884
+:END:
+- Why :: A localhost-only demo would conceal the original integration defect.
+- Change :: Use isolated browser network topology and trusted TLS test hostname to open a real demo app with patched Impeccable. Complete authenticated launch, overlay assets, SSE event, dev-server HMR websocket and revoke. Capture network destinations and sanitized evidence; add automated reproducible harness.
+- Tests :: Browser network cannot reach helper loopback directly. Screenshots: remote-preview-authenticated and remote-preview-denied at 390x844 and 1440x900, 100% font. Unauthenticated HTML/assets/helper/HMR all denied; trusted cert validation on.
+- Done when :: Evidence proves no browser-localhost request, working HMR/SSE and immediate revoked access through real Caddy; gate blocks later milestones on failure.
+
+* DONE [#A] Enforce exclusive session and app ownership
+:PROPERTIES:
+:ID: exclusive-live
+:SKILLS: $vertical-slice-architecture
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-10T21:37:35.136Z
+:UPDATED_AT: 2026-10-10T22:37:55.412Z
+:COMPLETED_AT: 2026-10-10T22:37:55.412Z
+:ELAPSED_SECONDS: 3620
+:END:
+- Effort :: Large; one fresh executor, 3 sequential L2 tasks.
+- Goal :: Make session takeover authoritative even during races and restart.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L1 state contract, L6 working transport. Allowed scope: live-design domain/application, sessions writer acquisition/runtime dispatch, autopilot policy/service, persistence adapter. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): enforce exclusive session and app ownership.
+
+** DONE [#A] Add durable ownership and generation fences
+:PROPERTIES:
+:ID: exclusive-live-ownership
+:STARTED_AT: 2026-10-10T21:37:35.136Z
+:UPDATED_AT: 2026-10-10T21:48:17.358Z
+:COMPLETED_AT: 2026-10-10T21:48:17.358Z
+:ELAPSED_SECONDS: 642
+:END:
+- Why :: Two sessions or stale callbacks must not write the same app.
+- Change :: Implement L1 state machine with transactional app-root and relay ownership, canonical path resolution, owner generation and versioned persistence. Start must register valid devserver then quiesce existing writers; busy admission is explicit and does not terminate unowned processes. Roll back partial start in reverse acquisition order.
+- Tests :: Tests for simultaneous starts across sessions, symlink aliases, double start, stale generation, busy executor and crash at each acquisition step.
+- Done when :: At most one authorized Live writer owns an app; no route is exposed before admission and auth readiness.
+
+** DONE [#A] Gate all ordinary and background dispatch
+:PROPERTIES:
+:ID: exclusive-live-dispatch-gates
+:STARTED_AT: 2026-10-10T21:49:35.874Z
+:UPDATED_AT: 2026-10-10T22:09:22.111Z
+:COMPLETED_AT: 2026-10-10T22:09:22.111Z
+:ELAPSED_SECONDS: 1186
+:END:
+- Why :: Disabling the composer leaves server-side races.
+- Change :: Enforce ownership at central dispatch plus every bypass discovered in L1: ordinary prompts/resume/model actions, Autopilot, Org checkpoint continuations and agent followups. Allow only fenced Live event dispatch and non-model Stop/recovery. In-flight writers must reach safe cancellation/idle before Live active. Preserve existing provider/permissions/model.
+- Tests :: Race tests use actual dispatch adapters and fake clocks: continuation due during start, delayed tool result, ordinary API send, child executor active, repeated wake, stale release. Assert no forbidden model/process call occurs.
+- Done when :: Ordinary calls receive LIVE_MODE_ACTIVE; background work remains held; authorized Live turns still work; Kimi capability is explicitly unavailable.
+
+** DONE [#A] Restore prior controls without overriding user intent
+:PROPERTIES:
+:ID: exclusive-live-control-restore
+:STARTED_AT: 2026-10-10T22:10:18.533Z
+:UPDATED_AT: 2026-10-10T22:24:37.186Z
+:COMPLETED_AT: 2026-10-10T22:24:37.186Z
+:ELAPSED_SECONDS: 858
+:END:
+- Why :: An old Autopilot snapshot must not undo manual Off.
+- Change :: Record control version at takeover; on clean stop release ownership and restore only still-valid prior intent. Leave interrupted states recoveryRequired and blocked until cleanup reconciles. Explicit manual Off during Live wins. Do not emit fake Org checkpoints to pause/resume.
+- Tests :: Test prior on/off, manual Off while active, restart before release, stale stop callback and no duplicate continuation after resume.
+- Done when :: State restoration is deterministic and manual choices persist; full Mobile gates pass.
+
+* DONE [#A] Implement lifecycle adapters and prove host-side launch
+:PROPERTIES:
+:ID: live-event-bridge
+:SKILLS: $vertical-slice-architecture $impeccable
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-10T22:40:32.947Z
+:UPDATED_AT: 2026-10-12T07:28:04.173Z
+:ELAPSED_SECONDS: 118051
+:END:
+- Effort :: Large; retain executor l8, 4 sequential L2 tasks.
+- Goal :: Deliver tested canonical lifecycle adapters and establish the supported host-side launch foundation without enabling unverified production admission.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L7 exclusivity; L2 event/CLI fixtures; approved host-side proof. Allowed scope: platform/live-design process/poll/controller adapters, live-design use cases and tests, narrow runtime wiring, related README/design contract, scoped hosted proof fixture/workflow and evidence-directory test seam. Preserve existing uncommitted work based on 7e8cdb1. L8.1–L8.3 criteria apply to adapter/use-case contracts; their real owning-session composition and end-to-end obligations remain mandatory in L11. Do not claim callbacks or fixture policies establish production admission. Keep Start unavailable until L11 gates pass. Other repositories are read-only. Accept only after all children, current full Mobile/e2e gates, independently reviewed complete diff and recorded host proof pass. No review or state is inherited from this scope revision. Consolidate any intended delivered proof changes with the complete L8 diff into exactly one post-ACCEPT conventional commit; preserve remote-only diagnostic provenance separately. Proposed commit: feat(live): add lifecycle adapters and verified host launch foundation.
+
+** DONE [#A] Own helper startup and journal recovery
+:PROPERTIES:
+:ID: live-event-bridge-helper-process
+:END:
+- Why :: Process reuse needs verified ownership, not matching a port.
+- Change :: Launch verified binary loopback-only with configured public URL and IMPECCABLE_LIVE_COPY_AGENT=chat, current effective permissions and bounded sanitized logs. Store process identity robust to PID reuse; preserve upstream config/journal and temporary inject rollback. Reuse external app server without ownership claims. Use live-status/resume/complete commands per actual pinned CLI.
+- Tests :: Process tests: occupied port, failed injection, helper early exit, PID reuse, stale metadata, server restart, config path with spaces, no browser opener on server, no nested codex/claude.
+- Done when :: Only owned helper is started/stopped; project modifications are journalled and recoverable; readiness never guesses from PID alone.
+
+** DONE [#A] Bridge one canonical poll owner into fenced relay turns
+:PROPERTIES:
+:ID: live-event-bridge-poll-events
+:END:
+- Why :: Raw /poll bypasses accept/discard semantics.
+- Change :: Reuse canonical CLI polling with its preflight, lease, acknowledgement and side effects. Add durable bounded event inbox keyed by upstream event ID plus generation (if upstream lacks stable IDs, implement and test a compatible identity/lease adaptation before enabling retries); one poll owner per app. Serialize generate/steer/manual edits through Live-only relay dispatch; handle all pinned event kinds. Track received/dispatched/applied/acknowledged outcomes and reconcile ambiguous crash states before retry. Never claim exactly-once edits without evidence.
+- Tests :: Contract tests from L2 fixtures cover every event, duplicate delivery, out-of-order/stale generations, timeout, lost response after apply, lease expiry and restart. Assert accept/discard effects occur once or enter explicit recovery instead of blind replay.
+- Done when :: Canonical workflow is preserved and all Live model work uses existing session authorization/provider without concurrent normal turns.
+
+** DONE [#A] Implement idempotent Stop and Resume
+:PROPERTIES:
+:ID: live-event-bridge-stop-recover
+:END:
+- Why :: Mobile tab suspension is common and cleanup must be reliable.
+- Change :: Make Stop cancel poll/model work safely, revoke access first, close streams, remove owned routes, finish/discard via upstream journal and clean injection before release. Preserve recoverable errors instead of deleting evidence. Define disconnect/background grace consistent with upstream or add a documented adaptation; explicit Stop always terminates. Resume reconciles upstream journal, source postconditions and routes before regrant.
+- Tests :: Tests for browser background beyond upstream eight-second disconnect behavior, network loss, helper death, crash during accept, partial route deletion, repeated Stop and inability to complete cleanup.
+- Done when :: No silent edits after Stop; unresolved cleanup retains recoveryRequired lock; clean stop restores controls exactly once.
+
+** DONE [#A] Validate host launch and record production admission dependencies
+:PROPERTIES:
+:ID: live-event-bridge-host-foundation
+:END:
+- Why :: The proven host-side launch path removes a false native prerequisite while MCP and production integration remain unfinished.
+- Change :: Reconcile the existing 25-file diff and host-proof evidence with this revised L8 contract. Update the repository's Live architecture/readiness documentation to identify trusted host Mobile/private stdio, native tool policies, the completed controller election/poll/revocation foundations and explicit L9–L11 admission dependencies. Preserve protected paths and the unavailable production Start behavior. Record exact proof source/head/artifact and its exclusions; retain actual full native/Caddy gates in their proper later milestone rather than replacing them with the narrow diagnostic workflow. Reconcile provisional remote test commits without importing unrelated source or asserting they represent the current complete L8 tree.
+- Tests :: Verify artifact checksum and head, ordinary/public success, same-UID protected-file/socket and tested proc/FD denial, host700 versus sandbox000 daemon directory, and owned shutdown. Reuse current successful proof when the launcher/profile/probe inputs remain unchanged; otherwise rerun on a supported host. Run focused elected-controller, polling, Stop/Resume and authorization regressions affected by the final L8 diff, plus document/syntax/diff checks. Full Mobile/e2e gates remain required before L8 review.
+- Done when :: Current adapter evidence and independently verified host-proof provenance are explicit; native model tools, MCP, production descendant admission and real Live flow are neither claimed complete nor waived and are assigned to L9–L11. L8 is ready for its full-suite/root review stage without exposing production Start.
+
+* DONE [#A] Establish trusted host policy and confined process launch
+:PROPERTIES:
+:ID: live-host-policy
+:SKILLS: $bash-defensive-patterns
+:REVIEW_STATUS: REVIEWED
+:STARTED_AT: 2026-10-12T14:36:41Z
+:UPDATED_AT: 2026-10-17T14:01:40Z
+:COMPLETED_AT: 2026-10-17T14:01:40Z
+:ELAPSED_SECONDS: 429899
+:END:
+- Effort :: Large; one fresh executor l9, 2 sequential L2 tasks.
+- Goal :: Supply a verifiable manager-owned policy and launch contract that retains host controller authority while confining every admitted project subprocess.
+- Notes :: Owner repository: gestalt. Dependencies: accepted L8 host foundation and L3/L4 managed runtime/Caddy bootstrap. Read public/gestalt Mobile bootstrap and native-state-aware Serena shim, manager tests, L8 proof and host-controller-investigation. Allowed scope: public/gestalt, focused launcher/policy fixtures, docs/caddy-live.md, compatibility/doctor outputs and isolated test-only CI. Other repositories are read-only. Reuse existing host-started Mobile; do not add a second controller/daemon unless evidence requires it. Define the exact CLI/JSON/error/version contract for L10 and L11 before their work. Record policy/config provenance outside project-writable state, preserve effective user restrictions, and fail Live readiness closed when launch authority cannot be established. Do not edit production /etc, actual user config or unowned daemon directories. Full manager suite, focused actual-native proof and root review precede one commit: feat(live): establish trusted host policy and confined launch.
+
+** DONE [#A] Define and implement authoritative launch policy inputs
+:PROPERTIES:
+:ID: live-host-policy-contract
+:STARTED_AT: 2026-10-14T17:06:36Z
+:UPDATED_AT: 2026-10-17T10:02:41.958Z
+:COMPLETED_AT: 2026-10-17T10:02:41.958Z
+:ELAPSED_SECONDS: 233765
+:END:
+- Why :: Thread settings, executable identity or a claimed sandbox callback cannot prove the effective restrictions of an existing process.
+- Change :: Define and implement the smallest trusted manager contract for native named profiles and/or native sandbox-state dispatch. Compose private auth/controller/Caddy exclusions with the existing effective policy without granting extra access. Record binary/version, effective policy/config digest, canonical app identity, process birth and applicable namespace/UID identity in controller-owned receipts. Specify how configuration, profile, permissions and component-version changes invalidate receipts. Keep controller-only operations separate from untrusted tool/process dispatch, with no project-writable policy or arbitrary command/credential forwarding. Account for inherited FDs, environment secrets and hook/project-config injection. Distinguish capability diagnosis from launching Live.
+- Tests :: Fixtures cover spaces, invalid/missing/incompatible profiles, tampered policy/receipt, private paths, stale PID/birth, symlinks, user-config precedence, attempted permission broadening and unsupported host namespace. Assert missing prerequisites produce a bounded unavailable reason, never silently fall back to full access or an arbitrary binary.
+- Done when :: L10/L11 have an exact tested launch/config/receipt contract and compatibility probe; normal non-Live manager behavior remains intact and no secret/config content is logged.
+
+** DONE [#A] Prove confined subprocess launch on a supported host
+:PROPERTIES:
+:ID: live-host-policy-native-proof
+:STARTED_AT: 2026-10-14T17:36:37Z
+:UPDATED_AT: 2026-10-17T13:58:17.402Z
+:COMPLETED_AT: 2026-10-17T13:58:17.402Z
+:ELAPSED_SECONDS: 246100
+:END:
+- Why :: Native metadata is useful only when the actual launched process and descendants enforce it.
+- Change :: Implement/reuse a host-side native-state-aware launcher following the existing Serena pattern. Launch owned helpers and test project children through native sandbox construction from host context, not through a nested project app-server. Define per-call or per-policy lifetime rules so persistent workers cannot retain broader authority after a permission/config change. Keep daemon RPC masks intact and controller state private. Document supported host bootstrap and ownership/reaping behavior without modifying the running installation.
+- Tests :: Actual native0.161-compatible pinned-host probes demonstrate public reads/writes and ordinary commands plus controller/auth/Caddy/daemon and proc/FD-alias denial, child/grandchild containment, policy narrowing, stale-receipt refusal, no inherited controller FDs/secrets, and owned-only cleanup. Test rollback/offline/paths-with-spaces and run unchanged full manager npm test plus git diff --check on a supported host; local nested-sandbox failures are not waivers. Retain command, exact tree, binary, policy and artifact provenance.
+- Done when :: The launcher enforces the policy for actual subprocess lifetimes and publishes a usable contract for package and Mobile integration; full owning-repository gates and native proof are green.
+
+* DONE [#A] Confine packaged MCP execution and trusted configuration
+:PROPERTIES:
+:ID: live-mcp-confinement
+:SKILLS: $modern-javascript-patterns $bash-defensive-patterns
+:REVIEW_STATUS: REVIEWED
+:END:
+- Effort :: Large; one fresh executor l10, 2 sequential L2 tasks.
+- Goal :: Prevent packaged or project-configured tools from bypassing Live's effective native permission boundary.
+- Notes :: Owner repository: gestalt-agents. Dependencies: accepted L9 launch/policy contract and L8 evidence. Read AGENTS.md, canonical context-mode/Org MCP manifests and launch paths, prepared runtime/config generation and package provenance tests. Allowed scope: canonical plugin runtime wrappers/configuration, necessary context-mode interpreter and Org tool boundaries, installer/preparation, checksums/provenance, focused regression and package tests. Other repositories are read-only. Do not claim thread sandbox metadata alone confines an MCP process. Preserve standard non-Live behavior and mandatory controller-backed Org lifecycle operations through narrow typed authority; no generic host filesystem/process bypass. Coordinate required manager interface solely through the accepted L9 contract. Full Agents and package/discovery gates plus actual native proof precede one commit: feat(live): confine packaged MCP execution and configuration.
+
+** DONE [#A] Enforce trusted MCP and executable admission
+:PROPERTIES:
+:ID: live-mcp-confinement-admission
+:STARTED_AT: 2026-10-17T14:13:27Z
+:UPDATED_AT: 2026-10-17T14:14:15Z
+:COMPLETED_AT: 2026-10-17T14:14:15Z
+:ELAPSED_SECONDS: 48
+:END:
+- Why :: Host-started app-server can otherwise launch arbitrary configured MCP/plugin/hook code outside the tool sandbox.
+- Change :: Produce trusted prepared-runtime configuration and a bounded admission manifest for Live. Enumerate the actual launch surfaces, allowlist verified package identity/command/arguments and reject unknown or project-injected MCP/plugin/hook/config executables for Live. Preserve unsupported normal workflows as explicitly unavailable for Live rather than silently changing user plugins. Authenticate and scope any necessary host-side lifecycle operation; path checks alone do not grant arbitrary host authority. Define receipts and invalidation on config/package/policy change for consumption by L11.
+- Tests :: Assert altered project config, command/argument substitution, duplicate MCP aliases, changed package/checksum, unexpected hooks, unapproved remote MCP and stale receipts cannot enter Live. Verify trusted required tools remain discoverable once, effective policy is not broadened, errors are bounded and normal non-Live configuration remains compatible.
+- Done when :: The exact admitted tool/config set and rejected cases are explicit and enforced before any Live model/tool work, with no permissive default or hidden plugin disabling.
+
+** DONE [#A] Apply native confinement to real packaged tool work
+:PROPERTIES:
+:ID: live-mcp-confinement-execution
+:STARTED_AT: 2026-10-17T14:20:51Z
+:UPDATED_AT: 2026-10-17T16:12:38Z
+:COMPLETED_AT: 2026-10-17T16:12:38Z
+:ELAPSED_SECONDS: 6707
+:END:
+- Why :: Current context-mode interpreter spawns and Org MCP startup require enforcement beyond receiving sandbox metadata.
+- Change :: Route actual untrusted filesystem/process operations and interpreter/descendant launches through the accepted L9 native policy contract, using trusted host shims only for narrow orchestration. Cover the installed prepared runtime and canonical package, not just source-only mocks. Handle state changes, permission narrowing, restart and cleanup so long-lived MCP workers cannot reuse old broader authority. Preserve authenticated controller lifecycle operations through their narrow typed interface; prohibit arbitrary paths/commands/credentials through that interface. Update adapted provenance/checksums only for verified intended changes.
+- Tests :: Run actual packaged context-mode/Org and any admitted subprocess-backed tool under the native boundary on a supported host: ordinary project work succeeds; private files, Caddy/daemon sockets and proc/FD aliases are denied; forged/missing state, policy narrowing and descendant escape fail closed. Run bash tests/run.sh, applicable tests/ci.sh/package smoke, exact temporary npx skills discovery and git diff --check. Test installation/update rollback without real home mutations.
+- Done when :: Real admitted tool processes and descendants enforce current restrictions, required controller operations remain narrow and usable, installed bytes match provenance, and full owning-repository gates pass.
+
+* WIP [#A] Complete host-controlled production Live integration
+:PROPERTIES:
+:ID: live-production-integration
+:SKILLS: $vertical-slice-architecture $security-best-practices
+:REVIEW_STATUS: UNREVIEWED
+:STARTED_AT: 2026-10-16T08:46:41Z
+:UPDATED_AT: 2026-10-16T12:14:24Z
+:COMPLETED_AT: 2026-10-16T12:14:24Z
+:ELAPSED_SECONDS: 12463
+:END:
+- Scope decision :: User approved deferring unchanged hooked-home support. L11 acceptance targets the verified hook-free installed configuration and exact admitted plugin metadata; enabled hooks/unsupported plugin configurations remain unavailable without rewriting or disabling the user home. Native hook startup confinement and ordinary hooked/enabled-Gestalt home support are deferred to a separately approved future scope. This does not waive editing/recovery, full exact-candidate integration, genuine-provider proof where required, or final review. Stop after final L11 review before starting/resuming L13.
+- Effort :: Large; reuse sole canonical executor l11. Five recorded L2 positions: admitted construction, narrow cleanup prerequisite, editing acceptance, historical recovery evidence, and current recovery/final gates. Only one implementation writer.
+- Goal :: Complete the original real owning-session picker/edit/accept lifecycle with proven runtime, tool and project-process confinement.
+- Execution policy :: Approved replan: complete L11.2 cleanup first; preserve partial harness edits without expanding them. Then L11.3 editing, followed by L11.5 current recovery/final gates; L11.4 is historical only. Track editing correctness, recovery, genuine-provider smoke and full integration as distinct evidence gates. Before each hosted trial record one hypothesis, exact candidate, expected observations, fixed cost/deadlines, and decisions for success, refusal or failure; root reviews that packet before one launch. No automatic retries or repeated unchanged experiments. A failed trial returns to the responsible product defect or a bounded missing-evidence task rather than open-ended harness expansion. All original final acceptance requirements remain.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: accepted L8 adapters, L9 trusted launch policy and L10 packaged confinement; L5/L6 auth/routes and L7 exclusivity. Allowed scope: src/server/features/live-design/, src/server/platform/live-design/, narrow Codex/session/composition/main/CLI wiring, shared Live contracts and integration/native proof fixtures. Other repositories are read-only. Read accepted L8 diff and all proof limitations. Preserve provider/model/thinking/effective restrictions, existing session identity and controller-only stdio RPC. Do not adopt unverified preexisting runtimes/devservers by PID alone. Restore/extend complete hosted proof workflows rather than treating the L8 diagnostic-only branch as final integration evidence. No production deployment or release. Full Mobile/e2e gates, actual native/tool/descendant proof and root review precede one commit: feat(live): complete host-controlled production integration.
+
+** DONE [#A] Bind trusted host admission and production lifecycle construction
+:PROPERTIES:
+:ID: live-production-integration-admission
+:END:
+- Scope decision :: Unchanged hooked-home support is deferred by explicit user decision. Secure refusal of enabled/nonempty hooks and unsupported enabled plugin metadata satisfies the exclusion boundary; no trusted-bootstrap exception is authorized. Accept admission evidence for the verified supported hook-free configuration, including actual native model/child confinement and positive cleanup.
+- Why :: Adapter factories and a host proof do not provide a ready production Start path.
+- Change :: Wire the elected controller/store, manager policy capability and Agents admission receipts into the sole production composition root and supported CLI/main path. Establish actual runtime and registered devserver birth/policy/config identity before takeover; refuse unsupported providers, masked launch contexts, unverified external processes and changed policies. Keep trusted fs/config/command RPC private and route only authorized Live model work through the owning relay session. Reconstruct per-generation gateway/helper/routes/journal adapters with real dependencies, not readiness callbacks. Preserve registered external servers without termination and return actionable unavailable/busy/recovery responses.
+- Tests :: Production composition tests and actual process probes cover valid host launch, same-session reuse, stale/tampered/missing receipt, unapproved MCP/config/hooks, Kimi refusal, two sessions/apps, process reuse and restart, no extra writer, policy changes and missing dependency. Verify native model tools and permitted child agents enforce restrictions in addition to command/exec; record any credential-dependent genuine provider proof separately and keep it blocking where required.
+- Done when :: Only a genuinely admitted owning runtime/app can Start and production construction supplies real lifecycle dependencies; all old false-readiness paths are closed.
+
+** DONE [#A] Repair pre-authority Stop settlement and verify failure cleanup
+:PROPERTIES:
+:ID: live-production-integration-edit-flow
+:END:
+- Scope decision :: User approved this replan on 2026-10-21. This existing WIP identity is narrowed to the prerequisite exposed by editing attempts; its unfinished editing acceptance moves to new L11.3 without a completion claim. Exactly one writer remains l11. No further hosted editing trial is allowed before this child passes root review.
+- Why :: Run 39499281719 reached Generate and Accept but failure Stop could not settle pending Native admission/poll operations; process exit did not establish source/config/journal restoration. Proof scheduling cannot substitute for product cleanup correctness.
+- Change :: Reproduce and repair arbitrary pre-authority Stop and failure reconciliation through actual production controller/runtime APIs. Retain original raw request ownership until settlement, revoke authority before further effects, prevent late edits and duplicate Stop, and restore the documented chosen-source/config/injection/routes state. Unsettled work must remain visibly locked; never fabricate successful cleanup or treat process exit as sufficient. Limit edits to the responsible Mobile cleanup/runtime path and focused regressions; preserve unrelated partial proof/UI work.
+- Tests :: Deterministically hold a real admission/catalog or canonical poll request before authority, invoke Stop/cancel, verify revoked authority/no late edits and retained ownership, release the original held operation, then verify bounded settlement, correct source/config/journal/routes state and physical closure. Exercise concurrent Stop, stale callback and rejected raw request. Every harness-held operation must release and settle in finally. Match the failing hosted incident to this mechanism before claiming its cause. Use focused real API/process integration tests; no hosted editing loop, timing optimization or new profiling framework in this task.
+- Done when :: The controlled production-path reproduction and current focused regressions prove successful Stop/failure cleanup after raw settlement, safe locked behavior while unresolved, correct restoration and no detached original work. Root inspects the intended diff and evidence. This is a cleanup-only completion boundary, not editing, genuine-provider or full L11 acceptance.
+
+** WIP [#A] Prove canonical editing through the owning production session
+:PROPERTIES:
+:ID: live-production-integration-editing-acceptance
+:END:
+- Scope decision :: User approved explicit authenticated Resume after a genuine post-Accept disconnect, followed by real Steer in the same surviving owning session. The proof must record the new generation and grant, preserve provider/model/effort, require prior Generate/Accept canonical acknowledgements and accepted source, deny stale authority, and never replay edits. Uninterrupted same-generation document handoff is not claimed. L11.3 owns this bounded editing-continuity recovery scenario after L11.2 cleanup acceptance; L11.5 owns current broader Stop/Resume, crash, policy-change and cleanup verification. L11.4 records historical evidence only. Before a hosted attempt, establish feasibility within existing absolute host/job bounds without deadline resets or weaker verification. All full exact-candidate and required genuine-provider gates remain; stop before L13.
+- Starting evidence :: Preserve all earlier editing evidence and the eight-file partial harness patch recorded in .gestalt/live-evidence/l11/ci-39499281719/deferred-proof-correction/pause-state.json. That patch is not review-ready (186/189 focused tests; one lint error); it is not a prerequisite for L11.2 and must not be discarded or silently published.
+- Why :: The original L8 picker-to-edit-to-accept requirement remains unfulfilled by adapter and native-launch proofs.
+- Change :: Bind the production canonical poll owner, durable inbox, owning-runtime dispatcher, helper and journal effects to authenticated remote preview. Exercise generate, steer, manual apply, accept and discard from the real picker while enforcing session/app exclusivity and unchanged provider/model/thinking/permission selection. Retain event-generation fencing and explicit recovery for ambiguous crash/apply/ack outcomes; never blindly replay edits.
+- Tests :: Actual pinned helper, production auth, isolated real Caddy with trusted TLS and browser on a separate network side; deterministic controlled provider fixture plus documented genuine provider smoke when credentials are available. Assert source postconditions, accept/discard side effects, duplicate/stale/out-of-order events, lost response, lease expiry, HMR, no raw extra poll owner and no ordinary chat/Autopilot/Org writer. Distinguish real process/tool paths from fixtures explicitly; absent required provider proof remains pending.
+- Done when :: The original real picker/edit/accept/discard flow works through the owning production session and exact native/MCP/helper/devserver confinement evidence exists for the integrated inputs.
+
+** DONE [#A] Historical production Stop Resume and policy-change recovery evidence
+:PROPERTIES:
+:ID: live-production-integration-recovery
+:END:
+- Evidence scope :: Historical completion is retained for audit only. The later run 39499281719 invalidates reliance on it for current acceptance. L11.2 repairs the narrow prerequisite; L11.5 explicitly owns all current recovery revalidation. This historical DONE state must never satisfy those pending gates.
+- Why :: Generation-safe adapters must also operate correctly across real process, route and authorization lifetimes.
+- Change :: Finish production revoke-first Stop, cancel/drain, helper/journal/injection cleanup, route removal, recoveryRequired ownership retention and exact control restoration. Resume must reconcile real source/journal/routes and process/config receipts before generation rotation and regrant. Handle permission narrowing or component/config changes without retaining broader MCP/process authority. Preserve the documented background/disconnect adaptation and model-independent control path.
+- Tests :: Repeated/concurrent Stop/Resume, tab background beyond eight seconds, network loss, process death/restart, crash during accept, delayed generation revocation, partial route cleanup, policy/config narrowing, stale callback and successor fencing. Verify old cookies/streams/processes remain revoked, no silent edits after Stop, external devservers survive, unresolved cleanup stays locked, and current full Mobile/e2e/native gates pass.
+- Done when :: All original L8 production cleanup/recovery obligations pass against real integrations; any unsupported combination remains unavailable rather than weakening isolation. Evidence is ready for subsequent skill/UI and complete resilience milestones.
+
+** TODO [#A] Revalidate current recovery and final L11 acceptance evidence
+:PROPERTIES:
+:ID: live-production-integration-current-recovery
+:END:
+- Why :: Historical L11.4 evidence predates the installed integration corrections and cannot establish current cleanup or recovery correctness.
+- Change :: Revalidate the full existing Stop/Resume, crash, permission/policy-change, stale authority and cleanup matrix against the final integrated candidate after L11.2 and L11.3. Reuse still-applicable evidence explicitly; rerun evidence invalidated by source changes. Preserve accepted scope decisions and the no-production-deployment constraint.
+- Tests :: All original recovery cases recorded in L11.4, including background/network loss, process death, crash during accept, delayed revocation, partial routes, successor fencing, external-devserver survival and unresolved locked cleanup. Complete required genuine-provider smoke, full exact-candidate hosted integration, current full Mobile/E2E gates and intended-diff review. Distinguish controlled-provider results from genuine-provider proof.
+- Done when :: Each current recovery obligation and required final evidence gate has a traceable passing result on the admitted candidate; no historical pass or partial lane substitutes for missing current proof. Parent acceptance still requires root review and the single prescribed L11 commit; stop before L13.
+
+* DONE [#A] Ship the native Live workflow and compatible skill package
+:PROPERTIES:
+:ID: bundled-live-skill
+:SKILLS: $skill-creator
+:REVIEW_STATUS: REVIEWED
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Make native Live discoverable without user-installed competing instructions.
+- Notes :: Owner repository: gestalt-agents. Dependencies: L2 patch/proposal; L3 runtime; L10 confined packaging and L11 production native lifecycle contracts. Allowed scope: Canonical plugin tree, manifests/marketplace, gestalt-setup.sh, skill references, UPSTREAM.md, checksum/discovery tests. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): ship the native live workflow and compatible skill package.
+
+** DONE [#A] Package an attributed compatible Impeccable adaptation
+:PROPERTIES:
+:ID: bundled-live-skill-package
+:END:
+- Why :: Upstream skill and binary versions are independent.
+- Change :: Choose canonical plugin location following current packaging; include complete required references/assets and Apache license attribution. Pin upstream source and compatible runtime matrix; document every downstream change and distinct package version in UPSTREAM.md. Generate adapted checksums and no symlinks/duplicate root skill copies.
+- Tests :: Manifest/frontmatter/checksum tests, modes and relative-link validation; clean temporary distributable npx skills list must match exact expected names once.
+- Done when :: One canonical package contains everything needed and declares precise runtime compatibility.
+
+** DONE [#A] Teach native session takeover and recovery
+:PROPERTIES:
+:ID: bundled-live-skill-instructions
+:END:
+- Why :: A novice agent must not run upstream raw loops alongside the controller.
+- Change :: Document native Start/status/Stop/resume tool or command contracts from L11, L9/L10 isolation prerequisites and prompt rules. Explain exclusive ownership, chat-copy mode, effective permissions and no Playwright MCP requirement. Delegate polling to controller; prohibit a second CLI poll owner. Remove unconditional escalation. Add explicit installer conflict handling for existing standalone impeccable; never silently disable other plugins.
+- Tests :: Instruction scenario tests for absent runtime, no Caddy, active Live, interrupted acceptance and pre-existing skill. Run installer smoke, complete tests/run.sh and exact discovery checks.
+- Done when :: Skill leads to native integration, normal design work remains available, and package installation has no hidden project hooks or competing Live controllers.
+
+* SUSPENDED [#A] Add accessible Start Open Resume and Stop controls
+:PROPERTIES:
+:ID: mobile-live-controls
+:SKILLS: $svelte-code-writer $svelte-core-bestpractices $impeccable
+:REVIEW_STATUS: UNREVIEWED
+:STARTED_AT: 2026-10-16T14:29:00Z
+:UPDATED_AT: 2026-10-16T14:29:00Z
+:ELAPSED_SECONDS: 0
+:SUSPENDED_FOR: live-production-integration
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Expose simple trustworthy controls with visible session ownership.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L11 working production lifecycle; L12 final skill/tool vocabulary. Allowed scope: src/client/features/live-design/, AppHeader.svelte, RelayApp.svelte and relay-client wiring; endpoint integration tests. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): add accessible start open resume and stop controls.
+
+** SUSPENDED [#A] Add discovery and authenticated launch UX
+:PROPERTIES:
+:ID: mobile-live-controls-start-open
+:END:
+- Why :: Users should not copy server-localhost URLs.
+- Change :: Show capability-aware Live control with registered app selection, clear missing external setup guidance and safe Start transition. Open returned authenticated preview through fragment exchange; support popup-blocked fallback without displaying raw bearer secrets. Repeated clicks are idempotent and cannot create two helpers. Use existing toast failure pipeline.
+- Tests :: Component and browser tests for ready/unavailable/busy/starting/active, keyboard focus and popup blocked. Screenshots AppHeader and Live controls at 390x844 and 1440x900 with 100% and 200% font scaling: live-ready, live-starting, live-active.
+- Done when :: All named screenshots show readable controls without overflow; a user reaches working remote overlay from Mobile without copying ports or tokens.
+
+** TODO [#A] Explain takeover and expose model-independent Stop
+:PROPERTIES:
+:ID: mobile-live-controls-exclusive-status
+:END:
+- Why :: A disabled composer must explain how to return.
+- Change :: Display durable Live status with Open, Stop, and recovery Resume when valid. Disable ordinary composer/actions consistent with server enforcement and explain session is controlled by Live. Preserve Stop during reconnect/error and render recovery guidance; manual Autopilot Off remains accessible. Avoid exposing internal event/protocol jargon.
+- Tests :: Screenshots RelayApp composer and Live controls at both viewports and both font scales: live-exclusive, live-recovery, live-stopping. Keyboard/screenreader labels, toast errors, reconnect and stale response tests; assert no disabled path can dispatch ordinary work.
+- Done when :: UI state matches authoritative server ownership, Stop works without model response, and all required screenshots plus full Mobile/e2e gates pass.
+
+* TODO [#A] Verify complete remote workflow and failure recovery
+:PROPERTIES:
+:ID: live-resilience
+:SKILLS: $playwright $security-best-practices
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Prove product behavior with real helper, Caddy, authentication and session gates.
+- Notes :: Owner repository: gestalt-mobile. Dependencies: L13 UI and every earlier contract, including L9/L10 process confinement and L11 integrated proof. Allowed scope: Integration/e2e harness and narrowly scoped fixes to this feature only; evidence under workspace .gestalt/live-evidence/. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): verify complete remote workflow and failure recovery.
+
+** TODO [#A] Exercise real picker edit acceptance and discard
+:PROPERTIES:
+:ID: live-resilience-end-to-end
+:END:
+- Why :: Mocks cannot establish compatibility across four components.
+- Change :: Build reproducible pinned test fixture using supported framework and production-like auth. Drive Start, authenticated Open, select element, generate variants, steer, accept and discard through actual helper semantics. Verify source postconditions and inject cleanup, not just toast text. Add second-session isolation scenario and HMR.
+- Tests :: Real browser on separate network side, real Caddy TLS validation, real helper; controlled relay model fixture for deterministic edits plus one documented genuine provider smoke when credentials available. Screenshots live-picker, live-variants, live-accepted at 390x844/1440x900 and 100%/200% font.
+- Done when :: Source changes match accepted variant only, discard preserves original, HMR works, and proof identifies which provider steps were real versus deterministic fixtures.
+
+** TODO [#A] Run restart revocation and confinement matrix
+:PROPERTIES:
+:ID: live-resilience-faults
+:END:
+- Why :: Long-lived previews survive infrastructure and browser failures.
+- Change :: Automate crash/restart at start, edit, accept and stop; Caddy reload, Mobile restart, tab suspension, lost network, expired grants, device revoke and two applications. Verify ordinary chat/Autopilot/Org cannot sneak through each state. Attempt admin socket access and arbitrary upstream registration from project permissions.
+- Tests :: Capture case-by-case expected/actual state, owned processes/routes, source journal and resumed controls. Negative tests prove no unauthenticated content and no residual access after revoke; unrelated Caddy site stays serving throughout.
+- Done when :: Every matrix case passes or remains explicitly blocking; no stale route, credential or writer remains after clean stop; full Mobile checks and e2e pass.
+
+* TODO [#A] Document install upgrade rollback and operational acceptance
+:PROPERTIES:
+:ID: live-operator-handoff
+:SKILLS: $bash-defensive-patterns
+:REVIEW_STATUS: UNREVIEWED
+:END:
+- Effort :: Medium; one fresh executor, 2 sequential L2 tasks.
+- Goal :: Finish a copyable operator guide and release-ready compatibility contract.
+- Notes :: Owner repository: gestalt. Dependencies: L14 verified integration and compatibility matrix. Allowed scope: README.md, docs/caddy-live.md, component install/doctor compatibility fixtures only. Read the global contracts and mandatory gates above. Other repositories are read-only. Accept only after every child passes, owning-repository full gates pass, root reviews intended diff, and evidence is recorded. Proposed commit: feat(live): document install upgrade rollback and operational acceptance.
+
+** TODO [#A] Publish tested operator setup and troubleshooting
+:PROPERTIES:
+:ID: live-operator-handoff-guide
+:END:
+- Why :: Out-of-box runtime still needs operator DNS and an existing Caddy.
+- Change :: Write clean-install and existing-install walkthrough: managed Impeccable, compatible agents/Mobile versions, DNS, Caddy snippet/socket isolation, preview hostname/port range, trusted TLS, doctor and first Live session. Include same-host-port limitation, no Playwright MCP, background/disconnect behavior, credential revocation and recoverable state paths.
+- Tests :: Follow guide in isolated fresh installation; all commands must match implemented help and doctor output. Validate Caddy examples and failure explanations; no edits to actual production /etc.
+- Done when :: Guide is prominent from README and a fresh operator can reach the tested workflow without reading this plan.
+
+** TODO [#A] Verify upgrade rollback and final compatibility
+:PROPERTIES:
+:ID: live-operator-handoff-rollback
+:END:
+- Why :: Partial version updates must fail safely.
+- Change :: Test supported upgrade sequence and incompatible component combinations; stop/refuse update while Live owns source unless clean shutdown is verified. Describe rollback preserving project journal and private auth state. Record final cross-repo commit/version matrix for reviewer; do not publish releases or deploy automatically.
+- Tests :: Manager full suite, clean install/update/rollback fixtures, diff checks and live-state preservation tests. Cross-check L14 evidence and all owning-repo gates before terminal review.
+- Done when :: All supported version combinations are explicit, unsafe partial upgrades fail closed, and root has complete evidence for independent whole-branch review.

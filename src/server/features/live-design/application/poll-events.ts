@@ -157,6 +157,7 @@ export class PollLiveEvents {
     if (run.state !== 'active' || run.provider !== 'codex') throw new Error('LIVE_MODE_ACTIVE');
     const token = this.input.inbox.begin(run);
     this.busy = true;
+    let pollDispatched = false;
     const check = () => {
       const current = this.input.owners.assert(fence);
       if (current.state !== 'active') throw new Error('LIVE_GENERATION_STALE');
@@ -181,7 +182,10 @@ export class PollLiveEvents {
       // Canonical poll itself may edit during preflight or accept/discard. Verify
       // actual confinement before launching that command, as well as each model turn.
       const event = parseLivePollEvent(
-        await this.input.authority.liveEvent(fence, token, () => this.input.cli.poll()),
+        await this.input.authority.liveEvent(fence, token, () => {
+          pollDispatched = true;
+          return this.input.cli.poll();
+        }),
       );
       check();
       const item = this.input.inbox.receive(token, event, this.input.now());
@@ -284,6 +288,19 @@ export class PollLiveEvents {
         error instanceof Error && /^LIVE_[A-Z_]+$/.test(error.message)
           ? error.message
           : 'LIVE_POLL_RECOVERY_REQUIRED';
+      const current = this.input.owners.current(fence.liveId);
+      if (
+        !pollDispatched &&
+        current?.controllerEpoch === run.controllerEpoch &&
+        current.generation === run.generation &&
+        ['stopping', 'idle'].includes(current.state)
+      ) {
+        // No canonical CLI command acquired authority or could edit source.
+        // Settle only this undispatched reservation; dispatched/unknown work
+        // and successor generations still require durable reconciliation.
+        this.input.inbox.finish(token);
+        throw new Error(code);
+      }
       this.input.inbox.recover(token, code);
       try {
         this.input.owners.mutate(fence, { event: 'recover', code });

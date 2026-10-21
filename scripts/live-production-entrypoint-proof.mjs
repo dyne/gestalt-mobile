@@ -34,11 +34,70 @@ import { gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import { removeOwnedProofTree } from './live-proof-cleanup.mjs';
 import { projectMetadataRegistryDiagnostics } from './live-project-metadata-diagnostics.mjs';
 import {
+  observeProofMethod,
+  boundedStopHttpResponse,
+  observeEventAuthority,
+  proofObservationRemaining,
+  observeCanonicalPollDispatch,
+  observePostAcceptPollDispatch,
+  manualObservationDeadline,
+  verifyManualAcknowledgement,
+  retainOwningStartupFailure,
+  observeOwningAdmissionFailure,
+  observeManualAcknowledgement,
+  retainManualCanonicalObservation,
+  observeInstalledPolicyTimings,
+  observeAdmissionTimings,
+  cleanupControllerSnapshot,
+  createSerialProfile,
+  createDeferredSourceGate,
+  validateSerialProfile,
+  editingSchedule,
+  editingRemaining,
+  requireEditingBudget,
+  drainEditingFailure,
+  assertOldPreviewCookieDenied,
+  assertPreviewLeaseIdentity,
+} from './live-production-edit-diagnostics.mjs';
+import { LivePollLoop } from '../dist/server/server/features/live-design/application/poll-loop.js';
+import { PollLiveEvents } from '../dist/server/server/features/live-design/application/poll-events.js';
+import { IsolatedLiveHelper } from '../dist/server/server/platform/live-design/isolated-live-helper.js';
+import {
   createProductionEditProvider,
+  productionModelWorkload,
+  withoutProofInjection,
+  failureStopOperation,
   liveEventFromRequest,
 } from './live-production-edit-provider.mjs';
 import { productionEditBrowser } from './live-production-edit-browser-host.mjs';
+import {
+  catalogProviderProbe,
+  catalogReceiptObserver,
+  correlateCatalogReceipts,
+  coldCatalogLifecycle,
+  catalogDriverBudget,
+  stopCatalogOwner,
+  finalizeCatalogDriver,
+  drainCatalogCancellation,
+  validateColdCatalog,
+} from './live-production-cold-catalog.mjs';
 import { productionRecoveryProof } from './live-production-recovery-proof.mjs';
+import {
+  candidateIdentity,
+  openRecoveryHandoff,
+  birthCurrent,
+  productionLane,
+  readEditingAnchor,
+  readEditingLaunch,
+  readCatalogObservation,
+  phaseBoundRemaining,
+  fixedProofFailure,
+} from './live-production-proof-lanes.mjs';
+import {
+  NativeContextCompletion,
+  contextToolResultDiagnostic,
+  pickerSmokeBaseline,
+} from './live-picker-smoke.mjs';
 import { composeRelayApp } from '../dist/server/server/composition.js';
 import { SqliteAuthorizationStore } from '../dist/server/server/platform/auth/sqlite-authorization-store.js';
 import { workspaceId } from '../dist/server/server/platform/catalog/workspace-id.js';
@@ -48,30 +107,93 @@ import {
   InstalledLivePolicy,
   InstalledLiveAdmissionError,
 } from '../dist/server/server/platform/live-design/installed-policy.js';
+import { CodexSessionRuntime } from '../dist/server/server/platform/codex/session-runtime.js';
 import { ProductionLiveController } from '../dist/server/server/platform/live-design/production-controller.js';
+import { LiveDispatchGuard } from '../dist/server/server/platform/live-design/live-dispatch.js';
 import {
   LIVE_CODEX_SHA256,
   LIVE_CODEX_BWRAP_SHA256,
 } from '../dist/server/server/platform/live-design/native-contract.js';
 import { LIVE_HELPER_BINARY_SHA256 } from '../dist/server/server/platform/live-design/helper-process.js';
-import { observedBirthExited } from '../dist/server/server/platform/live-design/process-identity.js';
+import {
+  observedBirthExited,
+  assertObservedProcessMetadata,
+} from '../dist/server/server/platform/live-design/process-identity.js';
 import { previewSecrets } from '../dist/server/server/platform/live-design/preview-secrets.js';
 import { IsolatedProjectProcess } from '../dist/server/server/platform/live-design/isolated-project-process.js';
+import {
+  LIVE_MANAGER_OBSERVATION_MS,
+  installedMcpBudgets,
+} from '../dist/server/server/platform/live-design/installed-launch-contract.js';
 import {
   helperEventIdDigest,
   helperProtocolSummary,
 } from './live-production-helper-diagnostics.mjs';
 
 assert.equal(process.env.LIVE_PRODUCTION_ENTRYPOINT_PROOF, '1');
+const coldCatalog = process.env.LIVE_PRODUCTION_COLD_CATALOG === '1';
 const editFlow = process.env.LIVE_PRODUCTION_EDIT_FLOW_PROOF === '1';
+const preflightOnly = process.env.LIVE_PRODUCTION_ADMISSION_PREFLIGHT === '1';
+const pickerSmoke = process.env.LIVE_PRODUCTION_PICKER_SMOKE === '1';
+const pickerDiagnostic = process.env.LIVE_PRODUCTION_PICKER_DIAGNOSTIC === '1';
+assert.ok(!pickerDiagnostic || pickerSmoke);
+assert.ok(!pickerSmoke || (editFlow && !preflightOnly));
+const seededPreflight = process.env.LIVE_PRODUCTION_ADMISSION_SEED === '1';
+assert.ok(!seededPreflight || preflightOnly);
+// Four serial measured control stages, the accepted Native context probe,
+// two existing project-readiness windows and a bounded response allowance.
+const startObservationBudgetMs =
+  4 * (LIVE_MANAGER_OBSERVATION_MS + 5_000) +
+  installedMcpBudgets('context-mode', true).tool_timeout_sec * 1000 +
+  5_000 +
+  2 * 15_000 +
+  5_000;
+assert.equal(startObservationBudgetMs, 815_000);
+// Two measured authority windows, two existing helper-command windows and
+// bounded result delivery; the upstream595s lease is never extended.
+const eventObservationBudgetMs = 2 * (LIVE_MANAGER_OBSERVATION_MS + 30_000) + 2 * 20_000 + 20_000;
+assert.equal(eventObservationBudgetMs, 300_000);
+assert.ok(!preflightOnly || !editFlow);
 const recoveryOnly = process.env.LIVE_PRODUCTION_RECOVERY_ONLY === '1';
 assert.ok(!(editFlow && recoveryOnly));
+assert.ok(
+  !coldCatalog ||
+    (!editFlow &&
+      !recoveryOnly &&
+      !preflightOnly &&
+      !pickerSmoke &&
+      !seededPreflight &&
+      !process.env.LIVE_PRODUCTION_SERIAL_PROFILE),
+);
+const proofLane = productionLane(process.env.LIVE_PRODUCTION_PROOF_LANE);
+const editingContinuity = process.env.LIVE_PRODUCTION_EDIT_CONTINUITY === '1';
+assert.equal(editingContinuity, proofLane === 'accept-steer');
+const editingAnchor = editingContinuity
+  ? readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR)
+  : undefined;
+const editingDeadline = (phase) => recoveryHandoff.deadlineNs(phase);
+const editingPhaseRemaining = (phase) =>
+  Math.min(
+    editingRemaining(editingAnchor, phase),
+    Math.max(0, Number((BigInt(editingDeadline(phase)) - process.hrtime.bigint()) / 1_000_000n)),
+  );
+const assertEditingClock = () => {
+  readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR, editingAnchor);
+  recoveryHandoff?.assertCurrent();
+};
+assert.ok(!proofLane || (!pickerSmoke && !preflightOnly));
+assert.ok(!proofLane || (proofLane === 'recovery' ? recoveryOnly : editFlow));
+assert.equal(
+  Boolean(process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL),
+  proofLane === 'recovery' || editingContinuity || coldCatalog,
+);
 const evidence = resolve(
   process.env.LIVE_PRODUCTION_EVIDENCE ?? 'test-results/live-caddy-proof/production-entrypoint',
 );
 mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const report = {
   schemaVersion: 1,
+  productionLane: proofLane || undefined,
   passed: false,
   genuine: false,
   stage: 'installation',
@@ -80,6 +202,7 @@ const report = {
   cleanupComplete: false,
   limitations: [
     'Controlled provider, not genuine credential-dependent proof.',
+    'Explicit already-hook-free installed bridge fixture; unchanged ordinary hooked homes and enabled Gestalt metadata remain unsupported.',
     ...(editFlow
       ? [
           'Browser uses a temporary pre-provisioned authorized device; WebAuthn enrollment is separately proven.',
@@ -89,12 +212,83 @@ const report = {
         ]),
   ],
 };
+const serialProfileRequested = process.env.LIVE_PRODUCTION_SERIAL_PROFILE === '1';
+if (serialProfileRequested) {
+  report.serialProfileTrialRequested = true;
+  assert.ok(editingContinuity && !pickerSmoke && !preflightOnly && !recoveryOnly);
+  assert.equal(process.env.LIVE_PRODUCTION_PROFILE_TRIAL, 'deferred-accept-confinement-1');
+  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+}
+let serialProfile, rootProfileId, childProfileId, sourcePatchProfile, browserCloseProfileId;
+let deferredReuse;
+const profiled = (label, work, metadata) =>
+  serialProfile ? serialProfile.trace(label, work, metadata) : work();
+const profileEventKind = (fence, eventId) => {
+  if (!/^[a-f0-9]{8}$/.test(eventId)) return 'poll-authority';
+  const path = join(
+    controller,
+    `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+  );
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const records = db
+      .prepare('SELECT record FROM live_event_inbox WHERE liveId=? AND generation=?')
+      .all(fence.liveId, fence.generation)
+      .map((row) => JSON.parse(row.record));
+    const found = records.filter((row) => row.upstreamId === eventId);
+    assert.equal(found.length, 1, 'PROOF_PROFILE_INVALID');
+    return found[0].kind === 'generate' ? 'generate-authority' : 'event-authority';
+  } finally {
+    db.close();
+  }
+};
+
+if (pickerDiagnostic) {
+  report.proofKind = 'actual-picker-current-independent-diagnostic';
+  report.pickerDiagnostic = {
+    mode: 'picker-diagnostic',
+    diagnosticOnly: true,
+    fullExactCandidateStillRequired: true,
+    identity: candidateIdentity(),
+  };
+  report.limitations.push(
+    'Diagnostic Start/Generate/Accept only; fresh independent evidence on this exact candidate is mandatory in the aggregate. Steer/manual/discard/background/recovery remain unproven.',
+  );
+} else if (pickerSmoke) {
+  const receipt = JSON.parse(readFileSync(process.env.LIVE_PICKER_SMOKE_RECEIPT, 'utf8'));
+  assert.equal(receipt.schemaVersion, 1);
+  assert.equal(receipt.mode, 'picker-smoke');
+  assert.equal(receipt.diagnosticOnly, true);
+  assert.equal(receipt.fullExactCandidateStillRequired, true);
+  assert.equal(receipt.candidate, process.env.LIVE_PROOF_EXPECTED_HEAD);
+  assert.deepEqual(receipt.baseline, pickerSmokeBaseline);
+  report.proofKind = 'actual-picker-smoke-diagnostic';
+  report.independentEvidenceReuse = receipt;
+  report.limitations.push(
+    'Diagnostic controls Start/Generate/Accept/cleanup only; full exact-candidate independent, steer/manual/discard/background/recovery proofs remain required.',
+  );
+}
 if (recoveryOnly) {
   report.proofKind = 'recovery-only-diagnostic-no-picker-or-model-child-claim';
   report.limitations.push(
     'Renewal diagnostic only; full real-picker and owning model-child proof remains mandatory.',
   );
 }
+if (coldCatalog) {
+  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+  report.proofKind = 'cold-catalog-diagnostic';
+  report.coldCatalog = {
+    trialId: 'cold-catalog-baseline-1',
+    attempt: 1,
+    fullAcceptance: false,
+    inferenceRefusals: 0,
+    preparationProbes: [],
+  };
+  report.limitations.push(
+    'Provider-free inference diagnostic only. Non-inference loopback preparation probes are counted separately. No editing/integration acceptance; Manager internal passes and worker import remain unobserved.',
+  );
+}
+if (proofLane) report.proofKind = `controlled-full-${proofLane}`;
 const admissionFailure = (error) => ({
   code: /^LIVE_[A-Z_]+$/.test(error?.message ?? '') ? error.message : 'UNCLASSIFIED',
   reason: error instanceof InstalledLiveAdmissionError ? error.diagnostic.reason : undefined,
@@ -147,11 +341,18 @@ function renewalManifestRelation(input) {
     return { unavailable: true };
   }
 }
-for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
+for (const method of [
+  'bootstrapRuntime',
+  'captureRuntime',
+  'renewRuntime',
+  'sealRuntime',
+  'revokeRuntime',
+]) {
   const original = InstalledLivePolicy.prototype[method];
   InstalledLivePolicy.prototype[method] = async function (...args) {
     const rows = (report.policyProtocol ??= []);
     if (rows.length === 32) rows.shift();
+    const startedAt = performance.now();
     const row = { operation: method, outcome: 'pending' };
     rows.push(row);
     try {
@@ -162,9 +363,64 @@ for (const method of ['bootstrapRuntime', 'renewRuntime', 'sealRuntime']) {
       Object.assign(row, { outcome: 'refused', ...admissionFailure(error) });
       if (method === 'renewRuntime') row.manifestRelation = renewalManifestRelation(args[0]);
       throw error;
+    } finally {
+      row.elapsedMs = Math.round(performance.now() - startedAt);
     }
   };
 }
+const startupFailures = (report.owningStartupFailures = []);
+const observeStartupFailure = (boundary, error, startedAt, childAlive) =>
+  retainOwningStartupFailure(
+    startupFailures,
+    boundary,
+    error,
+    performance.now() - startedAt,
+    childAlive,
+    error instanceof InstalledLiveAdmissionError ? error.diagnostic : undefined,
+  );
+// withOwningAdmission is an instance field captured by composition. Observe the
+// existing runtime port before its first discovery call, never replace admission.
+const observedAdmissions = new WeakSet();
+const originalStartupDiscovery = CodexSessionRuntime.prototype.startWithDiscovery;
+CodexSessionRuntime.prototype.startWithDiscovery = function (...args) {
+  const admission = this.owningAdmission;
+  if (admission && !observedAdmissions.has(admission)) {
+    const run = admission.run.bind(admission);
+    admission.run = (session, work) => {
+      const startedAt = performance.now();
+      return observeOwningAdmissionFailure(run, session, work, (boundary, error) =>
+        observeStartupFailure(boundary, error, startedAt),
+      );
+    };
+    observedAdmissions.add(admission);
+  }
+  return originalStartupDiscovery.apply(this, args);
+};
+const originalPolicyVerify = InstalledLivePolicy.prototype.verify;
+InstalledLivePolicy.prototype.verify = async function (...args) {
+  try {
+    return await originalPolicyVerify.apply(this, args);
+  } catch (error) {
+    const failures = (report.policyVerificationRefusals ??= []);
+    if (failures.length === 32) failures.shift();
+    failures.push(admissionFailure(error));
+    throw error;
+  }
+};
+const originalOwnerStarted = ProductionLiveController.prototype.observeOwnerStarted;
+ProductionLiveController.prototype.observeOwnerStarted = async function (...args) {
+  try {
+    return await originalOwnerStarted.apply(this, args);
+  } catch (error) {
+    report.originalAdmissionRefusal = {
+      ...admissionFailure(error),
+      configurationShape: error?.liveConfigDiagnostics,
+      launchInventory: error?.liveLaunchInventory,
+      sourceInventory: error?.liveSourceDiagnostics,
+    };
+    throw error;
+  }
+};
 const originalRenewGeneration = ProductionLiveController.prototype.renewGeneration;
 assert.equal(typeof originalRenewGeneration, 'function');
 ProductionLiveController.prototype.renewGeneration = async function (...args) {
@@ -175,6 +431,49 @@ ProductionLiveController.prototype.renewGeneration = async function (...args) {
     throw error;
   }
 };
+// Observe the actual authority boundary without supplying admission or model output.
+let closureBoundary = 'open';
+observeEventAuthority(
+  LiveDispatchGuard.prototype,
+  (report.eventAuthorityTimings = []),
+  () => closureBoundary,
+  {
+    trace: (fence, eventId, work) =>
+      serialProfile
+        ? serialProfile.trace(profileEventKind(fence, eventId), work, {
+            generation: fence.generation,
+            eventDigest: hash(eventId),
+          })
+        : work(),
+    granted: () => serialProfile?.granted(),
+  },
+);
+// Measure the real controller phases without supplying readiness or changing
+// their result. These fixed labels contain no arguments, paths or Native output.
+for (const phase of [
+  'register',
+  'verifyGeneration',
+  'prepareOwner',
+  'authorize',
+  'expose',
+  'renewGeneration',
+]) {
+  const perform = ProductionLiveController.prototype[phase];
+  assert.equal(typeof perform, 'function');
+  ProductionLiveController.prototype[phase] = async function (...args) {
+    const began = performance.now();
+    let completed = false;
+    try {
+      const result = await perform.apply(this, args);
+      completed = true;
+      return result;
+    } finally {
+      const timings = (report.startPhaseTimings ??= []);
+      if (timings.length === 64) timings.shift();
+      timings.push({ phase, elapsedMs: Math.round(performance.now() - began), completed });
+    }
+  };
+}
 const browserEventLoop = monitorEventLoopDelay({ resolution: 20 });
 function finishBrowserProfile() {
   if (!report.browserCpuWindowStartUs || report.browserCpuWindowEndUs) return;
@@ -188,6 +487,202 @@ function finishBrowserProfile() {
 }
 // Fixture-only observation: retain the production verifier, inputs and outcome.
 // Record timing/codes only, never receipts, process environments or credentials.
+const originalNativeLaunch = ProductionLiveController.prototype.launchNative;
+ProductionLiveController.prototype.launchNative = function (input) {
+  const child = originalNativeLaunch.call(this, input);
+  const observation = {
+    capturedOwner: !!input.liveCaptureId,
+    treeObservations: 0,
+    treeFailures: 0,
+    requests: [],
+    stderrMarkers: [],
+  };
+  (report.nativeLaunchLifetimes ??= []).push(observation);
+  child.child.once('error', (error) => {
+    observation.spawnError = ['ENOENT', 'EACCES', 'EPERM'].includes(error.code)
+      ? error.code
+      : 'UNCLASSIFIED';
+  });
+  child.child.once('exit', (code, signal) => {
+    observation.exitCode = code;
+    observation.signal = signal;
+  });
+  child.child.stderr.on('data', (chunk) => {
+    for (const marker of [
+      'not found',
+      'not installed',
+      'No such file',
+      'Permission denied',
+      'Read-only',
+      'sandbox',
+      'mode',
+      'unsupported',
+      'usage:',
+      'error:',
+      'Error:',
+      'requires',
+    ]) {
+      if (String(chunk).includes(marker) && !observation.stderrMarkers.includes(marker))
+        observation.stderrMarkers.push(marker);
+    }
+  });
+  if (child.waitForLiveImage) {
+    const waitForImage = child.waitForLiveImage.bind(child);
+    child.waitForLiveImage = async (...args) => {
+      const began = performance.now();
+      const row = (observation.imageTransition = { outcome: 'pending', budgetMs: 90_000 });
+      try {
+        const result = await waitForImage(...args);
+        Object.assign(row, { outcome: 'completed', elapsedFromSpawnMs: result.elapsedMs });
+        return result;
+      } catch (error) {
+        Object.assign(row, {
+          outcome: 'failed',
+          code: [
+            'LIVE_NATIVE_HANDOFF_UNVERIFIED',
+            'LIVE_NATIVE_HANDOFF_TIMEOUT',
+            'CODEX_STARTUP_CANCELLED',
+            'LIVE_RUNTIME_UNAVAILABLE',
+          ].includes(error?.message)
+            ? error.message
+            : 'UNCLASSIFIED',
+          phase: [
+            'construction',
+            'identity',
+            'cwd',
+            'source',
+            'image',
+            'wrapper',
+            'deadline',
+          ].includes(error?.handoffPhase)
+            ? error.handoffPhase
+            : 'unclassified',
+        });
+        throw error;
+      } finally {
+        row.elapsedMs = Math.round(performance.now() - began);
+      }
+    };
+  }
+  const observe = child.observeLiveDescendants.bind(child);
+  child.observeLiveDescendants = () => {
+    observation.treeObservations++;
+    try {
+      return observe();
+    } catch (error) {
+      observation.treeFailures++;
+      throw error;
+    }
+  };
+  const close = child.close.bind(child);
+  child.close = () => {
+    observation.closeWhileAlive = child.child.exitCode === null && child.child.signalCode === null;
+    return close();
+  };
+  const wait = child.waitForExit.bind(child);
+  child.waitForExit = async () => {
+    try {
+      await wait();
+      observation.exitVerified = true;
+    } catch (error) {
+      observation.exitVerified = false;
+      observation.exitFailure = /^LIVE_[A-Z_]+$/.test(error?.message ?? '')
+        ? error.message
+        : 'UNCLASSIFIED';
+      throw error;
+    }
+  };
+  const request = child.rpc.request.bind(child.rpc);
+  child.rpc.request = async (method, params) => {
+    const startedAt = performance.now();
+    const tracked =
+      ['initialize', 'model/list', 'skills/list'].includes(method) &&
+      observation.requests.length < 12;
+    try {
+      const value = await request(method, params);
+      if (tracked) observation.requests.push({ method, completed: true });
+      if (method === 'config/read') {
+        const config = value?.config;
+        const descriptor = config?.mcp_servers?.['context-mode'];
+        const known = [
+          'command',
+          'args',
+          'env',
+          'env_vars',
+          'cwd',
+          'enabled',
+          'required',
+          'default_tools_approval_mode',
+          'startup_timeout_sec',
+          'startup_timeout_ms',
+          'tool_timeout_sec',
+          'url',
+          'http_headers',
+          'bearer_token_env_var',
+          'enabled_tools',
+          'disabled_tools',
+          'oauth',
+        ];
+        const shapes = (report.originalConfigShapes ??= []);
+        if (shapes.length === 64) shapes.shift();
+        shapes.push({
+          context: descriptor
+            ? {
+                keys: Object.keys(descriptor).map((key) =>
+                  known.includes(key) ? key : 'unrecognized',
+                ),
+                commandIsNode: descriptor.command === 'node',
+                argsCount: descriptor.args?.length,
+                enabled: descriptor.enabled === true,
+                required: descriptor.required === true,
+                approve: descriptor.default_tools_approval_mode === 'approve',
+                envType: descriptor.env === null ? 'null' : typeof descriptor.env,
+                cwdType: descriptor.cwd === null ? 'null' : typeof descriptor.cwd,
+              }
+            : null,
+          plugins: Object.keys(config?.plugins ?? {}).map((name) =>
+            ['context-mode@dyne-gestalt-agents', 'gestalt@dyne-gestalt-agents'].includes(name)
+              ? name
+              : 'unapproved',
+          ),
+          hooksExplicitlyFalse: config?.features?.hooks === false,
+        });
+      }
+      if (method === 'mcpServerStatus/list' && params?.threadId && params?.serverName) {
+        const rows = (observation.owningCatalogs ??= []);
+        for (const server of value?.data ?? []) {
+          if (rows.length === 64) rows.shift();
+          rows.push({
+            name: ['context-mode', 'gestalt-org-plan'].includes(server.name)
+              ? server.name
+              : 'unapproved',
+            status: ['connected', 'failed', 'starting', 'notStarted'].includes(server.runtimeStatus)
+              ? server.runtimeStatus
+              : 'unrecognized',
+            toolCount:
+              server.tools && typeof server.tools === 'object'
+                ? Object.keys(server.tools).length
+                : null,
+            threadIdDigest: hash(params.threadId),
+          });
+        }
+      }
+      return value;
+    } catch (error) {
+      if (tracked) observation.requests.push({ method, completed: false });
+      if (observation.capturedOwner && method === 'initialize' && !observation.initializeFailure)
+        observation.initializeFailure = observeStartupFailure(
+          'captured-initialize',
+          error,
+          startedAt,
+          child.child.exitCode === null && child.child.signalCode === null,
+        );
+      throw error;
+    }
+  };
+  admissionTimings.observeRpc(child.rpc);
+  return child;
+};
 const projectProcesses = new Map();
 const originalHelperCommand = IsolatedProjectProcess.prototype.helperCommand;
 IsolatedProjectProcess.prototype.helperCommand = async function (receipt, args, deadline) {
@@ -199,6 +694,10 @@ IsolatedProjectProcess.prototype.helperCommand = async function (receipt, args, 
   }
   return result;
 };
+const pendingCanonicalPoll = observeCanonicalPollDispatch(
+  IsolatedProjectProcess.prototype,
+  assertObservedProcessMetadata,
+);
 const originalProjectVerify = IsolatedProjectProcess.prototype.verify;
 IsolatedProjectProcess.prototype.verify = function (receipt) {
   const started = performance.now();
@@ -254,24 +753,93 @@ IsolatedProjectProcess.prototype.verifyForConnection = async function (
     }
   }
 };
+report.policyVerificationTimings = observeInstalledPolicyTimings(
+  InstalledLivePolicy.prototype,
+  () => serialProfile?.currentId(),
+);
+const admissionOriginBefore = performance.now();
+const admissionTimings = observeAdmissionTimings(
+  CodexSessionRuntime.prototype,
+  ProductionLiveController.prototype,
+  () => serialProfile?.currentId(),
+);
+report.admissionVerificationTimings = admissionTimings.report;
+if (coldCatalog)
+  report.coldCatalog.admissionOriginBoundsMs = [
+    Math.floor(admissionOriginBefore),
+    Math.ceil(performance.now()),
+  ];
+const cleanupOperations = (report.cleanupOperations = []);
+const lifecycle = (boundary, owner) => {
+  const rows = (report.cleanupLifecycle ??= []);
+  if (rows.length === 8) rows.shift();
+  rows.push({ boundary, ...cleanupControllerSnapshot(owner) });
+  report.cleanupProjectClosure = [...projectProcesses].slice(0, 8).map(([process, metrics]) => {
+    const proof = process.diagnostics();
+    return {
+      role: metrics.role,
+      namespaceExited: proof.namespaceExited === true,
+      pipeDescriptorsClosed: proof.pipeDescriptorsClosed === true,
+    };
+  });
+};
+for (const [target, key, operation] of [
+  [InstalledLivePolicy.prototype, 'revokeRuntime', 'signed-revoke'],
+  [LivePollLoop.prototype, 'drain', 'poll-drain'],
+  [PollLiveEvents.prototype, 'settle', 'poll-settle'],
+  [IsolatedLiveHelper.prototype, 'settle', 'helper-settle'],
+  [IsolatedLiveHelper.prototype, 'removeInjection', 'helper-remove-injection'],
+  [IsolatedLiveHelper.prototype, 'forgetExitedServerRecord', 'helper-forget-record'],
+  [CodexSessionRuntime.prototype, 'settleLiveWork', 'owning-settle'],
+  [CodexSessionRuntime.prototype, 'abortLiveOwner', 'owning-abort'],
+  [ProductionLiveController.prototype, 'reconcileInbox', 'helper-reconcile'],
+  [ProductionLiveController.prototype, 'restoreOriginal', 'owning-restore'],
+])
+  observeProofMethod(target, key, operation, cleanupOperations);
+observeProofMethod(IsolatedProjectProcess.prototype, 'stop', 'project-stop', cleanupOperations, {
+  role: (owner) => projectProcesses.get(owner)?.role,
+});
+observeProofMethod(
+  ProductionLiveController.prototype,
+  'close',
+  'controller-close',
+  cleanupOperations,
+  {
+    before: (owner) => {
+      closureBoundary = 'closing';
+      lifecycle('before-close', owner);
+    },
+    after: (owner, record) => {
+      closureBoundary = record.result === 'completed' ? 'closed' : 'close-failed';
+      lifecycle('after-close', owner);
+    },
+  },
+);
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const pin = (path) => ({ path: realpathSync(path), sha256: hash(readFileSync(path)) });
 const root = mkdtempSync(join(realpathSync(process.env.RUNNER_TEMP), 'l11-entry-'));
 const rootIdentity = lstatSync(root);
 const installationOnly = process.env.LIVE_PRODUCTION_INSTALLATION_ONLY === '1';
+if (preflightOnly)
+  report.proofKind = seededPreflight
+    ? 'installed-bridge-owning-catalog-start-preflight-one-controlled-seed'
+    : 'installed-bridge-owning-catalog-start-preflight-no-model-turn';
 const constructionOnly = process.env.LIVE_PRODUCTION_CONSTRUCTION_ONLY === '1';
 assert.ok(!(installationOnly && constructionOnly));
 if (constructionOnly) report.proofKind = 'construction-only-no-native-launch';
 if (installationOnly) report.proofKind = 'installation-only-no-native-launch';
 const appRoot = join(root, 'app'),
-  privateRoot = join(root, 'private'),
+  privateRoot = join(root, 'home/.codex-gestalt/gestalt-mobile'),
   installation = join(root, 'installed');
-for (const path of [appRoot, privateRoot, installation]) mkdirSync(path, { mode: 0o700 });
-const home = join(privateRoot, 'home'),
+for (const path of [appRoot, privateRoot, installation])
+  mkdirSync(path, { mode: 0o700, recursive: true });
+const home = join(root, 'home'),
   owningHome = join(privateRoot, 'owning'),
   controller = join(privateRoot, 'controller'),
   caddyRoot = join(privateRoot, 'caddy');
-for (const path of [home, owningHome, controller, caddyRoot]) mkdirSync(path, { mode: 0o700 });
+for (const path of [home, owningHome, controller, caddyRoot])
+  mkdirSync(path, { mode: 0o700, recursive: true });
+assert.equal(join(home, '.codex-gestalt/gestalt-mobile'), privateRoot);
 const proofStarted = Date.now();
 const checkpoint = setInterval(() => {
   try {
@@ -332,6 +900,32 @@ const checkpoint = setInterval(() => {
 }, 5000);
 checkpoint.unref();
 let mobile, caddy, stream, baselineBirth, generationDirectory;
+let recoveryHandoff, mobileClose, failureCleanupStop;
+let catalogTimer, catalogObserver, sampleCatalogReceipts, catalogDeadlineTimer;
+let catalogCancellation, catalogFailureStop, catalogCleanupLimit;
+let catalogNormalCompleted = false;
+const catalogApiRaw = new Set();
+let editingRaw, editingActionTimer, editingCleanupTimer, editingStopped, editingLatestCaptureId;
+let editingStopSettled = false;
+const editingApiRaw = new Set();
+async function trackedEditingOperation(operation) {
+  if (!editingContinuity) return operation;
+  assert.equal(editingRaw, undefined, 'PROOF_EDIT_OPERATION_OVERLAP');
+  editingRaw = operation;
+  try {
+    return await operation;
+  } finally {
+    editingRaw = undefined;
+  }
+}
+
+async function closeMobileOnce() {
+  if (!mobile) return;
+  mobileClose ??= mobile.close();
+  await mobileClose;
+  if (baselineBirth) assert.equal(observedBirthExited(baselineBirth), true);
+  mobile = undefined;
+}
 let probeTimer;
 let probeActive = false;
 let probeRefresh = Promise.resolve();
@@ -352,20 +946,55 @@ const browserSession = previewSecrets.token();
 const headers = { origin: mobileOrigin, cookie: `gestalt_mobile_session=${browserSession}` };
 const roles = new Map();
 let firstPickerEventId;
-const editResponse = createProductionEditProvider(appRoot, final, report);
+let firstPickerObservationStarted;
+let retainManualFailureEvidence;
+let contextCompletion;
+const originalEditResponse = createProductionEditProvider(appRoot, final, report, {
+  lane: proofLane === 'recovery' ? '' : proofLane,
+});
+const editResponse = (body, toolCall) => {
+  const response = originalEditResponse(body, toolCall);
+  if (
+    serialProfile &&
+    sourcePatchProfile &&
+    !sourcePatchProfile.settled &&
+    body.input.some(
+      (item) =>
+        item.call_id === sourcePatchProfile.callId &&
+        ['function_call_output', 'custom_tool_call_output'].includes(item.type),
+    )
+  ) {
+    serialProfile.end(sourcePatchProfile.id, 'completed');
+    sourcePatchProfile.settled = true;
+  }
+  return response;
+};
 let seed = true,
   owningThread,
   owningNativeSession,
   childThread,
   providerFailure;
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(check, stage, budget = 30000) {
-  const deadline = Date.now() + budget;
+async function until(check, stage, budget = 30000, absoluteDeadline) {
+  const phase = recoveryHandoff?.snapshot().phase;
+  const phaseDeadline =
+    editingContinuity && ['setup', 'recovery'].includes(phase)
+      ? Date.now() + editingPhaseRemaining(phase === 'setup' ? 'accepted' : 'action')
+      : Infinity;
+  const deadline = Math.min(Date.now() + budget, absoluteDeadline ?? Infinity, phaseDeadline);
   while (Date.now() < deadline) {
+    recoveryHandoff?.assertCurrent();
     if (providerFailure) throw new Error('CONTROLLED_PROVIDER_FAILED');
-    if (await check()) return;
-    await wait(50);
+    if (await check()) {
+      recoveryHandoff?.assertCurrent();
+      if (absoluteDeadline !== undefined && Date.now() >= deadline) throw new Error(stage);
+      return;
+    }
+    await wait(
+      absoluteDeadline === undefined ? 50 : Math.max(0, Math.min(50, deadline - Date.now())),
+    );
   }
+  recoveryHandoff?.assertCurrent();
   throw new Error(stage);
 }
 // Never read project configuration or remove metadata: the production resolver
@@ -602,12 +1231,43 @@ async function eventFor(body) {
   }
   assert.equal(metadata.session_id, owningNativeSession);
   const role = metadata.thread_id === owningThread ? 'root' : 'child';
-  if (editFlow && role === 'root') firstPickerEventId ??= liveEventFromRequest(body).id;
+  if (productionModelWorkload(proofLane) === 'owning-edit-only') {
+    assert.equal(role, 'root', 'MANUAL_UNEXPECTED_CHILD');
+    report.modelWorkload = 'owning-edit-only';
+  }
+  if (editFlow && role === 'root') {
+    const event = liveEventFromRequest(body);
+    firstPickerEventId ??= event.id;
+    if (event.type === 'manual_edit_apply') {
+      assert.equal(event.batch?.entries?.length, 1);
+      const correlation = {
+        eventDigest: hash(event.id),
+        entryDigest: hash(event.batch.entries[0].id),
+      };
+      if (report.manualCanonicalCorrelation)
+        assert.deepEqual(report.manualCanonicalCorrelation, correlation);
+      else report.manualCanonicalCorrelation = correlation;
+    }
+  }
   if (role === 'child') {
     assert.ok(!childThread || childThread === metadata.thread_id);
     childThread = metadata.thread_id;
   }
   const step = roles.get(role) ?? 0;
+  if (serialProfile && step === 0) {
+    const parentId =
+      role === 'root'
+        ? serialProfile.eventParent(hash(liveEventFromRequest(body).id))
+        : rootProfileId;
+    const id = serialProfile.begin(role === 'root' ? 'root-confinement' : 'child-confinement', {
+      parentId,
+    });
+    if (role === 'root') {
+      rootProfileId = id;
+      if (deferredReuse)
+        deferredReuse.start({ parentId, eventDigest: hash(liveEventFromRequest(body).id) });
+    } else childProfileId = id;
+  }
   roles.set(role, step + 1);
   report.provider.lastCall = { role, step };
   const available = toolsIn([
@@ -618,6 +1278,20 @@ async function eventFor(body) {
   ]);
   const code = available.find((tool) => tool.name === 'exec' && tool.type === 'custom');
   const toolCall = (name, args, custom = false) => {
+    if (
+      serialProfile &&
+      role === 'root' &&
+      step >= 6 &&
+      name === 'apply_patch' &&
+      !sourcePatchProfile
+    ) {
+      deferredReuse?.assertPassed();
+      sourcePatchProfile = {
+        id: serialProfile.begin('first-source-patch', { parentId: rootProfileId }),
+        callId: `${role}-${step}`,
+        settled: false,
+      };
+    }
     const direct = available.find((tool) => tool.name === name);
     if (direct) return call(direct, `${role}-${step}`, args, custom);
     assert.ok(code?.description?.includes(`declare const tools: { ${name}(`));
@@ -628,7 +1302,14 @@ async function eventFor(body) {
       true,
     );
   };
-  if (editFlow && role === 'root' && step >= 7) return editResponse(body, toolCall);
+  if (
+    editFlow &&
+    role === 'root' &&
+    (productionModelWorkload(proofLane) === 'owning-edit-only' || step >= 7)
+  ) {
+    if (deferredReuse) await deferredReuse.beforeSourcePatch();
+    return editResponse(body, toolCall);
+  }
   if (step === 1) {
     const output = body.input.find(
       (x) =>
@@ -682,6 +1363,8 @@ async function eventFor(body) {
       'native-context-catalog-result',
       discovery && JSON.stringify(discovery.output).includes('production-context-tool-discovered'),
     );
+    assert.equal(contextCompletion, undefined);
+    contextCompletion = new NativeContextCompletion({ startedAt: firstPickerObservationStarted });
     const args = {
       language: 'javascript',
       code: `const fs=await import('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(privateFile)});}catch(e){denied=['EACCES','EPERM','ENOENT','ENOTDIR'].includes(e.code);}if(!denied)throw Error('breach');fs.writeFileSync(${JSON.stringify(join(appRoot, '.impeccable/live/artifacts/context.txt'))},'confined-context');console.log('production-context-denied');`,
@@ -695,6 +1378,29 @@ async function eventFor(body) {
     );
   }
   if (role === 'root' && step === 5) {
+    assert.ok(contextCompletion);
+    report.provider.contextToolResult = contextToolResultDiagnostic(
+      body.input,
+      contextCompletion.expectedCallId(),
+    );
+    let completion;
+    try {
+      completion = contextCompletion.advance(body.input);
+    } finally {
+      report.provider.contextProtocol = contextCompletion.diagnostics();
+    }
+    if (completion.state === 'wait') {
+      // Continue this exact Native cell. Never issue a second ctx_execute or
+      // advance the deterministic model phase while its original call is pending.
+      const wait = available.filter(
+        (tool) =>
+          tool.name === 'wait' && tool.type === 'function' && tool.namespace === code?.namespace,
+      );
+      check('native-context-wait-advertised', wait.length === 1);
+      roles.set(role, step);
+      return call(wait[0], completion.callId, completion.arguments);
+    }
+    report.checks.actualContextMcpCompletedBeforeArtifactValidation = true;
     check(
       'native-context-artifact',
       existsSync(join(appRoot, '.impeccable/live/artifacts/context.txt')) &&
@@ -762,8 +1468,13 @@ async function eventFor(body) {
     assert.ok(spawned);
     report.provider.stage = 'native-child-completion';
     await until(childCompletion, 'NATIVE_CHILD_COMPLETION_DEADLINE');
-    if (editFlow) return editResponse(body, toolCall);
+    if (serialProfile) serialProfile.end(rootProfileId, 'completed');
+    if (editFlow) {
+      if (deferredReuse) await deferredReuse.beforeSourcePatch();
+      return editResponse(body, toolCall);
+    }
   }
+  if (serialProfile && role === 'child') serialProfile.end(childProfileId, 'completed');
   return final(
     `${role}-final`,
     role === 'root'
@@ -775,6 +1486,30 @@ async function eventFor(body) {
   );
 }
 const provider = createServer(async (req, res) => {
+  if (coldCatalog) {
+    try {
+      const probe = catalogProviderProbe(req.method, req.url, req.headers);
+      let row = report.coldCatalog.preparationProbes.find((row) => row.method === probe.method);
+      if (!row) report.coldCatalog.preparationProbes.push((row = { ...probe, count: 0 }));
+      row.count++;
+      assert.ok(row.count <= 64);
+      res.writeHead(
+        probe.status,
+        probe.status === 200 ? { 'content-type': 'application/json' } : { allow: 'POST' },
+      );
+      res.end(
+        probe.status === 200
+          ? JSON.stringify({ data: [{ id: 'gpt-6-sol', object: 'model', owned_by: 'controlled' }] })
+          : undefined,
+      );
+    } catch {
+      report.coldCatalog.inferenceRefusals++;
+      providerFailure = true;
+      res.writeHead(403);
+      res.end();
+    }
+    return;
+  }
   if (providerFailure) {
     res.writeHead(503);
     res.end();
@@ -1000,7 +1735,16 @@ async function remote(
   });
 }
 async function api(method, path, payload) {
-  const res = await mobile.inject({ method, url: path, payload, headers });
+  recoveryHandoff?.assertCurrent();
+  const raw = mobile.inject({ method, url: path, payload, headers });
+  if (editingContinuity) editingApiRaw.add(raw);
+  let res;
+  try {
+    res = await raw;
+  } finally {
+    editingApiRaw.delete(raw);
+  }
+  recoveryHandoff?.assertCurrent();
   if (res.statusCode >= 400) {
     report.apiFailure = { status: res.statusCode, code: res.json()?.code ?? 'UNCLASSIFIED' };
     throw new Error('PRODUCTION_API_REFUSED');
@@ -1014,11 +1758,114 @@ try {
   report.provenance = {
     head,
     tree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(),
-    agents: '414a89284efbb050188ca1802563b92667c50994',
-    agentsAcceptedCommit: '2c88bc0694d8386bf3f1716fddce3082b7e6486f',
-    agentsProofSnapshot: '129d33bc6d6c58d280d9bcf5155fab6ed9b6e0bd',
+    agents: '88f8d4c825d5c6fd862ccff2070865a510f1268b',
+    agentsAcceptedCommit: '73b109603c89db31ff472b453fe6cbe8c6157b52',
+    agentsProofSnapshot: '6d9750e1b27972541ee6e10050a8e4f9a040a7a1',
+    managerAcceptedCommit: '4515cf31c4d00d8ecbdfa363085315f7cb13f78c',
+    managerTree: '349182948619bbbeab892c9884cfb06badf13997',
     manager: LIVE_MANAGER_SHA256,
   };
+  if (proofLane === 'recovery' || editingContinuity || coldCatalog)
+    recoveryHandoff = await openRecoveryHandoff({
+      directory: process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+      socketDirectory: privateRoot,
+      identity: candidateIdentity(),
+      ...(editingContinuity
+        ? {
+            editing: readEditingLaunch(
+              process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+              candidateIdentity(),
+              editingAnchor,
+            ),
+            onFailure: (code) => {
+              report.firstFixedFailure ??= { stage: report.stage, code };
+              serialProfile?.failure(code);
+            },
+          }
+        : {}),
+      onCancel: async () => {
+        stopPreviewProbe();
+        if (editingContinuity) {
+          await drainEditingFailure({
+            pending: Promise.allSettled(
+              [editingRaw, deferredReuse?.drain(), ...editingApiRaw].filter(Boolean),
+            ),
+            record: (row) => {
+              report.editingUnresolved = row;
+              writeFileSync(join(evidence, 'editing-unresolved.json'), JSON.stringify(row));
+            },
+            stop: async () => {
+              if (failureCleanupStop) await failureCleanupStop();
+            },
+          });
+        }
+        if (coldCatalog) {
+          if (!catalogCancellation) {
+            let deadlineNs = 0n;
+            try {
+              const now = process.hrtime.bigint();
+              const jobLeft = catalogDriverBudget(
+                readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR),
+                'cleanup',
+                now,
+              );
+              const cutoff = now + BigInt(jobLeft) * 1_000_000n;
+              deadlineNs =
+                catalogCleanupLimit && catalogCleanupLimit < cutoff ? catalogCleanupLimit : cutoff;
+            } catch {
+              /* Invalid/expired clocks still retain original raw obligations. */
+            }
+            catalogCancellation = drainCatalogCancellation({
+              raw: catalogApiRaw,
+              deadlineNs,
+              stop: async () => {
+                assert.ok(catalogFailureStop, 'COLD_CATALOG_CLEANUP_UNVERIFIED');
+                await catalogFailureStop();
+              },
+              close: closeMobileOnce,
+              record: (row) => {
+                report.catalogCancellation = row;
+              },
+            });
+          }
+          await catalogCancellation;
+        } else await closeMobileOnce();
+      },
+    });
+  if (serialProfileRequested) {
+    serialProfile = createSerialProfile({
+      trialId: process.env.LIVE_PRODUCTION_PROFILE_TRIAL,
+      identity: candidateIdentity(),
+      birth: recoveryHandoff.snapshot().birth,
+      anchor: editingAnchor,
+      phaseA: recoveryHandoff.snapshot().editing.phaseA,
+    });
+    report.serialProfile = serialProfile.report;
+  }
+  if (editingContinuity) {
+    requireEditingBudget(editingAnchor, 'accepted', 1);
+    recoveryHandoff.assertCurrent();
+    editingActionTimer = setTimeout(
+      () => {
+        void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+      },
+      editingRemaining(editingAnchor, 'action'),
+    );
+    editingCleanupTimer = setTimeout(
+      () => {
+        report.editingUnresolved = {
+          operationPending: !!editingRaw || (!!editingStopped && !editingStopSettled),
+          cleanupPending: report.cleanupStage !== 'settled',
+          lockRetained: report.cleanupStage !== 'settled',
+        };
+        writeFileSync(
+          join(evidence, 'editing-unresolved.json'),
+          JSON.stringify(report.editingUnresolved),
+        );
+      },
+      editingRemaining(editingAnchor, 'cleanup'),
+    );
+  }
   report.installationStage = 'vendor-copy';
   const vendor = join(installation, 'vendor');
   cpSync(dirname(realpathSync(process.env.LIVE_HOST_CODEX_BINARY)), join(vendor, 'bin'), {
@@ -1030,12 +1877,14 @@ try {
   const native = pin(join(vendor, 'bin/codex')),
     bwrap = pin(join(vendor, 'bin/codex-resources/bwrap'));
   assert.equal(native.sha256, LIVE_CODEX_SHA256);
+  report.nativeBinarySha256 = native.sha256;
   assert.equal(bwrap.sha256, LIVE_CODEX_BWRAP_SHA256);
   metadataNativePath = native.path;
-  report.installationStage = 'node-copy';
-  const nodeRoot = join(installation, 'node-bin');
-  mkdirSync(nodeRoot, { mode: 0o700 });
-  const node = copyFile(process.execPath, join(nodeRoot, 'node'), true);
+  report.installationStage = 'actual-original-interpreter';
+  // The supported original PATH resolves this exact interpreter identity. A
+  // byte-identical private copy is not the original executable source.
+  const node = pin(realpathSync(process.execPath));
+  assert.equal(node.path, '/usr/bin/node');
   report.installationStage = 'manager-copy';
   const manager = copyFile(
     process.env.LIVE_HOST_MANAGER_BINARY,
@@ -1060,7 +1909,16 @@ try {
   report.installationStage = 'agents-package-copy';
   const packages = ['context-mode', 'gestalt'].map((name) => {
     report.installationPackage = name;
-    const target = join(installation, name);
+    const version =
+      name === 'context-mode'
+        ? JSON.parse(readFileSync(join(agentsRoot, 'plugins', name, 'package.json'), 'utf8'))
+            .version
+        : null;
+    const target =
+      name === 'context-mode'
+        ? join(installation, 'cache/context-mode', version)
+        : join(installation, name);
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     cpSync(join(agentsRoot, 'plugins', name), target, {
       recursive: true,
       filter: (path) =>
@@ -1080,10 +1938,17 @@ try {
     pathToFileURL(join(installation, 'gestalt/scripts/prepare-live-runtime.mjs')).href
   );
   report.installationStage = 'runtime-preparation';
+  const contextPackage = packages.find((entry) => entry.name === 'context-mode');
+  // Ordinary Manager discovery derives this same home without additional env.
+  const gestaltHome = join(home, '.gestalt');
+  mkdirSync(join(gestaltHome, 'runtime'), { recursive: true, mode: 0o700 });
   const preparedRuntime = await prepareLiveRuntime(
-    join(installation, 'context-mode'),
-    join(installation, 'context-runtime'),
+    contextPackage.root,
+    join(gestaltHome, 'runtime/context-mode'),
   );
+  // Normal HOME/.gestalt is separate from Mobile's denied private state. Keep
+  // the required read-only runtime executable while retaining that denial.
+  assert.equal(preparedRuntime.root.startsWith(`${privateRoot}/`), false);
   report.installationStage = 'package-immutability-and-inventory';
   for (const entry of packages) {
     protect(entry.root);
@@ -1193,13 +2058,130 @@ try {
   await new Promise((done) => provider.listen(0, '127.0.0.1', done));
   const providerPort = provider.address().port;
   const originalConfig =
-    `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\nmcp_servers = {}\nplugins = {}\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n` +
+    `model = "gpt-6-sol"\nmodel_provider = "controlled"\nmodel_reasoning_effort = "medium"\napproval_policy = "never"\ndefault_permissions = "workspace-git"\n[model_providers.controlled]\nname = "Controlled production fixture"\nbase_url = "http://127.0.0.1:${providerPort}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[features]\nshell_snapshot = false\nshell_snapshot_v2 = false\ndaemon_auto_start = false\ncode_mode = false\nmulti_agent = true\nmulti_agent_v2 = true\nhooks = false\n[permissions.workspace-git]\nextends = ":workspace"\n[permissions.workspace-git.filesystem]\n":root" = "read"\n${JSON.stringify(appRoot)} = "write"\n${JSON.stringify(privateRoot)} = "deny"\n${JSON.stringify(`/tmp/codex-daemon-${process.getuid()}`)} = "deny"\n"/proc" = "deny"\n[permissions.workspace-git.network]\nenabled = false\n` +
     `[projects.${JSON.stringify(appRoot)}]\ntrust_level = "trusted"\n`;
   // Configure optional shell snapshot caching OFF in the original source before
   // any Native owner starts. Actual shell/model tools and their sandbox remain
   // mandatory below. Live never overrides an existing owner's snapshot setting
   // or accepts/deletes unproven metadata to make admission pass.
-  writeFileSync(join(owningHome, 'config.toml'), originalConfig, { mode: 0o600 });
+  // Obtain exact generated bridge bytes from the accepted configurator in a
+  // separate unused template home. Its hooks remain true and unmodified. The
+  // owning fixture below is explicitly hook-free from birth, never a relabeled
+  // ordinary installed home or a runtime hooks rewrite.
+  const templateHome = join(root, 'configurator-template');
+  mkdirSync(templateHome, { mode: 0o700 });
+  const { configureCodexIntegration } = await import(
+    pathToFileURL(join(contextPackage.root, 'scripts/configure-codex.mjs')).href
+  );
+  const configured = configureCodexIntegration({
+    codexHome: templateHome,
+    gestaltHome,
+    pluginRoot: contextPackage.root,
+    pluginId: 'context-mode@dyne-gestalt-agents',
+  });
+  const templateConfig = readFileSync(configured.configPath),
+    templateHooks = readFileSync(configured.hooksPath);
+  assert.match(templateConfig.toString(), /hooks = true/);
+  mkdirSync(join(owningHome, 'bin'), { mode: 0o700 });
+  const originalBridgePath = join(owningHome, 'bin/context-mode-mcp.mjs');
+  writeFileSync(originalBridgePath, readFileSync(configured.launcherPath), {
+    mode: 0o755,
+    flag: 'wx',
+  });
+  const installedOriginalConfig =
+    originalConfig +
+    `\n[marketplaces.dyne-gestalt-agents]\nsource_type = "local"\nsource = ${JSON.stringify(agentsRoot)}\n` +
+    `\n[mcp_servers.context-mode]\ncommand = "node"\nargs = [${JSON.stringify(originalBridgePath)}]\nenabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n[plugins."context-mode@dyne-gestalt-agents"]\nenabled = false\n[plugins."gestalt@dyne-gestalt-agents"]\nenabled = false\n`;
+  // Let pinned Native construct its genuine registry/cache in an unused staging
+  // home. Keep its generated enabled config separate; the intended owning home
+  // is explicitly disabled from birth and is never repaired by changing settings.
+  report.installationStage = 'native-authentic-plugin-registry';
+  const registryHome = join(root, 'registry-template');
+  mkdirSync(registryHome, { mode: 0o700 });
+  const registryEnvironment = {
+    PATH: '/usr/bin:/bin',
+    HOME: home,
+    CODEX_HOME: registryHome,
+    TMPDIR: '/tmp',
+    LANG: 'C.UTF-8',
+  };
+  const registryCommand = (args) =>
+    JSON.parse(
+      execFileSync(native.path, args, {
+        env: registryEnvironment,
+        cwd: appRoot,
+        encoding: 'utf8',
+        timeout: 90_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  registryCommand(['plugin', 'marketplace', 'add', agentsRoot, '--json']);
+  for (const name of ['gestalt', 'context-mode'])
+    registryCommand(['plugin', 'add', `${name}@dyne-gestalt-agents`, '--json']);
+  const generatedRegistryConfig = readFileSync(join(registryHome, 'config.toml'));
+  assert.equal((generatedRegistryConfig.toString().match(/enabled = true/g) ?? []).length, 2);
+  cpSync(join(registryHome, 'plugins'), join(owningHome, 'plugins'), { recursive: true });
+  writeFileSync(join(owningHome, 'config.toml'), installedOriginalConfig, { mode: 0o600 });
+  const installedPlugins = JSON.parse(
+    execFileSync(
+      native.path,
+      ['plugin', 'list', '--marketplace', 'dyne-gestalt-agents', '--json'],
+      {
+        env: { ...registryEnvironment, CODEX_HOME: owningHome },
+        cwd: appRoot,
+        encoding: 'utf8',
+        timeout: 90_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ),
+  );
+  const registryEntries = Array.isArray(installedPlugins)
+    ? installedPlugins
+    : installedPlugins.installed;
+  assert.equal(registryEntries.length, 2);
+  assert.deepEqual(registryEntries.map((entry) => entry.name).sort(), ['context-mode', 'gestalt']);
+  for (const entry of registryEntries) {
+    assert.notEqual(entry.installed, false);
+    assert.equal(entry.enabled, false);
+    assert.equal(entry.version, originalLaunchSourceVersion());
+  }
+  function originalLaunchSourceVersion() {
+    return JSON.parse(readFileSync(join(contextPackage.root, 'package.json'), 'utf8')).version;
+  }
+  report.nativeInstalledRegistry = registryEntries.map(({ name, version, enabled }) => ({
+    name,
+    version,
+    enabled,
+  }));
+  assert.deepEqual(readFileSync(join(registryHome, 'config.toml')), generatedRegistryConfig);
+  const originalLaunchSource = {
+    kind: 'context-mode-bridge-v1',
+    path: originalBridgePath,
+    sha256: hash(readFileSync(originalBridgePath)),
+    gestaltHome,
+    interpreter: node,
+    package: {
+      root: contextPackage.root,
+      version: JSON.parse(readFileSync(join(contextPackage.root, 'package.json'), 'utf8')).version,
+      treeDigest: contextPackage.sha256,
+    },
+    runtime: { root: runtime.root, treeDigest: runtime.sha256 },
+  };
+  assert.equal(lstatSync(originalBridgePath).mode & 0o7777, 0o755);
+  assert.deepEqual(readFileSync(configured.configPath), templateConfig);
+  assert.deepEqual(readFileSync(configured.hooksPath), templateHooks);
+  report.originalInstalledSurface = {
+    authenticConfiguratorBridgeBytes: true,
+    authenticPreparedRuntime: true,
+    explicitHookFreeOwningFixture: true,
+    ordinaryInstalledHomeEligible: false,
+    originalMode: '0755',
+    originalEnabled: true,
+    originalRequired: true,
+    packageExplicitlyDisabled: true,
+    templateHooksPreserved: true,
+  };
+
   execFileSync(
     'openssl',
     [
@@ -1271,6 +2253,8 @@ try {
     await until(() => existsSync(caddySocket), 'CADDY_START_DEADLINE');
   }
   const auth = new SqliteAuthorizationStore(home, rp);
+  assert.equal(auth.path, join(privateRoot, 'auth.sqlite'));
+  report.checks.normalHomeRuntimeSeparateFromDeniedMobileAuth = true;
   const owner = auth.initializeOwner(randomBytes(32));
   auth.claimFirstDevice(owner, {
     id: 'fixture-device',
@@ -1308,7 +2292,7 @@ try {
       providerCredentialEnvironment: [],
       project: { bwrap, node, worker, helper },
       components: {
-        manager: '19114b2389501c0a511b8a77ace4161b0dae2f0e',
+        manager: report.provenance.managerAcceptedCommit,
         mobile: report.provenance.tree,
         agents: report.provenance.agents,
       },
@@ -1330,6 +2314,7 @@ try {
             profileId: 'workspace-git',
             configFiles: [pin(join(owningHome, 'config.toml'))],
             instructionFiles: [],
+            originalLaunchSources: [originalLaunchSource],
             sandboxState: {
               permissionProfile: {
                 type: 'managed',
@@ -1371,6 +2356,7 @@ try {
     ancestorsBeforeComposition: ancestorMetadata(),
   };
   report.stage = 'sole-production-composition';
+  recoveryHandoff?.assertCurrent();
   mobile = await composeRelayApp({
     root: appRoot,
     dataDir: join(privateRoot, 'relay'),
@@ -1380,6 +2366,7 @@ try {
     installedCodexVersion: 'codex-cli 0.161.0',
     startAppServers: true,
     xerj: 'off',
+    ...(editFlow ? { staticDir: resolve('dist/client') } : {}),
     profiles: {
       list: async () => [],
       require: async () => ({ name: 'default', state: 'ok', status: 'ready' }),
@@ -1389,6 +2376,21 @@ try {
   if (editFlow) await mobile.listen({ host: '127.0.0.1', port: mobileHttpPort });
   report.projectMetadata.afterComposition = ownedProjectMetadata();
   if (constructionOnly) throw new Error('CONSTRUCTION_ONLY_COMPLETE');
+  report.stage = 'ordinary-installed-auxiliary-discovery';
+  const models = await api('POST', '/api/session-models/codex', {});
+  assert.ok(Array.isArray(models.models) && models.models.length > 0);
+  report.checks.ordinaryInstalledAuxiliaryModelDiscovery = true;
+  const skills = await api(
+    'GET',
+    `/api/skills?workspaceId=${workspaceId(appRoot)}&profile=default&refresh=true`,
+  );
+  assert.ok(Array.isArray(skills.skills));
+  assert.deepEqual(skills.errors, []);
+  assert.equal(
+    skills.skills.some((skill) => /\/plugins\/cache\/dyne-gestalt-agents\//.test(skill.path)),
+    false,
+  );
+  report.checks.ordinaryInstalledAuxiliarySkillsExcludeDisabledPackages = true;
   report.stage = 'actual-owning-session';
   const stopMetadataSampling = sampleNativeStartupMetadata();
   let session;
@@ -1409,14 +2411,20 @@ try {
   assert.equal(session.state, 'ready');
   assert.equal(typeof session.threadId, 'string');
   report.checks.actualOwningStartupAdmitted = true;
-  await api('POST', `/api/sessions/${session.id}/turns`, {
-    text: 'Seed owning thread persistence.',
-  });
-  await until(async () => {
-    const current = await api('GET', `/api/sessions/${session.id}`);
-    return !current.activeTurnId && report.provider.requestCount === 1;
-  }, 'OWNING_SEED_DEADLINE');
-  report.projectMetadata.afterSeed = ownedProjectMetadata();
+  if (coldCatalog || (preflightOnly && !seededPreflight)) {
+    owningThread = session.threadId;
+    report.projectMetadata.afterSeed = report.projectMetadata.afterSessionCreate;
+    report.preflightSeedSkipped = true;
+  } else {
+    await api('POST', `/api/sessions/${session.id}/turns`, {
+      text: 'Seed owning thread persistence.',
+    });
+    await until(async () => {
+      const current = await api('GET', `/api/sessions/${session.id}`);
+      return !current.activeTurnId && report.provider.requestCount === 1;
+    }, 'OWNING_SEED_DEADLINE');
+    report.projectMetadata.afterSeed = ownedProjectMetadata();
+  }
   report.stage = 'compatible-original-startup';
   for (const facts of [
     report.projectMetadata.afterSessionCreate,
@@ -1438,7 +2446,36 @@ try {
     operationId: 'production-admission',
   };
   report.stage = 'production-start-admission';
-  const started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  const startAdmissionBegan = performance.now();
+  let started;
+  if (editFlow) {
+    await trackedEditingOperation(
+      productionEditBrowser({
+        privateRoot,
+        certificate: join(caddyRoot, 'tls.pem'),
+        report,
+        browser: {
+          startThroughControls: true,
+          startObservationBudgetMs,
+          mobileOrigin,
+          sessionId: session.id,
+          sessionCookie: browserSession,
+          uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+          resultFile: join(evidence, 'production-controls-start-browser.json'),
+          screenshot: join(evidence, 'production-controls-start.png'),
+        },
+        command: async () => {
+          throw new Error('START_BROWSER_COMMAND_UNAVAILABLE');
+        },
+      }),
+    );
+    report.mobileControlsStart = report.editBrowser;
+    started = report.mobileControlsStart.startedRun;
+    operation.operationId = report.mobileControlsStart.operationId;
+    assert.equal(report.mobileControlsStart.startThroughMobileControls, true);
+    report.checks.actualMobileUiStartWithProductionAuthentication = true;
+  } else started = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
+  report.startAdmissionElapsedMs = Math.round(performance.now() - startAdmissionBegan);
   assert.equal(started.state, 'active');
   preview = started.previewOrigin;
   generationDirectory = readdirSync(controller)
@@ -1473,7 +2510,7 @@ try {
   }
   baselineBirth = observed.launch;
   assert.equal(observedBirthExited(baselineBirth), false);
-  assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), originalConfig);
+  assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
   for (const name of ['policy-receipt.json', 'admission-receipt.json'])
     report.checks[name.replaceAll('-', '_')] = existsSync(join(generationDirectory, name));
   const stable = (value) =>
@@ -1500,6 +2537,22 @@ try {
   const image = signed(join(generationDirectory, `image-${captureId}.json`));
   const sealed = signed(join(generationDirectory, `runtime-${captureId}.json`));
   assert.equal(before.kind, 'before-runtime-birth');
+  assert.ok(
+    before.configs.some(
+      (entry) =>
+        entry.path === join(owningHome, 'config.toml') &&
+        entry.sha256 === hash(Buffer.from(installedOriginalConfig)),
+    ),
+  );
+  assert.ok(
+    sealed.inventory.sources.some(
+      (entry) =>
+        entry.kind === 'file' &&
+        entry.path === join(owningHome, 'config.toml') &&
+        entry.sha256 === hash(Buffer.from(installedOriginalConfig)),
+    ),
+  );
+  report.checks.disabledPluginMetadataRemainsInSignedOriginalConfig = true;
   assert.equal(image.process.pid, baselineBirth.pid);
   assert.equal(sealed.runtime.process.pid, baselineBirth.pid);
   assert.equal(sealed.runtime.process.birth, baselineBirth.birth);
@@ -1527,12 +2580,266 @@ try {
     sourceKinds: sealed.inventory.sources.map((source) => source.kind),
     captureGenerationMatchesLiveGeneration: true,
   };
+  assert.deepEqual(manifest.originalLaunchSources, [originalLaunchSource]);
+  assert.deepEqual(before.originalLaunchSources[0].descriptor, originalLaunchSource);
+  assert.deepEqual(
+    sealed.inventory.sources.find((source) => source.kind === 'installed-launch-source'),
+    before.originalLaunchSources[0],
+  );
+  report.checks.installedExecutableSourceSeparatelySignedAndSealed = true;
   report.checks.originalManagedOwnerRetainedWithSignedV2Sources = true;
   report.checks.productionContextNativeAdmissionProbe = true; // active follows the actual fixed context probe, never a fixture callback.
-  const reused = await api('POST', `/api/sessions/${session.id}/live/start`, operation);
-  assert.equal(reused.liveId, started.liveId);
-  assert.equal(reused.generation, started.generation);
-  report.checks.sameSessionReuseNoReplacement = true;
+  if (serialProfile)
+    serialProfile.report.originalOwner = {
+      liveDigest: hash(started.liveId),
+      generation: started.generation,
+      rootThreadDigest: hash(owningThread),
+      captureDigest: hash(captureId),
+      nativeBirthDigest: hash(JSON.stringify(baselineBirth)),
+    };
+  const reuseOriginal = () =>
+    profiled(
+      'idempotent-start',
+      () => api('POST', `/api/sessions/${session.id}/live/start`, operation),
+      { generation: started.generation, ...(rootProfileId ? { parentId: rootProfileId } : {}) },
+    );
+  const validateReuse = (reused) => {
+    recoveryHandoff?.assertCurrent();
+    assert.equal(reused.liveId, started.liveId);
+    assert.equal(reused.generation, started.generation);
+    assert.equal(observedBirthExited(baselineBirth), false);
+    const currentManifest = JSON.parse(readFileSync(join(generationDirectory, 'manifest.json')));
+    assert.deepEqual(currentManifest.generation, manifest.generation);
+    assert.equal(currentManifest.runtimeProvenance.captureId, captureId);
+    assert.equal(
+      signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).captureId,
+      captureId,
+    );
+    // The actual idempotent API verifies fresh Native selection and source identity.
+    assert.deepEqual(currentManifest.runtimeProvenance, manifest.runtimeProvenance);
+    report.checks.sameSessionReuseNoReplacement = true;
+  };
+  if (serialProfileRequested) {
+    deferredReuse = createDeferredSourceGate({
+      assertCurrent: () => recoveryHandoff.assertCurrent(),
+      authorize: ({ parentId, eventDigest }) => {
+        assert.equal(serialProfile.eventParent(eventDigest), parentId);
+        const granted = report.serialProfile.spans.find((row) => row.id === parentId);
+        assert.equal(granted.generation, started.generation);
+        assert.equal(granted.label, 'generate-authority');
+        assert.equal(observedBirthExited(baselineBirth), false);
+      },
+      work: reuseOriginal,
+      validate: validateReuse,
+    });
+  } else validateReuse(await reuseOriginal());
+  if (['accept-steer', 'manual-discard'].includes(proofLane)) {
+    const readOriginalOwner = () => {
+      const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const run = JSON.parse(
+          db.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+        );
+        assert.equal(run.relayId, session.id);
+        assert.equal(run.rootThreadId, owningThread);
+        assert.equal(run.app.device, String(statSync(appRoot).dev));
+        assert.equal(run.app.inode, String(statSync(appRoot).ino));
+        const currentManifest = JSON.parse(
+          readFileSync(join(generationDirectory, 'manifest.json')),
+        );
+        assert.equal(currentManifest.generation.sessionId, session.id);
+        assert.equal(currentManifest.generation.generation, started.generation);
+        assert.equal(currentManifest.appRoot, appRoot);
+        assert.equal(currentManifest.runtimeProvenance.captureId, captureId);
+        const admission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+        assert.equal(admission.captureId, captureId);
+        return { run, captureId: admission.captureId };
+      } finally {
+        db.close();
+      }
+    };
+    const readOwner = () => {
+      if (!editingContinuity) return readOriginalOwner();
+      const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const run = JSON.parse(
+          db.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+        );
+        assert.equal(run.relayId, session.id);
+        assert.equal(run.rootThreadId, owningThread);
+        assert.equal(run.app.device, String(statSync(appRoot).dev));
+        assert.equal(run.app.inode, String(statSync(appRoot).ino));
+        const admission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+        const directories = readdirSync(controller).filter((name) => name.startsWith('owner-'));
+        const matches = directories
+          .map((name) => join(controller, name))
+          .filter((directory) => {
+            const item = JSON.parse(readFileSync(join(directory, 'manifest.json')));
+            return item.runtimeProvenance.captureId === admission.captureId;
+          });
+        assert.equal(matches.length, 1);
+        const directory = matches[0];
+        const currentManifest = JSON.parse(readFileSync(join(directory, 'manifest.json')));
+        assert.equal(currentManifest.generation.sessionId, session.id);
+        assert.equal(currentManifest.generation.generation, admission.generation.generation);
+        assert.ok(currentManifest.generation.generation <= run.generation);
+        assert.equal(currentManifest.appRoot, appRoot);
+        const currentSealed = signed(join(directory, `runtime-${admission.captureId}.json`));
+        assert.equal(currentSealed.runtime.process.pid, sealed.runtime.process.pid);
+        assert.equal(currentSealed.runtime.process.birth, sealed.runtime.process.birth);
+        assert.equal(
+          currentSealed.inventory.observation.accountDigest,
+          sealed.inventory.observation.accountDigest,
+        );
+        assert.deepEqual(
+          currentSealed.inventory.observation.sessionFlags,
+          sealed.inventory.observation.sessionFlags,
+        );
+        if (!editingContinuity) {
+          assert.equal(directory, generationDirectory);
+          assert.equal(admission.captureId, captureId);
+        }
+        return { run, captureId: admission.captureId };
+      } finally {
+        db.close();
+      }
+    };
+    failureCleanupStop = () =>
+      (editingStopped ??= (async () => {
+        await editingRaw?.catch(() => {});
+        const expected = readOwner();
+        const deadline = editingContinuity
+          ? Date.now() + editingRemaining(editingAnchor, 'cleanup')
+          : JSON.parse(readFileSync(join(privateRoot, 'edit-browser/browser.json')))
+              .observationHostDeadline;
+        // No new observation budget: the original browser host deadline also
+        // bounds this failure reconciliation. Await actual Stop settlement, never
+        // confuse an observer expiry with cancelled controller work.
+        const expectedIndex = withoutProofInjection(
+          readFileSync(join(appRoot, 'index.html'), 'utf8'),
+        );
+        const expectedModule = hash(readFileSync(join(appRoot, 'app.js')));
+        const operation = failureStopOperation({
+          expected,
+          read: readOwner,
+          deadline,
+          evidence: (row) => {
+            report.failureStop = row;
+          },
+          stop: async (fence) => {
+            closureBoundary = 'closing';
+            if (!editingContinuity)
+              return api('POST', `/api/sessions/${session.id}/live/stop`, fence);
+            // This authenticated cleanup remains legal after driver cancellation;
+            // all model/Resume/launch paths still require the live driver fence.
+            const response = await mobile.inject({
+              method: 'POST',
+              url: `/api/sessions/${session.id}/live/stop`,
+              headers,
+              payload: fence,
+            });
+            report.failureStopHttp = boundedStopHttpResponse(response);
+            assert.equal(response.statusCode, 200);
+            return response.json();
+          },
+          verify: async () => {
+            assert.equal(
+              signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
+              'revoked',
+            );
+            // Stop restores ordinary owner configuration; only Mobile close owns
+            // physical original-Native exit, verified after closeMobileOnce.
+            const stopped = readOwner().run;
+            assert.equal(stopped.state, 'idle');
+            assert.equal(stopped.controlsRestored, true);
+            for (const process of projectProcesses.keys()) {
+              const proof = process.diagnostics();
+              assert.equal(proof.namespaceExited, true);
+              assert.equal(proof.pipeDescriptorsClosed, true);
+            }
+            assert.equal(
+              readFileSync(join(owningHome, 'config.toml'), 'utf8'),
+              installedOriginalConfig,
+            );
+            assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), expectedIndex);
+            assert.equal(hash(readFileSync(join(appRoot, 'app.js'))), expectedModule);
+            assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+            assert.equal(
+              readFileSync(join(appRoot, 'index.html'), 'utf8').includes('__IMPECCABLE_LIVE'),
+              false,
+            );
+          },
+        })();
+        await operation.drain;
+      })().finally(() => {
+        editingStopSettled = true;
+      }));
+  }
+
+  if (preflightOnly || coldCatalog) {
+    assert.equal(report.provider.requestCount, seededPreflight ? 1 : 0);
+    const catalogs = report.nativeLaunchLifetimes.flatMap((launch) => launch.owningCatalogs ?? []);
+    const sameThread = catalogs.filter((row) => row.threadIdDigest === hash(session.threadId));
+    assert.ok(
+      sameThread.some(
+        (row) => row.name === 'context-mode' && row.status === 'connected' && row.toolCount === 11,
+      ),
+    );
+    for (const [name, count] of [
+      ['context-mode', 7],
+      ['gestalt-org-plan', 12],
+    ]) {
+      assert.ok(
+        sameThread.some(
+          (row) => row.name === name && row.status === 'failed' && row.toolCount === 0,
+        ),
+      );
+      assert.ok(
+        sameThread.some(
+          (row) => row.name === name && row.status === 'connected' && row.toolCount === count,
+        ),
+      );
+    }
+    const processes = readdirSync(generationDirectory)
+      .filter((name) => /^process-[a-f0-9-]{36}\.json$/.test(name))
+      .map((name) => signed(join(generationDirectory, name)));
+    assert.ok(
+      processes.some(
+        (receipt) =>
+          receipt.commandId === 'context-mode-call' &&
+          receipt.postSpawnValidated === true &&
+          receipt.status === 'exited' &&
+          receipt.termination === 'leader-exit' &&
+          receipt.policy.manifestDigest ===
+            hash(readFileSync(join(generationDirectory, 'manifest.json'))),
+      ),
+    );
+    report.preflight = {
+      sameOwningNativeBirth: true,
+      originalCatalog11: true,
+      originalRetiredBeforeSeal: true,
+      terminalPresealZeroTools: true,
+      actualPostsealCatalog7And12: true,
+      currentSignedPostSpawnProbe: true,
+      actualProductionStartActive: true,
+      modelRequests: report.provider.requestCount,
+    };
+    if (preflightOnly) {
+      report.stage = 'preflight-revoke-and-shutdown';
+      await mobile.close();
+      mobile = undefined;
+      assert.equal(
+        signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status,
+        'revoked',
+      );
+      assert.equal(observedBirthExited(baselineBirth), true);
+      assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
+      assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
+      report.checks.preflightRevokeCloseAndOriginalConfigurationPreserved = true;
+      report.cleanupComplete = true;
+      throw new Error('ADMISSION_PREFLIGHT_COMPLETE');
+    }
+  }
   report.stage = 'authenticated-preview-exchange';
   const verifier = previewSecrets.token();
   const grant = await api('POST', `/api/sessions/${session.id}/live/launch-grants`, {
@@ -1608,6 +2915,286 @@ try {
     }, 20000);
   }
   report.checks.authenticatedPrivatePipePreviewThroughRealTls = true;
+  if (coldCatalog) {
+    let catalogBound,
+      catalogActionsFinished = false;
+    const catalogIdentity = candidateIdentity(),
+      catalogBirth = recoveryHandoff.snapshot().birth,
+      catalogAnchor = readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR);
+    const assertCatalogClock = () => {
+      readEditingAnchor(process.env.LIVE_EDIT_JOB_ANCHOR, catalogAnchor);
+      if (catalogBound) {
+        readCatalogObservation(
+          process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+          catalogIdentity,
+          catalogBirth,
+          catalogBound,
+        );
+        if (!catalogActionsFinished && phaseBoundRemaining(catalogBound) === 0) {
+          report.firstFixedFailure ??= { stage: report.stage, code: 'PROOF_DRIVER_PHASE_DEADLINE' };
+          void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+        }
+      }
+      if (catalogActionsFinished) requireEditingBudget(catalogAnchor, 'cleanup', 1);
+      recoveryHandoff.assertCurrent();
+    };
+    const catalogApi = (...args) => {
+      assertCatalogClock();
+      const original = api(...args);
+      catalogApiRaw.add(original);
+      return original
+        .then((value) => {
+          assertCatalogClock();
+          return value;
+        })
+        .finally(() => catalogApiRaw.delete(original));
+    };
+    const prefix = `/api/sessions/${session.id}/live`;
+    const fencePath = join(controller, `runtime-admission-${hash(appRoot)}.json`);
+    const readCatalogOwner = () => {
+      const db = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        return JSON.parse(
+          db.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId).record,
+        );
+      } finally {
+        db.close();
+      }
+    };
+    const cleanupOwner = structuredClone(readCatalogOwner());
+    assert.equal(cleanupOwner.liveId, started.liveId);
+    assert.equal(cleanupOwner.generation, started.generation);
+    assert.equal(cleanupOwner.relayId, session.id);
+    assert.equal(cleanupOwner.rootThreadId, owningThread);
+    assert.equal(cleanupOwner.app.canonicalAppRoot, appRoot);
+    catalogFailureStop = () =>
+      stopCatalogOwner({
+        expected: cleanupOwner,
+        readOwner: readCatalogOwner,
+        request: async (payload) => {
+          // Trusted authenticated cleanup only; api() correctly refuses cancelled
+          // proof actions. This issues exactly one Stop, never another Resume.
+          assert.equal(observedBirthExited(baselineBirth), false);
+          const response = await mobile.inject({
+            method: 'POST',
+            url: `${prefix}/stop`,
+            headers,
+            payload,
+          });
+          return { status: response.statusCode, body: response.json() };
+        },
+        verify: () => {
+          assert.equal(signed(fencePath).status, 'revoked');
+          assert.equal(
+            readFileSync(join(owningHome, 'config.toml'), 'utf8'),
+            installedOriginalConfig,
+          );
+          assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
+          for (const name of ['inject-journal.json', 'server.json'])
+            assert.equal(existsSync(join(appRoot, '.impeccable/live', name)), false);
+          const routes = new DatabaseSync(join(controller, 'routes.sqlite'), { readOnly: true });
+          try {
+            assert.deepEqual(
+              {
+                ...routes
+                  .prepare(
+                    'SELECT desired,applied,registrationId FROM live_origins WHERE canonicalAppRoot=?',
+                  )
+                  .get(appRoot),
+              },
+              { desired: null, applied: null, registrationId: null },
+            );
+          } finally {
+            routes.close();
+          }
+          assert.ok(
+            [...projectProcesses.keys()].every((process) => {
+              const row = process.diagnostics();
+              return row.namespaceExited && row.pipeDescriptorsClosed;
+            }),
+          );
+        },
+      });
+    const capture = (run) => {
+      const fence = signed(fencePath);
+      assert.equal(fence.generation.sessionId, session.id);
+      assert.equal(fence.generation.generation, run.generation);
+      const matches = readdirSync(controller)
+        .filter((name) => name.startsWith('owner-'))
+        .map((name) => join(controller, name))
+        .filter(
+          (path) =>
+            JSON.parse(readFileSync(join(path, 'manifest.json'))).runtimeProvenance.captureId ===
+            fence.captureId,
+        );
+      assert.equal(matches.length, 1);
+      const manifestBytes = readFileSync(join(matches[0], 'manifest.json'));
+      const currentManifest = JSON.parse(manifestBytes);
+      assert.equal(currentManifest.appRoot, appRoot);
+      assert.equal(currentManifest.generation.sessionId, session.id);
+      assert.equal(currentManifest.generation.generation, run.generation);
+      const sealed = signed(join(matches[0], `runtime-${fence.captureId}.json`));
+      assert.deepEqual(currentManifest.originalLaunchSources, [originalLaunchSource]);
+      assert.equal(
+        signed(join(matches[0], 'policy-receipt.json')).manifestDigest,
+        hash(manifestBytes),
+      );
+      assert.ok(sealed.inventory.sources.some((item) => item.kind === 'installed-launch-source'));
+      assert.equal(observedBirthExited(baselineBirth), false);
+      return {
+        captureId: fence.captureId,
+        birth: sealed.runtime.process,
+        accountDigest: sealed.inventory.observation.accountDigest,
+        selection: sealed.inventory.observation.sessionFlags,
+      };
+    };
+    // Existing authenticated receipts supply NEW interval-censored command
+    // stages alongside the existing request-correlated admission timings.
+    const seen = new Map();
+    catalogObserver = catalogReceiptObserver({ origin: 0 });
+    report.coldCatalog.receipts = catalogObserver.report;
+    sampleCatalogReceipts = () => {
+      const scanStartedAt = performance.now();
+      const receipts = [];
+      try {
+        for (const name of readdirSync(controller).filter((name) => name.startsWith('owner-'))) {
+          const directory = join(controller, name),
+            manifestPath = join(directory, 'manifest.json');
+          if (!existsSync(manifestPath)) continue;
+          const bytes = readFileSync(manifestPath),
+            item = JSON.parse(bytes);
+          if (
+            item.generation.sessionId !== session.id ||
+            item.generation.generation <= started.generation
+          )
+            continue;
+          assert.equal(item.appRoot, appRoot);
+          for (const file of readdirSync(directory).filter((name) =>
+            /^process-[a-f0-9-]{36}\.json$/.test(name),
+          )) {
+            const path = join(directory, file),
+              info = lstatSync(path);
+            assert.ok(
+              info.isFile() &&
+                !info.isSymbolicLink() &&
+                info.uid === process.getuid() &&
+                info.size <= 2 * 1024 * 1024,
+            );
+            const version = `${info.ino}:${info.mtimeMs}:${info.size}`;
+            if (seen.get(path) === version) continue;
+            const receipt = signed(path);
+            if (receipt.commandId !== 'context-mode-call') continue;
+            assert.equal(file, `process-${receipt.launchId}.json`);
+            receipts.push({
+              receipt,
+              manifestDigest: hash(bytes),
+              generation: item.generation.generation,
+              captureId: item.runtimeProvenance.captureId,
+            });
+            seen.set(path, version);
+          }
+        }
+        catalogObserver.sample(receipts, { startedAt: scanStartedAt, endedAt: performance.now() });
+      } catch {
+        catalogObserver.sample([{}], { startedAt: scanStartedAt, endedAt: performance.now() });
+      }
+    };
+    report.stage = 'cold-catalog-ready';
+    await recoveryHandoff.boundary();
+    catalogBound = readCatalogObservation(
+      process.env.LIVE_PRODUCTION_RECOVERY_CHANNEL,
+      catalogIdentity,
+      catalogBirth,
+    );
+    assert.deepEqual(catalogBound.anchor, catalogAnchor, 'PROOF_DRIVER_METADATA_CHANGED');
+    catalogCleanupLimit = BigInt(catalogBound.deadlineNs) + 180_000_000_000n;
+    assertCatalogClock();
+    report.coldCatalog.bound = {
+      startedNs: catalogBound.startedNs,
+      deadlineNs: catalogBound.deadlineNs,
+    };
+    catalogDeadlineTimer = setTimeout(() => {
+      report.firstFixedFailure ??= { stage: report.stage, code: 'PROOF_DRIVER_PHASE_DEADLINE' };
+      void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+    }, phaseBoundRemaining(catalogBound));
+    report.stage = 'cold-catalog-survivor-renewal';
+    sampleCatalogReceipts();
+    catalogTimer = setInterval(sampleCatalogReceipts, 100);
+    const resumed = await coldCatalogLifecycle({
+      api: catalogApi,
+      until,
+      prefix,
+      original: started,
+      capture,
+      source: () => withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8')),
+      providerCount: () => report.provider.requestCount,
+      closeStream: () => stream.destroy(),
+      signedRevoked: () => signed(fencePath).status === 'revoked',
+      assertCurrent: assertCatalogClock,
+      report: report.coldCatalog,
+    });
+    const selected = await catalogApi('GET', `/api/sessions/${session.id}`);
+    assert.equal(selected.threadId, owningThread);
+    assert.equal(selected.provider, session.provider);
+    assert.equal(selected.model, session.model);
+    assert.deepEqual(selected.modelSettings, session.modelSettings);
+    assert.deepEqual(selected.executionPolicy, session.executionPolicy);
+    assertCatalogClock();
+    recoveryHandoff.finishActions();
+    catalogActionsFinished = true;
+    clearTimeout(catalogDeadlineTimer);
+    report.coldCatalog.actionFinishedNs = process.hrtime.bigint().toString();
+    report.stage = 'cold-catalog-stop-and-restore';
+    const stopped = await catalogApi('POST', `${prefix}/stop`, {
+      liveId: resumed.liveId,
+      generation: resumed.generation,
+    });
+    assert.equal(stopped.state, 'idle');
+    const stoppedDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+    try {
+      assert.equal(
+        JSON.parse(
+          stoppedDb.prepare('SELECT record FROM live_runs WHERE liveId=?').get(stopped.liveId)
+            .record,
+        ).controlsRestored,
+        true,
+      );
+    } finally {
+      stoppedDb.close();
+    }
+    assert.equal(signed(fencePath).status, 'revoked');
+    assert.equal(readFileSync(join(owningHome, 'config.toml'), 'utf8'), installedOriginalConfig);
+    assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
+    for (const name of ['inject-journal.json', 'server.json'])
+      assert.equal(existsSync(join(appRoot, '.impeccable/live', name)), false);
+    assert.ok(
+      [...projectProcesses.keys()].every((process) => {
+        const row = process.diagnostics();
+        return row.namespaceExited && row.pipeDescriptorsClosed;
+      }),
+    );
+    assert.notEqual(
+      await remote('/').then(
+        (response) => response.status,
+        () => 0,
+      ),
+      200,
+    );
+    report.coldCatalog.restorationVerified = true;
+    sampleCatalogReceipts();
+    catalogObserver.assertValid();
+    await closeMobileOnce();
+    assertCatalogClock();
+    clearTimeout(catalogDeadlineTimer);
+    assert.equal(observedBirthExited(baselineBirth), true);
+    assert.equal(report.provider.requestCount, 0);
+    assert.equal(report.coldCatalog.inferenceRefusals, 0);
+    assert.equal(catalogApiRaw.size, 0);
+    assert.equal(catalogCancellation, undefined);
+    catalogNormalCompleted = true;
+    report.cleanupComplete = true;
+    throw new Error('COLD_CATALOG_COMPLETE');
+  }
   report.stage = 'production-owning-model-tools';
   if (editFlow) {
     const requestsBeforeWriterProbes = report.provider.requestCount;
@@ -1633,102 +3220,728 @@ try {
     }
     assert.equal(report.provider.requestCount, requestsBeforeWriterProbes);
     report.checks.chatAutopilotOrgWritersRefusedDuringPickerFlow = true;
-    let manualSource;
+    let manualSource,
+      observedManualPoll,
+      acceptedCanonicalAcknowledged = false;
+    let steeredCanonicalAcknowledged = false,
+      backgroundFinished = false,
+      discardedCanonicalAcknowledged = false;
+    const acceptedLeaseStages = new Set();
+    const acceptedLeaseReceipts = (report.acceptedLeaseStages = []);
+    const manualLeaseStages = new Set();
+    const manualLeaseReceipts = (report.manualLeaseStages = []);
+    let manualWaitDeadline;
     let backgroundSourceDigest, backgroundRequestCount;
-    const acknowledged = async (kind) =>
-      until(
-        () => {
-          const db = new DatabaseSync(
-            join(
-              controller,
-              `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
-            ),
-            {
-              readOnly: true,
-            },
-          );
-          try {
-            return db
-              .prepare('SELECT record FROM live_event_inbox')
-              .all()
-              .some((row) => {
-                const item = JSON.parse(row.record);
-                return item.kind === kind && item.stage === 'acknowledged';
-              });
-          } finally {
-            db.close();
-          }
-        },
-        'EDIT_CANONICAL_ACK_DEADLINE',
-        60000,
+    const manualHistorySnapshot = () => {
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
       );
+      try {
+        const events = db
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+          .all()
+          .filter((row) => row.liveId === started.liveId && row.generation === started.generation)
+          .map((row) => JSON.parse(row.record))
+          .filter((item) => item.kind === 'manual_edit_apply')
+          .map((item) => ({
+            stage: item.stage,
+            history: item.history,
+            eventDigest: hash(item.upstreamId),
+          }));
+        return {
+          generation: started.generation,
+          entryDigest: report.manualCanonicalCorrelation?.entryDigest,
+          events,
+        };
+      } finally {
+        db.close();
+      }
+    };
+    const manualCanonicalObservations = (report.manualCanonicalObservations = []);
+    retainManualFailureEvidence = (boundary) =>
+      retainManualCanonicalObservation(
+        manualCanonicalObservations,
+        boundary,
+        manualHistorySnapshot,
+      );
+    const acknowledged = async (kind, budget = eventObservationBudgetMs, absoluteDeadline) => {
+      const work = () =>
+        until(
+          () => {
+            const db = new DatabaseSync(
+              join(
+                controller,
+                `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+              ),
+              {
+                readOnly: true,
+              },
+            );
+            try {
+              return db
+                .prepare('SELECT record FROM live_event_inbox')
+                .all()
+                .some((row) => {
+                  const item = JSON.parse(row.record);
+                  return item.kind === kind && item.stage === 'acknowledged';
+                });
+            } finally {
+              db.close();
+            }
+          },
+          'EDIT_CANONICAL_ACK_DEADLINE',
+          budget,
+          absoluteDeadline,
+        );
+      return kind === 'accept' ? profiled('accept-ack', work) : work();
+    };
     report.previewProbeAgeAtBrowserStartMs = Date.now() - previewProbeOpenedAt;
     report.browserCpuWindowStartUs = Number(process.hrtime.bigint() / 1000n);
     browserEventLoop.enable();
-    await productionEditBrowser({
-      privateRoot,
-      certificate: join(caddyRoot, 'tls.pem'),
-      report,
-      checkpoint: (stage) => {
-        if (stage === 'helper-connected') {
-          stopPreviewProbe();
-          report.checks.previewProbeHandedToActualBrowserConnection = true;
-        }
-      },
-      browser: {
-        mobileOrigin,
-        previewOrigin: preview,
-        sessionId: session.id,
-        liveId: started.liveId,
-        generation: started.generation,
-        helperTokenSha256: hash(token),
-        sessionCookie: browserSession,
-        uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
-        resultFile: join(evidence, 'production-edit-browser.json'),
-        screenshot: join(evidence, 'production-picker-edit.png'),
-      },
-      command: async (command) => {
-        const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
-        if (command === 'accepted') {
-          await acknowledged('accept');
-          assert.ok(source().includes('Production chosen variant'));
-          assert.ok(!source().includes('impeccable-variants-start'));
-        } else if (command === 'steered') {
-          await acknowledged('steer');
-          assert.ok(readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"));
-        } else if (command === 'manual-applied') {
-          await acknowledged('manual_edit_apply');
-          manualSource = source();
-          assert.ok(manualSource.includes('Production manual approved'));
-          assert.ok(
-            !/contenteditable|data-impeccable-editable|impeccable-variants-start/.test(
-              manualSource,
+    const runPicker = async (editingPhase) =>
+      trackedEditingOperation(
+        productionEditBrowser({
+          absoluteDeadlineNs: editingPhase
+            ? editingDeadline(editingPhase === 'accepted' ? 'accepted' : 'action')
+            : undefined,
+          privateRoot,
+          certificate: join(caddyRoot, 'tls.pem'),
+          report,
+          checkpoint: (stage, monotonicNs) => {
+            if (
+              serialProfile &&
+              editingPhase === 'accepted' &&
+              stage === 'profile-browser-close-start'
+            )
+              browserCloseProfileId = serialProfile.begin('browser-close', {}, BigInt(monotonicNs));
+            if (
+              serialProfile &&
+              editingPhase === 'accepted' &&
+              stage === 'profile-browser-close-end'
+            )
+              serialProfile.end(browserCloseProfileId, 'completed', BigInt(monotonicNs));
+            if (stage === 'picker-generate' || stage === 'picker-manual-apply')
+              firstPickerObservationStarted ??= performance.now();
+            if (stage === 'helper-connected') {
+              stopPreviewProbe();
+              report.checks.previewProbeHandedToActualBrowserConnection = true;
+            }
+          },
+          browser: {
+            editingPhase,
+            serialProfile: serialProfileRequested,
+            mobileOrigin,
+            previewOrigin: preview,
+            sessionId: session.id,
+            liveId: started.liveId,
+            generation: started.generation,
+            helperTokenSha256: hash(
+              JSON.parse(readFileSync(join(appRoot, '.impeccable/live/server.json'))).token,
             ),
-          );
-        } else if (command === 'discarded') {
-          await acknowledged('discard');
-          assert.equal(source(), manualSource);
-        } else if (command === 'background-begin') {
-          backgroundSourceDigest = hash(source());
-          backgroundRequestCount = report.provider.requestCount;
-        } else if (command === 'background-finished') {
-          assert.equal(hash(source()), backgroundSourceDigest);
-          assert.equal(report.provider.requestCount, backgroundRequestCount);
-          const status = await api('GET', `/api/sessions/${session.id}/live`);
-          assert.ok(['active', 'recoveryRequired'].includes(status.state));
-          report.background = { state: status.state, noModelOrSourceEffect: true };
-        } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
-      },
-    });
+            pickerSmoke,
+            proofLane,
+            eventObservationBudgetMs,
+            sessionCookie: browserSession,
+            uiModule: join(installation, 'tests/live-e2e/ui.mjs'),
+            resultFile: join(
+              evidence,
+              editingPhase
+                ? `production-edit-browser-${editingPhase}.json`
+                : 'production-edit-browser.json',
+            ),
+            screenshot: join(evidence, 'production-picker-edit.png'),
+          },
+          command: async (command, observation) => {
+            const source = () => readFileSync(join(appRoot, 'index.html'), 'utf8');
+            if (command === 'manual-poll-observed') {
+              manualWaitDeadline = manualObservationDeadline(observation);
+              assert.equal(manualWaitDeadline, observation.deadline);
+              await until(
+                () => {
+                  observedManualPoll = pendingCanonicalPoll(session.id, started.generation);
+                  return !!observedManualPoll;
+                },
+                'PROOF_CANONICAL_POLL_OBSERVATION_DEADLINE',
+                proofObservationRemaining(manualWaitDeadline),
+                manualWaitDeadline,
+              );
+              report.manualPollObservation = observedManualPoll;
+              return observedManualPoll;
+            } else if (command === 'manual-commit-observed') {
+              const current = pendingCanonicalPoll(session.id, started.generation);
+              assert.ok(
+                current && current.sequence === observedManualPoll?.sequence,
+                'PROOF_CANONICAL_POLL_OBSERVATION_STALE',
+              );
+              // The original480s reservation still covers manual150s + chain/UI/cleanup.
+              assert.ok(
+                observation.hostDeadline - Date.now() >= 420_000,
+                'PROOF_MANUAL_CHAIN_BUDGET',
+              );
+              report.manualPollCommitObservation = current;
+              return current;
+            } else if (
+              [
+                'manual-lease-before-generate',
+                'manual-lease-before-discard',
+                'accepted-lease-before-generate',
+                'accepted-lease-before-accept',
+              ].includes(command)
+            ) {
+              const acceptedLease = command.startsWith('accepted-lease-');
+              if (acceptedLease) {
+                assert.ok(
+                  serialProfileRequested &&
+                    editingPhase === 'accepted' &&
+                    proofLane === 'accept-steer',
+                );
+              } else assert.equal(proofLane, 'manual-discard');
+              const stages = acceptedLease ? acceptedLeaseStages : manualLeaseStages;
+              const receipts = acceptedLease ? acceptedLeaseReceipts : manualLeaseReceipts;
+              const leaseStage = command.endsWith('before-generate')
+                ? 'before-generate'
+                : acceptedLease
+                  ? 'before-accept'
+                  : 'before-discard';
+              assert.equal(stages.has(leaseStage), false);
+              stages.add(leaseStage);
+              if (!acceptedLease) assert.ok(manualSource, 'PROOF_MANUAL_ACK_INVALID');
+              if (leaseStage === 'before-accept') {
+                assert.equal(stages.has('before-generate'), true);
+                deferredReuse.assertPassed();
+                await acknowledged(
+                  'generate',
+                  proofObservationRemaining(observation.deadline),
+                  observation.deadline,
+                );
+                assert.ok(source().includes('Production chosen variant'));
+              }
+              if (leaseStage === 'before-discard') {
+                assert.equal(manualLeaseStages.has('before-generate'), true);
+                await acknowledged(
+                  'generate',
+                  proofObservationRemaining(observation.deadline),
+                  observation.deadline,
+                );
+                assert.ok(source().includes('Production discarded variant'));
+              }
+              proofObservationRemaining(observation.deadline);
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const audience = {
+                relayId: session.id,
+                appId: 'owning-app',
+                liveId: started.liveId,
+                generation: started.generation,
+                previewOrigin: preview,
+                authSessionHash: previewSecrets.hash(browserSession),
+                deviceId: 'fixture-device',
+              };
+              const readActualLease = () => {
+                const db = new DatabaseSync(
+                  join(home, '.codex-gestalt', 'gestalt-mobile', 'live-auth.sqlite'),
+                  { readOnly: true },
+                );
+                try {
+                  const row = db
+                    .prepare('SELECT record FROM live_leases WHERE token_hash = ?')
+                    .get(observation.cookie.tokenDigest);
+                  const lease = row ? JSON.parse(row.record) : null;
+                  assertPreviewLeaseIdentity(lease, observation.cookie, audience);
+                  return lease;
+                } finally {
+                  db.close();
+                }
+              };
+              const before = readActualLease();
+              const prior = receipts.at(-1);
+              if (prior) {
+                assert.equal(hash(before.leaseId), prior.leaseDigest);
+                assert.equal(before.tokenHash, prior.tokenDigest);
+                assert.equal(before.exchangedAt, prior.exchangedAt);
+                assert.equal(before.absoluteExpiresAt, prior.absoluteExpiresAt);
+              } else assert.equal(before.renewedAt, null);
+              const sinceRenewalMs =
+                Date.now() - Date.parse(before.renewedAt ?? before.exchangedAt);
+              const shouldRenew =
+                (!acceptedLease || leaseStage === 'before-accept') && sinceRenewalMs >= 60_000;
+              const renewed = shouldRenew
+                ? await api(
+                    'POST',
+                    `/api/sessions/${session.id}/live/leases/${before.leaseId}/renew`,
+                    { liveId: started.liveId, generation: started.generation },
+                  )
+                : before;
+              // Too early: retain only actual sufficient capacity, never try/retry429.
+
+              proofObservationRemaining(observation.deadline);
+              const after = readActualLease();
+              assert.equal(after.leaseId, before.leaseId);
+              assert.equal(after.exchangedAt, before.exchangedAt);
+              assert.equal(after.absoluteExpiresAt, before.absoluteExpiresAt);
+              assert.equal(after.leaseExpiresAt, renewed.leaseExpiresAt);
+              assert.equal(after.absoluteExpiresAt, renewed.absoluteExpiresAt);
+              assert.ok(Date.parse(after.leaseExpiresAt) - Date.now() <= 300_000);
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const receipt = {
+                generation: started.generation,
+                stage: leaseStage,
+                renewed: shouldRenew,
+                sinceRenewalMs,
+                exchangedAt: after.exchangedAt,
+                renewedAt: after.renewedAt,
+                tokenDigest: observation.cookie.tokenDigest,
+                leaseDigest: hash(after.leaseId),
+                leaseExpiresAt: after.leaseExpiresAt,
+                absoluteExpiresAt: after.absoluteExpiresAt,
+                priorAbsoluteExpiresAt: before.absoluteExpiresAt,
+                sameLeaseAndToken: true,
+                ownerRenewals: (prior?.ownerRenewals ?? 0) + (shouldRenew ? 1 : 0),
+              };
+              assert.ok(receipt.ownerRenewals <= (acceptedLease ? 1 : 2));
+              receipts.push(receipt);
+              if (acceptedLease) report.acceptedLeaseRenewal = receipt;
+              else report.manualLeaseRenewal = receipt;
+              return receipt;
+            } else if (command === 'accepted') {
+              deferredReuse?.assertPassed();
+              await acknowledged(
+                'generate',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              await acknowledged(
+                'accept',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              assert.ok(source().includes('Production chosen variant'));
+              assert.ok(!source().includes('impeccable-variants-start'));
+              acceptedCanonicalAcknowledged = true;
+            } else if (
+              [
+                'accepted-poll-observed',
+                'steered-poll-observed',
+                'discarded-poll-observed',
+              ].includes(command)
+            ) {
+              const phaseA = command === 'accepted-poll-observed';
+              const manualFinal = command === 'discarded-poll-observed';
+              if (manualFinal) {
+                assert.equal(proofLane, 'manual-discard');
+                assert.equal(discardedCanonicalAcknowledged, true);
+                assert.equal(manualLeaseStages.has('before-discard'), true);
+                assert.equal(source(), manualSource);
+              } else assert.equal(editingPhase, phaseA ? 'accepted' : 'steer');
+              if (phaseA) assert.equal(acceptedCanonicalAcknowledged, true);
+              else if (!manualFinal) assert.ok(steeredCanonicalAcknowledged && backgroundFinished);
+              // Read-only observation of the existing signed/birth-fenced helper
+              // IPC flight. The same Native/session remains alive; never poll here.
+              assert.equal(observedBirthExited(baselineBirth), false);
+              const deadline = Math.min(
+                observation.deadline,
+                editingAnchor
+                  ? Date.now() + editingPhaseRemaining(phaseA ? 'accepted' : 'action')
+                  : Infinity,
+              );
+              const work = () =>
+                observePostAcceptPollDispatch({
+                  sample: () => pendingCanonicalPoll(session.id, started.generation),
+                  deadline,
+                });
+              const current = await (phaseA ? profiled('post-accept-poll', work) : work());
+              assert.equal(observedBirthExited(baselineBirth), false);
+              if (phaseA) {
+                report.postAcceptPollObservation = current;
+                report.checks.authenticPostAcceptPollDispatchedBeforeBrowserClose = true;
+              } else if (manualFinal) {
+                report.postDiscardPollObservation = current;
+                report.checks.authenticPostDiscardPollDispatchedBeforeBrowserClose = true;
+              } else {
+                report.postSteerPollObservation = current;
+                report.checks.authenticPostSteerPollDispatchedBeforeBrowserClose = true;
+              }
+              return current;
+            } else if (command === 'steered') {
+              await acknowledged(
+                'steer',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              assert.ok(
+                readFileSync(join(appRoot, 'app.js'), 'utf8').includes("marker = 'steered'"),
+              );
+              steeredCanonicalAcknowledged = true;
+            } else if (command === 'manual-applied') {
+              await observeManualAcknowledgement(
+                () =>
+                  acknowledged(
+                    'manual_edit_apply',
+                    proofObservationRemaining(observation.deadline),
+                    observation.deadline,
+                  ),
+                manualCanonicalObservations,
+                manualHistorySnapshot,
+              );
+              const db = new DatabaseSync(
+                join(
+                  controller,
+                  `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+                ),
+                { readOnly: true },
+              );
+              try {
+                const items = db
+                  .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+                  .all()
+                  .map((row) => ({
+                    ...JSON.parse(row.record),
+                    liveId: row.liveId,
+                    generation: row.generation,
+                  }))
+                  .filter((item) => item.kind === 'manual_edit_apply');
+                assert.equal(items.length, 1);
+                const item = items[0];
+                assert.equal(item.liveId, started.liveId);
+                assert.equal(item.generation, started.generation);
+                report.manualAcknowledgementObservation = verifyManualAcknowledgement({
+                  ...observation.manual,
+                  acknowledgedAt: Date.now(),
+                  correlation: report.manualCanonicalCorrelation,
+                  canonical: { ...item, eventDigest: hash(item.upstreamId) },
+                });
+              } finally {
+                db.close();
+              }
+              manualSource = source();
+              assert.ok(manualSource.includes('Production manual approved'));
+              assert.ok(
+                !/contenteditable|data-impeccable-editable|impeccable-variants-start/.test(
+                  manualSource,
+                ),
+              );
+            } else if (command === 'discarded') {
+              await acknowledged(
+                'discard',
+                observation
+                  ? proofObservationRemaining(observation.deadline)
+                  : eventObservationBudgetMs,
+                observation?.deadline,
+              );
+              assert.equal(source(), manualSource);
+              discardedCanonicalAcknowledged = true;
+            } else if (command === 'background-begin') {
+              backgroundSourceDigest = hash(source());
+              backgroundRequestCount = report.provider.requestCount;
+            } else if (command === 'background-finished') {
+              assert.equal(hash(source()), backgroundSourceDigest);
+              assert.equal(report.provider.requestCount, backgroundRequestCount);
+              const status = await api('GET', `/api/sessions/${session.id}/live`);
+              assert.ok(['active', 'recoveryRequired'].includes(status.state));
+              report.background = { state: status.state, noModelOrSourceEffect: true };
+              backgroundFinished = true;
+            } else throw new Error('EDIT_BROWSER_COMMAND_UNAVAILABLE');
+          },
+        }),
+      );
+    await runPicker(editingContinuity ? 'accepted' : undefined);
+    if (editingContinuity) {
+      deferredReuse?.assertPassed();
+      const phaseA = report.editBrowser;
+      if (serialProfileRequested) {
+        assert.deepEqual(phaseA.acceptedLease.stages, acceptedLeaseReceipts);
+        assert.deepEqual(
+          acceptedLeaseReceipts.map((row) => row.stage),
+          ['before-generate', 'before-accept'],
+        );
+        assert.ok(acceptedLeaseReceipts.at(-1).ownerRenewals <= 1);
+        report.checks.authenticAcceptedSameCookieCapacity = true;
+      }
+      assert.equal(phaseA.realPickerGenerateAccept, true);
+      assert.equal(phaseA.realPickerSteer, false);
+      assert.deepEqual(phaseA.postAcceptPollObservation, report.postAcceptPollObservation);
+      assert.equal(report.postAcceptPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postAcceptPollObservation.postAuthority, true);
+      assert.equal(report.editBrowserRemainingProcesses, 0);
+      stopPreviewProbe();
+      await probeRefresh;
+      const acceptedSource = hash(
+        withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8')),
+      );
+      const requestsBeforeResume = report.provider.requestCount;
+      let disconnected;
+      await profiled('disconnect-ack', () =>
+        until(
+          async () => {
+            disconnected = await api('GET', `/api/sessions/${session.id}/live`);
+            return disconnected.state === 'recoveryRequired';
+          },
+          'EDIT_GENUINE_DISCONNECT_DEADLINE',
+          Math.min(30_000, editingPhaseRemaining('accepted')),
+        ),
+      );
+      const disconnectDb = new DatabaseSync(join(controller, 'live.sqlite'), { readOnly: true });
+      try {
+        const durable = JSON.parse(
+          disconnectDb.prepare('SELECT record FROM live_runs WHERE liveId=?').get(started.liveId)
+            .record,
+        );
+        assert.equal(durable.failureCode, 'LIVE_BROWSER_DISCONNECTED');
+        assert.equal(durable.generation, disconnected.generation);
+        assert.equal(durable.rootThreadId, owningThread);
+      } finally {
+        disconnectDb.close();
+      }
+      const exitDb = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        const exits = exitDb
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+          .all()
+          .filter((row) => row.liveId === started.liveId && row.generation === started.generation)
+          .map((row) => JSON.parse(row.record))
+          .filter((row) => row.kind === 'exit');
+        assert.equal(exits.length, 1);
+        assert.equal(exits[0].stage, 'acknowledged');
+        assert.deepEqual(exits[0].history, ['received', 'dispatched', 'applied', 'acknowledged']);
+      } finally {
+        exitDb.close();
+      }
+      await profiled('disconnect-revoke', () =>
+        until(
+          () =>
+            signed(join(controller, `runtime-admission-${hash(appRoot)}.json`)).status ===
+            'revoked',
+          'EDIT_DISCONNECT_REVOKE_DEADLINE',
+          Math.min(30_000, editingPhaseRemaining('accepted')),
+        ),
+      );
+      assert.equal(disconnected.liveId, started.liveId);
+      assert.ok(disconnected.generation > started.generation);
+      assert.equal(observedBirthExited(baselineBirth), false);
+      report.editingContinuity = {
+        kind: 'continuity-with-explicit-recovery',
+        phaseA,
+        originalGeneration: started.generation,
+        recoveryGeneration: disconnected.generation,
+        acceptedSourceDigest: acceptedSource,
+        originalNativeSurvived: true,
+        genuineBrowserClosed: true,
+        resumeDispatches: 0,
+        phaseAllocationMs: [1_260_000, 1_020_000, 180_000],
+        phaseATotalMs: recoveryHandoff.snapshot().phaseTimings.setupMs,
+      };
+      requireEditingBudget(editingAnchor, 'action', 1_020_000);
+      report.stage = 'editing-phase-ready';
+      await recoveryHandoff.boundary();
+      assertEditingClock();
+      requireEditingBudget(editingAnchor, 'action', 1_020_000);
+      report.stage = 'editing-explicit-resume';
+      report.editingContinuity.resumeDispatches++;
+      const resumeTimer = setTimeout(
+        () => {
+          void recoveryHandoff.cancel('PROOF_DRIVER_PHASE_DEADLINE').catch(() => {});
+        },
+        Math.min(editingSchedule.resume, editingPhaseRemaining('action')),
+      );
+      try {
+        editingRaw = api('POST', `/api/sessions/${session.id}/live/resume`, {
+          liveId: disconnected.liveId,
+          generation: disconnected.generation,
+        });
+        started = await editingRaw;
+      } finally {
+        editingRaw = undefined;
+        clearTimeout(resumeTimer);
+      }
+      assertEditingClock();
+      assert.equal(started.state, 'active');
+      assert.equal(started.liveId, disconnected.liveId);
+      assert.ok(started.generation > disconnected.generation);
+      assert.equal(observedBirthExited(baselineBirth), false);
+      const selected = await api('GET', `/api/sessions/${session.id}`);
+      assert.equal(selected.threadId, owningThread);
+      assert.equal(selected.provider, session.provider);
+      assert.equal(selected.model, session.model);
+      assert.deepEqual(selected.modelSettings, session.modelSettings);
+      assert.equal(report.provider.requestCount, requestsBeforeResume);
+      assert.equal(
+        hash(withoutProofInjection(readFileSync(join(appRoot, 'index.html'), 'utf8'))),
+        acceptedSource,
+      );
+      const currentAdmission = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
+      assert.equal(currentAdmission.status, 'sealed');
+      assert.equal(currentAdmission.generation.sessionId, session.id);
+      assert.equal(currentAdmission.generation.generation, started.generation);
+      const matches = readdirSync(controller)
+        .filter((name) => name.startsWith('owner-'))
+        .map((name) => join(controller, name))
+        .filter(
+          (path) =>
+            JSON.parse(readFileSync(join(path, 'manifest.json'))).runtimeProvenance.captureId ===
+            currentAdmission.captureId,
+        );
+      assert.equal(matches.length, 1);
+      const renewed = signed(join(matches[0], `runtime-${currentAdmission.captureId}.json`));
+      assert.equal(renewed.runtime.process.pid, sealed.runtime.process.pid);
+      assert.equal(renewed.runtime.process.birth, sealed.runtime.process.birth);
+      assert.equal(
+        renewed.inventory.observation.accountDigest,
+        sealed.inventory.observation.accountDigest,
+      );
+      assert.deepEqual(
+        renewed.inventory.observation.sessionFlags,
+        sealed.inventory.observation.sessionFlags,
+      );
+      editingLatestCaptureId = currentAdmission.captureId;
+      assert.notEqual(editingLatestCaptureId, captureId);
+      const deniedOldCookie = await remote('/__gestalt_live/lease', { method: 'POST', body: {} });
+      assertOldPreviewCookieDenied(deniedOldCookie);
+      const staleGrant = await mobile.inject({
+        method: 'POST',
+        url: `/api/sessions/${session.id}/live/launch-grants`,
+        headers,
+        payload: {
+          liveId: disconnected.liveId,
+          generation: report.editingContinuity.originalGeneration,
+          codeChallenge: previewSecrets.challenge(previewSecrets.token()),
+          codeChallengeMethod: 'S256',
+        },
+      });
+      assert.equal(staleGrant.statusCode, 409);
+      Object.assign(report.editingContinuity, {
+        resumedGeneration: started.generation,
+        newSignedCapture: true,
+        sameNativeThreadSelection: true,
+        noModelOrSourceReplay: true,
+        oldCookieDenied: true,
+        oldCookieDeniedStatus: 401,
+        oldCookieDeniedCode: 'LIVE_AUTH_REQUIRED',
+        staleGrantDenied: true,
+      });
+      requireEditingBudget(editingAnchor, 'action', 300_000);
+      report.stage = 'editing-resumed-steer';
+      await runPicker('steer');
+      report.editingContinuity.phaseB = report.editBrowser;
+      assert.deepEqual(
+        report.editBrowser.postSteerPollObservation,
+        report.postSteerPollObservation,
+      );
+      assert.equal(report.postSteerPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postSteerPollObservation.postAuthority, true);
+      report.editBrowser = {
+        ...report.editBrowser,
+        realPickerGenerateAccept: phaseA.realPickerGenerateAccept,
+      };
+    }
+    if (proofLane === 'manual-discard') {
+      assert.deepEqual(report.editBrowser.manualLease.lease, report.manualLeaseRenewal);
+      assert.ok(report.manualLeaseRenewal.ownerRenewals <= 2);
+      assert.deepEqual(report.editBrowser.manualLease.stages, report.manualLeaseStages);
+      assert.deepEqual(
+        report.manualLeaseStages.map((item) => item.stage),
+        ['before-generate', 'before-discard'],
+      );
+      assert.deepEqual(
+        report.editBrowser.postDiscardPollObservation,
+        report.postDiscardPollObservation,
+      );
+      assert.equal(report.postDiscardPollObservation.commandIpcDispatched, true);
+      assert.equal(report.postDiscardPollObservation.postAuthority, true);
+      assert.equal(
+        report.editBrowser.manualLease.cookie.tokenDigest,
+        report.manualLeaseRenewal.tokenDigest,
+      );
+      assert.deepEqual(
+        report.editBrowser.manualLease.capacityObservations.map((item) => item.boundary),
+        ['generate', 'discard', 'post-discard'],
+      );
+    }
     finishBrowserProfile();
+    if (proofLane || pickerDiagnostic) {
+      const required = pickerDiagnostic
+        ? ['generate', 'accept']
+        : proofLane === 'accept-steer'
+          ? ['generate', 'accept', 'steer']
+          : ['manual_edit_apply', 'generate', 'discard'];
+      const db = new DatabaseSync(
+        join(
+          controller,
+          `inbox-${hash(`${statSync(appRoot).dev}:${statSync(appRoot).ino}`)}.sqlite`,
+        ),
+        { readOnly: true },
+      );
+      try {
+        const records = db
+          .prepare('SELECT liveId,generation,record FROM live_event_inbox')
+          .all()
+          .filter((row) => row.liveId === started.liveId)
+          .map((row) => ({ ...JSON.parse(row.record), proofGeneration: row.generation }));
+        report.laneCanonicalEvents = required.map((kind) => {
+          const matches = records.filter((record) => record.kind === kind);
+          assert.equal(matches.length, 1);
+          assert.equal(matches[0].stage, 'acknowledged');
+          if (editingContinuity) {
+            const expectedGeneration =
+              kind === 'steer' ? started.generation : report.editingContinuity.originalGeneration;
+            assert.equal(matches[0].proofGeneration, expectedGeneration);
+            (report.editingContinuity.canonicalGenerations ??= {})[kind] = expectedGeneration;
+          }
+          assert.deepEqual(matches[0].history, [
+            'received',
+            'dispatched',
+            'applied',
+            'acknowledged',
+          ]);
+          return { kind, stage: matches[0].stage, history: matches[0].history };
+        });
+      } finally {
+        db.close();
+      }
+    }
     assert.equal(report.previewProbeFailure, undefined);
-    report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
-    report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
-      report.editBrowser.actualTabHiddenBeyondEightSeconds &&
-      report.background.noModelOrSourceEffect;
-    report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
-    report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+    if (proofLane !== 'manual-discard')
+      assert.equal(report.editBrowser.realPickerGenerateAccept, true);
+    if (pickerSmoke || proofLane === 'accept-steer') {
+      report.checks.actualPickerGenerateAcceptWithCanonicalSourceEffect = true;
+      if (proofLane) {
+        assert.equal(report.editBrowser.realPickerSteer, true);
+        assert.ok(report.editBrowser.hmrUpdates > 0);
+        assert.equal(report.editBrowser.actualTabHiddenBeyondEightSeconds, true);
+        assert.equal(report.background.noModelOrSourceEffect, true);
+        report.checks.actualPickerSteerWithCanonicalHmrEffect = true;
+        report.checks.actualBackgroundBeyondEightSecondsPreservesFencing = true;
+      }
+    } else if (proofLane === 'manual-discard') {
+      assert.equal(report.editBrowser.realPickerManualApply, true);
+      assert.equal(report.editBrowser.realPickerDiscard, true);
+      report.checks.actualPickerManualApplyGenerateDiscardWithExactSourceRestoration = true;
+    } else {
+      report.checks.realPickerGenerateSteerManualApplyAcceptDiscard = true;
+      report.checks.actualBackgroundBeyondEightSecondsPreservesFencing =
+        report.editBrowser.actualTabHiddenBeyondEightSeconds &&
+        report.background.noModelOrSourceEffect;
+      report.checks.canonicalJournalSourceEffectsAndDiscardRestoration = true;
+      report.checks.actualViteHmrThroughAuthenticatedGateway = report.editBrowser.hmrUpdates > 0;
+    }
+    assert.equal(report.editBrowser.openThroughMobileControls, true);
+    report.checks.actualMobileUiOpenAuthenticatedRemoteOverlay = true;
   } else if (!recoveryOnly) {
+    firstPickerObservationStarted ??= performance.now();
     const event = await remote(`/__gestalt_live/events?token=${encodeURIComponent(token)}`, {
       method: 'POST',
       body: {
@@ -1743,7 +3956,7 @@ try {
     report.modelEventStatus = event.status;
     assert.equal(event.status, 200);
   }
-  if (!recoveryOnly) {
+  if (!recoveryOnly && productionModelWorkload(proofLane) !== 'owning-edit-only') {
     await until(
       () => roles.get('root') >= 7 && roles.get('child') >= 4 && childCompletion(),
       'PRODUCTION_MODEL_CHILD_DEADLINE',
@@ -1770,6 +3983,8 @@ try {
     report.checks.actualModelToolsAndChildInheritedConfinement = true;
     report.checks.nativeModelContextToolConfined = true;
     report.checks.futureControlDenialsAndArtifactCarveouts = true;
+  }
+  if (!recoveryOnly) {
     await until(() => {
       const db = new DatabaseSync(
         join(
@@ -1804,11 +4019,18 @@ try {
       : 'sameOwningThreadModelThinkingAndDurableInbox'
   ] = true;
   let recovery;
-  if (editFlow || recoveryOnly) {
+  if ((editFlow && !pickerSmoke && !proofLane) || recoveryOnly) {
+    if (recoveryHandoff) {
+      report.stage = 'recovery-phase-ready';
+      await recoveryHandoff.boundary();
+    }
     stopPreviewProbe();
     recovery = await productionRecoveryProof({
       api,
-      inject: (method, url, payload) => mobile.inject({ method, url, payload, headers }),
+      inject: (method, url, payload) => {
+        recoveryHandoff?.assertCurrent();
+        return mobile.inject({ method, url, payload, headers });
+      },
       remote,
       until,
       report,
@@ -1819,6 +4041,7 @@ try {
       privateRoot,
       signed,
       expectedSourceText: recoveryOnly ? 'Owning app' : 'Production manual approved',
+      eventObservationBudgetMs,
       // Manager's signed process identity omits bootId; bind its PID/birth to
       // the actual original launch's boot before using Mobile's exit observer.
       owningBirthExited: (identity) =>
@@ -1851,19 +4074,34 @@ try {
       },
     });
   }
+  if (editingContinuity) {
+    assertEditingClock();
+    requireEditingBudget(editingAnchor, 'action', 1);
+    clearTimeout(editingActionTimer);
+    report.editingContinuity.phaseBTotalMs = recoveryHandoff.snapshot().phaseTimings.recoveryMs;
+    report.editingContinuity.actionFinishedOffsetMs =
+      Number(process.hrtime.bigint() - BigInt(editingAnchor.monotonicNs)) / 1e6;
+    recoveryHandoff.finishActions();
+  }
   report.stage = 'revoke-and-production-shutdown';
   stopPreviewProbe();
-  await mobile.close();
-  mobile = undefined;
+  if (editingContinuity) await failureCleanupStop();
+  await closeMobileOnce();
   assert.equal(existsSync(join(controller, 'live-policy.key')), true);
   const fence = signed(join(controller, `runtime-admission-${hash(appRoot)}.json`));
   assert.equal(fence.status, 'revoked');
-  assert.equal(fence.captureId, recovery?.latestCaptureId ?? captureId);
+  assert.equal(fence.captureId, editingLatestCaptureId ?? recovery?.latestCaptureId ?? captureId);
   assert.equal(observedBirthExited(baselineBirth), true);
   report.checks.signedRevocationPrecedesOriginalOwnerExit = true;
   if (editFlow) {
     const source = readFileSync(join(appRoot, 'index.html'), 'utf8');
-    assert.ok(source.includes('Production manual approved'));
+    assert.ok(
+      source.includes(
+        pickerSmoke || proofLane === 'accept-steer'
+          ? 'Production chosen variant'
+          : 'Production manual approved',
+      ),
+    );
     assert.ok(!source.includes('__IMPECCABLE_LIVE'));
   } else assert.equal(readFileSync(join(appRoot, 'index.html'), 'utf8'), sourceIndex);
   assert.equal(existsSync(join(appRoot, '.impeccable/live/inject-journal.json')), false);
@@ -1874,13 +4112,27 @@ try {
   report.passed = true;
   report.stage = 'complete';
 } catch (error) {
+  const fixedFailure = fixedProofFailure(error);
+  if (fixedFailure) {
+    report.firstFixedFailure ??= { stage: report.stage, code: fixedFailure };
+    serialProfile?.failure(fixedFailure);
+  }
+  retainManualFailureEvidence?.('production-failure');
   finishBrowserProfile();
   if (
+    (coldCatalog && error?.message === 'COLD_CATALOG_COMPLETE') ||
+    (preflightOnly && error?.message === 'ADMISSION_PREFLIGHT_COMPLETE') ||
     (installationOnly && error?.message === 'INSTALLATION_ONLY_COMPLETE') ||
     (constructionOnly && error?.message === 'CONSTRUCTION_ONLY_COMPLETE')
   ) {
     report.passed = true;
-    report.stage = installationOnly ? 'installation-only-complete' : 'construction-only-complete';
+    report.stage = coldCatalog
+      ? 'cold-catalog-complete'
+      : preflightOnly
+        ? 'admission-preflight-complete'
+        : installationOnly
+          ? 'installation-only-complete'
+          : 'construction-only-complete';
   } else {
     try {
       report.nativeActivity = nativeActivity();
@@ -1958,13 +4210,31 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  if (report.manualPollObservation) retainManualFailureEvidence?.('before-close');
   report.cleanupStage = 'mobile';
   stopPreviewProbe();
   await probeRefresh;
-  if (mobile) {
+  if (mobile || (coldCatalog && (catalogNormalCompleted || catalogCancellation))) {
+    if (report.failure && failureCleanupStop) {
+      try {
+        await failureCleanupStop();
+      } catch {
+        report.failureStopUnverified = true;
+      }
+    }
     try {
-      await mobile.close();
-      mobile = undefined;
+      if (coldCatalog && (catalogNormalCompleted || catalogFailureStop || catalogCancellation)) {
+        // The main cancelled api and onCancel share the same originals. Never
+        // race its Stop/restoration with a second Mobile.close from finally.
+        await finalizeCatalogDriver({
+          completed: catalogNormalCompleted,
+          raw: catalogApiRaw,
+          closed: () =>
+            !mobile && observedBirthExited(baselineBirth) && !recoveryHandoff.snapshot().cancelled,
+          cancellation: () => catalogCancellation,
+          cancel: () => recoveryHandoff.cancel(),
+        });
+      } else await closeMobileOnce();
       if (report.projectMetadata)
         report.projectMetadata.afterOwnerShutdown = ownedProjectMetadata();
     } catch (error) {
@@ -2041,12 +4311,46 @@ try {
           return { unavailable: true };
         }
       });
+  if (recoveryHandoff) {
+    const state = recoveryHandoff.snapshot();
+    report.recoveryHandoff = {
+      continuations: state.continuations,
+      cancelled: state.cancelled,
+      sameDriverBirth: birthCurrent(state.birth),
+      ...(editingContinuity
+        ? {
+            birthDigest: hash(JSON.stringify(state.birth)),
+            phaseBounds: { phaseA: state.editing.phaseA, phaseB: state.phaseB },
+          }
+        : {}),
+      phaseTimings: state.phaseTimings,
+    };
+    if (state.cancelled) {
+      report.passed = false;
+      report.cleanupComplete = false;
+      process.exitCode = 1;
+    }
+    try {
+      await recoveryHandoff.close();
+    } catch {
+      report.passed = false;
+      report.cleanupComplete = false;
+      process.exitCode = 1;
+    }
+  }
+  clearInterval(catalogTimer);
+  clearTimeout(catalogDeadlineTimer);
+  sampleCatalogReceipts?.();
+  if (catalogObserver)
+    correlateCatalogReceipts(report.coldCatalog, report.admissionVerificationTimings);
   if (!report.shutdownFailure) {
     try {
       removeOwnedProofTree(root, rootIdentity, {
         processesClosed: !mobile && !caddy && !provider.listening,
       });
       report.disposableTreeRemoved = true;
+      if (report.failureStop?.verified === true && !report.failureStopUnverified)
+        report.cleanupComplete = true;
       if (installationOnly || constructionOnly || report.failure?.stage === 'installation')
         report.cleanupComplete = true;
     } catch (error) {
@@ -2066,8 +4370,43 @@ try {
     report.passed = false;
     report.cleanupComplete = false;
   }
+  if (editingContinuity && report.editingContinuity) {
+    report.editingContinuity.cleanupFinishedOffsetMs =
+      Number(process.hrtime.bigint() - BigInt(editingAnchor.monotonicNs)) / 1e6;
+    if (editingRemaining(editingAnchor, 'cleanup') === 0) {
+      report.passed = false;
+      report.cleanupComplete = false;
+      report.editingCleanupDeadlineExceeded = true;
+      process.exitCode = 1;
+    }
+  }
+  if (serialProfileRequested) {
+    try {
+      validateSerialProfile(report.serialProfile);
+      report.serialProfileValid = true;
+    } catch {
+      report.serialProfileValid = false;
+      report.firstFixedFailure ??= {
+        stage: 'serial-profile-validation',
+        code: 'PROOF_PROFILE_INVALID',
+      };
+      report.passed = false;
+      process.exitCode = 1;
+    }
+  }
   report.cleanupStage = 'settled';
+  if (coldCatalog && report.passed) {
+    try {
+      validateColdCatalog(report, candidateIdentity());
+    } catch {
+      report.passed = false;
+      report.coldCatalog.evidenceFailure = 'COLD_CATALOG_EVIDENCE_INVALID';
+      process.exitCode = 1;
+    }
+  }
   clearInterval(checkpoint);
+  clearTimeout(editingActionTimer);
+  clearTimeout(editingCleanupTimer);
   writeFileSync(
     join(evidence, 'production-entrypoint-proof.json'),
     JSON.stringify(report, null, 2) + '\n',

@@ -104,6 +104,7 @@ export async function productionRecoveryProof(input) {
     owningBirthExited,
     ownedProcesses,
   } = input;
+  assert.equal(input.eventObservationBudgetMs, 300_000);
   const external = await registeredExternal(input.privateRoot);
   try {
     const prefix = `/api/sessions/${session.id}/live`;
@@ -268,7 +269,7 @@ export async function productionRecoveryProof(input) {
         }
       },
       'RECOVERY_IDLE_CANONICAL_POLL_DEADLINE',
-      30000,
+      input.eventObservationBudgetMs,
     );
     assert.equal(owningBirthExited(surviving.sealed.runtime.process), false);
     process.kill(surviving.sealed.runtime.process.pid, 'SIGTERM');

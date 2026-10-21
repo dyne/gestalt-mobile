@@ -1,0 +1,1672 @@
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index ae76b2d..de71964 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -268,7 +268,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
+ 
+ [[package]]
+ name = "app_test_support"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1893,7 +1893,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-core",
+@@ -1905,7 +1905,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-graph-store"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-state",
+@@ -1920,7 +1920,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-identity"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1940,7 +1940,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-message-board-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -1963,7 +1963,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-message-board-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "caseless",
+@@ -1986,7 +1986,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-roles"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-config",
+  "codex-file-system",
+@@ -1999,7 +1999,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-analytics"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-app-server-protocol",
+  "codex-git-utils",
+@@ -2021,7 +2021,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ansi-escape"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "ansi-to-tui",
+  "pretty_assertions",
+@@ -2032,7 +2032,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-api"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "assert_matches",
+@@ -2070,7 +2070,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2183,7 +2183,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-app-server",
+  "codex-app-server-protocol",
+@@ -2210,7 +2210,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-daemon"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "blake3",
+@@ -2235,7 +2235,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-app-server-protocol-noop-macros",
+@@ -2269,11 +2269,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol-noop-macros"
+-version = "0.0.0"
++version = "0.161.0"
+ 
+ [[package]]
+ name = "codex-app-server-test-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2295,7 +2295,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-transport"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "axum",
+  "base64 0.22.1",
+@@ -2337,7 +2337,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-apply-patch"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2357,7 +2357,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-arg0"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-apply-patch",
+@@ -2380,7 +2380,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-async-utils"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "rand 0.9.3",
+@@ -2390,7 +2390,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-attachment-store"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "serde",
+@@ -2400,7 +2400,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-aws-auth"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "aws-config",
+  "aws-credential-types",
+@@ -2426,7 +2426,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-api",
+@@ -2446,7 +2446,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-openapi-models"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -2455,7 +2455,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-build-info"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-install-context",
+  "pretty_assertions",
+@@ -2468,7 +2468,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-bwrap"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -2477,7 +2477,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-chatgpt"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2499,7 +2499,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cli"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2601,7 +2601,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-http-client",
+  "eventsource-stream",
+@@ -2615,7 +2615,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-config"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -2641,7 +2641,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2674,7 +2674,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2689,7 +2689,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-mock-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "chrono",
+  "codex-cloud-tasks-client",
+@@ -2698,7 +2698,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-code-mode-protocol",
+  "codex-http-client",
+@@ -2721,7 +2721,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-host"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -2750,7 +2750,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-protocol"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "glob",
+@@ -2768,7 +2768,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-runtime"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-code-mode-protocol",
+@@ -2786,11 +2786,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-collaboration-mode-templates"
+-version = "0.0.0"
++version = "0.161.0"
+ 
+ [[package]]
+ name = "codex-config"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -2840,7 +2840,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-config-schema"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2849,7 +2849,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2871,7 +2871,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-connectors",
+  "codex-core-plugins",
+@@ -2885,7 +2885,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-context-fragments"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -2895,7 +2895,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3035,7 +3035,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-api"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-analytics",
+  "codex-app-server-protocol",
+@@ -3058,7 +3058,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugin-common"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "semver",
+@@ -3069,7 +3069,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugins"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3125,7 +3125,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-diagnostics"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -3133,7 +3133,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -3185,7 +3185,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3254,7 +3254,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-protocol"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-file-system",
+@@ -3271,7 +3271,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-test-support"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-exec-server",
+@@ -3286,7 +3286,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3304,7 +3304,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-experimental-api-macros"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -3313,7 +3313,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-api"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-api",
+  "codex-config",
+@@ -3335,7 +3335,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-items"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "pretty_assertions",
+@@ -3347,7 +3347,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-migration"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "chrono",
+  "codex-analytics",
+@@ -3377,7 +3377,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-features"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-network-proxy",
+  "codex-protocol",
+@@ -3391,7 +3391,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-feedback"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "bytes",
+@@ -3416,7 +3416,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-search"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3432,7 +3432,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-system"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "bytes",
+  "codex-protocol",
+@@ -3444,7 +3444,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-watcher"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "notify",
+  "pretty_assertions",
+@@ -3455,7 +3455,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-attribution"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-backend-client",
+  "codex-extension-api",
+@@ -3468,7 +3468,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-utils"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3495,7 +3495,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-goal-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3520,7 +3520,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-context"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-context-fragments",
+  "codex-history",
+@@ -3531,7 +3531,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-reviewer"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -3556,7 +3556,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian-v2"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -3592,7 +3592,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-history"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-protocol",
+@@ -3604,7 +3604,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-history-notes-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-analytics",
+  "codex-client",
+@@ -3629,7 +3629,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-home"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-extension-api",
+  "codex-utils-absolute-path",
+@@ -3641,7 +3641,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-hooks"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "async-channel",
+@@ -3669,7 +3669,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-http-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "bytes",
+  "codex-utils-cargo-bin",
+@@ -3705,7 +3705,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-image-generation-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3733,7 +3733,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-install-context"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "codex-utils-home-dir",
+@@ -3746,7 +3746,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-keyring-store"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "keyring",
+  "pretty_assertions",
+@@ -3757,7 +3757,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-linux-sandbox"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "clap",
+  "codex-core",
+@@ -3786,7 +3786,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-lmstudio"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-core",
+  "codex-http-client",
+@@ -3800,7 +3800,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-login"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3845,7 +3845,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3885,7 +3885,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -3918,7 +3918,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -3940,7 +3940,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-read"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -3950,7 +3950,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-write"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3987,7 +3987,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mermaid"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "insta",
+  "pretty_assertions",
+@@ -3996,7 +3996,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-history"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-config",
+  "memchr",
+@@ -4010,7 +4010,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -4043,7 +4043,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider-info"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-client",
+  "codex-protocol",
+@@ -4061,7 +4061,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-models-manager"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "chrono",
+  "codex-http-client",
+@@ -4080,7 +4080,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mxc-sandbox"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "appcontainer_common",
+@@ -4102,7 +4102,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-network-proxy"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4151,7 +4151,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ollama"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "assert_matches",
+  "async-stream",
+@@ -4171,7 +4171,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "bytes",
+  "chrono",
+@@ -4208,7 +4208,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel-trace-websocket"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -4219,7 +4219,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-plugin"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-config",
+  "codex-core-plugin-common",
+@@ -4234,7 +4234,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-process-hardening"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -4242,7 +4242,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-prompts"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-collaboration-mode-templates",
+@@ -4259,7 +4259,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-protocol"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chardetng",
+@@ -4304,7 +4304,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-queue-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-core",
+@@ -4325,7 +4325,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-realtime-webrtc"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-build-info",
+@@ -4343,7 +4343,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-response-debug-context"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -4354,7 +4354,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-responses-api-proxy"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4371,7 +4371,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rmcp-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -4422,7 +4422,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4451,7 +4451,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout-trace"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -4467,7 +4467,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-sandboxing"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-mxc-sandbox",
+@@ -4494,7 +4494,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-secrets"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "age",
+  "anyhow",
+@@ -4515,7 +4515,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-command"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4538,7 +4538,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-escalation"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4558,7 +4558,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -4575,7 +4575,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "assert_matches",
+  "blake3",
+@@ -4612,7 +4612,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-state"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4639,7 +4639,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-stdio-to-uds"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-uds",
+@@ -4651,7 +4651,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tcp-tunnel"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "bytes",
+@@ -4672,7 +4672,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-terminal-detection"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "tracing",
+@@ -4680,7 +4680,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-test-binary-support"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-arg0",
+  "tempfile",
+@@ -4688,7 +4688,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-manager-sample"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4699,7 +4699,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-store"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "chrono",
+  "codex-app-server-protocol",
+@@ -4730,7 +4730,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tools"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "bitflags 2.13.1",
+  "codex-code-mode",
+@@ -4756,7 +4756,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tui"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -4882,7 +4882,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-uds"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "async-io",
+  "libc",
+@@ -4896,7 +4896,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-user-verification"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "core-foundation 0.10.1",
+@@ -4916,7 +4916,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-absolute-path"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "dirs",
+  "dunce",
+@@ -4930,14 +4930,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-approval-presets"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-audio"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-protocol",
+@@ -4951,7 +4951,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cache"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "lru",
+  "sha1 0.10.6",
+@@ -4960,7 +4960,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cargo-bin"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "assert_cmd",
+  "runfiles",
+@@ -4969,7 +4969,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cli"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "clap",
+  "codex-protocol",
+@@ -4981,15 +4981,15 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-elapsed"
+-version = "0.0.0"
++version = "0.161.0"
+ 
+ [[package]]
+ name = "codex-utils-fuzzy-match"
+-version = "0.0.0"
++version = "0.161.0"
+ 
+ [[package]]
+ name = "codex-utils-git-discovery"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-git-utils",
+  "codex-utils-absolute-path",
+@@ -5002,7 +5002,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-home-dir"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dirs",
+@@ -5012,7 +5012,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-image"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-cache",
+@@ -5026,7 +5026,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-json-to-toml"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "serde_json",
+@@ -5035,7 +5035,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-oss"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-core",
+  "codex-lmstudio",
+@@ -5045,7 +5045,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-output-truncation"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -5054,7 +5054,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dunce",
+@@ -5065,7 +5065,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path-uri"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-absolute-path",
+@@ -5081,7 +5081,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-plugins"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-exec-server",
+  "codex-exec-server-protocol",
+@@ -5095,7 +5095,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-process"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "tokio",
+@@ -5103,7 +5103,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-pty"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "ctor 0.6.3",
+@@ -5121,7 +5121,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-readiness"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "assert_matches",
+  "thiserror 2.0.18",
+@@ -5131,7 +5131,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-redacted-string"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "schemars 0.8.22",
+  "serde",
+@@ -5139,14 +5139,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-rustls-provider"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "rustls",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-sandbox-summary"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-absolute-path",
+@@ -5156,7 +5156,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-sleep-inhibitor"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "core-foundation 0.9.4",
+  "libc",
+@@ -5166,14 +5166,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-stream-parser"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-string"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "regex-lite",
+@@ -5183,14 +5183,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-template"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-v8-poc"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "pretty_assertions",
+  "v8",
+@@ -5198,7 +5198,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-voice-host"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-install-context",
+@@ -5225,7 +5225,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-web-search-extension"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-api",
+  "codex-core",
+@@ -5247,7 +5247,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-websocket-auth"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5266,7 +5266,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-websocket-client"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-http-client",
+  "codex-utils-rustls-provider",
+@@ -5282,7 +5282,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -5311,7 +5311,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox-service"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-cloud-config",
+@@ -5328,14 +5328,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox-test-support"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "dirs",
+ ]
+ 
+ [[package]]
+ name = "codex-workload-identity"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "codex-http-client",
+  "pretty_assertions",
+@@ -5350,7 +5350,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-worktree"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "codex-git-utils",
+@@ -5590,7 +5590,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "core_test_support"
+-version = "0.0.0"
++version = "0.161.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+diff --git a/codex-rs/linux-sandbox/src/bwrap.rs b/codex-rs/linux-sandbox/src/bwrap.rs
+index 319b6af..4ca458a 100644
+--- a/codex-rs/linux-sandbox/src/bwrap.rs
++++ b/codex-rs/linux-sandbox/src/bwrap.rs
+@@ -733,6 +733,12 @@ fn create_filesystem_args(
+             if deferred_read_only_subpaths.contains(&subpath) {
+                 continue;
+             }
++            // An explicit file deny supplies the stronger mask below. Do not
++            // first add an automatic metadata file-data mask: bubblewrap
++            // consumes its input FD, so masking the same file twice can fail.
++            if unreadable_paths.contains(&subpath) && subpath.is_file() {
++                continue;
++            }
+             append_read_only_subpath_args(
+                 &mut bwrap_args,
+                 &subpath,
+@@ -1343,6 +1349,19 @@ fn append_unreadable_root_args(
+         if let Some(first_missing_component) = find_first_non_existent_component(unreadable_root)
+             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
+         {
++            // Protected metadata may already have a synthetic directory mount.
++            // A file-data mask at that target would fail with EISDIR; retain
++            // its directory shape while enforcing the same unreadable mask.
++            if bwrap_args.synthetic_mount_targets.iter().any(|target| {
++                target.path() == first_missing_component
++                    && target.kind() == SyntheticMountTargetKind::EmptyDirectory
++            }) {
++                return append_existing_unreadable_path_args(
++                    bwrap_args,
++                    &first_missing_component,
++                    allowed_write_paths,
++                );
++            }
+             append_missing_empty_file_bind_data_args(bwrap_args, &first_missing_component)?;
+         }
+         return Ok(());
+@@ -1356,7 +1375,12 @@ fn append_existing_unreadable_path_args(
+     unreadable_root: &Path,
+     allowed_write_paths: &[PathBuf],
+ ) -> Result<()> {
+-    if unreadable_root.is_dir() {
++    if unreadable_root.is_dir()
++        || bwrap_args.synthetic_mount_targets.iter().any(|target| {
++            target.path() == unreadable_root
++                && target.kind() == SyntheticMountTargetKind::EmptyDirectory
++        })
++    {
+         let mut writable_descendants: Vec<&Path> = allowed_write_paths
+             .iter()
+             .map(PathBuf::as_path)
+@@ -2000,6 +2024,114 @@ mod tests {
+         );
+     }
+ 
++    fn denied_metadata_policy(workspace: &Path, metadata: &Path) -> FileSystemSandboxPolicy {
++        FileSystemSandboxPolicy::restricted(vec![
++            FileSystemSandboxEntry::new(
++                FileSystemPath::Special { value: FileSystemSpecialPath::Root },
++                FileSystemAccessMode::Read,
++            ),
++            FileSystemSandboxEntry::new(
++                AbsolutePathBuf::try_from(workspace).expect("absolute workspace").into(),
++                FileSystemAccessMode::Write,
++            ),
++            FileSystemSandboxEntry::new(
++                AbsolutePathBuf::try_from(metadata).expect("absolute metadata").into(),
++                FileSystemAccessMode::Deny,
++            ),
++        ])
++    }
++
++    fn assert_unreadable_directory_mask(args: &BwrapArgs, target: &Path) {
++        let target = path_to_string(target);
++        assert!(args.args.windows(4).any(|args| {
++            args == ["--perms", "000", "--tmpfs", target.as_str()]
++        }), "denied metadata must use an unreadable directory mask");
++        assert!(!args.args.windows(3).any(|args| {
++            args[0] == "--ro-bind-data" && args[2] == target
++        }), "a directory target must never receive a file-data mask");
++    }
++
++    #[test]
++    fn denied_missing_protected_metadata_keeps_directory_mask() {
++        for name in [".codex", ".git", ".agents", ".aws"] {
++            let workspace = TempDir::new().expect("workspace");
++            let metadata = workspace.path().join(name);
++            let policy = denied_metadata_policy(workspace.path(), &metadata);
++            let args = create_filesystem_args(&policy, workspace.path(), BwrapOptions::default())
++                .expect("filesystem args");
++            assert_unreadable_directory_mask(&args, &metadata);
++            let targets = args.synthetic_mount_targets.iter()
++                .filter(|target| target.path() == metadata).collect::<Vec<_>>();
++            assert_eq!(targets.len(), 1);
++            assert_eq!(targets[0].kind(), SyntheticMountTargetKind::EmptyDirectory);
++            assert!(!metadata.exists(), "argument construction must not create host metadata");
++            assert!(!policy.can_read_local_path_with_cwd(&metadata, workspace.path()));
++            assert!(!policy.can_write_local_path_with_cwd(&metadata, workspace.path()));
++        }
++    }
++
++    #[test]
++    fn denied_existing_metadata_directory_and_file_keep_their_types() {
++        let workspace = TempDir::new().expect("workspace");
++        let directory = workspace.path().join(".codex");
++        fs::create_dir(&directory).expect("existing metadata directory fixture");
++        fs::write(directory.join("config.toml"), "private fixture").expect("fixture content");
++        let policy = denied_metadata_policy(workspace.path(), &directory);
++        let args = create_filesystem_args(&policy, workspace.path(), BwrapOptions::default())
++            .expect("directory filesystem args");
++        assert_unreadable_directory_mask(&args, &directory);
++        assert_eq!(fs::read_to_string(directory.join("config.toml")).unwrap(), "private fixture");
++
++        for contents in ["", "private fixture"] {
++            let file = workspace.path().join(".agents");
++            fs::write(&file, contents).expect("existing metadata file fixture");
++            let policy = denied_metadata_policy(workspace.path(), &file);
++            let args = create_filesystem_args(&policy, workspace.path(), BwrapOptions::default())
++                .expect("file filesystem args");
++            let target = path_to_string(&file);
++            assert_eq!(args.args.windows(3).filter(|args| {
++                args[0] == "--ro-bind-data" && args[2] == target
++            }).count(), 1, "an explicit metadata file deny needs exactly one file mask");
++            assert!(args.args.windows(5).any(|args| {
++                args[0] == "--perms" && args[1] == "000" && args[2] == "--ro-bind-data"
++                    && args[4] == target
++            }));
++            assert_eq!(fs::read_to_string(&file).unwrap(), contents);
++        }
++    }
++
++    #[test]
++    fn synthetic_metadata_directory_deny_survives_file_replacement() {
++        let workspace = TempDir::new().expect("workspace");
++        let metadata = workspace.path().join(".codex");
++        let policy = denied_metadata_policy(workspace.path(), &metadata);
++        let mut args = create_filesystem_args(&policy, workspace.path(), BwrapOptions::default())
++            .expect("missing directory filesystem args");
++        fs::write(&metadata, "replacement fixture").expect("race replacement fixture");
++        append_unreadable_root_args(&mut args, &metadata, &[workspace.path().to_path_buf()])
++            .expect("retained directory deny");
++        assert_unreadable_directory_mask(&args, &metadata);
++        assert_eq!(fs::read_to_string(&metadata).unwrap(), "replacement fixture");
++        assert!(args.synthetic_mount_targets.iter().any(|target| {
++            target.path() == metadata && target.kind() == SyntheticMountTargetKind::EmptyDirectory
++        }));
++    }
++
++    #[test]
++    fn synthetic_metadata_directory_deny_rejects_symlink_replacement() {
++        let workspace = TempDir::new().expect("workspace");
++        let outside = TempDir::new().expect("outside fixture");
++        let metadata = workspace.path().join(".codex");
++        let policy = denied_metadata_policy(workspace.path(), &metadata);
++        let mut args = create_filesystem_args(&policy, workspace.path(), BwrapOptions::default())
++            .expect("missing directory filesystem args");
++        std::os::unix::fs::symlink(outside.path(), &metadata).expect("race symlink fixture");
++        let error = append_unreadable_root_args(
++            &mut args, &metadata, &[workspace.path().to_path_buf()],
++        ).expect_err("writable symlink replacement must fail closed");
++        assert!(error.to_string().contains("writable symlink"));
++    }
++
+     #[test]
+     fn missing_read_only_subpath_uses_empty_file_bind_data() {
+         let temp_dir = TempDir::new().expect("temp dir");
+diff --git a/codex-rs/linux-sandbox/tests/suite/landlock.rs b/codex-rs/linux-sandbox/tests/suite/landlock.rs
+index 9666af8..9338a47 100644
+--- a/codex-rs/linux-sandbox/tests/suite/landlock.rs
++++ b/codex-rs/linux-sandbox/tests/suite/landlock.rs
+@@ -1567,3 +1567,78 @@ async fn sandbox_blocks_dev_tcp_redirection() {
+ 
+ #[path = "daemon_sockets_tests.rs"]
+ mod daemon_sockets_tests;
++
++#[tokio::test]
++async fn sandbox_enforces_denied_metadata_directory_and_file_types() {
++    assert!(!should_skip_bwrap_tests().await, "native metadata regression requires supported bubblewrap");
++    for kind in ["missing", "empty-directory", "directory", "empty-file", "file"] {
++        let workspace = tempfile::tempdir().expect("workspace fixture");
++        let metadata = workspace.path().join(".codex");
++        if kind == "directory" || kind == "empty-directory" {
++            std::fs::create_dir(&metadata).expect("existing directory fixture");
++            if kind == "directory" {
++                std::fs::write(metadata.join("config.toml"), "private fixture").expect("fixture content");
++            }
++        } else if kind == "empty-file" {
++            std::fs::File::create(&metadata).expect("existing empty file fixture");
++        } else if kind == "file" {
++            std::fs::write(&metadata, "private fixture").expect("existing file fixture");
++        }
++        let policy = FileSystemSandboxPolicy::restricted(vec![
++            FileSystemSandboxEntry::new(
++                FileSystemPath::Special { value: FileSystemSpecialPath::Root },
++                FileSystemAccessMode::Read,
++            ),
++            FileSystemSandboxEntry::new(
++                AbsolutePathBuf::try_from(workspace.path()).unwrap().into(),
++                FileSystemAccessMode::Write,
++            ),
++            FileSystemSandboxEntry::new(
++                AbsolutePathBuf::try_from(metadata.as_path()).unwrap().into(),
++                FileSystemAccessMode::Deny,
++            ),
++        ]);
++        let profile = PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
++        std::fs::write(workspace.path().join("AGENTS.md"), "instructions").expect("project instructions fixture");
++        let output = run_cmd_result_with_permission_profile_for_cwd(
++            &["bash", "-c", r#"cat "$1/AGENTS.md"
++printf allowed > "$1/public"
++if cat "$1/.codex" 2>/dev/null; then exit 11; fi
++if ls "$1/.codex/" 2>/dev/null; then exit 12; fi
++if (printf injected > "$1/.codex/config.toml") 2>/dev/null; then exit 13; fi
++printf denied"#, "metadata-regression", workspace.path().to_str().unwrap()],
++            AbsolutePathBuf::try_from(workspace.path()).unwrap(),
++            profile,
++            create_env_from_core_vars(),
++            LONG_TIMEOUT_MS,
++            /*use_legacy_landlock*/ false,
++        ).await.expect("native sandbox must launch without directory/file mask collision");
++        let stderr_class = if output.stderr.text.contains("Is a directory") {
++            "EISDIR"
++        } else if output.stderr.text.contains("Not a directory") {
++            "ENOTDIR"
++        } else if output.stderr.text.contains("Permission denied") {
++            "EACCES"
++        } else if output.stderr.text.contains("Read-only file system") {
++            "EROFS"
++        } else if output.stderr.text.contains("No such file or directory") {
++            "ENOENT"
++        } else {
++            "unclassified"
++        };
++        assert_eq!(output.exit_code, 0,
++            "NATIVE_METADATA_EXIT kind={kind} exitCode={} stderrClass={stderr_class} stdoutBytes={} stderrBytes={}",
++            output.exit_code, output.stdout.text.len(), output.stderr.text.len());
++        assert_eq!(output.stdout.text, "instructionsdenied");
++        assert_eq!(std::fs::read_to_string(workspace.path().join("public")).unwrap(), "allowed");
++        if kind == "directory" {
++            assert_eq!(std::fs::read_to_string(metadata.join("config.toml")).unwrap(), "private fixture");
++        } else if kind == "file" {
++            assert_eq!(std::fs::read_to_string(&metadata).unwrap(), "private fixture");
++        } else if kind == "empty-directory" {
++            assert!(metadata.is_dir(), "pre-existing empty directory must be preserved");
++        } else if kind == "empty-file" {
++            assert!(metadata.is_file(), "pre-existing empty file must be preserved");
++        }
++    }
++}

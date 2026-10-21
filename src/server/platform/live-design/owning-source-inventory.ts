@@ -16,6 +16,7 @@ import {
 } from './effective-config.js';
 import type { LiveProcessIdentity } from './process-identity.js';
 import type { OwningNativeObservation } from './owning-observation.js';
+import type { InstalledSourceObservation } from './installed-launch-contract.js';
 
 const systemSources = [
   '/etc/codex/config.toml',
@@ -152,9 +153,12 @@ export function resolveLiveSourceInventory(input: {
   policyDigest: string;
   workerConfig: LiveConfigFile;
   approved: Parameters<typeof resolveLiveConfigFiles>[0]['approved'];
+  originalLaunchSources?: readonly InstalledSourceObservation[];
 }) {
+  let stage = 'response-shape';
   try {
     const observed = response.parse(input.configuration);
+    stage = 'configuration-files';
     const files = resolveLiveConfigFiles({
       configuration: input.configuration,
       threadConfig: input.threadConfig,
@@ -173,6 +177,7 @@ export function resolveLiveSourceInventory(input: {
       sources.push({ kind: 'file', role, ...file });
     };
     for (const layer of observed.layers) {
+      stage = 'layer-provenance';
       const name = layer.name;
       if (name.type === 'project' || name.type === 'sessionFlags') continue;
       const path = z.string().parse(name.file);
@@ -195,6 +200,7 @@ export function resolveLiveSourceInventory(input: {
       addFile(path, role);
     }
     for (const file of files) if (!emitted.has(file.path)) addFile(file.path, 'agent-role');
+    stage = 'worker-configuration';
     if (
       emitted.has(input.workerConfig.path) ||
       !isDeepStrictEqual(readLiveConfigFile(input.workerConfig.path), input.workerConfig)
@@ -202,6 +208,7 @@ export function resolveLiveSourceInventory(input: {
       throw new Error();
     sources.push({ kind: 'file', role: 'sandbox-worker', ...input.workerConfig });
     for (const path of input.captured.directories) {
+      stage = 'project-directory';
       if (absent(path)) {
         sources.push({ kind: 'absent', role: 'project', path });
         continue;
@@ -224,9 +231,11 @@ export function resolveLiveSourceInventory(input: {
       });
     }
     for (const path of systemSources) {
+      stage = 'system-source';
       if (!absent(path)) throw new Error();
       sources.push({ kind: 'absent', role: 'system', path });
     }
+    stage = 'loaded-instruction-paths';
     const loaded = instructionPaths.parse(input.selection.instructionSources);
     if (
       new Set(loaded).size !== loaded.length ||
@@ -237,6 +246,7 @@ export function resolveLiveSourceInventory(input: {
     )
       throw new Error();
     for (const [path, prior] of Object.entries(input.captured.instructions)) {
+      stage = 'instruction-identity';
       if (!prior) {
         if (!absent(path)) throw new Error();
         continue;
@@ -249,11 +259,21 @@ export function resolveLiveSourceInventory(input: {
         ...current,
       });
     }
+    const originalSources = input.originalLaunchSources ?? [];
+    stage = 'source-uniqueness';
+    sources.push(...originalSources.map((source) => structuredClone(source)));
     if (
       sources.length > 128 ||
-      new Set(sources.map((source) => source.path)).size !== sources.length
+      new Set(
+        sources.map((source) =>
+          source.kind === 'installed-launch-source'
+            ? (source.descriptor as { path: string }).path
+            : source.path,
+        ),
+      ).size !== sources.length
     )
       throw new Error();
+    stage = 'runtime-binding';
     const { pid, birth, uid, namespaces } = input.runtime;
     return {
       schemaVersion: 2 as const,
@@ -273,6 +293,8 @@ export function resolveLiveSourceInventory(input: {
       ...(input.observation ? { observation: structuredClone(input.observation) } : {}),
     };
   } catch {
-    throw new Error('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE');
+    throw Object.assign(new Error('LIVE_EFFECTIVE_CONFIG_UNAVAILABLE'), {
+      liveSourceDiagnostics: { stage },
+    });
   }
 }

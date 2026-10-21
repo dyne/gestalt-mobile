@@ -12,11 +12,32 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { safeBrowserFailure } from './live-production-edit-diagnostics.mjs';
+import {
+  safeBrowserFailure,
+  observePopupHmr,
+  observePreviewExchange,
+  observeEditingSteer,
+  pickerChromeSnapshot,
+  observePickerContinuity,
+  withinProofObservation,
+  manualObservationDeadline,
+  proofObservationRemaining,
+  boundedManualCommitObservation,
+  previewCookieObservation,
+  renewManualPreviewLease,
+  manualLeaseDeadline,
+  manualLeaseEstimate,
+  acceptedLeaseEstimate,
+  acceptedLeaseDeadline,
+  renewAcceptedPreviewLease,
+  ownedProofSequence,
+  expectedPollProbeResponse,
+} from './live-production-edit-diagnostics.mjs';
 
 const config = JSON.parse(await readFile(process.argv[2], 'utf8'));
 let stage = 'start';
 let browser;
+let popupHmr;
 let browserProcess;
 let browserExit;
 const chromeStartupMarkers = new Set();
@@ -26,32 +47,77 @@ const chromeChecks = [];
 let baselineSandboxedLaunch;
 let launcherKernel;
 const networkErrors = [];
+const networkResourceFailures = [];
+let initialMobileAssetsChanged = false;
 const exchangeStatuses = [];
 const resourcePending = {};
 const resourceStatuses = {};
 const pageErrors = [];
 const helperResponses = [];
+let firstHelperAuthLoss, lastAuthenticatedHelper, expectedPollProbeRequest;
+let pollProbeArmed = false;
+const pollProbeTag = createHash('sha256').update(String(process.hrtime.bigint())).digest('hex');
 const editRequests = [];
+const acceptedLeaseCapacityObservations = [];
+let manualEntryDigest, manualCommit, manualCommitDeadline;
+const emitManualCommitObservation = (boundary) => {
+  if (!manualCommit) return;
+  const observed = boundedManualCommitObservation({
+    boundary,
+    ...manualCommit,
+    deadline: manualCommitDeadline,
+  });
+  if (observed) process.stdout.write(JSON.stringify({ manualCommitObservation: observed }) + '\n');
+};
+let manualCommitCount = 0;
 const editKinds = ['generate', 'steer', 'accept', 'discard', 'manual_edit_apply'];
-// Real Native admission precedes every model effect. The measured generate took
-// 56s; steer was still durably dispatched at the old30s fixture deadline.
-// These observation waits do not change the helper lease or any product deadline.
-const modelEffectTimeout = 90000;
-const terminalEffectTimeout = 60000;
+// A measured source/selection/catalog/provenance/resource authority check takes
+//111s before turn/start. Observe both authority/helper windows without changing
+// the upstream595s lease, source checks, replay rules or any product deadline.
+if (!config.preflight && !config.startThroughControls)
+  assert.equal(config.eventObservationBudgetMs, 300_000);
+const modelEffectTimeout = config.eventObservationBudgetMs ?? 90_000;
+const terminalEffectTimeout = config.eventObservationBudgetMs ?? 60_000;
 let helperBridge;
+let previewNavigationCount = 0;
 const browserStarted = Date.now();
 let initialPreviewGetRetried = false;
 const checkpoint = (value) => {
   stage = value;
   process.stdout.write(
-    JSON.stringify({ checkpoint: value, elapsedMs: Date.now() - browserStarted }) + '\n',
+    JSON.stringify({
+      checkpoint: value,
+      elapsedMs: Date.now() - browserStarted,
+      ...(config.serialProfile ? { monotonicNs: process.hrtime.bigint().toString() } : {}),
+    }) + '\n',
   );
 };
-const replies = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
-async function command(value) {
-  process.stdout.write(JSON.stringify({ command: value }) + '\n');
-  const reply = await replies.next();
-  assert.equal(JSON.parse(reply.value).ok, true);
+const replyLines = createInterface({ input: process.stdin });
+const replies = replyLines[Symbol.asyncIterator]();
+async function command(value, deadline, details) {
+  process.stdout.write(
+    JSON.stringify({
+      command: value,
+      observation: deadline ? { deadline, ...details } : undefined,
+    }) + '\n',
+  );
+  const pendingReply = replies.next();
+  let reply;
+  try {
+    reply = deadline
+      ? await withinProofObservation(() => pendingReply, deadline)
+      : await pendingReply;
+  } catch (error) {
+    // Terminal observation failure: close IPC and join the exact original read.
+    // The host independently retains its callback until actual settlement.
+    replyLines.close();
+    process.stdin.destroy();
+    await pendingReply.catch(() => {});
+    throw error;
+  }
+  const result = JSON.parse(reply.value);
+  assert.equal(result.ok, true);
+  return result.observation;
 }
 try {
   checkpoint('namespace');
@@ -159,7 +225,7 @@ try {
       if (text.includes(marker)) chromeStartupMarkers.add(code);
   });
   let debugPort;
-  const launchDeadline = Date.now() + 30000;
+  const launchDeadline = Math.min(Date.now() + 30000, config.observationHostDeadline);
   while (Date.now() < launchDeadline) {
     try {
       const lines = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n');
@@ -208,6 +274,21 @@ try {
     });
   });
   context.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path === '/__gestalt_live/manual-edit-stash') {
+      try {
+        const id = request.postDataJSON()?.id;
+        if (/^[a-f0-9]{8}$/.test(id ?? ''))
+          manualEntryDigest = createHash('sha256').update(id).digest('hex');
+      } catch {
+        /* No raw body retained. */
+      }
+    }
+    if (request.method() === 'POST' && path === '/__gestalt_live/manual-edit-commit') {
+      manualCommitCount++;
+      manualCommit = { requestStartedAt: Date.now(), entryDigest: manualEntryDigest };
+      emitManualCommitObservation('commit-requested');
+    }
     if (
       request.method() === 'POST' &&
       new URL(request.url()).pathname === '/__gestalt_live/events'
@@ -233,10 +314,38 @@ try {
   context.on('requestfailed', finished);
   context.on('requestfailed', (request) => {
     const code = request.failure()?.errorText;
-    if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '') && networkErrors.length < 16)
-      networkErrors.push(code);
+    if (/^net::ERR_[A-Z0-9_]{1,64}$/.test(code ?? '')) {
+      if (networkErrors.length < 16) networkErrors.push(code);
+      const resource = request.resourceType();
+      if (networkResourceFailures.length < 16) networkResourceFailures.push({ resource, code });
+      if (
+        stage === 'mobile-navigation' &&
+        code === 'net::ERR_NETWORK_CHANGED' &&
+        ['script', 'stylesheet'].includes(resource)
+      )
+        initialMobileAssetsChanged = true;
+    }
+  });
+  context.on('request', (request) => {
+    if (
+      pollProbeArmed &&
+      !expectedPollProbeRequest &&
+      request.method() === 'GET' &&
+      request.url() === `${config.previewOrigin}/__gestalt_live/poll` &&
+      request.headers()['x-gestalt-proof-probe'] === pollProbeTag
+    )
+      expectedPollProbeRequest = request;
   });
   context.on('response', async (response) => {
+    if (
+      new URL(response.url()).pathname === '/__gestalt_live/manual-edit-commit' &&
+      response.request().method() === 'POST' &&
+      manualCommit
+    ) {
+      manualCommit.acceptedAt = Date.now();
+      manualCommit.status = response.status();
+      emitManualCommitObservation('commit-response');
+    }
     const resource = `${response.request().resourceType()}:${response.status()}`;
     resourceStatuses[resource] = (resourceStatuses[resource] ?? 0) + 1;
     const url = new URL(response.url());
@@ -249,6 +358,7 @@ try {
         'agent-target-claim',
         'manual-edit-stash',
         'manual-edit-commit',
+        'poll',
       ];
       const tail = url.pathname.slice('/__gestalt_live/'.length);
       let headers = {};
@@ -259,7 +369,7 @@ try {
       }
       const requestToken = url.searchParams.get('token');
       if (helperResponses.length === 24) helperResponses.shift();
-      helperResponses.push({
+      const observed = {
         elapsedMs: Date.now() - browserStarted,
         method: ['GET', 'POST'].includes(response.request().method())
           ? response.request().method()
@@ -272,7 +382,23 @@ try {
             ? null
             : createHash('sha256').update(requestToken).digest('hex') === config.helperTokenSha256,
         cookiePresent: String(headers.cookie ?? '').includes('__Host-gestalt_live_p'),
-      });
+      };
+      observed.expectedPollProbe = expectedPollProbeResponse(
+        response,
+        expectedPollProbeRequest,
+        config.previewOrigin,
+      );
+      if (
+        !firstHelperAuthLoss &&
+        [401, 403].includes(observed.status) &&
+        !observed.expectedPollProbe
+      ) {
+        firstHelperAuthLoss = { previous: lastAuthenticatedHelper ?? null, first: observed };
+        process.stdout.write(JSON.stringify({ firstHelperAuthLoss }) + '\n');
+      }
+      if (observed.status >= 200 && observed.status < 300 && observed.cookiePresent)
+        lastAuthenticatedHelper = observed;
+      helperResponses.push(observed);
     }
     if (
       url.origin === config.previewOrigin &&
@@ -283,6 +409,8 @@ try {
   });
   await context.addInitScript(() => {
     window.__productionHelperConnected = false;
+    window.__productionHelperConnectedDocument = null;
+    window.__productionHelperHideLiveBar = null;
     const OriginalEventSource = window.EventSource;
     window.EventSource = class extends OriginalEventSource {
       constructor(...args) {
@@ -292,8 +420,14 @@ try {
           return;
         this.addEventListener('message', (event) => {
           try {
-            if (JSON.parse(event.data).type === 'connected')
+            const value = JSON.parse(event.data);
+            if (value.type === 'connected') {
               window.__productionHelperConnected = true;
+              window.__productionHelperConnectedDocument = performance.timeOrigin;
+              window.__productionHelperHideLiveBar = value.hideLiveBar === true;
+            } else if (value.type === 'live_bar' && typeof value.hidden === 'boolean') {
+              window.__productionHelperHideLiveBar = value.hidden;
+            }
           } catch {
             // Ignore non-JSON heartbeat frames.
           }
@@ -318,11 +452,13 @@ try {
   await mobile.setViewportSize({ width: 1440, height: 900 });
   checkpoint('mobile-navigation');
   let response;
+  let initialMobileGetRetried = false;
   try {
     response = await mobile.goto(config.mobileOrigin + '/');
   } catch (error) {
     if (!String(error?.message ?? '').startsWith('page.goto: net::ERR_NETWORK_CHANGED'))
       throw error;
+    initialMobileGetRetried = true;
     // The namespace notifier can settle after Chromium starts. Repeat only
     // this initial read-only GET; no grant, exchange or edit has happened yet.
     await mobile.waitForFunction(
@@ -333,93 +469,143 @@ try {
     checkpoint('mobile-get-after-network-change');
     response = await mobile.goto(config.mobileOrigin + '/');
   }
+  // A successful document GET can still lose its initial JS/CSS to the same
+  // namespace notifier. Allow one read-only navigation recovery before any
+  // controls, grant, Start or edit action; never retry an ambiguous dispatch.
+  if (!initialMobileGetRetried && initialMobileAssetsChanged) {
+    checkpoint('mobile-get-after-asset-network-change');
+    response = await mobile.goto(config.mobileOrigin + '/');
+  }
   assert.ok(response.status() < 500);
   assert.equal(await mobile.evaluate(() => isSecureContext), true);
-  checkpoint('launch-grant');
-  await mobile.evaluate(async ({ sessionId, liveId, generation, previewOrigin }) => {
-    const encode = (bytes) =>
-      btoa(String.fromCharCode(...bytes))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replaceAll('=', '');
-    const random = new Uint8Array(32);
-    crypto.getRandomValues(random);
-    const verifier = encode(random);
-    const codeChallenge = encode(
-      new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))),
+  checkpoint('mobile-controls');
+  await mobile.getByRole('button', { name: 'Chat', exact: true }).click();
+  await mobile.getByRole('button', { name: 'Live controls', exact: true }).click();
+  if (config.startThroughControls) {
+    checkpoint('mobile-start');
+    assert.equal(config.startObservationBudgetMs, 815_000);
+    const startResponse = mobile.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/sessions/${config.sessionId}/live/start` &&
+        response.request().method() === 'POST',
+      { timeout: config.startObservationBudgetMs },
     );
-    const result = await fetch(`/api/sessions/${sessionId}/live/launch-grants`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ liveId, generation, codeChallenge, codeChallengeMethod: 'S256' }),
-    });
-    if (result.status !== 201) throw Error('EDIT_LAUNCH_GRANT_REFUSED');
-    const grant = await result.json();
-    const button = document.createElement('button');
-    button.id = 'production-proof-launch';
-    button.textContent = 'Open preview';
-    document.body.append(button);
-    button.onclick = () => {
-      const peer = window.open(grant.exchangeUrl, 'production-edit-preview');
-      const receive = (event) => {
-        if (
-          event.source !== peer ||
-          event.origin !== previewOrigin ||
-          event.data?.grantId !== grant.grantId
-        )
-          return;
-        if (event.data.type === 'gestalt-live-proof')
-          peer.postMessage(
-            { type: 'gestalt-live-proof', grantId: grant.grantId, codeVerifier: verifier },
-            previewOrigin,
-          );
-        if (event.data.type === 'gestalt-live-exchanged') {
-          window.__editExchanged = true;
-          window.removeEventListener('message', receive);
-        }
-      };
-      window.addEventListener('message', receive);
-    };
-  }, config);
-  const popup = mobile.waitForEvent('popup');
-  checkpoint('preview-popup');
-  await mobile.locator('#production-proof-launch').click();
-  const preview = await popup;
-  await preview.setViewportSize({ width: 1440, height: 900 });
-  let hmrUpdates = 0;
-  preview.on('websocket', (socket) =>
-    socket.on('framereceived', (message) => {
-      try {
-        if (JSON.parse(String(message.payload)).type === 'update') hmrUpdates++;
-      } catch {
-        /* Ignore non-HMR frames. */
-      }
-    }),
+    await mobile.getByRole('button', { name: 'Start Live', exact: true }).click();
+    const result = await startResponse;
+    if (result.status() !== 200) {
+      const failure = await result.json();
+      await writeFile(
+        config.resultFile,
+        JSON.stringify({
+          startStatus: result.status(),
+          startCode: /^LIVE_[A-Z_]+$/.test(failure?.code ?? '') ? failure.code : 'UNCLASSIFIED',
+        }),
+      );
+    }
+    assert.equal(result.status(), 200);
+    const started = await result.json();
+    assert.equal(started.state, 'active');
+    assert.match(started.liveId, /^[A-Za-z0-9_-]{1,128}$/);
+    assert.ok(Number.isSafeInteger(started.generation) && started.generation > 0);
+    const origin = new URL(started.previewOrigin);
+    assert.equal(origin.protocol, 'https:');
+    assert.equal(origin.hostname, 'preview.entrypoint.test');
+    const operationId = result.request().postDataJSON().operationId;
+    assert.match(operationId, /^[A-Za-z0-9_-]{1,128}$/);
+    await mobile.getByRole('button', { name: 'Open preview', exact: true }).waitFor();
+    await mobile.screenshot({ path: config.screenshot });
+    await writeFile(
+      config.resultFile,
+      JSON.stringify(
+        {
+          trustedTls: true,
+          ignoreHttpsErrors: false,
+          separateBrowserNetwork: true,
+          separateBrowserMountNamespace: true,
+          startThroughMobileControls: true,
+          startObservationBudgetMs: config.startObservationBudgetMs,
+          startedRun: {
+            liveId: started.liveId,
+            generation: started.generation,
+            state: started.state,
+            previewOrigin: origin.origin,
+          },
+          operationId,
+          productionAuthentication: 'temporary-preprovisioned-authorized-device',
+          genuineProvider: false,
+        },
+        null,
+        2,
+      ),
+    );
+    throw new Error('CONTROLS_START_COMPLETE');
+  }
+  const previewDeadline = Math.min(Date.now() + 60_000, config.observationHostDeadline);
+  const grantResponse = mobile.waitForResponse(
+    (response) =>
+      new URL(response.url()).origin === new URL(config.mobileOrigin).origin &&
+      new URL(response.url()).pathname === `/api/sessions/${config.sessionId}/live/launch-grants` &&
+      response.request().method() === 'POST',
+    { timeout: proofObservationRemaining(previewDeadline) },
   );
+  // All observers are armed once before the click; rejected peers remain handled
+  // while another exact phase is being observed. No retry mints another grant.
+  void grantResponse.catch(() => {});
+  const exchangeResponse = context.waitForEvent('response', {
+    predicate: (response) =>
+      new URL(response.url()).origin === config.previewOrigin &&
+      new URL(response.url()).pathname === '/__gestalt_live/exchange',
+    timeout: proofObservationRemaining(previewDeadline),
+  });
+  void exchangeResponse.catch(() => {});
+  popupHmr = observePopupHmr(context);
+  const popup = mobile.waitForEvent('popup', {
+    timeout: proofObservationRemaining(previewDeadline),
+  });
+  void popup.catch(() => {});
+  checkpoint('preview-popup');
+  await mobile.getByRole('button', { name: 'Open preview', exact: true }).click({
+    timeout: proofObservationRemaining(previewDeadline),
+  });
+  const preview = await withinProofObservation(() => popup, previewDeadline);
+  const readHmrUpdates = popupHmr.select(preview);
+  await preview.setViewportSize({ width: 1440, height: 900 });
   checkpoint('preview-exchange');
+  const exchangedLease = await observePreviewExchange({
+    grantResponse,
+    exchangeResponse,
+    liveId: config.liveId,
+    generation: config.generation,
+    previewOrigin: config.previewOrigin,
+    deadline: previewDeadline,
+    checkpoint,
+  });
+  checkpoint('preview-navigation');
   try {
-    await preview.waitForURL(config.previewOrigin + '/', { waitUntil: 'commit' });
+    await preview.waitForURL(config.previewOrigin + '/', {
+      waitUntil: 'commit',
+      timeout: proofObservationRemaining(previewDeadline),
+    });
   } catch (error) {
     if (!String(error?.message ?? '').startsWith('page.waitForURL: net::ERR_NETWORK_CHANGED'))
       throw error;
     // The isolated Chromium network notifier can settle after the successful
     // one-use exchange. Repeat only its initial GET, using the same cookie and
     // generation; never repeat the exchange, mint a grant or replay an edit.
-    await mobile.waitForFunction(() => window.__editExchanged === true, null, {
-      timeout: 10000,
-    });
     await preview.waitForFunction(
       () => document.documentURI.startsWith('chrome-error://') && document.readyState !== 'loading',
       null,
-      { timeout: 5000 },
+      { timeout: Math.min(5000, proofObservationRemaining(previewDeadline)) },
     );
     checkpoint('preview-get-after-network-change');
-    const recovered = await preview.goto(config.previewOrigin + '/', { waitUntil: 'commit' });
+    const recovered = await preview.goto(config.previewOrigin + '/', {
+      waitUntil: 'commit',
+      timeout: proofObservationRemaining(previewDeadline),
+    });
     assert.equal(recovered.status(), 200);
     initialPreviewGetRetried = true;
   }
   checkpoint('opener-confirmation');
-  await mobile.waitForFunction(() => window.__editExchanged === true);
   checkpoint('preview-privacy');
   assert.equal(await preview.evaluate(() => location.hash), '');
   assert.equal(await preview.evaluate(() => window.opener), null);
@@ -447,69 +633,443 @@ try {
   await preview.waitForFunction(() => window.__productionHelperConnected === true);
   checkpoint('app-module-ready');
   await preview.waitForFunction(() => document.body?.dataset.productionHmr === 'original');
+  if (config.editingPhase === 'steer')
+    await preview
+      .getByRole('heading', { name: 'Production chosen variant', exact: true })
+      .waitFor();
   checkpoint('helper-connected');
-  assert.equal(
-    await preview.evaluate(async () => (await fetch('/__gestalt_live/poll')).status),
-    403,
-  );
-  checkpoint('picker-generate');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 2);
-  await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-  await preview.getByRole('heading', { name: 'Production chosen variant', exact: true }).waitFor();
-  await ui.clickAccept(preview, { expectedVariant: 1 });
-  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
-  await command('accepted');
-  checkpoint('picker-steer');
-  await ui.submitSteer(preview, 'production steer: update the HMR marker');
-  await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
-    timeout: modelEffectTimeout,
+  pollProbeArmed = true;
+  try {
+    assert.equal(
+      await preview.evaluate(
+        async (tag) =>
+          (await fetch('/__gestalt_live/poll', { headers: { 'x-gestalt-proof-probe': tag } }))
+            .status,
+        pollProbeTag,
+      ),
+      403,
+    );
+    assert.ok(expectedPollProbeRequest, 'PROOF_POLL_PROBE_UNOBSERVED');
+  } finally {
+    pollProbeArmed = false;
+  }
+  preview.on('framenavigated', (frame) => {
+    if (frame === preview.mainFrame()) previewNavigationCount++;
   });
-  await ui.waitForSteerUnlocked(preview, { timeout: modelEffectTimeout });
-  assert.ok(hmrUpdates > 0);
-  await command('steered');
-  checkpoint('picker-manual-apply');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.clickEditCopy(preview);
-  await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
-  await ui.clickSaveEdit(preview);
-  await ui.assertApplyDockVisible(preview, 1, { timeout: terminalEffectTimeout });
-  await ui.clickApplyEdits(preview);
-  await ui.waitForApplyDockHidden(preview, { timeout: modelEffectTimeout });
-  await command('manual-applied');
-  checkpoint('picker-discard');
-  await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
-  await ui.setCount(preview, 2);
-  await ui.clickGo(preview);
-  await ui.waitForCycling(preview, 2, { timeout: modelEffectTimeout });
-  await preview
-    .getByRole('heading', { name: 'Production discarded variant', exact: true })
-    .waitFor();
-  await ui.clickDiscard(preview);
-  await ui.waitForBarHidden(preview, { timeout: terminalEffectTimeout });
-  await command('discarded');
-  assert.equal(
-    await preview.getByRole('heading', { name: 'Production manual approved', exact: true }).count(),
-    1,
-  );
-  checkpoint('background-beyond-eight-seconds');
-  await command('background-begin');
-  const foreground = await context.newPage();
-  await foreground.bringToFront();
-  await preview.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
-    polling: 100,
-    timeout: 5000,
-  });
-  const hiddenAt = Date.now();
-  await new Promise((done) => setTimeout(done, 9200));
-  assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
-  assert.ok(Date.now() - hiddenAt > 8000);
-  await preview.bringToFront();
-  await preview.waitForFunction(() => document.visibilityState === 'visible');
-  await foreground.close();
-  await command('background-finished');
+  const observePicker = async (boundary) => {
+    let snapshot, timer;
+    try {
+      snapshot = await Promise.race([
+        preview.evaluate(pickerChromeSnapshot),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ available: false }), 1000);
+        }),
+      ]);
+    } catch {
+      snapshot = { available: false };
+    } finally {
+      clearTimeout(timer);
+    }
+    process.stdout.write(
+      JSON.stringify({
+        pickerObservation: {
+          boundary,
+          navigationCount: Math.min(100000, previewNavigationCount),
+          ...snapshot,
+        },
+      }) + '\n',
+    );
+  };
+  const actions = new Set();
+  let manualLease;
+  let acceptedLease;
+  const acceptedLeaseStages = new Set();
+  const recordAcceptedCapacity = (row) => {
+    assert.ok(acceptedLeaseCapacityObservations.length < 8);
+    acceptedLeaseCapacityObservations.push(row);
+  };
+  const acceptedCapacity = async (boundary) => {
+    const cookie = await readPreviewCookie();
+    const deadline = acceptedLeaseDeadline({
+      cookie,
+      lease: acceptedLease.lease,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: acceptedLeaseEstimate[boundary],
+      boundary,
+      observeCapacity: recordAcceptedCapacity,
+    });
+    return deadline;
+  };
+  const observeAcceptedLeaseStage = async (stage) => {
+    assert.equal(acceptedLeaseStages.has(stage), false);
+    acceptedLeaseStages.add(stage);
+    const cookie = await readPreviewCookie();
+    const previous = acceptedLease;
+    const current = await renewAcceptedPreviewLease({
+      cookie,
+      stage,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: acceptedLeaseEstimate[stage === 'before-generate' ? 'generate' : 'accept'],
+      observeCapacity: recordAcceptedCapacity,
+      renew: (actual, deadline) =>
+        command(`accepted-lease-${stage}`, deadline, {
+          cookie: actual,
+          startedAt: Date.now(),
+          hostDeadline: config.observationHostDeadline,
+        }),
+      redeliver: () =>
+        preview.evaluate(async () => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) throw new Error('PROOF_ACCEPTED_LEASE_REDELIVERY');
+          return response.json();
+        }),
+      readCookie: readPreviewCookie,
+    });
+    acceptedLease = {
+      ...current,
+      capacityObservations: acceptedLeaseCapacityObservations,
+      stages: [...(previous?.stages ?? []), current.lease],
+    };
+  };
+  const manualLeaseStages = new Set();
+  const readPreviewCookie = async () =>
+    previewCookieObservation(await context.cookies(config.previewOrigin), config.previewOrigin);
+  const requireManualCapacity = async (boundary) => {
+    const cookie = await readPreviewCookie();
+    const deadline = manualLeaseDeadline({
+      cookie,
+      lease: manualLease.lease,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: manualLeaseEstimate[boundary],
+    });
+    manualLease.capacityObservations.push({
+      boundary,
+      sampledAt: Date.now(),
+      cookieExpiresAt: cookie.cookieExpiresAt,
+      deadline,
+      estimateMs: manualLeaseEstimate[boundary],
+      discardCostIsProxy: true,
+    });
+    return deadline;
+  };
+  const runManualSequence = (steps, deadline, boundary) =>
+    ownedProofSequence({
+      steps,
+      deadline,
+      abort: () => context.close(),
+      observe: (observation) =>
+        process.stdout.write(
+          JSON.stringify({
+            manualSequenceObservation: { boundary, ...observation },
+          }) + '\n',
+        ),
+    });
+  const observeManualLeaseStage = async (leaseStage) => {
+    assert.equal(manualLeaseStages.has(leaseStage), false);
+    manualLeaseStages.add(leaseStage);
+    const cookie = await readPreviewCookie();
+    const previous = manualLease;
+    const current = await renewManualPreviewLease({
+      cookie,
+      stage: leaseStage,
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      requiredMs: manualLeaseEstimate[leaseStage === 'before-generate' ? 'generate' : 'discard'],
+      renew: (actual, deadline) =>
+        command(`manual-lease-${leaseStage}`, deadline, {
+          cookie: actual,
+          startedAt: Date.now(),
+          hostDeadline: config.observationHostDeadline,
+        }),
+      redeliver: () =>
+        preview.evaluate(async () => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) throw new Error('PROOF_MANUAL_LEASE_REDELIVERY');
+          return response.json();
+        }),
+      readCookie: readPreviewCookie,
+    });
+    manualLease = {
+      ...current,
+      capacityObservations: previous?.capacityObservations ?? [],
+      stages: [...(previous?.stages ?? []), current.lease],
+    };
+  };
+  const generate = async (label) => {
+    if (config.serialProfile && config.editingPhase === 'accepted')
+      await observeAcceptedLeaseStage('before-generate');
+    const deadline = acceptedLease
+      ? await acceptedCapacity('generate')
+      : manualLease
+        ? await requireManualCapacity('generate')
+        : undefined;
+    checkpoint('picker-generate');
+    const steps = [
+      () => ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true }),
+      () => ui.setCount(preview, 2),
+      () => ui.clickGo(preview),
+      () =>
+        ui.waitForCycling(preview, 2, {
+          timeout: deadline
+            ? Math.min(modelEffectTimeout, proofObservationRemaining(deadline))
+            : modelEffectTimeout,
+        }),
+      () =>
+        preview.getByRole('heading', { name: label, exact: true }).waitFor({
+          timeout: deadline ? proofObservationRemaining(deadline) : modelEffectTimeout,
+        }),
+    ];
+    if (acceptedLease) await ownedProofSequence({ steps, deadline, abort: () => context.close() });
+    else if (deadline) await runManualSequence(steps, deadline, 'generate');
+    else for (const step of steps) await step();
+    actions.add('generate');
+  };
+  let acceptContinuity, resumedSteerDeadline;
+  const accept = async () => {
+    if (acceptedLease) await observeAcceptedLeaseStage('before-accept');
+    // Starts BEFORE the first Accept observation/click, never reset by acknowledgement/navigation.
+    const acceptDeadline = Math.min(
+      Date.now() + terminalEffectTimeout,
+      config.observationHostDeadline,
+      acceptedLease ? await acceptedCapacity('accept') : Infinity,
+    );
+    const acceptSteps = [
+      () => observePicker('before-accept'),
+      () => ui.clickAccept(preview, { expectedVariant: 1 }),
+      () => ui.waitForBarHidden(preview, { timeout: Math.max(1, acceptDeadline - Date.now()) }),
+      () => observePicker('after-accept'),
+      () => command('accepted', acceptDeadline),
+      () => observePicker('after-accept-ack'),
+    ];
+    await ownedProofSequence({
+      steps: acceptSteps,
+      deadline: acceptDeadline,
+      abort: () => context.close(),
+    });
+    if (!config.pickerSmoke && config.editingPhase !== 'accepted')
+      acceptContinuity = await observePickerContinuity(preview, {
+        deadline: acceptDeadline,
+        heading: 'Production chosen variant',
+      });
+    actions.add('accept');
+  };
+  const steer = async () => {
+    checkpoint('picker-steer');
+    await observePicker('before-steer');
+    const submit = async (deadline) => {
+      resumedSteerDeadline = deadline;
+      if (resumedSteerDeadline)
+        assert.ok(
+          proofObservationRemaining(resumedSteerDeadline) >= 180_000,
+          'PROOF_EDIT_BUDGET_INSUFFICIENT',
+        );
+      await ui.submitSteer(preview, 'production steer: update the HMR marker');
+      await preview.waitForFunction(() => document.body.dataset.productionHmr === 'steered', null, {
+        timeout: resumedSteerDeadline
+          ? Math.min(modelEffectTimeout, proofObservationRemaining(resumedSteerDeadline))
+          : modelEffectTimeout,
+      });
+      await ui.waitForSteerUnlocked(preview, {
+        timeout: resumedSteerDeadline
+          ? Math.min(modelEffectTimeout, proofObservationRemaining(resumedSteerDeadline))
+          : modelEffectTimeout,
+      });
+      assert.ok(readHmrUpdates() > 0);
+      await command('steered', resumedSteerDeadline);
+      actions.add('steer');
+    };
+    if (config.editingPhase !== 'steer') return submit();
+    return observeEditingSteer({
+      generation: config.generation,
+      hostDeadline: config.observationHostDeadline,
+      observeContinuity: async () => {
+        acceptContinuity = await observePickerContinuity(preview, {
+          deadline: Math.min(Date.now() + 30_000, config.observationHostDeadline - 195_000),
+          heading: 'Production chosen variant',
+        });
+      },
+      readLease: () =>
+        preview.evaluate(async (generation) => {
+          const response = await fetch('/__gestalt_live/lease', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          if (response.status !== 200) return null;
+          const lease = await response.json();
+          return {
+            generation,
+            leaseExpiresAt: lease.leaseExpiresAt,
+            absoluteExpiresAt: lease.absoluteExpiresAt,
+          };
+        }, exchangedLease.generation),
+      submit,
+    });
+  };
+  const manual = async () => {
+    checkpoint('picker-manual-apply');
+    const manualObservationStartedAt = Date.now();
+    const manualObservation = {
+      startedAt: manualObservationStartedAt,
+      hostDeadline: config.observationHostDeadline,
+    };
+    const pollDeadline = manualObservationDeadline(manualObservation);
+    const dispatched = await command('manual-poll-observed', pollDeadline, manualObservation);
+    assert.equal(dispatched.commandIpcDispatched, true);
+    assert.equal(dispatched.workerBirthsCurrent, true);
+    assert.equal(dispatched.pending, true);
+    await ui.pickElement(preview, 'h1.hero-title', { resetPickMode: true });
+    await ui.clickEditCopy(preview);
+    await ui.editTextLeaf(preview, 'h1.hero-title', 'Production manual approved');
+    await ui.clickSaveEdit(preview);
+    await ui.assertApplyDockVisible(preview, 1, { timeout: 60_000 });
+    await command('manual-commit-observed', pollDeadline, manualObservation);
+    const manualDeadline = Math.min(Date.now() + 120_000, config.observationHostDeadline);
+    manualCommitDeadline = manualDeadline;
+    await withinProofObservation(() => ui.clickApplyEdits(preview), manualDeadline);
+    await withinProofObservation(async () => {
+      while (manualCommit?.acceptedAt === undefined)
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(25, proofObservationRemaining(manualDeadline))),
+        );
+    }, manualDeadline);
+    assert.equal(manualCommitCount, 1);
+    assert.equal(manualCommit?.status, 202);
+    await withinProofObservation(
+      () =>
+        ui.waitForApplyDockHidden(preview, { timeout: Math.max(1, manualDeadline - Date.now()) }),
+      manualDeadline,
+    );
+    const { requestStartedAt, acceptedAt, entryDigest } = manualCommit;
+    emitManualCommitObservation('before-canonical-ack');
+    await command('manual-applied', manualDeadline, {
+      manual: { requestStartedAt, acceptedAt, entryDigest },
+    });
+    emitManualCommitObservation('canonical-acknowledged');
+    actions.add('manual');
+  };
+  const discard = async () => {
+    checkpoint('picker-discard');
+    await generate('Production discarded variant');
+    if (manualLease) await observeManualLeaseStage('before-discard');
+    const deadline = manualLease ? await requireManualCapacity('discard') : undefined;
+    const steps = [
+      () => ui.clickDiscard(preview),
+      () =>
+        ui.waitForBarHidden(preview, {
+          timeout: deadline
+            ? Math.min(terminalEffectTimeout, proofObservationRemaining(deadline))
+            : terminalEffectTimeout,
+        }),
+      () => command('discarded', deadline),
+    ];
+    if (deadline) await runManualSequence(steps, deadline, 'discard');
+    else for (const step of steps) await step();
+    assert.equal(
+      await preview
+        .getByRole('heading', { name: 'Production manual approved', exact: true })
+        .count(),
+      1,
+    );
+    actions.add('discard');
+  };
+  const background = async () => {
+    checkpoint('background-beyond-eight-seconds');
+    await command('background-begin');
+    const foreground = await context.newPage();
+    await foreground.bringToFront();
+    await preview.waitForFunction(() => document.visibilityState === 'hidden', undefined, {
+      polling: 100,
+      timeout: 5000,
+    });
+    const hiddenAt = Date.now();
+    await new Promise((done) => setTimeout(done, 9200));
+    assert.equal(await preview.evaluate(() => document.visibilityState), 'hidden');
+    assert.ok(Date.now() - hiddenAt > 8000);
+    await preview.bringToFront();
+    await preview.waitForFunction(() => document.visibilityState === 'visible');
+    await foreground.close();
+    await command('background-finished');
+    actions.add('background');
+  };
+  assert.ok(['', 'accept-steer', 'manual-discard'].includes(config.proofLane ?? ''));
+  if (config.proofLane === 'manual-discard') {
+    await manual();
+    checkpoint('manual-before-generate-lease');
+    await observeManualLeaseStage('before-generate');
+    await discard();
+  } else if (config.editingPhase === 'steer') {
+    assert.equal(config.proofLane, 'accept-steer');
+    assert.ok(
+      config.observationHostDeadline - Date.now() >= 195_000,
+      'PROOF_EDIT_BUDGET_INSUFFICIENT',
+    );
+    await steer();
+    await background();
+  } else {
+    await generate('Production chosen variant');
+    await accept();
+    if (!config.pickerSmoke && config.editingPhase !== 'accepted') {
+      await steer();
+      if (config.proofLane !== 'accept-steer') {
+        await manual();
+        await discard();
+      }
+      await background();
+    }
+  }
   await preview.screenshot({ path: config.screenshot });
+  let postAcceptPollObservation;
+  let postSteerPollObservation;
+  let postDiscardPollObservation;
+  if (config.proofLane === 'manual-discard') {
+    assert.ok(actions.has('discard'));
+    checkpoint('post-discard-poll-dispatch');
+    const deadline = await requireManualCapacity('post-discard');
+    postDiscardPollObservation = await command('discarded-poll-observed', deadline, {
+      hostDeadline: config.observationHostDeadline,
+    });
+    assert.equal(postDiscardPollObservation.commandIpcDispatched, true);
+    assert.equal(postDiscardPollObservation.postAuthority, true);
+    assert.equal(postDiscardPollObservation.pending, true);
+  }
+  if (['accepted', 'steer'].includes(config.editingPhase)) {
+    // Keep the real preview/SSE alive until the next owning poll has actually
+    // dispatched after authority validation. This read cannot reset phase A.
+    const phaseA = config.editingPhase === 'accepted';
+    if (!phaseA) assert.ok(actions.has('steer') && actions.has('background'));
+    checkpoint(phaseA ? 'post-accept-poll-dispatch' : 'post-steer-poll-dispatch');
+    const deadline = Math.min(
+      Date.now() + 300_000,
+      config.observationHostDeadline,
+      acceptedLease ? await acceptedCapacity('post-accept') : Infinity,
+    );
+    const observed = await command(
+      phaseA ? 'accepted-poll-observed' : 'steered-poll-observed',
+      deadline,
+      {
+        hostDeadline: config.observationHostDeadline,
+      },
+    );
+    assert.equal(observed.commandIpcDispatched, true);
+    assert.equal(observed.postAuthority, true);
+    assert.equal(observed.pending, true);
+    if (phaseA) postAcceptPollObservation = observed;
+    else postSteerPollObservation = observed;
+  }
   await writeFile(
     config.resultFile,
     JSON.stringify(
@@ -518,13 +1078,27 @@ try {
         ignoreHttpsErrors: false,
         separateBrowserNetwork: true,
         separateBrowserMountNamespace: true,
-        realPickerGenerateAccept: true,
-        realPickerSteer: true,
-        realPickerManualApply: true,
-        realPickerDiscard: true,
-        actualTabHiddenBeyondEightSeconds: true,
+        openThroughMobileControls: true,
+        realPickerGenerateAccept: actions.has('generate') && actions.has('accept'),
+        acceptContinuity: config.editingPhase ? undefined : acceptContinuity,
+        postResumeContinuity: config.editingPhase === 'steer' ? acceptContinuity : undefined,
+        proofLane: config.proofLane || undefined,
+        editingPhase: config.editingPhase,
+        postAcceptPollObservation,
+        postSteerPollObservation,
+        postDiscardPollObservation,
+        manualLease,
+        acceptedLease,
+        acceptedLeaseCapacityObservations,
+        firstHelperAuthLoss,
+        observedGeneration: config.generation,
+        pickerSmoke: config.pickerSmoke === true,
+        realPickerSteer: actions.has('steer'),
+        realPickerManualApply: actions.has('manual'),
+        realPickerDiscard: actions.has('discard'),
+        actualTabHiddenBeyondEightSeconds: actions.has('background'),
         playwrightFocusOverrideDisabled: true,
-        hmrUpdates,
+        hmrUpdates: readHmrUpdates(),
         extraPollOwnerDenied: true,
         initialPreviewGetRetried,
         exchangePosts: exchangeStatuses.filter((item) => item.path === '/__gestalt_live/exchange')
@@ -538,7 +1112,9 @@ try {
   );
   checkpoint('complete');
 } catch (error) {
-  if (config.preflight && error?.message === 'BROWSER_PREFLIGHT_COMPLETE') {
+  if (config.startThroughControls && error?.message === 'CONTROLS_START_COMPLETE') {
+    checkpoint('controls-start-complete');
+  } else if (config.preflight && error?.message === 'BROWSER_PREFLIGHT_COMPLETE') {
     checkpoint('preflight-complete');
   } else {
     const callsite = /live-production-edit-browser\.mjs:(\d+):(\d+)/.exec(error?.stack ?? '');
@@ -572,13 +1148,16 @@ try {
             launcherKernel,
           },
           networkErrors,
+          networkResourceFailures,
           exchangeStatuses,
           resourcePending,
           resourceStatuses,
           pageErrors,
           helperBridge,
           helperResponses,
+          firstHelperAuthLoss,
           editRequests,
+          acceptedLeaseCapacityObservations,
         },
       }) + '\n',
     );
@@ -586,7 +1165,11 @@ try {
     process.exitCode = 1;
   }
 } finally {
+  popupHmr?.dispose();
+  emitManualCommitObservation('browser-finally');
+  if (config.serialProfile) checkpoint('profile-browser-close-start');
   await browser?.close();
+  if (config.serialProfile) checkpoint('profile-browser-close-end');
   if (browserProcess && browserProcess.exitCode === null && browserProcess.signalCode === null) {
     browserProcess.kill('SIGTERM');
     let timer;

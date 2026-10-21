@@ -321,6 +321,49 @@ describe('canonical poll bridge', () => {
     expect(f.owners.current(f.run.liveId)?.state).toBe('stopping');
     expect(() => f.reopen().begin(f.run)).toThrow();
   });
+  it('settles an undispatched poll when Stop revokes admission during verification', async () => {
+    const f = fixture();
+    let reject!: (error: Error) => void;
+    f.verify.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
+    const flight = f.bridge.next(f.run);
+    const refused = expect(flight).rejects.toThrow('LIVE_ADMISSION_UNAVAILABLE');
+    await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+    const stopping = f.owners.mutate(f.run, { event: 'stop' });
+    reject(new Error('LIVE_ADMISSION_UNAVAILABLE'));
+    await refused;
+    expect(f.cli.poll).not.toHaveBeenCalled();
+    expect(f.apply).not.toHaveBeenCalled();
+    expect(f.inbox.records()).toEqual([]);
+    expect(() => f.reopen().begin(stopping)).not.toThrow();
+  });
+  it.each(['active', 'successor'] as const)(
+    'retains an undispatched refused poll for %s recovery',
+    async (state) => {
+      const f = fixture();
+      let reject!: (error: Error) => void;
+      f.verify.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, fail) => {
+            reject = fail;
+          }),
+      );
+      const flight = f.bridge.next(f.run);
+      const refused = expect(flight).rejects.toThrow('LIVE_ADMISSION_UNAVAILABLE');
+      await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+      if (state === 'successor')
+        f.owners.mutate(f.run, { event: 'recover', code: 'LIVE_TEST_RECOVERY' });
+      reject(new Error('LIVE_ADMISSION_UNAVAILABLE'));
+      await refused;
+      expect(f.cli.poll).not.toHaveBeenCalled();
+      expect(f.apply).not.toHaveBeenCalled();
+      expect(() => f.reopen().begin(f.run)).toThrow('LIVE_POLL_RECOVERY_REQUIRED');
+    },
+  );
   it('out-of-order accept follows upstream terminal handling without an unsolicited model turn', async () => {
     const f = fixture();
     f.event(events[2]);

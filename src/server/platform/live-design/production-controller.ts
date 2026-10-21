@@ -93,6 +93,11 @@ import { SqliteLiveEventInbox } from './sqlite-event-inbox.js';
 import { captureOwningRuntime, type OwningRuntimeCapture } from './owning-runtime-capture.js';
 import { assertLiveNativeInstallation } from './native-contract.js';
 import { validateOriginalLaunchSources } from './original-launch-sources.js';
+import {
+  assertOriginalLiveMcp,
+  assertAdmittedLiveMcp,
+  originalLaunchSurfaces,
+} from './installed-launch-contract.js';
 import { observeOwningNative } from './owning-observation.js';
 import { currentOwningSession, recoveredSession } from './recovered-session.js';
 import {
@@ -146,6 +151,8 @@ export class ProductionLiveController {
   private pollFactory?: (cli: CanonicalLivePoll, inbox: LiveEventInbox) => LivePollLoop;
   private readonly scopesBySession = new Map<string, readonly string[]>();
   private readonly generations = new Map<string, Generation>();
+  // Original verification work survives observation cancellation until Stop joins it.
+  private readonly verificationFlights = new Map<Generation, Map<AbortController, Promise<void>>>();
   private readonly preflight = new Set<string>();
   private readonly failedPreparations = new Set<string>();
   private readonly targets = new RegisteredPreviewTargets();
@@ -240,10 +247,29 @@ export class ProductionLiveController {
     if (!this.supportsOwningStartup(session)) return;
     const b = this.requireBindings();
     const capture = this.captures.get(session.id);
+    let assertReleased = () => {};
     try {
       if (capture) {
-        await this.revokeCapture(capture);
+        const captured = structuredClone(capture);
         const child = this.capturedProcesses.get(capture.captureId);
+        const assertRevoked = () => {
+          if (
+            this.captures.get(session.id) !== capture ||
+            !isDeepStrictEqual(capture, captured) ||
+            capture.sessionId !== session.id ||
+            this.capturedProcesses.get(capture.captureId) !== child ||
+            !this.revokedCaptures.has(capture.captureId) ||
+            this.generations.has(session.id) ||
+            this.preparedOwners.has(session.id)
+          )
+            throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
+        };
+        assertReleased = assertRevoked;
+        // Manager revoke retains its existing separate bounded phase. Only the
+        // subsequent physical exit AND raw RPC drain share the existing 10s.
+        await this.revokeCapture(capture);
+        assertRevoked();
+        const deadline = performance.now() + 10000;
         if (child) {
           child.close();
           if (!child.waitForExit) throw new Error('LIVE_PROCESS_TREE_UNVERIFIED');
@@ -252,15 +278,22 @@ export class ProductionLiveController {
             await Promise.race([
               child.waitForExit(),
               new Promise<never>((_, reject) => {
-                timer = setTimeout(() => reject(new Error('LIVE_PROCESS_TREE_UNVERIFIED')), 10000);
+                timer = setTimeout(
+                  () => reject(new Error('LIVE_PROCESS_TREE_UNVERIFIED')),
+                  Math.max(0, deadline - performance.now()),
+                );
               }),
             ]);
           } finally {
             if (timer) clearTimeout(timer);
           }
+          assertRevoked();
         }
+        await b.runtime.settleFailedStartup(session, capture.captureId, assertRevoked, deadline);
+        assertRevoked();
       }
       await b.settleAuxiliary();
+      assertReleased();
       if (this.failedPreparations.has(session.id)) throw new Error('LIVE_CLEANUP_REQUIRED');
       b.guard.settle(session.id, {
         roots: 0,
@@ -296,6 +329,12 @@ export class ProductionLiveController {
       this.owners.assertCaptureWriters(session.id, peers);
       return await this.construction.run(authority, () => b.guard.livePreparation(session, work));
     } catch (error) {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'LIVE_RUNTIME_CAPTURE_CLEANUP_REQUIRED'
+      )
+        this.failedPreparations.add(session.id);
       const capture = this.captures.get(session.id);
       if (capture)
         try {
@@ -328,6 +367,7 @@ export class ProductionLiveController {
         validateOriginalLaunchSources({
           owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
           files: app.owningPolicy.configFiles,
+          installedSource: app.owningPolicy.originalLaunchSources?.[0],
           threadConfig: {},
         });
     const capture = input.liveCaptureId ? this.pendingLaunches.get(input.liveCaptureId) : undefined;
@@ -346,6 +386,17 @@ export class ProductionLiveController {
       environment,
       managedLaunch: {
         command: this.cfg.installation.manager.path,
+        ...(capture
+          ? {
+              cwdTransition: {
+                intermediate: dirname(capture.manifestPath),
+                final: new InstalledLivePolicy(this.cfg.installation).owningRuntimeCwd(
+                  capture.manifestPath,
+                  capture.captureId,
+                ),
+              },
+            }
+          : {}),
         args: capture
           ? [
               'cli',
@@ -424,6 +475,7 @@ export class ProductionLiveController {
     validateOriginalLaunchSources({
       owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
       files: app.owningPolicy.configFiles,
+      installedSource: app.owningPolicy.originalLaunchSources?.[0],
       threadConfig: modelConfig,
     });
   };
@@ -444,6 +496,19 @@ export class ProductionLiveController {
         session.provider !== 'codex' ? 'LIVE_PROVIDER_UNSUPPORTED' : 'LIVE_TARGET_UNREGISTERED',
       );
     return app;
+  }
+  private originalSurfaces(app: App, threadConfig: Readonly<Record<string, unknown>>) {
+    if (!app.owningPolicy) throw new Error('LIVE_ORIGINAL_LAUNCH_UNVERIFIED');
+    const source = app.owningPolicy.originalLaunchSources?.[0];
+    return originalLaunchSurfaces(
+      source,
+      validateOriginalLaunchSources({
+        owningHome: this.cfg.nativeEnvironment.CODEX_HOME,
+        files: app.owningPolicy.configFiles,
+        installedSource: source,
+        threadConfig,
+      }).plugins,
+    );
   }
   /** Called after actual native start/resume, before exposing ordinary writer readiness. */
   async observeOwnerStarted(session: RelaySessionSnapshot): Promise<void> {
@@ -466,11 +531,9 @@ export class ProductionLiveController {
         appRoot: app.appRoot,
         capturedProjectSources: this.captures.get(session.id)?.captured.directories,
         threadConfig: observation.threadConfig,
-        approved: { mcpServers: {}, plugins: {} },
+        approved: this.originalSurfaces(app, observation.threadConfig),
       });
-      const mcp = observation.mcp as { data?: unknown[]; nextCursor?: unknown };
-      if (!Array.isArray(mcp.data) || mcp.data.length || mcp.nextCursor)
-        throw new Error('LIVE_UNAPPROVED_LAUNCH_SURFACE');
+      assertOriginalLiveMcp(observation.mcp, app.owningPolicy?.originalLaunchSources?.[0]);
       const { state } = owningPermissions({
         session,
         observation,
@@ -563,19 +626,7 @@ export class ProductionLiveController {
               }))
             : [],
         };
-        if (
-          !Array.isArray(tools.data) ||
-          tools.data.length !== 2 ||
-          tools.nextCursor ||
-          !isDeepStrictEqual(tools.data.map((tool) => tool.name).sort(), [
-            'context-mode',
-            'gestalt-org-plan',
-          ]) ||
-          tools.data.some(
-            (tool) => tool.runtimeStatus !== 'connected' || tool.toolsError || tool.httpOrigin,
-          )
-        )
-          throw new Error('LIVE_MCP_UNAVAILABLE');
+        assertAdmittedLiveMcp(current.mcp);
         this.preparedOwners.set(session.id, policy);
         this.originalObservations.set(session.id, observation);
       }
@@ -1015,6 +1066,25 @@ export class ProductionLiveController {
     const g = this.cleanupGeneration(run),
       b = this.requireBindings();
     if (b.runtime.liveOwnerIds().includes(run.relayId)) {
+      const deadline = Date.now() + 5000;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.all([
+            Promise.allSettled([...(this.verificationFlights.get(g)?.values() ?? [])]),
+            b.runtime.settleLiveAdmission(g.session, { owners: this.owners, fence: run }, deadline),
+          ]),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('LIVE_RUNTIME_LIFETIME_UNVERIFIED')),
+              Math.max(1, deadline - Date.now()),
+            );
+          }),
+        ]);
+        this.owners.assert(run);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       await b.runtime.inspectLiveQuiescence(g.session);
       return;
     }
@@ -1151,7 +1221,7 @@ export class ProductionLiveController {
   }
   private recordStartFailure(
     sessionId: string,
-    stage: 'start-operation' | 'start-lifecycle' | 'resume-lifecycle',
+    stage: 'start-operation' | 'start-lifecycle' | 'resume-lifecycle' | 'runtime-admission',
     lifecycleStage: string,
     error: unknown,
   ): void {
@@ -1232,7 +1302,7 @@ export class ProductionLiveController {
           appRoot: app.appRoot,
           capturedProjectSources: capture.captured.directories,
           threadConfig: observation.threadConfig,
-          approved: { mcpServers: {}, plugins: {} },
+          approved: this.originalSurfaces(app, observation.threadConfig),
         });
         stage = 'original-permissions';
         owningPermissions({
@@ -1455,7 +1525,14 @@ export class ProductionLiveController {
       g.claim.app.device !== run.app.device ||
       g.claim.app.inode !== run.app.inode ||
       (g.plannedGeneration !== run.generation &&
-        !['stopping', 'recoveryRequired'].includes(run.state))
+        !['stopping', 'recoveryRequired'].includes(run.state) &&
+        !(
+          run.state === 'idle' &&
+          run.controlsRestored &&
+          g.retired &&
+          !g.resumed &&
+          this.revokedCaptures.has(g.policy.capture.captureId)
+        ))
     )
       throw new Error('LIVE_GENERATION_STALE');
     return g;
@@ -1488,6 +1565,13 @@ export class ProductionLiveController {
       )
     )
       throw new Error('LIVE_AUTH_UNAVAILABLE');
+    // The resumed verifier already checks current Native sources, selection,
+    // catalogs, signed policy, project resources and the final generation fence.
+    // Keep each admission boundary fresh without repeating those checks inside it.
+    if (g.resumed) {
+      await this.verifyLiveRuntime(run);
+      return;
+    }
     const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
       g.policy.manifestPath,
       g.policy.bootstrapPath,
@@ -1496,12 +1580,42 @@ export class ProductionLiveController {
     if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
     await this.verifyProjectResources(g);
     this.owners.assert(run);
-    if (g.resumed) await this.verifyLiveRuntime(run);
   }
   verifyLiveRuntime = async (fence: LiveFence): Promise<void> => {
+    const g = this.generation(this.owners.assert(fence));
+    const cancellation = new AbortController();
+    const raw = this.verifyRuntimeObservation(fence, cancellation.signal);
+    const flights = this.verificationFlights.get(g) ?? new Map<AbortController, Promise<void>>();
+    this.verificationFlights.set(g, flights);
+    flights.set(cancellation, raw);
+    const settled = () => {
+      flights.delete(cancellation);
+      if (!flights.size && this.verificationFlights.get(g) === flights)
+        this.verificationFlights.delete(g);
+    };
+    raw.then(settled, settled);
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        raw,
+        new Promise<never>((_resolve, reject) => {
+          abort = () => reject(cancellation.signal.reason);
+          cancellation.signal.addEventListener('abort', abort, { once: true });
+          if (cancellation.signal.aborted) abort();
+        }),
+      ]);
+    } finally {
+      if (abort) cancellation.signal.removeEventListener('abort', abort);
+    }
+  };
+  private async verifyRuntimeObservation(
+    fence: LiveFence,
+    cancellation: AbortSignal,
+  ): Promise<void> {
     const run = this.owners.assert(fence),
       g = this.generation(run),
       b = this.requireBindings();
+    let stage = 'host';
     try {
       this.verifyHost();
       const session = b.sessions.find(run.relayId);
@@ -1512,8 +1626,13 @@ export class ProductionLiveController {
         !g.resumed
       )
         throw new Error('LIVE_RUNTIME_UNAVAILABLE');
-      const observed = await b.runtime.inspectLiveAdmission(session);
+      stage = 'owning-observation';
+      const observed = await b.runtime.inspectLiveAdmission(session, cancellation);
+      cancellation.throwIfAborted();
+      this.owners.assert(fence);
+      stage = 'source-inventory';
       assertProductionSourceObservation(g.policy, observed);
+      stage = 'owning-selection';
       for (const field of [
         'threadId',
         'model',
@@ -1528,38 +1647,35 @@ export class ProductionLiveController {
           throw new Error('LIVE_RUNTIME_IDENTITY_CHANGED');
       if (!isDeepStrictEqual(observed.threadConfig, g.policy.modelConfig))
         throw new Error('LIVE_CONFIG_CHANGED');
-      const mcp = observed.mcp as {
-        data?: {
-          name: string;
-          runtimeStatus?: string;
-          toolsError?: unknown;
-          httpOrigin?: unknown;
-        }[];
-        nextCursor?: unknown;
-      };
-      if (
-        !Array.isArray(mcp.data) ||
-        mcp.data.length !== 2 ||
-        mcp.nextCursor ||
-        !isDeepStrictEqual(mcp.data.map((server) => server.name).sort(), [
-          'context-mode',
-          'gestalt-org-plan',
-        ]) ||
-        mcp.data.some(
-          (server) =>
-            server.runtimeStatus !== 'connected' || server.toolsError || server.httpOrigin,
-        )
-      )
-        throw new Error('LIVE_MCP_UNAVAILABLE');
+      stage = 'owning-catalog';
+      assertAdmittedLiveMcp(observed.mcp);
+      stage = 'signed-provenance';
       const digests = await new InstalledLivePolicy(this.cfg.installation).verify(
         g.policy.manifestPath,
         g.policy.bootstrapPath,
         g.policy.files,
       );
+      cancellation.throwIfAborted();
+      this.owners.assert(fence);
       if (!isDeepStrictEqual(digests, g.policy.digests)) throw new Error('LIVE_CONFIG_CHANGED');
+      stage = 'project-resources';
       await this.verifyProjectResources(g);
+      cancellation.throwIfAborted();
+      stage = 'generation-fence';
       this.owners.assert(fence);
     } catch (error) {
+      if (cancellation.aborted) throw cancellation.reason;
+      // Stop may revoke admission while its old poll is still verifying. Stop
+      // owns that exact generation's drain; never turn its expected refusal
+      // into a second recovery transition or grant the old poll authority.
+      const current = this.owners.current(run.liveId);
+      if (
+        current?.controllerEpoch === run.controllerEpoch &&
+        current.generation === run.generation &&
+        ['stopping', 'idle'].includes(current.state)
+      )
+        throw error;
+      this.recordStartFailure(run.relayId, 'runtime-admission', stage, error);
       // Flags are private Native RPC state: Manager cannot observe their change
       // itself. Revoke the exact old admission before retaining recovery ownership.
       let revoked = false;
@@ -1574,6 +1690,7 @@ export class ProductionLiveController {
       } catch {
         /* cleanup remains required */
       }
+      let retired = false;
       try {
         const current = this.owners.assert(fence);
         const recovery = this.owners.mutate(current, {
@@ -1582,13 +1699,15 @@ export class ProductionLiveController {
         });
         await b.runtime.abortLiveOwner(g.session, { owners: this.owners, fence: recovery });
         g.resumed = false;
+        retired = true;
       } catch {
         this.failedPreparations.add(run.relayId);
       }
       if (!revoked) this.failedPreparations.add(run.relayId);
+      if (!revoked || !retired) throw new Error('LIVE_CLEANUP_REQUIRED', { cause: error });
       throw error;
     }
-  };
+  }
   private async prepareOwner(run: LiveRun): Promise<void> {
     const g = this.generation(run),
       b = this.requireBindings();
@@ -1615,7 +1734,14 @@ export class ProductionLiveController {
     prepareHelperOutputRoots(g.app.appRoot, g.policy.capture.projectState);
     await b.guard.liveMaintenance(run, async () => {
       g.resumed = true;
+      const admission = new InstalledLivePolicy(this.cfg.installation);
+      const prior = admission.contextLaunchIds(g.policy.manifestPath);
       await b.runtime.probeLiveContext(g.session, g.policy.probePath);
+      admission.assertCompletedContextLaunch(
+        g.policy.manifestPath,
+        prior,
+        g.policy.digests.policyDigest,
+      );
     });
   }
   private async authorize(run: LiveRun): Promise<void> {
@@ -1708,6 +1834,8 @@ export class ProductionLiveController {
       this.revokeCapture(g.policy.capture),
       this.connections!.revoke({ liveId: run.liveId, throughGeneration: run.generation }),
     ]);
+    for (const cancellation of this.verificationFlights.get(g)?.keys() ?? [])
+      cancellation.abort(new Error('LIVE_GENERATION_STALE'));
     if (results.some((result) => result.status === 'rejected'))
       throw new Error('LIVE_CLEANUP_REQUIRED');
   }
@@ -1730,6 +1858,19 @@ export class ProductionLiveController {
       await this.revoke(run);
     } catch {
       failed = true;
+    }
+    // Signed revocation precedes this non-authorizing interruption. Interrupt
+    // bounded observation waits before poll drain, then retire/drain raw RPCs
+    // below; waiting for physical abort inside observation would deadlock Stop.
+    if (g.resumed && !preserveOwner) {
+      try {
+        this.requireBindings().runtime.cancelLiveAdmission(g.session, {
+          owners: this.owners,
+          fence: run,
+        });
+      } catch {
+        failed = true;
+      }
     }
     if (g.loop) {
       try {
@@ -1790,6 +1931,7 @@ export class ProductionLiveController {
       if (b.runtime.liveOwnerIds().includes(g.session.id)) {
         await b.runtime.reconfigureLiveOwner(g.session, configuration);
         const current = await b.runtime.inspectLiveAdmission(g.session);
+        assertOriginalLiveMcp(current.mcp, g.app.owningPolicy?.originalLaunchSources?.[0]);
         if (
           !isDeepStrictEqual(current.launch, g.observation.launch) ||
           !isDeepStrictEqual(current.configuration, g.observation.configuration) ||
@@ -1806,9 +1948,7 @@ export class ProductionLiveController {
               selection: g.observation.threadSelection,
               account: g.observation.account,
             }),
-          ) ||
-          !Array.isArray((current.mcp as { data?: unknown[] }).data) ||
-          (current.mcp as { data: unknown[] }).data.length
+          )
         )
           throw new Error('LIVE_ORIGINAL_CONFIGURATION_UNVERIFIED');
         g.resumed = false;
@@ -1886,7 +2026,6 @@ export class ProductionLiveController {
                 // Recovery denies admission before its asynchronous revocation
                 // completes. Join that drain and attempt signed revocation before
                 // terminating the original owner. Never reuse old CLI authority.
-                await g.loop?.waitForRecoveryDrain(run);
                 try {
                   await this.revokeCapture(g.policy.capture);
                 } catch {
@@ -1900,6 +2039,17 @@ export class ProductionLiveController {
                 } catch {
                   failed = true;
                 }
+                if (g.resumed) {
+                  try {
+                    this.requireBindings().runtime.cancelLiveAdmission(g.session, {
+                      owners: this.owners,
+                      fence: run,
+                    });
+                  } catch {
+                    failed = true;
+                  }
+                }
+                await g.loop?.waitForRecoveryDrain(run);
                 if (g.resumed) {
                   try {
                     await this.requireBindings().runtime.abortLiveOwner(g.session, {
