@@ -38,7 +38,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onreference,
     verifiedReferences = new Set<string>(),
   }: Props = $props();
-  let opened = $state<Set<string>>(new Set());
   let detailsById = $state<Partial<Record<string, HTMLDetailsElement>>>({});
   let lastCurrentStepId: string | null = null;
   let scrollGeneration = 0;
@@ -76,6 +75,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     if (initialStep) return;
     void tick().then(() => {
       if (generation !== scrollGeneration || plan?.currentStepId !== currentStepId) return;
+      for (const id of automaticOpenIds) {
+        const details = detailsById[id];
+        if (details) details.open = true;
+      }
       detailsById[currentStepId]?.scrollIntoView({
         behavior: 'auto',
         block: 'nearest',
@@ -116,11 +119,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function isOpen(id: string): boolean {
-    return opened.has(id) || automaticOpenIds.has(id);
-  }
-
-  function toggle(id: string, open: boolean): void {
-    opened = open ? new Set([...opened, id]) : new Set([...opened].filter((value) => value !== id));
+    // Native disclosure state owns existing nodes. A refreshed plan contains
+    // new step objects; applying its initial default again would undo a close.
+    return detailsById[id]?.open ?? automaticOpenIds.has(id);
   }
 
   function summary(step: PlanStep): string {
@@ -206,12 +207,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <ol class="plan-steps">
         {#each plan.steps as step, l1Index (step.id)}
           <li>
-            <details
-              bind:this={detailsById[step.id]}
-              data-step-id={step.id}
-              open={isOpen(step.id)}
-              ontoggle={(event) => toggle(step.id, event.currentTarget.open)}
-            >
+            <details bind:this={detailsById[step.id]} data-step-id={step.id} open={isOpen(step.id)}>
               <summary>
                 <strong
                   ><span class="position">{orgPlanPosition(l1Index + 1)}</span> {step.title}</strong
@@ -239,7 +235,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                         bind:this={detailsById[child.id]}
                         data-step-id={child.id}
                         open={isOpen(child.id)}
-                        ontoggle={(event) => toggle(child.id, event.currentTarget.open)}
                       >
                         <summary>
                           <strong

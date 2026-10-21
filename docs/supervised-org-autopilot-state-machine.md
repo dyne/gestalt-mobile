@@ -221,13 +221,35 @@ rotated trace is not proof that the process never completed.
 For a timestamped GitHub run watcher, from the source or installed package root:
 
 ```sh
-node scripts/watch-github-run.mjs OWNER/REPOSITORY RUN_ID
+node scripts/watch-github-run.mjs OWNER/REPOSITORY RUN_ID ATTEMPT COMMIT_SHA NEW_EVIDENCE_DIRECTORY
 ```
 
-The helper reads `gh run view` every 30 seconds and emits only structured status,
-conclusion, run ID, local UTC `observedAt`, and separate `upstreamUpdatedAt` on
-every poll, including the terminal poll. It exits zero only for success and
-records read failures without exposing command diagnostics. Run it as an owned
-background process and register `processExited` plus `processResultAvailable`
-with a bounded version 2 wait lease. The helper does not enable Autopilot or
-register that lease itself. Existing running watchers are unchanged.
+Attempt and commit are required; the former two-argument invocation is rejected.
+The helper reads the latest `gh run view` every 30 seconds and verifies the run,
+attempt and candidate on every response. A replaced attempt or changed candidate
+ends this watcher unsuccessfully. It emits state/conclusion changes and bounded
+retry diagnostics, rather than timestamp refreshes. Network/rate-limit failures
+get at most three consecutive retries with delays capped at two minutes;
+authentication and malformed responses fail immediately. The selected JSON fields
+are documented in the [GitHub CLI manual](https://cli.github.com/manual/gh_run_view).
+
+Use a new workspace-local evidence directory for this owned process. Its exclusive
+creation prevents another watcher from overwriting that process's evidence.
+`events.jsonl` retains structural transitions, every failed read and all failing
+job IDs/step numbers; job names, logs and command diagnostics are excluded.
+`summary.json` contains the identity, counts, completeness, first failure and
+the full journal's byte count/digest. Each stdout record is bounded to 2048 bytes.
+Coverage describes workflow status and failure identities; failure counts count
+retained records, while individual test counts remain unknown. Logs are not collected.
+Missing job coverage or unknown conclusions remain partial and cannot exit zero.
+Only a fully observed success exits zero. UTC `observedAt` is local receipt time,
+`upstreamUpdatedAt` is GitHub's update time, and `processExitedAt` stays null:
+the watcher cannot observe its own exact exit time. SIGINT/SIGTERM cancels the
+current gh call or delay, retains incomplete evidence, and exits 130.
+
+Keep the same process handle and evidence directory through retries and result
+retrieval. Register one bounded version 2 lease for `processExited` plus
+`processResultAvailable`; consume that same process result on completion. Do not
+start a second root/executor poller. The helper never registers a lease or enables
+Autopilot, and Mobile receives no GitHub credentials. Existing running watchers
+retain their original behavior.

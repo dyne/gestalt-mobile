@@ -424,19 +424,37 @@ export class AutopilotCoordinator {
     this.cancelWaitTimer(sessionId);
     this.parkedSubscriptions.delete(sessionId);
     const now = this.deps.now();
-    this.persist({ ...state, supervision: nextProtocol, updatedAt: now }, undefined, [
+    this.persist(
       {
-        sessionId,
-        type: 'autopilot.wait-woken',
-        occurredAt: now,
-        payload: {
-          leaseId: wake.leaseId,
-          reportId: state.supervision.lastReportId,
-          wakeCondition: wake.condition,
-          resumeAt: state.supervision.waitLease?.resumeAt ?? null,
+        ...state,
+        supervision: {
+          ...nextProtocol,
+          wakeCause: { condition: wake.condition, leaseId: wake.leaseId },
         },
+        updatedAt: now,
       },
-    ]);
+      undefined,
+      [
+        {
+          sessionId,
+          type: 'autopilot.wait-woken',
+          occurredAt: now,
+          payload: {
+            ...this.wakeAttribution({
+              ...state,
+              supervision: {
+                ...nextProtocol,
+                wakeCause: { condition: wake.condition, leaseId: wake.leaseId },
+              },
+            }),
+            leaseId: wake.leaseId,
+            reportId: state.supervision.lastReportId,
+            wakeCondition: wake.condition,
+            resumeAt: state.supervision.waitLease?.resumeAt ?? null,
+          },
+        },
+      ],
+    );
     this.evaluate(sessionId);
     return true;
   }
@@ -775,6 +793,7 @@ export class AutopilotCoordinator {
             type: 'autopilot.continuation-scheduled',
             payload: {
               controlId: scheduledControlId,
+              ...this.wakeAttribution(next),
               reportId: prior.supervision?.lastReportId ?? null,
               nextEvaluationAt: decision.at,
               ...(prior.checkpoints?.activeHandoffId
@@ -1573,10 +1592,13 @@ export class AutopilotCoordinator {
         generation: prior.generation + 1,
         nextEvaluationAt: null,
         lastControlId: null,
-        supervision: consumeObsoleteWait(
-          prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
-          this.progressKey(sessionId),
-        ),
+        supervision: {
+          ...consumeObsoleteWait(
+            prior.supervision ?? startSupervisionProtocol(this.progressKey(sessionId)),
+            this.progressKey(sessionId),
+          ),
+          wakeCause: null,
+        },
         updatedAt: now,
       },
       cancelled,
@@ -1610,6 +1632,7 @@ export class AutopilotCoordinator {
         type: 'autopilot.control-issued',
         payload: {
           controlId,
+          ...this.wakeAttribution(prior),
           ...(prior.checkpoints?.activeHandoffId
             ? { traceId: prior.checkpoints.activeHandoffId }
             : {}),
@@ -1631,6 +1654,25 @@ export class AutopilotCoordinator {
     events: readonly AutopilotAuditEvent[] = [],
   ): void {
     const prior = this.deps.store.find(next.sessionId);
+    // Protocol resets affect retry policy, not the last runtime acknowledgement.
+    if (next.supervision && prior?.supervision)
+      next = {
+        ...next,
+        supervision: {
+          ...next.supervision,
+          acknowledgedRevision:
+            next.supervision.acknowledgedRevision ?? prior.supervision.acknowledgedRevision,
+          wakeCause:
+            !next.requestedEnabled ||
+            !prior.requestedEnabled ||
+            (next.supervision.waitLease &&
+              next.supervision.waitLease.id !== prior.supervision.waitLease?.id)
+              ? null
+              : next.supervision.wakeCause === undefined
+                ? prior.supervision.wakeCause
+                : next.supervision.wakeCause,
+        },
+      };
     const previousLease = prior?.supervision?.waitLease;
     const nextLease = next.supervision?.waitLease;
     const diagnostics: AutopilotAuditEvent[] = [];
@@ -1640,6 +1682,7 @@ export class AutopilotCoordinator {
         type: 'autopilot.wait-registered',
         occurredAt: next.updatedAt,
         payload: {
+          ...this.wakeAttribution(next),
           leaseId: nextLease.id,
           reportId: next.supervision?.lastReportId,
           resumeAt: nextLease.resumeAt ?? null,
@@ -1961,14 +2004,29 @@ export class AutopilotCoordinator {
           }
           this.parkedSubscriptions.delete(sessionId);
           const observedAt = this.deps.now();
-          this.persist({ ...state, supervision: protocol, updatedAt: observedAt }, undefined, [
+          this.persist(
             {
-              sessionId,
-              type: 'autopilot.wait-expired',
-              occurredAt: observedAt,
-              payload: { leaseId, reportId: state.supervision.lastReportId, resumeAt, observedAt },
+              ...state,
+              supervision: { ...protocol, wakeCause: { condition: 'deadline', leaseId } },
+              updatedAt: observedAt,
             },
-          ]);
+            undefined,
+            [
+              {
+                sessionId,
+                type: 'autopilot.wait-expired',
+                occurredAt: observedAt,
+                payload: {
+                  ...this.wakeAttribution(state),
+                  wakeReason: 'deadline',
+                  leaseId,
+                  reportId: state.supervision.lastReportId,
+                  resumeAt,
+                  observedAt,
+                },
+              },
+            ],
+          );
           this.evaluate(sessionId);
         },
         Math.max(0, Date.parse(resumeAt) - Date.parse(this.deps.now())),
@@ -3200,14 +3258,32 @@ export class AutopilotCoordinator {
     };
     const occurredAt = this.deps.now();
     const state = this.deps.store.find(sessionId);
+    const accepted = status === 'started' && Boolean(turnId);
+    const acceptanceState =
+      accepted && state
+        ? {
+            ...state,
+            supervision: {
+              ...(state.supervision ?? startSupervisionProtocol(this.progressKey(sessionId))),
+              acknowledgedRevision: {
+                revision: this.supervisionRevision(state),
+                controlId,
+                turnId: turnId!,
+              },
+              wakeCause: null,
+            },
+            updatedAt: occurredAt,
+          }
+        : undefined;
     this.commit({
+      ...(acceptanceState ? { state: acceptanceState } : {}),
       ...(status === 'started' &&
       turnId &&
       state?.checkpoints?.rootContinuationFromTurnId &&
       turnId !== state.checkpoints.rootContinuationFromTurnId
         ? {
             state: {
-              ...state,
+              ...(acceptanceState ?? state),
               checkpoints: { ...state.checkpoints, rootContinuationFromTurnId: undefined },
               stopReason: null,
               updatedAt: occurredAt,
@@ -3224,6 +3300,8 @@ export class AutopilotCoordinator {
                 eventType === 'autopilot.turn-failed'
                   ? {
                       controlId,
+                      ...(state ? this.wakeAttribution(state) : {}),
+                      trafficClass: 'control',
                       code: failureCode,
                       ...(this.deps.store.find(sessionId)?.checkpoints?.activeHandoffId
                         ? { traceId: this.deps.store.find(sessionId)!.checkpoints!.activeHandoffId }
@@ -3231,6 +3309,9 @@ export class AutopilotCoordinator {
                     }
                   : {
                       controlId,
+                      ...(state ? this.wakeAttribution(state) : {}),
+                      trafficClass: accepted ? 'acceptedRootTurn' : 'unconfirmedStart',
+                      turnId,
                       ...(this.deps.store.find(sessionId)?.checkpoints?.activeHandoffId
                         ? { traceId: this.deps.store.find(sessionId)!.checkpoints!.activeHandoffId }
                         : {}),
@@ -3301,24 +3382,61 @@ export class AutopilotCoordinator {
     const control =
       prospectiveControl ??
       (next.lastControlId ? this.deps.store.findControl(next.sessionId, next.lastControlId) : null);
-    return autopilotSnapshot(next, this.deps.policy.retryLimit, {
-      activeTurn: Boolean(session?.activeTurnId),
-      executorActive: this.authoritativeExecutorActive(next, plan?.plan ?? null, activity),
-      control: control?.status ?? 'none',
-      timerArmed: this.timers.has(next.sessionId),
-      reconciling: this.reconciling.has(next.sessionId),
-      planMatches: Boolean(plan && plan.identity === next.planIdentity),
-      parkedSubscriptionActive:
-        Boolean(next.supervision?.waitLease) &&
-        this.parkedSubscriptions.get(next.sessionId) === next.supervision?.waitLease?.id,
-      transitionFresh: Date.parse(now) - Date.parse(next.updatedAt) <= 120_000,
-      observedAt: now,
-    });
+    return {
+      ...autopilotSnapshot(next, this.deps.policy.retryLimit, {
+        activeTurn: Boolean(session?.activeTurnId),
+        executorActive: this.authoritativeExecutorActive(next, plan?.plan ?? null, activity),
+        control: control?.status ?? 'none',
+        timerArmed: this.timers.has(next.sessionId),
+        reconciling: this.reconciling.has(next.sessionId),
+        planMatches: Boolean(plan && plan.identity === next.planIdentity),
+        parkedSubscriptionActive:
+          Boolean(next.supervision?.waitLease) &&
+          this.parkedSubscriptions.get(next.sessionId) === next.supervision?.waitLease?.id,
+        transitionFresh: Date.parse(now) - Date.parse(next.updatedAt) <= 120_000,
+        observedAt: now,
+      }),
+      supervisionDelta: this.supervisionDelta(next),
+    };
+  }
+  private supervisionRevision(state: AutopilotSession): string {
+    return `sha256:${createHash('sha256')
+      .update(this.progressKeyFor(state.sessionId, state, this.deps.plan(state.sessionId)))
+      .digest('hex')}`;
+  }
+  private supervisionDelta(
+    state: AutopilotSession,
+  ): NonNullable<AutopilotSnapshot['supervisionDelta']> {
+    const revision = this.supervisionRevision(state);
+    const acknowledgement = state.supervision?.acknowledgedRevision;
+    return {
+      revision,
+      acknowledgedRevision: acknowledgement?.revision ?? null,
+      changed: acknowledgement ? acknowledgement.revision !== revision : null,
+      acceptedControlId: acknowledgement?.controlId ?? null,
+      acceptedTurnId: acknowledgement?.turnId ?? null,
+    };
+  }
+  private wakeAttribution(state: AutopilotSession) {
+    return {
+      trafficClass: 'control',
+      supervisionDelta: this.supervisionDelta(state),
+      wakeReason: state.checkpoints?.rootContinuationFromTurnId
+        ? 'checkpointContinuation'
+        : (state.supervision?.wakeCause?.condition ??
+          (state.supervision?.outcome === 'probeRequired'
+            ? 'probeRequired'
+            : 'continuationPolicy')),
+      leaseId: state.supervision?.wakeCause?.leaseId ?? state.supervision?.waitLease?.id ?? null,
+    };
   }
   private semanticSnapshot(next: AutopilotSession, control?: AutopilotControl): string {
     const snapshot = this.snapshotFor(next, control);
     return JSON.stringify({
       ...snapshot,
+      // Diagnostic revisions are sampled on reads/existing publications. They
+      // must not create status traffic or change the scheduling projection.
+      supervisionDelta: undefined,
       updatedAt: '',
       health: { ...snapshot.health, observedAt: '', lastTransitionAt: '' },
     });
@@ -3337,6 +3455,8 @@ export class AutopilotCoordinator {
       {
         sessionId: next.sessionId,
         type: 'autopilot.updated',
+        // Status events are observation traffic; only turn-started with a
+        // concrete turnId is evidence of an accepted automatic root turn.
         payload: snapshot,
         occurredAt: next.updatedAt,
       },

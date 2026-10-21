@@ -204,6 +204,36 @@ describe('PlanView', () => {
     await vi.waitFor(() => expect(detail(otherL1.id).open).toBe(true));
   });
 
+  it('retains a user-collapsed current path through an unchanged plan refresh', async () => {
+    const { rerender } = render(PlanView, {
+      state: ready({ currentStepId: l2.id }),
+      onclose: vi.fn(),
+    });
+    await tick();
+    const parent = detail(l1.id);
+    expect(parent.open).toBe(true);
+    await fireEvent(parent, new Event('toggle'));
+    parent.open = false;
+    await rerender({
+      state: ready({ currentStepId: l2.id, doneSteps: 2, steps: structuredClone([l1, otherL1]) }),
+      onclose: vi.fn(),
+    });
+    expect(parent.open).toBe(false);
+    await fireEvent(parent, new Event('toggle'));
+    expect(parent.open).toBe(false);
+    await rerender({
+      state: ready({ currentStepId: l2.id, doneSteps: 2, steps: structuredClone([l1, otherL1]) }),
+      onclose: vi.fn(),
+    });
+    expect(parent.open).toBe(false);
+    parent.open = true;
+    await fireEvent(parent, new Event('toggle'));
+    const child = detail(l2.id);
+    child.open = false;
+    await fireEvent(child, new Event('toggle'));
+    expect(child.open).toBe(false);
+  });
+
   it('announces meaningful current step changes once without replacing the same announcement', async () => {
     const { rerender } = render(PlanView, { state: ready(), onclose: vi.fn() });
     const live = document.querySelector('[aria-live="polite"]')!;

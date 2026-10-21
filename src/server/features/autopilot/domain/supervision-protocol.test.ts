@@ -46,6 +46,40 @@ const facts = (change: Partial<SemanticProgressFacts> = {}): SemanticProgressFac
   ...change,
 });
 
+describe('persisted wake attribution', () => {
+  const acknowledgement = {
+    revision: `sha256:${'a'.repeat(64)}`,
+    controlId: 'control',
+    turnId: 'root-turn',
+  };
+  it('reads legacy rows without inventing an acknowledgement and retains only content-free fields', () => {
+    const legacy = startSupervisionProtocol('revision');
+    expect(parseSupervisionProtocolState(legacy)?.acknowledgedRevision).toBeUndefined();
+    expect(
+      parseSupervisionProtocolState({
+        ...legacy,
+        acknowledgedRevision: { ...acknowledgement, prompt: 'canary' },
+        wakeCause: { condition: 'deadline', leaseId: 'lease', output: 'canary' },
+      }),
+    ).toEqual({
+      ...legacy,
+      acknowledgedRevision: acknowledgement,
+      wakeCause: { condition: 'deadline', leaseId: 'lease' },
+    });
+  });
+  it.each([
+    { acknowledgedRevision: { ...acknowledgement, revision: 'untrusted prose' } },
+    { acknowledgedRevision: { ...acknowledgement, turnId: '' } },
+    { acknowledgedRevision: { ...acknowledgement, controlId: 'a'.repeat(257) } },
+    { wakeCause: { condition: 'unsupported', leaseId: 'lease' } },
+    { wakeCause: { condition: 'deadline', leaseId: '' } },
+  ])('rejects malformed attribution %j', (change) => {
+    expect(
+      parseSupervisionProtocolState({ ...startSupervisionProtocol('revision'), ...change }),
+    ).toBeUndefined();
+  });
+});
+
 describe('semantic supervision progress key', () => {
   it('is equal for equivalent durable observations regardless of duplicate or reordered facts', () => {
     const original = semanticProgressKey(facts());

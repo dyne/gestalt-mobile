@@ -86,6 +86,16 @@ export type AutopilotSession = Readonly<{
 }>;
 
 export type AutopilotSnapshot = Readonly<{
+  /** Bounded semantic delta since the last runtime-accepted automatic root turn.
+   * Missing acknowledgement is unknown, including records written by older relays.
+   */
+  supervisionDelta?: Readonly<{
+    revision: string;
+    acknowledgedRevision: string | null;
+    changed: boolean | null;
+    acceptedControlId: string | null;
+    acceptedTurnId: string | null;
+  }>;
   providerFailure?: ProviderFailure;
   providerRetry?: ProviderRetry;
   state: AutopilotState;

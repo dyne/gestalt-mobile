@@ -204,6 +204,112 @@ describe('ChatController', () => {
       controller.dispose();
     }
   });
+
+  it('refreshes an in-flight snapshot below the resync fence before reopening its socket', async () => {
+    const initial = deferred<unknown>();
+    const sockets: Socket[] = [];
+    const urls: string[] = [];
+    const getHistory = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue({
+      baseSequence: 4,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    });
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket: (url) => {
+        urls.push(url);
+        const socket = new Socket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    try {
+      controller.select('s');
+      sockets[0]!.emit({ type: 'relay.resyncRequired', currentSequence: 4 });
+      sockets[0]!.onclose?.();
+      initial.resolve({
+        baseSequence: 0,
+        items: [],
+        turns: [],
+        interactions: [],
+        activeTurnId: null,
+      });
+      await vi.waitFor(() => expect(sockets).toHaveLength(2));
+      expect(urls[1]).toMatch(/after=4$/);
+      expect(getHistory).toHaveBeenCalledTimes(2);
+      sockets[1]!.emit({
+        type: 'relay.event',
+        event: { sequence: 5, type: 'agentMessageDelta', payload: { text: 'live again' } },
+      });
+      await Promise.resolve();
+      expect(sockets).toHaveLength(2);
+      expect(controller.view.messages.at(-1)?.text).toBe('live again');
+    } finally {
+      controller.dispose();
+    }
+  });
+  it('bounds stale resync snapshots and reports recovery failure without reopening', async () => {
+    const timers: Array<{ callback: () => void; delay: number }> = [];
+    const socket = new Socket();
+    const websocket = vi.fn(() => socket as unknown as WebSocket);
+    const getHistory = vi.fn().mockResolvedValue({
+      baseSequence: 0,
+      items: [],
+      turns: [],
+      interactions: [],
+      activeTurnId: null,
+    });
+    const onHistoryError = vi.fn();
+    const controller = new ChatController({
+      ...environment(),
+      relay: {
+        getHistory,
+        startTurn: vi.fn(),
+        interruptTurn: vi.fn(),
+        respondInteraction: vi.fn(),
+      },
+      publish: vi.fn(),
+      websocket,
+      onHistoryError,
+      setTimeout: (callback, delay) => {
+        timers.push({ callback, delay });
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout: vi.fn(),
+    });
+    const settle = async () => {
+      for (let index = 0; index < 5; index++) await Promise.resolve();
+    };
+    try {
+      controller.select('s');
+      socket.emit({ type: 'relay.resyncRequired', currentSequence: 4 });
+      socket.onclose?.();
+      for (const delay of [250, 750, 1500]) {
+        await settle();
+        expect(timers.at(-1)?.delay).toBe(delay);
+        timers.at(-1)?.callback();
+      }
+      await settle();
+      expect(getHistory).toHaveBeenCalledTimes(4);
+      expect(websocket).toHaveBeenCalledOnce();
+      expect(timers).toHaveLength(3);
+      expect(onHistoryError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: 'CHAT_SNAPSHOT_BEHIND_RESYNC' }),
+      );
+      expect(controller.view.lifecycle).toBe('recoverable');
+    } finally {
+      controller.dispose();
+    }
+  });
   it('does not refetch history when the initial socket opens after hydration', async () => {
     const getHistory = vi.fn().mockResolvedValue({
       baseSequence: 3,
