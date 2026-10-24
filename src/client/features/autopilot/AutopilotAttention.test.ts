@@ -21,6 +21,28 @@ const attention = {
   },
 };
 describe('AutopilotAttention', () => {
+  it('uses the answer renderer for supervisor Markdown and local file links', async () => {
+    const onopenfile = vi.fn();
+    render(AutopilotAttention, {
+      attention: {
+        ...attention,
+        supervisorReport: '## Diagnosis\n\n**Repair** [Source](/workspace/main.ts:9)',
+        attention: {
+          ...attention.attention,
+          requestedAction: 'Read [Notes](</workspace/My Notes.md:2>)',
+        },
+      },
+      onopenfile,
+    });
+    expect(screen.getByRole('heading', { name: 'Diagnosis' })).not.toBeNull();
+    expect(screen.getByText('Repair').tagName).toBe('STRONG');
+    await fireEvent.click(screen.getByRole('link', { name: 'Source' }));
+    await fireEvent.click(screen.getByRole('link', { name: 'Notes' }));
+    expect(onopenfile.mock.calls).toEqual([
+      ['/workspace/main.ts', 9],
+      ['/workspace/My Notes.md', 2],
+    ]);
+  });
   it('opens focused DEBUG without resolving the blocker and suppresses the action for history', async () => {
     const ondebug = vi.fn();
     const onresolve = vi.fn();

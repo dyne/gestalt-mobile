@@ -374,8 +374,12 @@ export class ChatController {
           result.outcome === 'failed')
           ? result.outcome
           : value;
-      if (this.#current(id, generation))
-        this.#set(resolveInteraction(this.#projection, requestId, outcome));
+      if (
+        this.#current(id, generation) &&
+        this.#projection.interactions.find((item) => item.requestId === requestId)?.state !==
+          'resolved'
+      )
+        this.#set(resolveInteraction(this.#projection, requestId, outcome, this.#options.now()));
     } catch {
       if (this.#current(id, generation))
         this.#set(failInteraction(this.#projection, requestId, value));

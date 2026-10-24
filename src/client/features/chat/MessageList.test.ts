@@ -12,6 +12,94 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import MessageList from './MessageList.svelte';
 
 describe('MessageList', () => {
+  it('pins a quiz, renders shared Markdown and file links once, then archives at resolution time', async () => {
+    const question = '**Choose** [Source](/workspace/app.ts:12)';
+    const quiz = {
+      requestId: 'q',
+      key: 'q',
+      kind: 'quiz',
+      turnId: 't',
+      state: 'pending' as const,
+      occurredAt: 1000,
+      payload: {
+        questions: [
+          {
+            id: 'choice',
+            header: 'Choice',
+            question,
+            choices: [
+              { label: 'Yes', description: 'Read [Notes](</workspace/My Notes.md:3>)' },
+              { label: 'No', description: 'Keep current behavior' },
+            ],
+            allowCustom: true,
+          },
+        ],
+      },
+    };
+    const messages = [
+      {
+        id: 'echo',
+        role: 'assistant' as const,
+        turnId: 't',
+        text: question,
+        occurredAt: 1500,
+        complete: true,
+      },
+      {
+        id: 'later',
+        role: 'user' as const,
+        text: 'Later message',
+        occurredAt: 2000,
+        complete: true,
+      },
+      {
+        id: 'newer',
+        role: 'assistant' as const,
+        text: 'After resolution',
+        occurredAt: 4000,
+        complete: true,
+      },
+    ];
+    const onopenfile = vi.fn();
+    const view = render(MessageList, {
+      messages,
+      activities: [],
+      interactions: [quiz],
+      onopenfile,
+    });
+    const pending = screen.getByRole('complementary', { name: 'Pending chat requests' });
+    expect(pending.querySelector('strong')?.textContent).toBe('Choice');
+    expect(pending.querySelector('.message-content strong')?.textContent).toBe('Choose');
+    expect(screen.getAllByRole('link', { name: 'Source' })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('link', { name: 'Source' }));
+    await fireEvent.click(screen.getByRole('link', { name: 'Notes' }));
+    expect(onopenfile.mock.calls).toEqual([
+      ['/workspace/app.ts', 12],
+      ['/workspace/My Notes.md', 3],
+    ]);
+    await view.rerender({
+      messages,
+      activities: [],
+      interactions: [{ ...quiz, state: 'failed' }],
+      onopenfile,
+    });
+    expect(screen.getByRole('complementary', { name: 'Pending chat requests' })).not.toBeNull();
+    await view.rerender({
+      messages,
+      activities: [],
+      interactions: [
+        { ...quiz, state: 'resolved', resolvedAt: 3000, attemptedOutcome: 'answered' },
+      ],
+      onopenfile,
+    });
+    expect(screen.queryByRole('complementary', { name: 'Pending chat requests' })).toBeNull();
+    const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
+    expect(entries).toHaveLength(3);
+    expect(entries[0]?.textContent).toContain('After resolution');
+    expect(entries[1]?.textContent).toContain('Answers sent');
+    expect(entries[2]?.textContent).toContain('Later message');
+    expect(screen.getAllByRole('link', { name: 'Source' })).toHaveLength(1);
+  });
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -47,7 +135,7 @@ describe('MessageList', () => {
     expect(texts()[0]).toContain('Latest prompt');
   });
 
-  it('anchors the attention dialogue between earlier and later chat and keeps its explanation after resolution', async () => {
+  it('pins attention above later chat and archives it at resolution without repeating its explanation', async () => {
     const attention = {
       requestId: 'blocker',
       turnId: 'turn',
@@ -88,15 +176,34 @@ describe('MessageList', () => {
     const onattentionresolve = vi.fn();
     const view = render(MessageList, { messages, activities: [], attention, onattentionresolve });
     const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
-    expect(entries[2]?.textContent).toContain('commentary');
-    expect(entries[1]?.textContent).toContain('Autopilot needs your attention');
-    expect(entries[1]?.textContent).toContain('The L3 checkpoint cannot be validated');
+    expect(entries).toHaveLength(1);
     expect(entries[0]?.textContent).toContain('Later guidance');
+    const pending = screen.getByRole('complementary', { name: 'Pending chat requests' });
+    expect(pending.textContent).toContain('The L3 checkpoint cannot be validated');
+    expect(
+      pending.compareDocumentPosition(screen.getByRole('list', { name: 'Chat messages' })),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     await fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     expect(onattentionresolve).toHaveBeenCalledWith('resume');
-    await view.rerender({ messages, activities: [], attention: null });
-    expect(entries[1]?.textContent).toContain('Autopilot attention request');
-    expect(entries[1]?.textContent).toContain('The L3 checkpoint cannot be validated');
+    await view.rerender({
+      messages,
+      activities: [],
+      attention: null,
+      interactions: [
+        {
+          requestId: 'blocker',
+          key: 'blocker',
+          kind: 'orgPlanAttention',
+          payload: null,
+          state: 'resolved',
+          resolvedAt: Date.parse('2026-10-10T12:00:03Z'),
+        },
+      ],
+    });
+    expect(screen.queryByRole('complementary', { name: 'Pending chat requests' })).toBeNull();
+    expect(entries[0]?.textContent).toContain('Autopilot attention request');
+    expect(entries[0]?.textContent).toContain('The L3 checkpoint cannot be validated');
+    expect(entries[1]?.textContent).toContain('Later guidance');
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 
@@ -117,8 +224,10 @@ describe('MessageList', () => {
       },
     });
     const entries = screen.getByRole('list', { name: 'Chat messages' }).children;
-    expect(entries[1]?.textContent).toContain('Existing chat');
-    expect(entries[0]?.textContent).toContain('The test runner is unavailable.');
+    expect(entries[0]?.textContent).toContain('Existing chat');
+    expect(
+      screen.getByRole('complementary', { name: 'Pending chat requests' }).textContent,
+    ).toContain('The test runner is unavailable.');
   });
 
   it('presents automatic continuation history as an audit entry, not a prompt bubble', () => {
@@ -485,7 +594,7 @@ describe('MessageList', () => {
     );
   });
 
-  it('renders a durable resolved interaction in its owning prompt turn', () => {
+  it('renders a durable resolved interaction as a separate history entry', () => {
     render(MessageList, {
       messages: [
         {
@@ -524,13 +633,14 @@ describe('MessageList', () => {
       onretry: () => {},
     });
     const prompt = screen.getByText('Inspect the workspace').closest('.prompt-turn');
-    expect(prompt?.textContent).toContain('Approved');
+    expect(prompt?.textContent).not.toContain('Approved');
+    expect(screen.getByText('Approved').closest('li')).not.toBe(prompt);
     expect(screen.getByText('Done.').compareDocumentPosition(prompt!)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
 
-  it('places unassigned interactions exactly once at the latest prompt or interaction-only record', () => {
+  it('places unassigned resolved interactions exactly once in history', () => {
     const props = {
       activities: [],
       answers: {},
@@ -567,7 +677,8 @@ describe('MessageList', () => {
       ],
     });
     expect(screen.getAllByText('commandApproval')).toHaveLength(2);
-    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).toContain('Denied');
+    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).not.toContain('Denied');
+    expect(screen.getAllByText('Denied')).toHaveLength(1);
     view.unmount();
     render(MessageList, { ...props, messages: [] });
     expect(screen.getAllByText('commandApproval')).toHaveLength(2);
@@ -609,16 +720,10 @@ describe('MessageList', () => {
       ],
     });
 
-    expect(screen.getAllByText('orgPlanCheckpoint')).toHaveLength(1);
-    expect(screen.getByText('original request').closest('.prompt-turn')?.textContent).toContain(
-      'orgPlanCheckpoint',
-    );
-    expect(screen.getByText('continue').closest('.prompt-turn')?.textContent).not.toContain(
-      'orgPlanCheckpoint',
-    );
+    expect(screen.queryByText('orgPlanCheckpoint')).toBeNull();
   });
 
-  it('assigns an interaction to only the last prompt record for a duplicated turn', () => {
+  it('renders an interaction only once despite duplicated prompt turns', () => {
     render(MessageList, {
       messages: [
         { id: 'first', role: 'user', turnId: 'turn-1', text: 'first', complete: true },
@@ -647,7 +752,10 @@ describe('MessageList', () => {
     expect(screen.getByText('first').closest('.prompt-turn')?.textContent).not.toContain(
       'Approved',
     );
-    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).toContain('Approved');
+    expect(screen.getByText('second').closest('.prompt-turn')?.textContent).not.toContain(
+      'Approved',
+    );
+    expect(screen.getAllByText('Approved')).toHaveLength(1);
   });
   it('renders interleaved groups with one upper-right absolute time per group and relative labels', () => {
     const start = Date.UTC(2026, 6, 15, 12, 0, 0);

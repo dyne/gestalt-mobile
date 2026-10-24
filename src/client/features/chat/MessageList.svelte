@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
-  import { onMount, type Snippet } from 'svelte';
+  import { onMount, tick, type Snippet } from 'svelte';
   import AutopilotAttention from '../autopilot/AutopilotAttention.svelte';
   import type { OrgPlanAttention } from '../autopilot/contracts.js';
   import { boundedAttentionReport } from '../../../shared/contracts/attention-report.js';
@@ -13,20 +13,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import ActivityList from './ActivityList.svelte';
   import WorkDetails from './WorkDetails.svelte';
   import InteractionList from './InteractionList.svelte';
+  import PendingChatRequests from './PendingChatRequests.svelte';
   import type { HistoryActivity } from './activity-summary.js';
   import type { ChatMessage } from './message-store.js';
+  import { visibleInteraction, withoutDialogueEchoes } from './interaction-timeline.js';
   import { groupMessages } from './message-groups.js';
   import { formatElapsedAfter, formatMessageTime, formatRelativeAge } from './message-time.js';
   import { summarizeChangedFiles, summarizeFileChangeTotals } from './file-change-summary.js';
-  import { renderCommentary, type CommentaryPart } from './rendering.js';
+  import MessageContent from './MessageContent.svelte';
   import type { ProjectedInteraction } from './chat-projection.js';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
-  import {
-    localFilePathFromHref,
-    localFileReferenceFromHref,
-  } from '../../../shared/contracts/local-file-link.js';
-  import { isLocalOrgHref } from '../plans/org-plan-link.js';
-  import { copyText } from '../sessions/clipboard.js';
 
   type Props = {
     messages: ChatMessage[];
@@ -104,9 +100,80 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     });
     return grouped;
   });
-  let displayGroups = $derived(groups.toReversed());
+  let attentionReports = $derived(
+    groups.flatMap((group) =>
+      group.kind === 'audit' && group.attention ? [attentionReport(group.attention)] : [],
+    ),
+  );
+  let pendingInteractions = $derived(
+    interactions.filter((item) => visibleInteraction(item) && item.state !== 'resolved'),
+  );
+  let previousPending = new Set<string>();
+  $effect.pre(() => {
+    const ids = new Set([
+      ...pendingInteractions.map((item) => `chat-request-${item.requestId}`),
+      ...(attention ? [`chat-attention-${attention.requestId}`] : []),
+    ]);
+    for (const id of previousPending) {
+      if (!ids.has(id) && document.getElementById(id)?.contains(document.activeElement)) {
+        void tick().then(() => document.getElementById(id)?.focus({ preventScroll: true }));
+      }
+    }
+    previousPending = ids;
+  });
+  let displayGroups = $derived.by(() => {
+    const filtered = groupMessages(
+      withoutDialogueEchoes(messages, interactions, attentionReports, submittedAnswers),
+    );
+    const history = filtered
+      .filter(
+        (group) =>
+          !attention ||
+          group.kind !== 'audit' ||
+          group.attention?.requestId !== attention.requestId,
+      )
+      .map((group) => {
+        if (group.kind !== 'audit' || !group.attention) return group;
+        const resolution = interactions.find(
+          (item) => item.requestId === group.attention?.requestId,
+        )?.resolvedAt;
+        return resolution === undefined ? group : { ...group, occurredAt: resolution };
+      });
+    const entries: Array<
+      | (typeof history)[number]
+      | { id: string; kind: 'interaction'; interaction: ProjectedInteraction; occurredAt?: number }
+    > = history;
+    for (const item of interactions.filter(
+      (item) => visibleInteraction(item) && item.state === 'resolved',
+    )) {
+      const entry = {
+        id: item.key,
+        kind: 'interaction' as const,
+        interaction: item,
+        occurredAt: item.resolvedAt ?? item.occurredAt,
+      };
+      const index =
+        entry.occurredAt === undefined
+          ? -1
+          : entries.findIndex(
+              (group) => group.occurredAt !== undefined && group.occurredAt > entry.occurredAt!,
+            );
+      entries.splice(index < 0 ? entries.length : index, 0, entry);
+    }
+    // Audit entries may have moved from request time to resolution time.
+    // Preserve the original order when legacy records have no timestamps.
+    return entries
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) =>
+        a.entry.occurredAt !== undefined && b.entry.occurredAt !== undefined
+          ? a.entry.occurredAt - b.entry.occurredAt || a.index - b.index
+          : a.index - b.index,
+      )
+      .map(({ entry }) => entry)
+      .toReversed();
+  });
 
-  function attentionReport(record: NonNullable<ChatMessage['attention']>): OrgPlanAttention {
+  function attentionReport(record: OrgPlanAttention): OrgPlanAttention {
     const requestedAt = record.requestedAt ? Date.parse(record.requestedAt) : NaN;
     const reports = messages.filter(
       (message) => message.role === 'assistant' && message.turnId === record.turnId,
@@ -136,32 +203,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     return () => globalThis.clearInterval(timer);
   });
   let promptGroups = $derived(groups.filter((group) => group.kind === 'user'));
-  let assistantGroups = $derived(groups.filter((group) => group.kind === 'assistant'));
-  let latestAssistantId = $derived(assistantGroups.at(-1)?.id);
-  let unassignedInteractions = $derived(
-    interactions.filter(
-      (interaction) =>
-        !interaction.turnId || !promptGroups.some((group) => group.turnId === interaction.turnId),
-    ),
+  let assistantGroups = $derived(
+    displayGroups.filter((group) => group.kind === 'assistant').toReversed(),
   );
-  function ownerGroupId(interaction: ProjectedInteraction): string | null {
-    const exact = promptGroups.findLast(
-      (group) => group.turnId && group.turnId === interaction.turnId,
-    );
-    if (exact) return exact.id;
-    const occurredAt = interaction.occurredAt;
-    if (occurredAt !== undefined) {
-      const preceding = promptGroups.findLast(
-        (group) => group.occurredAt !== undefined && group.occurredAt <= occurredAt,
-      );
-      if (preceding) return preceding.id;
-    }
-    return promptGroups.at(-1)?.id ?? null;
-  }
-  function turnInteractions(group: (typeof groups)[number]): ProjectedInteraction[] {
-    if (group.kind !== 'user') return [];
-    return interactions.filter((interaction) => ownerGroupId(interaction) === group.id);
-  }
+  let latestAssistantId = $derived(assistantGroups.at(-1)?.id);
   function activityAnswerOwnerId(activity: HistoryActivity): string | null {
     if (activity.turnId) {
       const exact = assistantGroups.findLast((group) => group.turnId === activity.turnId);
@@ -224,47 +269,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   function timeLabel(index: number, occurredAt: number | undefined): string | null {
     return formatElapsedAfter(displayGroups[index + 1]?.occurredAt, occurredAt);
   }
-  function openOrg(event: MouseEvent, href: string): void {
-    if (!onopenorg || !isLocalOrgHref(href)) return;
-    event.preventDefault();
-    onopenorg(href);
-  }
-  function codeCopyLabel(text: string): string {
-    const preview = text.trim().split('\n')[0]?.trim() || 'empty block';
-    return `Copy code block: ${preview.slice(0, 48)}`;
-  }
-  async function copyCode(text: string): Promise<void> {
-    oncopyresult(await copyText(text, clipboard));
-  }
 </script>
-
-{#snippet inline(parts: CommentaryPart[])}
-  {#each parts as part, partIndex (partIndex)}
-    {#if part.kind === 'link'}
-      {#if onopenorg && isLocalOrgHref(part.href)}
-        <a href={part.href} onclick={(event) => openOrg(event, part.href)}>{part.text}</a>
-      {:else if onopenfile && localFilePathFromHref(part.href)}
-        <a
-          href={part.href}
-          onclick={(event) => {
-            event.preventDefault();
-            const reference = localFileReferenceFromHref(part.href)!;
-            if (reference.line) onopenfile?.(reference.path, reference.line);
-            else onopenfile?.(reference.path);
-          }}>{part.text}</a
-        >
-      {:else}
-        <a href={part.href} target="_blank" rel="noreferrer">{part.text}</a>
-      {/if}
-    {:else if part.kind === 'code'}
-      <code>{part.text}</code>
-    {:else if part.kind === 'strong'}
-      <strong>{@render inline(part.parts)}</strong>
-    {:else}
-      {part.text}
-    {/if}
-  {/each}
-{/snippet}
 
 {#snippet changedFiles(items: HistoryActivity[])}
   {@const changes = summarizeChangedFiles(items)}
@@ -302,79 +307,40 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/snippet}
 
 {#snippet content(text: string)}
-  {#each renderCommentary(text) as block, blockIndex (blockIndex)}
-    {#if block.kind === 'code'}
-      <div class="code-block">
-        <button
-          class="code-copy"
-          type="button"
-          aria-label={codeCopyLabel(block.text)}
-          title="Copy code"
-          onclick={() => void copyCode(block.text)}
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <rect x="9" y="9" width="10" height="10" rx="2" />
-            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
-          </svg>
-        </button>
-        <pre><code>{block.text}</code></pre>
-      </div>
-    {:else if block.kind === 'table'}
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              {#each block.headers as header, headerIndex (headerIndex)}
-                <th scope="col">{@render inline(header)}</th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each block.rows as row, rowIndex (rowIndex)}
-              <tr>
-                {#each row as cell, cellIndex (cellIndex)}
-                  <td>{@render inline(cell)}</td>
-                {/each}
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {:else if block.kind === 'heading'}
-      {#if block.level === 1}
-        <h1>{@render inline(block.parts)}</h1>
-      {:else if block.level === 2}
-        <h2>{@render inline(block.parts)}</h2>
-      {:else if block.level === 3}
-        <h3>{@render inline(block.parts)}</h3>
-      {:else if block.level === 4}
-        <h4>{@render inline(block.parts)}</h4>
-      {:else if block.level === 5}
-        <h5>{@render inline(block.parts)}</h5>
-      {:else}
-        <h6>{@render inline(block.parts)}</h6>
-      {/if}
-    {:else}
-      <div>{@render inline(block.parts)}</div>
-    {/if}
-  {/each}
+  <MessageContent {text} {onopenorg} {onopenfile} {oncopyresult} {clipboard} />
 {/snippet}
 
-<ol aria-label="Chat messages">
-  {#if promptGroups.length === 0 && unassignedInteractions.length}
-    <li class="interaction-only">
-      <InteractionList
-        interactions={unassignedInteractions}
-        {answers}
-        {submittedAnswers}
-        {onanswer}
-        {onquiz}
-        {onpermission}
-        {ondecision}
-        {onretry}
+{#if attention || pendingInteractions.length}
+  <PendingChatRequests>
+    {#if attention}
+      <AutopilotAttention
+        attention={attentionReport(attention)}
+        pending={attentionPending}
+        controlId={`chat-attention-${attention.requestId}`}
+        onresolve={onattentionresolve}
+        ondebug={onattentiondebug}
+        {debugPending}
+        {onopenorg}
+        {onopenfile}
+        {oncopyresult}
       />
-    </li>
-  {/if}
+    {/if}
+    <InteractionList
+      interactions={pendingInteractions}
+      {answers}
+      {submittedAnswers}
+      {onanswer}
+      {onquiz}
+      {onpermission}
+      {ondecision}
+      {onretry}
+      {onopenorg}
+      {onopenfile}
+      {oncopyresult}
+    />
+  </PendingChatRequests>
+{/if}
+<ol aria-label="Chat messages">
   {#if detached.length}
     <li class="progress-item">
       <section class={activeTurnId ? 'progress-turn' : 'orphan-activity-turn'}>
@@ -396,16 +362,35 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           ? 'audit-item'
           : 'answer-item'}
     >
-      {#if group.kind === 'audit'}
+      {#if group.kind === 'interaction'}
+        <InteractionList
+          interactions={[group.interaction]}
+          {answers}
+          {submittedAnswers}
+          {onanswer}
+          {onquiz}
+          {onpermission}
+          {ondecision}
+          {onretry}
+          {onopenorg}
+          {onopenfile}
+          {oncopyresult}
+        />
+      {:else if group.kind === 'audit'}
         {#if group.attention}
           <AutopilotAttention
             attention={attentionReport(group.attention)}
             historical={attention?.requestId !== group.attention.requestId}
+            resolvedAt={interactions.find((item) => item.requestId === group.attention?.requestId)
+              ?.resolvedAt}
             pending={attentionPending}
             controlId={`chat-attention-${group.attention.requestId}`}
             onresolve={onattentionresolve}
             ondebug={onattentiondebug}
             {debugPending}
+            {onopenorg}
+            {onopenfile}
+            {oncopyresult}
           />
         {:else}
           <aside class="autopilot-audit" aria-label="Autopilot audit entry">
@@ -446,16 +431,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           {/if}
         </div>
         <div class="entry-content">{@render content(group.text)}</div>
-        <InteractionList
-          interactions={turnInteractions(group)}
-          {answers}
-          {submittedAnswers}
-          {onanswer}
-          {onquiz}
-          {onpermission}
-          {ondecision}
-          {onretry}
-        />
         {#if ownedActivities.length}
           <section class={isPromptLive(group) ? 'progress-turn' : 'orphan-activity-turn'}>
             {#if isPromptLive(group)}
@@ -731,135 +706,5 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .entry-content {
     margin-block: 0.125rem 0;
     margin-inline: 0;
-  }
-
-  :is(h1, h2, h3, h4, h5, h6) {
-    margin-block: 0.85em 0.3em;
-    line-height: 1.25;
-    text-wrap: balance;
-  }
-
-  :is(h1, h2, h3):first-child {
-    margin-block-start: 0.25em;
-  }
-
-  h1 {
-    font-size: 1.5em;
-  }
-
-  h2 {
-    font-size: 1.3em;
-  }
-
-  h3 {
-    font-size: 1.15em;
-  }
-
-  :is(h4, h5, h6) {
-    font-size: 1em;
-  }
-
-  pre,
-  code {
-    font-family: var(--theme-font-code);
-  }
-
-  pre {
-    margin: 0;
-    padding: 0.625rem;
-    padding-inline-end: 3rem;
-    white-space: pre;
-    overflow-x: auto;
-    background: var(--theme-code);
-    border: 1px solid var(--theme-border);
-    border-radius: var(--theme-radius);
-  }
-
-  .code-block {
-    position: relative;
-    margin-block: 0.75rem;
-  }
-
-  .code-copy {
-    position: absolute;
-    inset-block-start: 0.375rem;
-    inset-inline-end: 0.375rem;
-    z-index: 1;
-    display: grid;
-    place-items: center;
-    inline-size: 2rem;
-    min-block-size: 2rem;
-    padding: 0;
-    color: var(--theme-text-muted);
-    background: var(--theme-surface-subtle);
-    border: 1px solid var(--theme-border);
-    border-radius: 0.375rem;
-  }
-
-  .code-copy:hover {
-    color: var(--theme-text);
-    background: var(--theme-control-hover);
-  }
-
-  .code-copy:focus-visible {
-    color: var(--theme-text);
-    outline: 2px solid var(--theme-focus);
-    outline-offset: 2px;
-  }
-
-  .code-copy svg {
-    inline-size: 1rem;
-    block-size: 1rem;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  :not(pre) > code {
-    padding-inline: 0.2em;
-    background: var(--theme-code);
-    border-radius: 0.2rem;
-  }
-
-  a {
-    color: var(--theme-info);
-  }
-
-  .table-scroll {
-    overflow-x: auto;
-    margin-block: 0.75rem;
-  }
-
-  table {
-    width: max-content;
-    min-width: 100%;
-    border-collapse: collapse;
-    white-space: normal;
-  }
-
-  th,
-  td {
-    padding: 0.25rem 0.5rem;
-    text-align: left;
-    vertical-align: top;
-    border: 1px solid var(--theme-border);
-  }
-
-  th {
-    font-weight: 600;
-    background: var(--theme-surface-subtle);
-  }
-
-  @media (pointer: coarse) {
-    pre {
-      padding-inline-end: 3.75rem;
-    }
-
-    .code-copy {
-      inline-size: 2.75rem;
-      min-block-size: 2.75rem;
-    }
   }
 </style>

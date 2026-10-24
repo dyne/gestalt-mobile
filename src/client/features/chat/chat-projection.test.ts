@@ -41,6 +41,38 @@ const snapshot = (baseSequence = 1) => ({
   ],
 });
 describe('chat projection', () => {
+  it('retains authoritative resolution time through live events, cache and history refresh', () => {
+    let projection = acceptSnapshot(createChatProjection('s'), snapshot());
+    projection = resolveInteraction(projection, 'r1', 'approved', 3000);
+    projection = applyProjectionEvent(projection, {
+      sequence: 2,
+      type: 'interaction.resolved',
+      occurredAt: '2026-10-24T08:00:00Z',
+      payload: { requestId: 'r1', outcome: 'approved' },
+    });
+    const resolvedAt = Date.parse('2026-10-24T08:00:00Z');
+    expect(projection.interactions[0]?.resolvedAt).toBe(resolvedAt);
+    expect(hydrateCache('s', projection).interactions[0]?.resolvedAt).toBe(resolvedAt);
+    const authoritative = {
+      ...snapshot(3),
+      interactions: [
+        {
+          requestId: 'r1',
+          kind: 'commandApproval',
+          turnId: null,
+          requestedAt: '2026-10-24T07:00:00Z',
+          resolvedAt: '2026-10-24T08:00:01Z',
+          outcome: 'approved' as const,
+        },
+      ],
+    };
+    expect(acceptSnapshot(projection, authoritative).interactions[0]?.resolvedAt).toBe(
+      resolvedAt + 1000,
+    );
+    expect(
+      acceptSnapshot(createChatProjection('s'), authoritative).interactions[0]?.resolvedAt,
+    ).toBe(resolvedAt + 1000);
+  });
   it('does not flood dialogue with repeated recovery health snapshots', () => {
     let projection = createChatProjection();
     for (let sequence = 1; sequence <= 100; sequence++)

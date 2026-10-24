@@ -188,9 +188,9 @@ describe('InteractionList', () => {
     });
 
     const transcript = screen.getByRole('region', { name: 'Submitted answers' });
-    expect(transcript.textContent).toContain('Mode — Which execution mode?');
+    expect(transcript.textContent).toMatch(/Mode\s+Which execution mode\?/);
     expect(transcript.textContent).toContain('Supervised multi-agent');
-    expect(transcript.textContent).toContain('Review — Who should review?');
+    expect(transcript.textContent).toMatch(/Review\s+Who should review\?/);
     expect(transcript.textContent).toContain('Supervisor');
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
 

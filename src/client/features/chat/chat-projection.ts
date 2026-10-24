@@ -39,6 +39,7 @@ export type ProjectedInteraction = Readonly<{
   operationId?: string;
   attemptedOutcome?: unknown;
   occurredAt?: number;
+  resolvedAt?: number;
 }>;
 export type ChatProjection = Readonly<{
   sessionId: string | null;
@@ -149,6 +150,7 @@ function parseOccurredAt(value: unknown): number | undefined {
 }
 function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
   const occurredAt = parseOccurredAt(snapshot.requestedAt);
+  const resolvedAt = parseOccurredAt(snapshot.resolvedAt);
   return {
     requestId: snapshot.requestId,
     key: `interaction:${snapshot.requestId}`,
@@ -162,6 +164,7 @@ function interaction(snapshot: SafeInteractionSnapshot): ProjectedInteraction {
       : 'pending',
     ...(snapshot.resolvedAt ? { attemptedOutcome: snapshot.outcome } : {}),
     ...(occurredAt !== undefined ? { occurredAt } : {}),
+    ...(resolvedAt !== undefined ? { resolvedAt } : {}),
   };
 }
 function safeOutcome(
@@ -459,6 +462,8 @@ export function hydrateCache(sessionId: string, cached: unknown): ChatProjection
           typeof item.kind === 'string' &&
           (item.turnId === undefined || item.turnId === null || typeof item.turnId === 'string') &&
           interactionStates.includes(item.state) &&
+          (item.resolvedAt === undefined ||
+            (typeof item.resolvedAt === 'number' && Number.isFinite(item.resolvedAt))) &&
           (item.occurredAt === undefined ||
             (typeof item.occurredAt === 'number' && Number.isFinite(item.occurredAt))),
         ),
@@ -496,7 +501,11 @@ export function acceptSnapshot(current: ChatProjection, snapshot: ChatSnapshot):
   const interactions = unique(
     canonicalInteractions.map((next) => {
       const prior = priorById.get(next.requestId);
-      if (prior?.state === 'resolved') return prior;
+      if (prior?.state === 'resolved')
+        return {
+          ...prior,
+          ...(next.resolvedAt !== undefined ? { resolvedAt: next.resolvedAt } : {}),
+        };
       return {
         ...next,
         ...(next.occurredAt === undefined && prior?.occurredAt !== undefined
@@ -694,6 +703,7 @@ export function resolveInteraction(
   current: ChatProjection,
   requestId: string,
   attemptedOutcome?: unknown,
+  resolvedAt?: number,
 ): ChatProjection {
   return {
     ...current,
@@ -702,6 +712,7 @@ export function resolveInteraction(
         ? {
             ...item,
             state: 'resolved',
+            ...(resolvedAt !== undefined ? { resolvedAt } : {}),
             ...(safeOutcome(item, attemptedOutcome)
               ? { attemptedOutcome: safeOutcome(item, attemptedOutcome) }
               : {}),
@@ -841,7 +852,7 @@ export function applyProjectionEvent(
       };
     }
   } else if (event.type === 'interaction.resolved' && typeof payload?.requestId === 'string')
-    next = resolveInteraction(next, payload.requestId, payload.outcome);
+    next = resolveInteraction(next, payload.requestId, payload.outcome, occurredAt);
   else if (
     event.type === 'activity.updated' &&
     typeof payload?.id === 'string' &&

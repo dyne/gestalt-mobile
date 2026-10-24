@@ -5,7 +5,11 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { createSelfDebugSession, type CreateDebugDependencies } from './create-session.js';
+import {
+  createSelfDebugSession,
+  debugExecutionSettings,
+  type CreateDebugDependencies,
+} from './create-session.js';
 import { RelaySession, type RelaySessionSnapshot } from '../sessions/model/relay-session.js';
 import type { DebugContext } from '../../../shared/contracts/self-debug.js';
 
@@ -159,5 +163,49 @@ describe('Self DEBUG creation', () => {
       threadId: 'independent-thread',
       selfDebug: { context, tracePath: 'traces/debug.json' },
     });
+  });
+});
+
+describe('DEBUG execution settings', () => {
+  it.each([
+    [
+      { executorModel: 'session-executor', executorReasoningEffort: 'medium' as const },
+      'session-executor',
+      'medium',
+      false,
+    ],
+    [{ executorModel: 'session-executor' }, 'session-executor', 'high', true],
+    [{ executorReasoningEffort: 'medium' as const }, 'installed-executor', 'medium', true],
+    [{}, 'installed-executor', 'high', true],
+  ])(
+    'uses executor overrides and installed defaults: %j',
+    async (overrides, model, reasoningEffort, readsDefaults) => {
+      const { deps } = fixture();
+      const source = deps.find('source')!;
+      const defaults = vi.fn(async () => ({
+        name: 'org-plan-executor' as const,
+        model: 'installed-executor',
+        reasoningEffort: 'high' as const,
+      }));
+      expect(
+        await debugExecutionSettings(
+          {
+            ...source,
+            model: 'supervisor-model',
+            modelSettings: { reasoningEffort: 'low', ...overrides },
+          },
+          defaults,
+        ),
+      ).toEqual({ name: 'root', model, reasoningEffort });
+      expect(defaults).toHaveBeenCalledTimes(readsDefaults ? 1 : 0);
+    },
+  );
+  it('does not silently use the supervisor model when executor defaults are unavailable', async () => {
+    const { deps } = fixture();
+    await expect(
+      debugExecutionSettings(deps.find('source')!, async () => {
+        throw new Error('missing profile');
+      }),
+    ).rejects.toThrow('missing profile');
   });
 });

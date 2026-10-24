@@ -147,10 +147,6 @@ for (const viewport of [
       );
       await page.goto('/');
       await page.getByRole('button', { name: 'Chat' }).click();
-      await page
-        .getByRole('button', { name: 'Review command approval', exact: true })
-        .first()
-        .click();
       await expect(page.getByRole('button', { name: 'Approve' })).toBeInViewport();
       await page.getByRole('button', { name: 'Approve' }).click();
       await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Approved');
