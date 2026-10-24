@@ -60,6 +60,22 @@ export function parseSupervisedPlan(input: {
   )
     return unavailable('INVALID_MODEL_POLICY');
   const modelPolicyVersion = declarations.length ? 1 : undefined;
+  const assurances = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^#\+MODEL_POLICY_ASSURANCE:/i.test(line));
+  if (
+    assurances.length > 1 ||
+    assurances.some(
+      ({ line, index }) =>
+        !modelPolicyVersion ||
+        index >= firstHeading ||
+        !/^#\+MODEL_POLICY_ASSURANCE: (configured|runtime-attested)$/.test(line),
+    )
+  )
+    return unavailable('INVALID_MODEL_POLICY');
+  const modelPolicyAssurance = assurances[0]?.line.split(
+    ': ',
+  )[1] as SupervisedPlan['modelPolicyAssurance'];
 
   for (let index = 0; index < lines.length;) {
     const line = lines[index]!;
@@ -176,6 +192,7 @@ export function parseSupervisedPlan(input: {
       ...(metadata.has('DATE') ? { date: metadata.get('DATE') } : {}),
       ...(metadata.has('KEYWORDS') ? { keywords: metadata.get('KEYWORDS') } : {}),
       ...(modelPolicyVersion ? { modelPolicyVersion } : {}),
+      ...(modelPolicyAssurance ? { modelPolicyAssurance } : {}),
       steps: built,
       totalSteps: allSteps.length,
       doneSteps: allSteps.filter((step) => step.state === 'DONE').length,

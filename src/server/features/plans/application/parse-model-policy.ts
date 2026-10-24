@@ -33,7 +33,7 @@ export function parseModelPolicy(
   const invalid = () => {
     throw new Error('INVALID_MODEL_POLICY');
   };
-  if (properties.has('MODEL_POLICY_VERSION')) invalid();
+  if (properties.has('MODEL_POLICY_VERSION') || properties.has('MODEL_POLICY_ASSURANCE')) invalid();
   if (declared.length && (level === 2 || version === undefined)) invalid();
   if (version === undefined || level === 2) return undefined;
   if (required.some((key) => !properties.get(key)?.trim())) invalid();

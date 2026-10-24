@@ -141,6 +141,7 @@ import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-cap
 import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
 import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
 import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
+import { currentExecutableL1Index } from './features/plans/domain/supervised-plan.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
 import type { ComponentVersion } from '../shared/contracts/component-version.js';
 import type { LlmProvider, ProviderAvailability } from '../shared/contracts/llm-provider.js';
@@ -499,16 +500,24 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
         const writer = await runtime.ensureWriter(session, new Date().toISOString());
         if (!current() || writer.session.activeTurnId || blockingInteractions(sessionId).length)
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
+        const selectedPlan = supervisedPlans.find(sessionId);
+        const selectedPlanFence = JSON.stringify(selectedPlan);
+        const selectedPolicy =
+          selectedPlan?.modelPolicyVersion === 1
+            ? selectedPlan.steps[currentExecutableL1Index(selectedPlan)]?.modelPolicy
+            : undefined;
+        if (selectedPolicy) await runtime.validateExecutorPolicy(sessionId, selectedPolicy);
         await options.autopilotBeforeTurnAccepted?.({ sessionId, controlId });
         requireOrgExecutionAdmission(sessionId);
         if (
           !current() ||
+          JSON.stringify(supervisedPlans.find(sessionId)) !== selectedPlanFence ||
           sessions.find(sessionId)?.activeTurnId ||
           blockingInteractions(sessionId).length
         )
           throw new Error('AUTOPILOT_START_UNAVAILABLE');
         const continuationPrompt = launchIdentity
-          ? autopilotExecutorLaunchPrompt(launchIdentity)
+          ? autopilotExecutorLaunchPrompt(launchIdentity, supervisedPlans.find(sessionId))
           : AUTOPILOT_CONTINUATION_PROMPT;
         const recovery = autopilotStore.find(sessionId);
         const executorRecovery =
@@ -1545,7 +1554,45 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           },
           verify: (rpc, threadId, state) => capabilities.verify(rpc, threadId, state),
         },
-        requireOrgExecutionAdmission,
+        async (sessionId, threadId) => {
+          requireOrgExecutionAdmission(sessionId);
+          const plan = supervisedPlans.find(sessionId);
+          if (plan?.modelPolicyVersion !== 1) return;
+          const planFence = JSON.stringify(plan);
+          const fence = () => {
+            const state = autopilotStore.find(sessionId);
+            return state?.requestedEnabled && state.executor?.threadId === threadId
+              ? JSON.stringify([state.generation, state.planIdentity, state.executor])
+              : null;
+          };
+          const before = fence();
+          const assertCurrent = () => {
+            requireOrgExecutionAdmission(sessionId);
+            if (
+              !before ||
+              fence() !== before ||
+              JSON.stringify(supervisedPlans.find(sessionId)) !== planFence ||
+              blockingInteractions(sessionId).length
+            )
+              throw new Error('EXECUTOR_AUTHORITY_CHANGED');
+          };
+          assertCurrent();
+          const report = await executorModelEvidence.read(sessionId);
+          assertCurrent();
+          if (
+            !report ||
+            report.child.threadId !== threadId ||
+            report.configuration === 'mismatch' ||
+            [
+              'CONTROLLER_BINDING_INVALID',
+              'CONTEXT_CHANGED',
+              'CHILD_BINDING_MISMATCH',
+              'OBSERVATION_CHANGED',
+            ].includes(report.code)
+          )
+            throw new Error(`EXECUTOR_POLICY_BLOCKED:${report?.code ?? 'CHILD_BINDING_UNKNOWN'}`);
+          return { ...report.requested, assertCurrent };
+        },
       )
     : null;
   const handleKimiNotification = (

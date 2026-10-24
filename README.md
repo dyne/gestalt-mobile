@@ -102,22 +102,34 @@ session-relative interpretation.
 
 ### Versioned model policy
 
-The `l1-model-policy-v1` capability and packaged `modelPolicyContract` describe
-schema validation and retention. `runtimeEnforcement` is `false`. When a
-versioned plan has a retained canonical executor, `gestalt_org_plan_health`
-can compare its configured thread model and effort with the requested L1 policy.
-This uses bounded thread metadata and the owning runtime's model catalog, with
-no transcript retrieval or extra model-probe turn. Missing values stay unknown;
-matching configuration does not admit automatic execution.
+Version-1 plans separate requested model choices from assurance. Existing plans
+without `#+MODEL_POLICY_ASSURANCE` use disclosed **configured compatibility**;
+their policy metadata and file bytes need no migration. An explicit
+`#+MODEL_POLICY_ASSURANCE: configured` selects the same mode. Mobile validates
+allowed models/efforts and higher-effort necessity, checks the active runtime
+catalog before versioned root dispatch, and directs the root to launch the exact
+L1 model/effort through supported overrides with inherited sandbox and approval
+policy. Automatic executor resumes use that L1 policy rather than session defaults.
 
-Mobile rejects unsupported versioned-policy automation at enable,
-supervision-start, automatic root dispatch, and direct executor resume. Manual
-review, repair input and model selection remain available; unrelated legacy
-sessions retain their existing behavior. Native child creation inside manual or
-already-running turns is outside this guarantee. Strict runtime attestation,
-runtime-issued settings revisions and native child pre-spawn enforcement require
-separate integration work. They are deferred capabilities, not installation
-prerequisites, and package presence does not establish them.
+`#+MODEL_POLICY_ASSURANCE: runtime-attested` explicitly requires strict runtime
+receipts. The current adapter cannot supply runtime-issued settings revisions;
+strict plans fail with `RUNTIME_ATTESTATION_UNAVAILABLE` and remain strict until
+the user authorizes a change. Repeated approvals or attention resolution cannot
+provide that capability. Manual Off is independently respected. Legacy plans
+without model policy keep their existing behavior.
+
+`gestalt_org_plan_health` reports `executionAdmission.allowed`, configured
+assurance and `runtimeEnforcement:false`. Its `modelPolicy` evidence separately
+reports `admissionScope: runtime-attestation`, `admitted:false`, `attested:false`,
+requested values and observed configured thread settings. Unknown values remain
+null, never copied from requests. A configured match is not runtime attestation.
+Controller-owned resume guards reject stale identities and observed mismatches,
+and recheck authority immediately before dispatch and after thread recovery.
+Native collaboration spawn/followup calls remain cooperatively root-supervised;
+Mobile does not intercept them or guarantee universal pre-spawn enforcement.
+One writer per L1, independent review, evidence gates, checkpoint continuation
+and terminal whole-branch review remain required. See
+[update and rollback guidance](docs/org-plan-policy-compatibility.md).
 
 ## Skill profiles
 

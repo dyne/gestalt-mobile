@@ -86,10 +86,7 @@ export type AutopilotSession = Readonly<{
 }>;
 
 export type AutopilotSnapshot = Readonly<{
-  executionAdmission?: Extract<
-    import('../../plans/domain/model-policy-admission.js').ModelPolicyAdmission,
-    { allowed: false }
-  >;
+  executionAdmission?: import('../../plans/domain/model-policy-admission.js').ModelPolicyAdmission;
   /** Bounded semantic delta since the last runtime-accepted automatic root turn.
    * Missing acknowledgement is unknown, including records written by older relays.
    */
