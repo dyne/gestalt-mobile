@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -43,5 +44,22 @@ it('persists an inspectable fingerprint and detects incompatible or damaged conf
   await writeFile(path, JSON.stringify(saved));
   expect(await checkXerjIndexConfig(directory, config)).toBe('incompatible');
   await writeFile(path, '{invalid');
+  expect(await checkXerjIndexConfig(directory, config)).toBe('incompatible');
+});
+
+it('accepts an intact legacy version fingerprint without imposing a version pin', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'xerj legacy config '));
+  roots.push(directory);
+  const config = xerjIndexConfig('/sources', 'ax-root', 'http://127.0.0.1:9200');
+  const settings = { ...config.settings, nativeVersion: '1.0.0-rc.87' };
+  const legacy = {
+    ...config,
+    settings,
+    fingerprint: createHash('sha256').update(JSON.stringify(settings)).digest('hex'),
+  };
+  await writeFile(join(directory, '.gestalt-index-config.json'), JSON.stringify(legacy));
+  expect(await checkXerjIndexConfig(directory, config)).toBe('compatible');
+  legacy.settings.nativeVersion = 'tampered';
+  await writeFile(join(directory, '.gestalt-index-config.json'), JSON.stringify(legacy));
   expect(await checkXerjIndexConfig(directory, config)).toBe('incompatible');
 });

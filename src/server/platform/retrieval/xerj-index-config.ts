@@ -7,9 +7,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { managedXerjVersion } from './managed-xerj.js';
 
-// Content-affecting rc.87 settings. Reused in the command and fingerprint so
+// Content-affecting settings. Reused in the command and fingerprint so
 // changing an operational setting cannot accidentally require a rebuild.
 export const xerjContentArguments = [
   '--no-graph',
@@ -27,7 +26,6 @@ export function xerjIndexConfig(root: string, prefix: string, endpoint: string) 
     root,
     prefix,
     endpoint,
-    nativeVersion: managedXerjVersion,
     contentArguments: xerjContentArguments,
     followSymlinks: false,
     label: null,
@@ -49,8 +47,13 @@ export async function checkXerjIndexConfig(
 ): Promise<'missing' | 'compatible' | 'incompatible'> {
   try {
     const saved = JSON.parse(await readFile(join(directory, filename), 'utf8')) as IndexConfig;
+    // Older fingerprints included a pinned version. Validate their integrity
+    // before comparing content settings; native XERJ owns index compatibility.
+    const settings = { ...saved.settings } as IndexConfig['settings'] & { nativeVersion?: string };
+    delete settings.nativeVersion;
     return saved.schemaVersion === expected.schemaVersion &&
-      saved.fingerprint === expected.fingerprint &&
+      createHash('sha256').update(JSON.stringify(settings)).digest('hex') ===
+        expected.fingerprint &&
       createHash('sha256').update(JSON.stringify(saved.settings)).digest('hex') ===
         saved.fingerprint
       ? 'compatible'

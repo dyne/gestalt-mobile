@@ -13,8 +13,6 @@ import type {
   RetrievalCapabilityPort,
 } from '../../features/skills/application/ports.js';
 
-export const managedXerjVersion = '1.0.0-rc.87';
-
 /** The manager alone owns backend identity, authentication and shared lifetime. */
 export class ManagedXerj implements RetrievalCapabilityPort {
   constructor(private readonly environment: NodeJS.ProcessEnv = process.env) {}
@@ -75,7 +73,8 @@ export class ManagedXerj implements RetrievalCapabilityPort {
             return settle(unavailable('managed-backend-unavailable'));
           if (
             value.status !== 'ready' ||
-            value.version !== managedXerjVersion ||
+            typeof value.version !== 'string' ||
+            !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(value.version) ||
             typeof value.endpoint !== 'string' ||
             !/^http:\/\/(127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(value.endpoint)
           )
