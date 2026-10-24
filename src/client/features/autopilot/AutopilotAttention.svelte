@@ -5,23 +5,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
 <script lang="ts">
+  import MessageContent from '../chat/MessageContent.svelte';
   import type { OrgPlanAttention } from './contracts.js';
   let {
     attention,
     controlId = 'autopilot-attention',
     pending = false,
     historical = false,
+    resolvedAt,
     onresolve = () => {},
     ondebug,
     debugPending = false,
+    onopenorg,
+    onopenfile,
+    oncopyresult,
   }: {
     attention: OrgPlanAttention | null;
     pending?: boolean;
     historical?: boolean;
+    resolvedAt?: number;
     controlId?: string;
     onresolve?: (action: 'resume' | 'disableAutopilot', guidance?: string) => void;
     ondebug?: (requestId: string, trigger: HTMLButtonElement) => void;
     debugPending?: boolean;
+    onopenorg?: (href: string) => void;
+    onopenfile?: (path: string, line?: number) => void;
+    oncopyresult?: (copied: boolean) => void;
   } = $props();
   let guidance = $state('');
   const reasons: Record<string, string> = {
@@ -59,7 +68,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <h3 id={`${controlId}-title`}>
       {historical ? 'Autopilot attention request' : 'Autopilot needs your attention'}
     </h3>
-    {#if attention.requestedAt}
+    {#if historical && resolvedAt !== undefined}
+      <time datetime={new Date(resolvedAt).toISOString()}
+        >Resolved {new Date(resolvedAt).toLocaleString()}</time
+      >
+    {:else if attention.requestedAt}
       <time datetime={attention.requestedAt}
         >{new Date(attention.requestedAt).toLocaleString()}</time
       >
@@ -72,15 +85,27 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <div>
         <dt>What happened</dt>
         <dd>
-          {compact
-            ? 'The supervisor has paused work and needs your help to continue.'
-            : attention.attention.summary}
+          <MessageContent
+            text={compact
+              ? 'The supervisor has paused work and needs your help to continue.'
+              : attention.attention.summary}
+            {onopenorg}
+            {onopenfile}
+            {oncopyresult}
+          />
         </dd>
       </div>
       {#if attention.supervisorReport}
         <div>
           <dt>Supervisor explanation</dt>
-          <dd class="supervisor-report">{attention.supervisorReport}</dd>
+          <dd class="supervisor-report">
+            <MessageContent
+              text={attention.supervisorReport}
+              {onopenorg}
+              {onopenfile}
+              {oncopyresult}
+            />
+          </dd>
         </div>
       {:else if compact}
         <div>
@@ -95,9 +120,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <div>
         <dt>Requested action</dt>
         <dd>
-          {compact
-            ? 'Resolve the blocker or describe a way forward below, then choose Resume. You can also disable Autopilot.'
-            : attention.attention.requestedAction}
+          <MessageContent
+            text={compact
+              ? 'Resolve the blocker or describe a way forward below, then choose Resume. You can also disable Autopilot.'
+              : attention.attention.requestedAction}
+            {onopenorg}
+            {onopenfile}
+            {oncopyresult}
+          />
         </dd>
       </div>
       <div>

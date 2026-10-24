@@ -708,7 +708,8 @@ test('suppresses a double-click while an interaction response is deferred', asyn
   expect(fixture.commands[1]?.body).toEqual(fixture.commands[0]?.body);
   second.resolve({ kind: 'fulfill', status: 202, body: { accepted: true } });
   await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Approved');
-  expect(await card?.evaluate((node) => node.isConnected)).toBe(true);
+  await expect(page.getByRole('complementary', { name: 'Pending chat requests' })).toHaveCount(0);
+  await expect(page.getByLabel('Chat messages').locator('#chat-request-approval-1')).toBeVisible();
   fixture.event('session-1', 1, 'interaction.requested', {
     requestId: 'approval-1',
     kind: 'commandApproval',
@@ -871,7 +872,6 @@ for (const shot of [
         document.documentElement.style.fontSize = '200%';
       });
     await page.getByRole('button', { name: 'Chat' }).click();
-    await page.getByRole('button', { name: 'Review command approval' }).click();
     const approve = page.getByRole('button', { name: 'Approve' });
     await expect(approve).toBeVisible();
     await approve.scrollIntoViewIfNeeded();

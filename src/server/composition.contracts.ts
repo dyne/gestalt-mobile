@@ -6072,7 +6072,7 @@ describe('production composition', () => {
         socket.close();
       }
     });
-    it('starts Self DEBUG with the source root model and exact skill profile instead of executor defaults', async () => {
+    it('starts Self DEBUG with the configured executor model and exact source skill profile', async () => {
       const root = await mkdtemp(join(tmpdir(), 'gestalt-debug-root-'));
       const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-debug-state-'));
       const homeDirectory = await mkdtemp(join(tmpdir(), 'gestalt-debug-home-'));
@@ -6179,7 +6179,7 @@ describe('production composition', () => {
       const debug = response.json();
       expect(debug.id).not.toBe(sourceId);
       expect(debug.workspacePath).toBe(debugRoot);
-      expect(debug.model).toBe('source-root-model');
+      expect(debug.model).toBe('configured-debug-model');
       expect(debug.profile).toBe('supervisor');
       expect(debug.effectiveSkillSelection).toEqual(inheritedSkills);
       expect(debug.selfDebug.agent.name).toBe('root');
@@ -6206,8 +6206,8 @@ describe('production composition', () => {
             (request.params as { threadId?: string }).threadId === debug.threadId,
         );
       expect(request?.params).toMatchObject({
-        model: 'source-root-model',
-        effort: 'medium',
+        model: 'configured-debug-model',
+        effort: 'high',
         input: [{ type: 'text', text: expect.stringContaining('User detected an error') }],
       });
       expect(JSON.stringify(request?.params)).toContain('FOCUSED_BLOCKER_EXPLANATION');

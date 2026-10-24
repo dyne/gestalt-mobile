@@ -150,12 +150,13 @@ test('retries a failed quiz once and suppresses a duplicate accepted request', a
   await page.getByRole('radio', { name: /Solo/ }).click();
   await page.getByRole('button', { name: 'Send answers' }).click();
   const submitted = page.getByRole('region', { name: 'Submitted answers' });
-  await expect(submitted).toContainText('Execution mode');
-  await expect(submitted).toContainText('How should this plan run?');
-  await expect(submitted).toContainText('Solo');
-  await expect(submitted).toContainText('Recorded in this chat view before delivery.');
   const retry = page.getByRole('button', { name: 'Retry' });
   await expect(retry).toBeVisible();
+  await expect(submitted).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Pending chat requests' })).toContainText(
+    'How should this plan run?',
+  );
+  await expect(page.getByRole('radio', { name: /Solo/ })).toBeChecked();
 
   await retry.click();
   await expect(page.locator('[data-interaction-state="resolved"]')).toContainText('Answers sent');
@@ -193,9 +194,7 @@ test('marks an interaction already cleared upstream as no longer pending', async
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
 });
 
-test('keeps a resolved supervision interaction with the prompt that preceded it', async ({
-  page,
-}) => {
+test('keeps internal supervision checkpoints out of the chat', async ({ page }) => {
   const start = Date.parse('2026-01-01T07:56:00.000Z');
   await page.route('**/api/bootstrap', (route) =>
     route.fulfill({
@@ -253,13 +252,9 @@ test('keeps a resolved supervision interaction with the prompt that preceded it'
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
 
-  await expect(page.getByText('orgPlanCheckpoint')).toHaveCount(1);
-  await expect(page.getByText('original request').locator('xpath=ancestor::li')).toContainText(
-    'orgPlanCheckpoint',
-  );
-  await expect(page.getByText('continue').locator('xpath=ancestor::li')).not.toContainText(
-    'orgPlanCheckpoint',
-  );
+  await expect(page.getByText('original request')).toBeVisible();
+  await expect(page.getByText('continue', { exact: true })).toBeVisible();
+  await expect(page.getByText('orgPlanCheckpoint')).toHaveCount(0);
 });
 
 test('submits a quiz as a follow-up prompt after its original turn has ended', async ({ page }) => {

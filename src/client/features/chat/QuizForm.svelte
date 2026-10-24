@@ -6,6 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 <script lang="ts">
   import { tick } from 'svelte';
+  import MessageContent from './MessageContent.svelte';
   import type { Quiz } from '../../../shared/contracts/quiz.js';
 
   type Props = {
@@ -15,8 +16,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     disabled?: boolean;
     onanswer(id: string, value: string): void;
     onsubmit(): void;
+    onopenorg?: (href: string) => void;
+    onopenfile?: (path: string, line?: number) => void;
+    oncopyresult?: (copied: boolean) => void;
   };
-  let { requestId, quiz, answers, disabled = false, onanswer, onsubmit }: Props = $props();
+  let {
+    requestId,
+    quiz,
+    answers,
+    disabled = false,
+    onanswer,
+    onsubmit,
+    onopenorg,
+    onopenfile,
+    oncopyresult,
+  }: Props = $props();
   let customInputs = $state<Record<string, HTMLInputElement | undefined>>({});
   let customSelected = $state<Record<string, boolean>>({});
   let complete = $derived(
@@ -45,7 +59,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         (choice) => choice.label === answers[question.id],
       )}
       <fieldset>
-        <legend><strong>{question.header}</strong><span>{question.question}</span></legend>
+        <legend><strong>{question.header}</strong></legend>
+        <MessageContent text={question.question} {onopenorg} {onopenfile} {oncopyresult} />
         <div class="choices">
           {#each question.choices as choice (`${question.id}-${choice.label}`)}
             {@const choiceId = `${requestId}-${question.id}-${choice.label}`}
@@ -54,15 +69,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 id={choiceId}
                 name={`${requestId}-${question.id}`}
                 type="radio"
+                aria-describedby={`${choiceId}-description`}
                 checked={answers[question.id] === choice.label}
                 onchange={() => {
                   customSelected[question.id] = false;
                   onanswer(question.id, choice.label);
                 }}
               />
-              <label for={choiceId}
-                ><strong>{choice.label}</strong><span>{choice.description}</span></label
-              >
+              <label for={choiceId}><strong>{choice.label}</strong></label>
+              <div id={`${choiceId}-description`} class="choice-description">
+                <MessageContent text={choice.description} {onopenorg} {onopenfile} {oncopyresult} />
+              </div>
             </div>
           {/each}
           {#if question.allowCustom}
@@ -133,11 +150,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
   .choice > input {
     position: absolute;
-    inset: 0;
-    inline-size: 100%;
-    block-size: 100%;
+    inset-block-start: 0.9rem;
+    inset-inline-start: 0.65rem;
+    inline-size: 1.1rem;
+    block-size: 1.1rem;
     margin: 0;
-    opacity: 0;
+    z-index: 1;
     cursor: pointer;
   }
   .choice > label {
@@ -145,6 +163,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     gap: 0.125rem;
     min-block-size: 44px;
     padding: 0.75rem;
+    padding-inline-start: 2.25rem;
     background: var(--theme-surface);
     border: 2px solid var(--theme-border);
     border-radius: 0.5rem;
@@ -158,8 +177,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     outline: 3px solid var(--theme-focus);
     outline-offset: 2px;
   }
-  label span,
-  legend span {
+  label span {
+    color: var(--theme-text-muted);
+  }
+  .choice-description {
+    padding: 0.25rem 0.75rem 0.5rem 2.25rem;
     color: var(--theme-text-muted);
   }
   .custom {

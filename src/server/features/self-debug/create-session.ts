@@ -12,6 +12,21 @@ import {
 } from '../../../shared/contracts/self-debug.js';
 import { RelaySession, type RelaySessionSnapshot } from '../sessions/model/relay-session.js';
 
+/** DEBUG is a root thread using the same execution settings as Org executors. */
+export async function debugExecutionSettings(
+  source: RelaySessionSnapshot,
+  defaults: () => Promise<SelfDebugSession['agent']>,
+): Promise<SelfDebugSession['agent']> {
+  if (!source.effectiveSkillSelection) throw new Error('DEBUG_SOURCE_SETTINGS_UNAVAILABLE');
+  const settings = source.modelSettings;
+  const fallback =
+    settings?.executorModel && settings.executorReasoningEffort ? undefined : await defaults();
+  const model = settings?.executorModel ?? fallback?.model;
+  const reasoningEffort = settings?.executorReasoningEffort ?? fallback?.reasoningEffort;
+  if (!model) throw new Error('DEBUG_EXECUTOR_CONFIGURATION_INVALID');
+  return { name: 'root', model, ...(reasoningEffort ? { reasoningEffort } : {}) };
+}
+
 export type CreateDebugDependencies = {
   createId(): string;
   now(): string;

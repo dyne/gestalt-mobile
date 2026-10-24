@@ -307,7 +307,7 @@ async function install(
   await page.routeWebSocket(/\/api\/sessions\/session-1\/events/, (socket) => onsocket?.(socket));
 }
 
-test('keeps the attention dialogue at its original chat position with an explanation after reload', async ({
+test('pins pending attention and restores its explanation in history after resolution', async ({
   page,
 }) => {
   const report = 'The L3 checkpoint cannot identify its step. Refresh the plan before retrying.';
@@ -374,16 +374,18 @@ test('keeps the attention dialogue at its original chat position with an explana
   await page.goto('/');
   await page.getByRole('button', { name: 'Chat' }).click();
   const entries = page.getByLabel('Chat messages').locator(':scope > li');
-  await expect(entries.nth(3)).toContainText('Earlier work');
-  await expect(entries.nth(2)).toContainText('Autopilot needs your attention');
-  await expect(entries.nth(2)).toContainText(report);
+  const pending = page.getByRole('complementary', { name: 'Pending chat requests' });
+  await expect(pending).toContainText('Autopilot needs your attention');
+  await expect(pending).toContainText(report);
+  await expect(page.getByLabel('Chat messages')).toContainText('Earlier work');
   await expect(entries.nth(0)).toContainText('Later guidance');
   await install(page, 'monitoring', undefined, false);
   await installHistory();
   await page.reload();
   await page.getByRole('button', { name: 'Chat' }).click();
-  await expect(entries.nth(2)).toContainText('Autopilot attention request');
-  await expect(entries.nth(2)).toContainText(report);
+  await expect(pending).toHaveCount(0);
+  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot attention request');
+  await expect(page.getByLabel('Chat messages')).toContainText(report);
   await expect(entries.nth(0)).toContainText('Later guidance');
   await expect(page.getByRole('button', { name: 'Resume', exact: true })).toHaveCount(0);
 });
@@ -1043,7 +1045,9 @@ test('selected Chat receives live autopilot and attention journal events without
     }),
   );
   await expect(page.getByRole('alert', { name: 'Autopilot needs your attention' })).toBeVisible();
-  await expect(page.getByLabel('Chat messages')).toContainText('Autopilot needs your attention');
+  await expect(page.getByRole('complementary', { name: 'Pending chat requests' })).toContainText(
+    'Autopilot needs your attention',
+  );
   await expect(page.getByText('Autopilot needs your attention.')).toHaveCount(1);
   const report = 'The checkpoint cannot identify L1.2. Refresh the plan state before retrying.';
   socket!.send(
@@ -1090,10 +1094,10 @@ for (const viewport of [
     await page.goto('/');
     await page.getByRole('button', { name: 'Chat' }).click();
     const alert = page.getByRole('alert', { name: 'Autopilot needs your attention' });
-    const pending = page.getByRole('status', { name: 'Pending chat requests' });
+    const pending = page.getByRole('complementary', { name: 'Pending chat requests' });
     await expect(pending).toContainText('checkpoint could not identify the completed L1.2');
-    await pending.getByRole('button', { name: 'Review Autopilot blocker' }).click();
-    await expect(alert).toBeFocused();
+    await expect(pending.getByRole('button', { name: 'Resume', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Review Autopilot blocker' })).toHaveCount(0);
     await expect(alert).toContainText('checkpoint could not identify the completed L1.2');
     await page.reload();
     await expect(alert).toContainText('Refresh plan state, then retry the checkpoint');

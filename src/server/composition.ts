@@ -16,7 +16,10 @@ import { SqliteTransportDiagnostics } from './platform/persistence/sqlite-transp
 import { buildApp } from './app.js';
 import { ManagedUpgrade } from './platform/maintenance/managed-upgrade.js';
 import { SelfDebugWorkspace } from './platform/self-debug/workspace.js';
-import { createSelfDebugSession } from './features/self-debug/create-session.js';
+import {
+  createSelfDebugSession,
+  debugExecutionSettings,
+} from './features/self-debug/create-session.js';
 import { startSession } from './features/sessions/start-session/use-case.js';
 import type { ModelCatalog, ProfileCatalog } from './features/catalog/application/ports.js';
 import { FilesystemWorkspaceCatalog } from './platform/catalog/filesystem-workspace-catalog.js';
@@ -1899,15 +1902,8 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                 {
                   createId: randomUUID,
                   now: () => new Date().toISOString(),
-                  settings: async (source) => {
-                    if (!source.model || !source.effectiveSkillSelection)
-                      throw new Error('DEBUG_SOURCE_SETTINGS_UNAVAILABLE');
-                    return {
-                      name: 'root',
-                      model: source.model,
-                      reasoningEffort: source.modelSettings?.reasoningEffort,
-                    };
-                  },
+                  settings: (source) =>
+                    debugExecutionSettings(source, () => debugWorkspace.settings()),
                   capture: async (id, capturedContext, agent) => {
                     const captured = await debugWorkspace.capture(id, capturedContext, agent);
                     return {

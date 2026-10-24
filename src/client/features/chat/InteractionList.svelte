@@ -9,6 +9,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import { readCommandApproval } from './command-approval.js';
   import { readFileChangeApproval } from './file-change-approval.js';
   import QuizForm from './QuizForm.svelte';
+  import MessageContent from './MessageContent.svelte';
   import type { SubmittedQuizAnswer } from './quiz-submission.js';
   import { mapNativeUserInputToQuiz, parseQuiz } from '../../../shared/contracts/quiz.js';
   type Interaction = {
@@ -18,6 +19,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     payload: unknown;
     state?: 'pending' | 'submitting' | 'resolved' | 'failed';
     attemptedOutcome?: unknown;
+    resolvedAt?: number;
   };
   type Props = {
     interactions: Interaction[];
@@ -28,6 +30,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpermission(interaction: Interaction): void;
     ondecision(id: string, decision: 'accept' | 'decline'): void;
     onretry?(interaction: Interaction): void;
+    onopenorg?: (href: string) => void;
+    onopenfile?: (path: string, line?: number) => void;
+    oncopyresult?: (copied: boolean) => void;
   };
   let {
     interactions,
@@ -38,6 +43,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     onpermission,
     ondecision,
     onretry = () => {},
+    onopenorg,
+    onopenfile,
+    oncopyresult,
   }: Props = $props();
   let focusRequestId = $state<string | null>(null);
   let resultElements = $state<Record<string, HTMLElement | undefined>>({});
@@ -69,6 +77,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   >
     <p class="interaction-kind">{interaction.kind}</p>
     {#if interaction.state === 'resolved'}
+      {#if interaction.resolvedAt !== undefined}
+        <time datetime={new Date(interaction.resolvedAt).toISOString()}>
+          Resolved {new Date(interaction.resolvedAt).toLocaleString()}
+        </time>
+      {/if}
       <p
         class="interaction-result"
         data-interaction-state="resolved"
@@ -83,6 +96,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               ? 'Answers sent'
               : 'Approved'}
       </p>
+      {#if !submittedAnswers[interaction.requestId]?.length}
+        {@const quiz =
+          interaction.kind === 'quiz'
+            ? parseQuiz(interaction.payload)
+            : interaction.kind === 'userInput'
+              ? mapNativeUserInputToQuiz(interaction.payload)
+              : null}
+        {#each quiz?.questions ?? [] as question (question.id)}
+          <MessageContent text={question.question} {onopenorg} {onopenfile} {oncopyresult} />
+        {/each}
+      {/if}
     {:else}
       {#if submitting}<p class="interaction-submitting" data-interaction-state="submitting">
           Submitting…
@@ -92,10 +116,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           interaction.kind === 'quiz'
             ? parseQuiz(interaction.payload)
             : mapNativeUserInputToQuiz(interaction.payload)}
-        {#if quiz}
+        {#if submitting && submittedAnswers[interaction.requestId]?.length}
+          <!-- The submitted transcript below owns this question during delivery. -->
+        {:else if quiz}
           <QuizForm
             requestId={interaction.requestId}
             {quiz}
+            {onopenorg}
+            {onopenfile}
+            {oncopyresult}
             answers={scopedAnswers(interaction.requestId)}
             disabled={submitting}
             onanswer={(id, value) => onanswer(interaction.requestId, id, value)}
@@ -175,16 +204,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         <button type="button" onclick={() => onretry(interaction)}>Retry</button>
       {/if}
     {/if}
-    {#if submittedAnswers[interaction.requestId]?.length}
+    {#if submittedAnswers[interaction.requestId]?.length && (submitting || interaction.state === 'resolved')}
       <section class="submitted-answers" aria-label="Submitted answers" aria-live="polite">
         <p><strong>Submitted answers</strong></p>
         <ol>
           {#each submittedAnswers[interaction.requestId] as answer (answer.id)}
             <li>
-              <span class="submitted-question"
-                ><strong>{answer.header}</strong> — {answer.question}</span
-              >
-              <span class="submitted-answer">{answer.answer}</span>
+              <div class="submitted-question">
+                <strong>{answer.header}</strong>
+                <MessageContent text={answer.question} {onopenorg} {onopenfile} {oncopyresult} />
+              </div>
+              <div class="submitted-answer">
+                <MessageContent text={answer.answer} {onopenorg} {onopenfile} {oncopyresult} />
+              </div>
             </li>
           {/each}
         </ol>

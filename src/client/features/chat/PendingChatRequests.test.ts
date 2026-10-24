@@ -7,62 +7,53 @@
 /* @vitest-environment jsdom */
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, expect, it, vi } from 'vitest';
-import PendingChatRequests from './PendingChatRequests.svelte';
+import MessageList from './MessageList.svelte';
 
 afterEach(cleanup);
-it('keeps unresolved requests visible and distinguishes a retained quiz from a live blocker', async () => {
+it('keeps unresolved requests at the top across turns and removes the panel after resolution', async () => {
   const interaction = {
     requestId: 'q',
     key: 'q',
-    kind: 'quiz',
+    kind: 'commandApproval',
     turnId: 'old',
-    payload: {},
+    payload: { command: 'git status' },
     state: 'pending' as const,
   };
-  const view = render(PendingChatRequests, {
-    interactions: [interaction],
-    attention: null,
-    activeTurnId: 'new',
-  });
-  expect(screen.getByRole('status').textContent).toContain(
-    'Earlier quiz remains unanswered. Autopilot can continue.',
-  );
+  const props = { messages: [], activities: [], interactions: [interaction], activeTurnId: 'new' };
+  const view = render(MessageList, props);
+  expect(
+    screen.getByRole('complementary', { name: 'Pending chat requests' }).textContent,
+  ).toContain('git status');
+  await view.rerender({ ...props, activeTurnId: 'another' });
+  expect(screen.getAllByRole('button', { name: 'Approve' })).toHaveLength(1);
   await view.rerender({
-    interactions: [{ ...interaction, turnId: 'new' }],
-    attention: null,
-    activeTurnId: 'new',
+    ...props,
+    interactions: [{ ...interaction, state: 'resolved', resolvedAt: 2000 }],
   });
-  expect(screen.getByRole('status').textContent).toContain('Quiz answer needed to continue.');
-  await view.rerender({ interactions: [{ ...interaction, state: 'resolved' }], attention: null });
-  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.queryByRole('complementary', { name: 'Pending chat requests' })).toBeNull();
+  expect(screen.getByRole('list', { name: 'Chat messages' }).textContent).toContain('Approved');
 });
-it('shows the supervisor explanation and takes the user to the actionable blocker', async () => {
-  const target = document.createElement('section');
-  target.id = 'chat-attention-block';
-  target.tabIndex = -1;
-  target.scrollIntoView = vi.fn();
-  document.body.append(target);
-  try {
-    render(PendingChatRequests, {
-      interactions: [],
+it('shows one actionable blocker instead of a duplicate summary and review button', async () => {
+  const onattentionresolve = vi.fn();
+  render(MessageList, {
+    messages: [],
+    activities: [],
+    onattentionresolve,
+    attention: {
+      requestId: 'block',
+      turnId: 't',
+      requestedAt: null,
+      supervisorReport: 'The build tool is missing.',
       attention: {
-        requestId: 'block',
-        turnId: 't',
-        requestedAt: null,
-        supervisorReport: 'The build tool is missing.',
-        attention: {
-          reason: 'missingDependency',
-          summary: 'Dependency unavailable.',
-          requestedAction: 'Install the build tool.',
-          resumeCondition: 'dependencyInstalled',
-        },
+        reason: 'missingDependency',
+        summary: 'Dependency unavailable.',
+        requestedAction: 'Install the build tool.',
+        resumeCondition: 'dependencyInstalled',
       },
-    });
-    expect(screen.getByRole('status').textContent).toContain('The build tool is missing.');
-    await fireEvent.click(screen.getByRole('button', { name: 'Review Autopilot blocker' }));
-    expect(document.activeElement).toBe(target);
-    expect(target.scrollIntoView).toHaveBeenCalled();
-  } finally {
-    target.remove();
-  }
+    },
+  });
+  expect(screen.getAllByText('The build tool is missing.')).toHaveLength(1);
+  expect(screen.queryByRole('button', { name: 'Review Autopilot blocker' })).toBeNull();
+  await fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  expect(onattentionresolve).toHaveBeenCalledWith('resume');
 });
