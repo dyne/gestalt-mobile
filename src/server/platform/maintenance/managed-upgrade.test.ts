@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ManagedUpgrade } from './managed-upgrade.js';
 
 const environment = {
+  GESTALT_MANAGER_BIN: '/managed/bin/gestalt',
   GESTALT_MOBILE_PID: String(process.pid),
   GESTALT_MOBILE_RESTART_STATE: '/managed/run/mobile.restart',
 };
@@ -31,7 +32,7 @@ describe('managed upgrade', () => {
     expect(one).toEqual(two);
     expect(one.phase).toBe('updating');
     expect(run).toHaveBeenCalledWith(
-      'gestalt',
+      '/managed/bin/gestalt',
       ['update-restart'],
       expect.objectContaining({ cwd: '/workspace', env: environment }),
     );

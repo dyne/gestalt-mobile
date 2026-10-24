@@ -5,6 +5,7 @@
  */
 
 import { once } from 'node:events';
+import Fastify from 'fastify';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +26,51 @@ import { registerSessionEvents } from './endpoint.js';
 import { replayOrResync } from '../../../platform/events/replay.js';
 
 describe('session event WebSocket', () => {
+  it.each([false, true])(
+    'releases the restart port with a connected browser (unresponsive: %s)',
+    async (unresponsive) => {
+      const app = Fastify();
+      const unsubscribe = vi.fn();
+      registerSessionEvents(app, {
+        exists: () => true,
+        replay: () => ({ kind: 'replay', events: [] }),
+        subscribe: () => unsubscribe,
+      });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected TCP listener');
+      const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/sessions/live/events`);
+      await once(socket, 'open');
+      if (unresponsive) socket.pause();
+      const disconnected = once(socket, 'close');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          app.close(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Shutdown blocked by browser')), 2_000);
+          }),
+        ]);
+        socket.resume();
+        const [code] = await disconnected;
+        if (!unresponsive) expect(code).toBe(1012);
+        expect(unsubscribe).toHaveBeenCalledOnce();
+        const replacement = Fastify();
+        try {
+          await replacement.listen({ host: '127.0.0.1', port: address.port });
+          expect((await replacement.inject('/')).statusCode).toBe(404);
+        } finally {
+          await replacement.close();
+        }
+      } finally {
+        clearTimeout(timer);
+        socket.resume();
+        socket.terminate();
+        await app.close();
+      }
+    },
+  );
+
   it('fails closed for malformed, duplicate, expired, and revoked shared-store cookies without consulting relay state', async () => {
     const home = await mkdtemp(join(tmpdir(), 'gestalt-ws-auth-'));
     let now = '2026-08-02T00:00:00.000Z';

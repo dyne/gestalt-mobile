@@ -60,12 +60,16 @@ export class ManagedUpgrade implements UpgradePort {
       throw new Error('A managed Mobile restart descriptor is required');
     }
     this.current = { instanceId: this.current.instanceId, phase: 'updating' };
-    this.starting = this.run('gestalt', ['update-restart'], {
-      cwd: this.cwd,
-      env: this.environment,
-      timeout: 15_000,
-      maxBuffer: 64 * 1024,
-    })
+    this.starting = this.run(
+      this.environment.GESTALT_MANAGER_BIN || 'gestalt',
+      ['update-restart'],
+      {
+        cwd: this.cwd,
+        env: this.environment,
+        timeout: 15_000,
+        maxBuffer: 64 * 1024,
+      },
+    )
       .then(() => ({ ...this.current }))
       .catch(() => {
         this.current = { ...this.current, phase: 'failed' };
