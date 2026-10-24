@@ -26,7 +26,7 @@ async function manager(body: string) {
 const ready = {
   schemaVersion: 1,
   status: 'ready',
-  version: '1.0.0-rc.87',
+  version: '1.0.0-rc.98',
   endpoint: 'http://127.0.0.1:19200',
   auth: { keyFile: '/private/admin.key' },
 };
