@@ -26,7 +26,12 @@ export function registerSessionEvents(
   },
 ): void {
   const server = new WebSocketServer({ noServer: true });
+  let closing = false;
   app.server.on('upgrade', (request, socket, head) => {
+    if (closing) {
+      socket.destroy();
+      return;
+    }
     const url = new URL(request.url ?? '/', 'http://relay.invalid');
     const match = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
     const after = Number(url.searchParams.get('after') ?? '0');
@@ -101,5 +106,21 @@ export function registerSessionEvents(
       connection.on('close', cleanup);
     });
   });
-  app.addHook('onClose', async () => server.close());
+  // HTTP shutdown waits for upgraded sockets, so onClose is too late to drain
+  // them. Bound the close handshake so an offline browser cannot block restart.
+  app.addHook('preClose', async () => {
+    closing = true;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        for (const connection of server.clients) connection.terminate();
+      }, 1_000);
+      timeout.unref();
+      server.close((error) => {
+        clearTimeout(timeout);
+        if (error) reject(error);
+        else resolve();
+      });
+      for (const connection of server.clients) connection.close(1012, 'service restart');
+    });
+  });
 }
