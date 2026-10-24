@@ -10,6 +10,13 @@ export type ModelPolicyStatus = 'legacy' | 'required' | 'unavailable';
 export type ModelPolicyAdmission =
   | Readonly<{ allowed: true; scope: 'legacy' }>
   | Readonly<{
+      allowed: true;
+      scope: 'configured';
+      assurance: 'configured';
+      runtimeEnforcement: false;
+      action: string;
+    }>
+  | Readonly<{
       allowed: false;
       code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE';
       reason:
@@ -17,6 +24,8 @@ export type ModelPolicyAdmission =
         | 'POLICY_VERSION_UNSUPPORTED'
         | 'POLICY_FIELDS_INVALID'
         | 'MODEL_PROHIBITED'
+        | 'EFFORT_UNSUPPORTED'
+        | 'ASSURANCE_UNSUPPORTED'
         | 'RUNTIME_ATTESTATION_UNAVAILABLE';
       action: string;
     }>;
@@ -33,7 +42,9 @@ export function assessModelPolicyAdmission(
     code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
     reason,
     action:
-      'Keep Org automation off until a compatible runtime can attest the canonical executor settings. Manual plan review and repair remain available.',
+      reason === 'RUNTIME_ATTESTATION_UNAVAILABLE'
+        ? 'This plan explicitly requires runtime-attested assurance. This adapter has no settings receipt/revision API. Use a runtime with attestation support, or explicitly authorize changing MODEL_POLICY_ASSURANCE to configured; repeating approval cannot provide attestation.'
+        : 'Repair the plan policy or its publication, then retry supervision. Manual Off and user authorization are separate from policy admission.',
   });
   if (status === 'unavailable') return blocked('POLICY_PROJECTION_UNAVAILABLE');
   const version = plan?.modelPolicyVersion;
@@ -49,10 +60,39 @@ export function assessModelPolicyAdmission(
     )
   )
     return blocked('MODEL_PROHIBITED');
-  // Configured settings and locally derived digests from the current adapter do
-  // not satisfy the Agents runtime receipt/revision contract. No bypass flag or
-  // fixture can turn this prerequisite into live admission.
-  return blocked('RUNTIME_ATTESTATION_UNAVAILABLE');
+  if (
+    plan.steps.some((step) => {
+      const policy = step.modelPolicy!;
+      const necessity = policy.necessity;
+      return (
+        !['medium', 'high', 'xhigh'].includes(policy.reasoningEffort) ||
+        (policy.reasoningEffort === 'medium'
+          ? necessity !== null
+          : !necessity ||
+            !['unresolved-correctness', 'specific-reasoning'].includes(necessity.kind) ||
+            ![
+              necessity.whyMediumInadequate,
+              necessity.evidence,
+              necessity.affectedScope,
+              necessity.returnToMedium,
+              ...(policy.reasoningEffort === 'xhigh' ? [necessity.scopeReassessment] : []),
+            ].every((value) => typeof value === 'string' && value.trim()))
+      );
+    })
+  )
+    return blocked('EFFORT_UNSUPPORTED');
+  const assurance = plan.modelPolicyAssurance ?? 'configured';
+  if (!['configured', 'runtime-attested'].includes(assurance))
+    return blocked('ASSURANCE_UNSUPPORTED');
+  if (assurance === 'runtime-attested') return blocked('RUNTIME_ATTESTATION_UNAVAILABLE');
+  return {
+    allowed: true,
+    scope: 'configured',
+    assurance: 'configured',
+    runtimeEnforcement: false,
+    action:
+      'Compatibility mode: validate exact L1 launch settings and controller-owned executor identity. Observed mismatches block continuation. Missing runtime settings remain unknown; no runtime attestation is claimed.',
+  };
 }
 
 export class ModelPolicyAdmissionError extends Error {

@@ -20,8 +20,16 @@ export const AUTOPILOT_EXECUTOR_CONTINUATION_PROMPT =
   'Continue the same assigned Org L1 from its durable state. A prior turn ending did not complete the objective. Consume any supplied process result and take the next legal L2 action. Whenever an L2 reaches DONE, return its concise structured evidence and end the executor turn so the root can publish that mandatory answer boundary. Also report at the L1 review boundary or through structured attention.';
 
 /** Builds a physical launch instruction while keeping durable L1 identity canonical. */
-export function autopilotExecutorLaunchPrompt(identity: ExecutorIdentity): string {
-  const launch = `Launch task_name ${identity.taskName} for canonical ${identity.canonicalPosition} with agent_type org-plan-executor and reasoning_effort high; the profile selects gpt-5.6-terra by default, so do not override its model. Retain the canonical label in status and review output.`;
+export function autopilotExecutorLaunchPrompt(
+  identity: ExecutorIdentity,
+  plan?: SupervisedPlan | null,
+): string {
+  const policy = plan?.steps.find(
+    (_, index) => `L${index + 1}` === identity.canonicalPosition,
+  )?.modelPolicy;
+  const launch = policy
+    ? `Launch task_name ${identity.taskName} for canonical ${identity.canonicalPosition}, preferring agent_type default, fork_turns none, explicit model ${policy.model} and reasoning_effort ${policy.reasoningEffort}. If explicit overrides are unavailable, use the verified fixed org-plan-executor role only when both pins exactly match ${policy.model}/${policy.reasoningEffort}, omitting ineffective overrides. Load the executor duties and full L1 assignment from the Org-plan launch contract. Validate actual host support and sandbox/approval inheritance before spawning; unsupported routes are capability blockers. Assurance is configured compatibility: unavailable runtime metadata remains unknown and does not require repeated human approval. Reject observed settings mismatches; never call requested settings observed or runtime-enforced. Preserve one writer, independent review, checkpoint and terminal review gates.`
+    : `Launch task_name ${identity.taskName} for canonical ${identity.canonicalPosition} with agent_type org-plan-executor and reasoning_effort high; the profile selects gpt-5.6-terra by default, so do not override its model. Retain the canonical label in status and review output.`;
   if (identity.generation === 1) return `${AUTOPILOT_CONTINUATION_PROMPT} ${launch}`;
   return `${AUTOPILOT_CONTINUATION_PROMPT} ${launch} This exact replacement generation ${identity.generation} is durably authorized by Mobile; do not infer another generation from this prompt or the roster; the durable ${identity.canonicalTaskName} slot may remain reserved. Do not reuse that task_name or attempt to change an existing agent's model in place. Interrupt the previous physical executor if it is still running, then spawn the authorized ${identity.taskName}. Transfer sole ${identity.canonicalPosition} ownership and continue from its durable Org Plan and worktree state.`;
 }

@@ -40,6 +40,40 @@ const necessity = `:EFFORT_NECESSITY_KIND: unresolved-correctness
 `;
 
 describe('L1 model-policy-v1 retention', () => {
+  it('retains explicit assurance without changing requested policy; existing v1 needs no rewrite', () => {
+    for (const assurance of ['configured', 'runtime-attested']) {
+      expect(
+        parse(
+          source().replace(
+            '#+MODEL_POLICY_VERSION: 1',
+            `#+MODEL_POLICY_VERSION: 1\n#+MODEL_POLICY_ASSURANCE: ${assurance}`,
+          ),
+        ),
+      ).toMatchObject({
+        kind: 'available',
+        plan: { modelPolicyAssurance: assurance },
+      });
+    }
+    expect(parse(source())).not.toHaveProperty('plan.modelPolicyAssurance');
+  });
+  it.each([
+    '#+MODEL_POLICY_ASSURANCE: strict',
+    '#+MODEL_POLICY_ASSURANCE: configured\n#+MODEL_POLICY_ASSURANCE: runtime-attested',
+    '#+MODEL_POLICY_ASSURANCE: ',
+  ])('rejects invalid assurance %s', (declaration) => {
+    expect(parse(declaration + '\n' + source()).kind).toBe('unavailable');
+  });
+  it('rejects assurance without version, after headings or in a drawer', () => {
+    expect(
+      parse(
+        '#+MODEL_POLICY_ASSURANCE: configured\n' + header + l1('first', 'WIP', 'UNREVIEWED', ''),
+      ).kind,
+    ).toBe('unavailable');
+    expect(parse(source() + '#+MODEL_POLICY_ASSURANCE: configured\n').kind).toBe('unavailable');
+    expect(
+      parse(source().replace(':ID: first', ':ID: first\n:MODEL_POLICY_ASSURANCE: configured')).kind,
+    ).toBe('unavailable');
+  });
   it('retains complete immutable values without inventing effective settings; legacy stays absent', () => {
     const result = parse(source());
     expect(result).toMatchObject({

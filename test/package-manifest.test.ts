@@ -83,7 +83,9 @@ describe('publishable package manifest', () => {
     expect(capabilities.capabilities).toContain('l1-model-policy-v1');
     expect(capabilities.modelPolicyContract).toEqual({
       version: 1,
-      scope: 'schema-and-retention',
+      scope: 'configured-launch-and-retention',
+      defaultAssurance: 'configured',
+      strictAttestation: false,
       runtimeEnforcement: false,
     });
   });

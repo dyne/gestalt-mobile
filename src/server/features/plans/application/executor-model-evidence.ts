@@ -140,7 +140,10 @@ export class ExecutorModelEvidenceReader {
       catalogRevisionSource: 'normalized-content-digest' as const,
       configuration: 'unknown' as 'unknown' | 'match' | 'mismatch',
       admitted: false as const,
+      attested: false as const,
+      admissionScope: 'runtime-attestation' as const,
       runtimeEnforcement: false as const,
+      assurance: context.plan.modelPolicyAssurance ?? 'configured',
       code: 'CHILD_BINDING_UNKNOWN' as string,
       unknown: [] as string[],
     };
@@ -177,7 +180,7 @@ export class ExecutorModelEvidenceReader {
           executor.assignment.taskPath !== executor.taskPath ||
           executor.assignment.generation !== identity.generation))
     )
-      return finish('CHILD_BINDING_UNKNOWN');
+      return finish('CONTROLLER_BINDING_INVALID');
     const fence = contextFence(context);
     let result: ExecutorConfigurationRead;
     try {
@@ -244,6 +247,7 @@ function contextFence(context: ExecutorPolicyContext | null): string {
     root: context?.rootThreadId,
     plan: context?.planIdentity,
     policyVersion: context?.plan?.modelPolicyVersion,
+    assurance: context?.plan?.modelPolicyAssurance,
     l1: step?.id,
     state: step?.state,
     policy: step?.modelPolicy ? executionPolicyDigest(step.modelPolicy) : null,

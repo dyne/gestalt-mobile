@@ -3414,7 +3414,9 @@ export class AutopilotCoordinator {
         observedAt: now,
       }),
       supervisionDelta: this.supervisionDelta(next),
-      ...(!admission.allowed ? { executionAdmission: admission } : {}),
+      ...(admission.allowed && admission.scope === 'legacy'
+        ? {}
+        : { executionAdmission: admission }),
     };
   }
 
@@ -3948,6 +3950,17 @@ function fingerprint(plan: SupervisedPlan): string {
         step.state,
         step.reviewStatus,
         step.children.map((child) => [child.id, child.state]),
+        ...(plan.modelPolicyVersion
+          ? [
+              {
+                version: plan.modelPolicyVersion,
+                assurance: plan.modelPolicyAssurance ?? 'configured',
+                model: step.modelPolicy?.model,
+                reasoningEffort: step.modelPolicy?.reasoningEffort,
+                necessity: step.modelPolicy?.necessity,
+              },
+            ]
+          : []),
       ]),
     ),
   );

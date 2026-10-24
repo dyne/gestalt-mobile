@@ -101,6 +101,10 @@ function fixture() {
     start,
     events,
     setPolicy: () => {
+      plan = { ...versioned, modelPolicyAssurance: 'runtime-attested' };
+      policyStatus = 'required';
+    },
+    setConfigured: () => {
       plan = versioned;
       policyStatus = 'required';
     },
@@ -123,16 +127,20 @@ function fixture() {
 afterEach(() => vi.useRealTimers());
 
 describe('versioned policy admission prerequisites', () => {
-  it('admits legacy only; configured-match fixtures never become runtime admission', () => {
+  it('admits legacy and disclosed v1 compatibility; explicit strict remains blocked', () => {
     expect(assessModelPolicyAdmission(legacy)).toEqual({ allowed: true, scope: 'legacy' });
     expect(assessModelPolicyAdmission(versioned)).toMatchObject({
+      allowed: true,
+      scope: 'configured',
+      runtimeEnforcement: false,
+    });
+    const strict = { ...versioned, modelPolicyAssurance: 'runtime-attested' as const };
+    expect(assessModelPolicyAdmission(strict)).toMatchObject({
       allowed: false,
       code: 'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
       reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
     });
-    expect(() => requireModelPolicyAdmission(versioned)).toThrow(
-      'AUTOPILOT_MODEL_POLICY_UNAVAILABLE',
-    );
+    expect(() => requireModelPolicyAdmission(strict)).toThrow('AUTOPILOT_MODEL_POLICY_UNAVAILABLE');
     expect(
       Buffer.byteLength(JSON.stringify(assessModelPolicyAdmission(versioned))),
     ).toBeLessThanOrEqual(2048);
@@ -141,6 +149,21 @@ describe('versioned policy admission prerequisites', () => {
     [{ ...legacy, modelPolicyVersion: 2 }, 'POLICY_VERSION_UNSUPPORTED'],
     [{ ...legacy, modelPolicyVersion: 1 }, 'POLICY_FIELDS_INVALID'],
     [{ ...versioned, modelPolicyVersion: undefined }, 'POLICY_VERSION_UNSUPPORTED'],
+    [{ ...versioned, modelPolicyAssurance: 'invented' }, 'ASSURANCE_UNSUPPORTED'],
+    [
+      {
+        ...versioned,
+        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: 'ultra' } }],
+      },
+      'EFFORT_UNSUPPORTED',
+    ],
+    [
+      {
+        ...versioned,
+        steps: [{ ...versioned.steps[0]!, modelPolicy: { ...policy, reasoningEffort: 'high' } }],
+      },
+      'EFFORT_UNSUPPORTED',
+    ],
     [
       {
         ...versioned,
@@ -163,6 +186,29 @@ describe('versioned policy admission prerequisites', () => {
 });
 
 describe('automatic dispatch policy guard', () => {
+  it('activates existing v1 once without approval loops and respects Manual Off', async () => {
+    const f = fixture();
+    try {
+      f.setConfigured();
+      expect(f.coordinator.supervisionStarted('s')).toMatchObject({ enabled: true });
+      f.coordinator.supervisionStarted('s');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.start).toHaveBeenCalledOnce();
+      expect(f.coordinator.snapshot('s')).toMatchObject({
+        executionAdmission: { allowed: true, assurance: 'configured', runtimeEnforcement: false },
+      });
+      f.coordinator.disable('s');
+      f.coordinator.supervisionStarted('s');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.coordinator.snapshot('s')).toMatchObject({
+        enabled: false,
+        reason: 'manualDisabled',
+      });
+      expect(f.start).toHaveBeenCalledOnce();
+    } finally {
+      f.database.close();
+    }
+  });
   it('rejects new-policy enable without writing enabled authority, scheduling, probing or dispatching', async () => {
     const f = fixture();
     try {

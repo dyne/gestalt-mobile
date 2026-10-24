@@ -74,8 +74,9 @@ export type SupervisedPlan = Readonly<{
   subtitle?: string;
   date?: string;
   keywords?: string;
-  /** Absent for legacy plans; v1 promises retention, not runtime admission. */
+  /** Absent for legacy plans. Existing v1 plans default to configured assurance. */
   modelPolicyVersion?: 1;
+  modelPolicyAssurance?: 'configured' | 'runtime-attested';
   steps: readonly PlanStep[];
   totalSteps: number;
   doneSteps: number;

@@ -170,7 +170,7 @@ describe('controller-bound L1 configuration evidence', () => {
     const input = context();
     const { service, read } = reader({ ...input, executor: { ...input.executor!, ...change } });
     expect(await service.read('a')).toMatchObject({
-      code: 'CHILD_BINDING_UNKNOWN',
+      code: 'CONTROLLER_BINDING_INVALID',
       effective: { model: null },
     });
     expect(read).not.toHaveBeenCalled();

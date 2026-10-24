@@ -18,7 +18,9 @@
   ],
   "modelPolicyContract": {
     "version": 1,
-    "scope": "schema-and-retention",
+    "scope": "configured-launch-and-retention",
+    "defaultAssurance": "configured",
+    "strictAttestation": false,
     "runtimeEnforcement": false
   }
 }

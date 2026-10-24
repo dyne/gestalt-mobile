@@ -6,6 +6,7 @@
 
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
+import { decodeCodexPolicyCatalog } from './codex-model-catalog.js';
 
 import {
   RelaySession,
@@ -280,7 +281,10 @@ export class CodexSessionRuntime {
       ): Promise<CodexRetrievalState>;
       verify(rpc: AppServer['rpc'], threadId: string, state: CodexRetrievalState): Promise<boolean>;
     },
-    private readonly requireExecutorAdmission?: (sessionId: string) => void,
+    private readonly requireExecutorAdmission?: (
+      sessionId: string,
+      threadId: string,
+    ) => void | Promise<void | { model: string; reasoningEffort: string; assertCurrent(): void }>,
   ) {
     void _legacyProcesses;
     void _legacyRequestTimeoutMs;
@@ -443,22 +447,23 @@ export class CodexSessionRuntime {
     text: string,
     clientUserMessageId: string,
   ): Promise<string> {
-    this.requireExecutorAdmission?.(session.id);
+    const policy = await this.requireExecutorAdmission?.(session.id, childThreadId);
     const resource = this.sessions.get(session.id);
     if (!resource) throw new Error('CODEX_SESSION_NOT_RUNNING');
     const params = {
       threadId: childThreadId,
       input: [{ type: 'text', text, text_elements: [] }],
       clientUserMessageId,
-      ...(session.modelSettings?.executorModel
-        ? { model: session.modelSettings.executorModel }
+      ...((policy?.model ?? session.modelSettings?.executorModel)
+        ? { model: policy?.model ?? session.modelSettings?.executorModel }
         : {}),
-      ...(session.modelSettings?.executorReasoningEffort
-        ? { effort: session.modelSettings.executorReasoningEffort }
+      ...((policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort)
+        ? { effort: policy?.reasoningEffort ?? session.modelSettings?.executorReasoningEffort }
         : {}),
     };
     let response: unknown;
     try {
+      policy?.assertCurrent();
       response = await resource.process.rpc.request('turn/start', params);
     } catch (error) {
       // Codex 0.160 rejects a durable child absent from this writer's live
@@ -471,15 +476,48 @@ export class CodexSessionRuntime {
         error.message !== `thread not found: ${childThreadId}`
       )
         throw error;
-      this.requireExecutorAdmission?.(session.id);
+      await this.requireExecutorAdmission?.(session.id, childThreadId);
       await resource.process.rpc.request('thread/resume', { threadId: childThreadId });
-      this.requireExecutorAdmission?.(session.id);
+      const refreshed = await this.requireExecutorAdmission?.(session.id, childThreadId);
+      policy?.assertCurrent();
+      if (JSON.stringify(refreshed) !== JSON.stringify(policy))
+        throw new Error('EXECUTOR_POLICY_CHANGED');
+      refreshed?.assertCurrent();
       response = await resource.process.rpc.request('turn/start', params);
     }
     const result = decodeTurnStart(response);
     if (resource.turnThreads.has(result) || resource.turnThreads.size < 256)
       resource.turnThreads.set(result, childThreadId);
     return result;
+  }
+
+  /** Uses the active writer's catalog; never upgrades requested settings to observations. */
+  async validateExecutorPolicy(
+    sessionId: string,
+    policy: { model: string; reasoningEffort: string },
+  ): Promise<void> {
+    const resource = this.sessions.get(sessionId);
+    if (!resource) throw new Error('EXECUTOR_CATALOG_UNAVAILABLE');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let catalog;
+    try {
+      catalog = decodeCodexPolicyCatalog(
+        await Promise.race([
+          resource.process.rpc.request('model/list', {}),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('EXECUTOR_CATALOG_UNAVAILABLE')), 5_000);
+          }),
+        ]),
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!catalog || this.sessions.get(sessionId) !== resource || !resource.active)
+      throw new Error('EXECUTOR_CATALOG_UNAVAILABLE');
+    const model = catalog.models.find((entry) => entry.id === policy.model);
+    if (!model) throw new Error('EXECUTOR_MODEL_UNAVAILABLE');
+    if (!model.reasoningEfforts.includes(policy.reasoningEffort))
+      throw new Error('EXECUTOR_EFFORT_UNSUPPORTED');
   }
 
   /** The sole authoritative in-process ownership probe.  It never launches a child. */

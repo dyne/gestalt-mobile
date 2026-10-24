@@ -19,6 +19,7 @@ import WebSocket from 'ws';
 import { composeRelayApp, type ComposeRelayAppOptions } from './composition.js';
 import { autopilotExecutorLaunchPrompt } from './features/autopilot/application/policy.js';
 import { CodexJsonRpcError } from './platform/codex/json-rpc-client.js';
+import { CodexSessionRuntime } from './platform/codex/session-runtime.js';
 import { SqliteAuthorizationStore } from './platform/auth/sqlite-authorization-store.js';
 import { SqliteEventJournal } from './platform/persistence/sqlite-event-journal.js';
 import {
@@ -219,9 +220,10 @@ async function installAutopilotPlan(
   name: string,
   childState: 'TODO' | 'DONE' = 'TODO',
   reason = 'supervision-start',
+  source?: string,
 ) {
   const planPath = join(workspacePath, `${name}.org`);
-  await writeFile(planPath, autopilotPlanText(childState));
+  await writeFile(planPath, source ?? autopilotPlanText(childState));
   await writeFile(
     planStatusFilePath(planStatusDirectoryPath(workspacePath, sessionId), planPath),
     JSON.stringify({
@@ -229,6 +231,9 @@ async function installAutopilotPlan(
       planPath,
       reason,
       updatedAt: new Date().toISOString(),
+      ...(source?.includes('#+MODEL_POLICY_VERSION: 1')
+        ? { modelPolicyVersion: 1, requiredCapabilities: ['l1-model-policy-v1'] }
+        : {}),
     }),
   );
   await expect
@@ -240,7 +245,10 @@ async function installAutopilotPlan(
   return planPath;
 }
 
-async function createProductionAutopilotFixture(overrides: Partial<ComposeRelayAppOptions> = {}) {
+async function createProductionAutopilotFixture(
+  overrides: Partial<ComposeRelayAppOptions> = {},
+  source?: string,
+) {
   const root = await mkdtemp(join(tmpdir(), 'gestalt-mobile-root-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'gestalt-mobile-state-'));
   ownTemporaryPaths(root, dataDir);
@@ -267,7 +275,15 @@ async function createProductionAutopilotFixture(overrides: Partial<ComposeRelayA
       threadId: expect.any(String),
     }),
   );
-  await installAutopilotPlan(app, sessionId, workspacePath, 'autopilot');
+  await installAutopilotPlan(
+    app,
+    sessionId,
+    workspacePath,
+    'autopilot',
+    'TODO',
+    'supervision-start',
+    source,
+  );
   return { app, dataDir, handles, root, sessionId, workspacePath };
 }
 
@@ -461,10 +477,306 @@ async function createUnauthorizedProductionApp(root: string, dataDir: string) {
 
 describe('production composition', () => {
   describeCompositionConcern('autopilot', () => {
-    it.each(['idle', 'active', 'retry'] as const)(
+    const versionedText = (state: 'TODO' | 'DONE' = 'TODO', strict = false) =>
+      '#+MODEL_POLICY_VERSION: 1\n' +
+      (strict ? '#+MODEL_POLICY_ASSURANCE: runtime-attested\n' : '') +
+      autopilotPlanText(state).replace(
+        ':REVIEW_STATUS: UNREVIEWED',
+        `:REVIEW_STATUS: UNREVIEWED
+:MODEL: gpt-6.1-sol
+:REASONING_EFFORT: medium
+:MODEL_RATIONALE: Composition contract with explicit launch choices.
+:MODEL_FALLBACKS: none
+:MODEL_ESCALATION_TRIGGER: A focused invariant fails.`,
+      );
+    const policyCatalog = {
+      data: [{ id: 'gpt-6.1-sol', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] }],
+    };
+
+    it('activates existing v1, validates catalog, dispatches launch instructions and records a report checkpoint', async () => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const fixture = await createProductionAutopilotFixture(
+        {
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        },
+        versionedText(),
+      );
+      const { app, sessionId, handles, workspacePath } = fixture;
+      onTestFinished(() => app.close());
+      for (const handle of handles)
+        handle.respond = (method) => (method === 'model/list' ? policyCatalog : undefined);
+      expect((await app.inject(`/api/sessions/${sessionId}`)).json()).toMatchObject({
+        autopilot: {
+          enabled: true,
+          executionAdmission: { allowed: true, assurance: 'configured', runtimeEnforcement: false },
+        },
+      });
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() =>
+        expect(
+          handles
+            .flatMap((handle) => handle.requests)
+            .filter((call) => call.method === 'turn/start'),
+        ).toHaveLength(1),
+      );
+      const handle = handles.find((candidate) =>
+        candidate.requests.some((call) => call.method === 'turn/start'),
+      )!;
+      const start = handle.requests.find((call) => call.method === 'turn/start')!;
+      expect(start.params).toMatchObject({
+        input: [
+          {
+            text: expect.stringContaining('explicit model gpt-6.1-sol and reasoning_effort medium'),
+          },
+        ],
+      });
+      expect(JSON.stringify(start.params)).not.toContain('reasoning_effort high');
+      const session = (await app.inject(`/api/sessions/${sessionId}`)).json();
+      // Synthetic executor report: real composition validates the authoritative plan boundary.
+      await writeFile(join(workspacePath, 'autopilot.org'), versionedText('DONE'));
+      const result = await handle.request!({
+        id: 9901,
+        method: 'item/tool/call',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          tool: 'gestalt_org_plan_checkpoint',
+          arguments: { kind: 'l2Completed' },
+        },
+      });
+      expect(result).toEqual(toOrgPlanCheckpointToolResponse('recorded'));
+      const db = new DatabaseSync(join(fixture.dataDir, 'relay.sqlite'));
+      try {
+        expect(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM session_events WHERE type='org-plan.step-checkpointed'",
+            )
+            .get(),
+        ).toMatchObject({ n: 1 });
+      } finally {
+        db.close();
+      }
+      handle.notify!({
+        method: 'turn/completed',
+        params: {
+          threadId: session.threadId,
+          turn: { id: session.activeTurnId, status: 'completed' },
+        },
+      });
+      await vi.waitFor(async () =>
+        expect((await app.inject(`/api/sessions/${sessionId}`)).json().activeTurnId).toBeNull(),
+      );
+      expect((await app.inject(`/api/sessions/${sessionId}/plan`)).json().steps[0]).toMatchObject({
+        reviewStatus: 'UNREVIEWED',
+      });
+      expect(
+        handles.flatMap((handle) => handle.requests).filter((call) => call.method === 'turn/start'),
+      ).toHaveLength(1);
+    });
+
+    it('keeps explicit strict v1 blocked at production activation without scheduling', async () => {
+      const timers: (() => void)[] = [];
+      const f = await createProductionAutopilotFixture(
+        {
+          autopilotSchedule: (callback) => {
+            timers.push(callback);
+            return () => {};
+          },
+        },
+        versionedText('TODO', true),
+      );
+      onTestFinished(() => f.app.close());
+      const response = await f.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${f.sessionId}/autopilot`,
+        payload: { enabled: true },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        reason: 'RUNTIME_ATTESTATION_UNAVAILABLE',
+        action: expect.stringContaining('explicitly requires'),
+      });
+      expect(timers).toHaveLength(0);
+      expect(
+        f.handles
+          .flatMap((handle) => handle.requests)
+          .filter((call) => call.method === 'turn/start'),
+      ).toHaveLength(0);
+    });
+
+    it.each([
+      'match',
+      'mismatch',
+      'off-during-read',
+      'policy-during-read',
+      'same-plan-during-read',
+      'off-on-during-recovery',
+    ] as const)('guards configured executor dispatch in production: %s', async (scenario) => {
+      const timers: Array<{ callback: () => void; cancelled: boolean }> = [];
+      const f = await createProductionAutopilotFixture(
+        {
+          autopilotActivity: (sessionId) => {
+            const observedAt = new Date().toISOString();
+            return {
+              sessionId,
+              rootThreadId: 'thread-1',
+              root: {
+                state: 'idle',
+                reason: 'turnCompleted',
+                observedAt,
+                lastActivityAt: observedAt,
+              },
+              subagents: [
+                {
+                  id: 'child-1',
+                  threadId: 'child-1',
+                  taskPath: '/root/l1',
+                  canonicalTaskName: 'l1',
+                  canonicalPosition: 'L1',
+                  continuationGeneration: 1,
+                  outcome: 'partial',
+                  ownedProcesses: [],
+                  state: 'idle',
+                  reason: 'turnCompleted',
+                  observedAt,
+                  lastActivityAt: observedAt,
+                },
+              ],
+              aggregateSubagents: 'idle',
+              confidence: 'fresh',
+            };
+          },
+          autopilotSchedule: (callback) => {
+            const timer = { callback, cancelled: false };
+            timers.push(timer);
+            return () => {
+              timer.cancelled = true;
+            };
+          },
+        },
+        versionedText(),
+      );
+      onTestFinished(() => f.app.close());
+      const actualRootThreadId = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json()
+        .threadId as string;
+      const pendingRead = Promise.withResolvers<unknown>();
+      const pendingRecovery = Promise.withResolvers<unknown>();
+      const resumeOperation = vi.spyOn(CodexSessionRuntime.prototype, 'startExecutorTurn');
+      onTestFinished(() => {
+        pendingRead.resolve({});
+        pendingRecovery.resolve({});
+        resumeOperation.mockRestore();
+      });
+      let sawRead = false,
+        sawRecovery = false;
+      let childStarts = 0;
+      for (const handle of f.handles)
+        handle.respond = async (method, params) => {
+          if (method === 'model/list') return policyCatalog;
+          if (method === 'thread/read' && (params as { threadId: string }).threadId === 'child-1') {
+            sawRead = true;
+            if (
+              ['off-during-read', 'policy-during-read', 'same-plan-during-read'].includes(scenario)
+            )
+              await pendingRead.promise;
+            return {
+              thread: {
+                id: 'child-1',
+                parentThreadId: actualRootThreadId,
+                source: { subAgent: { thread_spawn: { agent_path: '/root/l1' } } },
+                status: { type: 'idle' },
+                model: scenario === 'mismatch' ? 'gpt-6-sol' : 'gpt-6.1-sol',
+                reasoningEffort: 'medium',
+                agentRole: 'default',
+              },
+            };
+          }
+          if (method === 'turn/start' && (params as { threadId: string }).threadId === 'child-1') {
+            childStarts++;
+            if (scenario === 'off-on-during-recovery')
+              throw new CodexJsonRpcError(-32600, 'thread not found: child-1');
+          }
+          if (
+            method === 'thread/resume' &&
+            (params as { threadId: string }).threadId === 'child-1'
+          ) {
+            sawRecovery = true;
+            await pendingRecovery.promise;
+          }
+          return undefined;
+        };
+      timers.find((timer) => !timer.cancelled)!.callback();
+      await vi.waitFor(() => expect(sawRead).toBe(true));
+      if (scenario === 'off-during-read' || scenario === 'off-on-during-recovery') {
+        if (scenario === 'off-on-during-recovery')
+          await vi.waitFor(() => expect(sawRecovery).toBe(true));
+        await f.app.inject({
+          method: 'PUT',
+          url: `/api/sessions/${f.sessionId}/autopilot`,
+          payload: { enabled: false },
+        });
+        if (scenario === 'off-on-during-recovery')
+          await f.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${f.sessionId}/autopilot`,
+            payload: { enabled: true },
+          });
+      }
+      if (scenario === 'policy-during-read') {
+        await writeFile(
+          join(f.workspacePath, 'autopilot.org'),
+          versionedText().replace(':MODEL: gpt-6.1-sol', ':MODEL: gpt-6-sol'),
+        );
+        await f.app.inject(`/api/sessions/${f.sessionId}/plan`);
+      }
+      if (scenario === 'same-plan-during-read') {
+        const planPath = join(f.workspacePath, 'autopilot.org');
+        await writeFile(
+          planStatusFilePath(planStatusDirectoryPath(f.workspacePath, f.sessionId), planPath),
+          JSON.stringify({
+            schemaVersion: 1,
+            planPath,
+            reason: 'supervision-start',
+            updatedAt: new Date().toISOString(),
+            modelPolicyVersion: 1,
+            requiredCapabilities: ['l1-model-policy-v1'],
+          }),
+        );
+        await f.app.inject(`/api/sessions/${f.sessionId}/plan`);
+      }
+      pendingRead.resolve({});
+      pendingRecovery.resolve({});
+      if (scenario === 'match' || scenario === 'same-plan-during-read') {
+        await vi.waitFor(() => expect(childStarts).toBe(1));
+        const call = f.handles
+          .flatMap((handle) => handle.requests)
+          .find((call) => call.method === 'turn/start');
+        expect(call?.params).toMatchObject({
+          threadId: 'child-1',
+          model: 'gpt-6.1-sol',
+          effort: 'medium',
+        });
+      } else {
+        await vi.waitFor(() =>
+          expect(resumeOperation.mock.settledResults[0]?.type).toBe('rejected'),
+        );
+        expect(childStarts).toBe(scenario === 'off-on-during-recovery' ? 1 : 0);
+      }
+    });
+    it.each(['idle', 'active', 'retry', 'configured'] as const)(
       'delivers acknowledged attention guidance to the %s supervisor and retains its explanation beyond the journal tail',
       async (mode) => {
-        const fixture = await createProductionAutopilotFixture();
+        const fixture = await createProductionAutopilotFixture(
+          {},
+          mode === 'configured' ? versionedText() : undefined,
+        );
         const { app, sessionId, handles } = fixture;
         onTestFinished(() => app.close());
         const handle = handles.filter((value) => value.request).at(-1)!;

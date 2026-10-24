@@ -14,6 +14,7 @@ import { CodexSessionRuntime } from './session-runtime.js';
 const versioned: SupervisedPlan = {
   title: 'Synthetic',
   modelPolicyVersion: 1,
+  modelPolicyAssurance: 'runtime-attested',
   totalSteps: 1,
   doneSteps: 0,
   allDone: false,
@@ -39,7 +40,7 @@ const versioned: SupervisedPlan = {
     },
   ],
 };
-async function fixture() {
+async function fixture(catalog: unknown = {}) {
   let mandatory = false;
   let flipOnMissingChild = false;
   const calls: { method: string; params: unknown }[] = [];
@@ -47,6 +48,7 @@ async function fixture() {
     rpc: {
       request: async (method, params) => {
         calls.push({ method, params });
+        if (method === 'model/list') return catalog;
         if (method === 'thread/start') return { thread: { id: 'root' } };
         if (method === 'turn/start') {
           if ((params as { threadId: string }).threadId === 'child' && flipOnMissingChild) {
@@ -95,6 +97,40 @@ async function fixture() {
 }
 
 describe('executor admission at the owned runtime dispatch boundary', () => {
+  it.each([
+    [{}, 'EXECUTOR_CATALOG_UNAVAILABLE'],
+    [
+      { data: [{ id: 'gpt-6-sol', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] }] },
+      'EXECUTOR_MODEL_UNAVAILABLE',
+    ],
+    [
+      { data: [{ id: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }] },
+      'EXECUTOR_EFFORT_UNSUPPORTED',
+    ],
+  ])('rejects unavailable runtime model/effort support before launch', async (catalog, code) => {
+    const f = await fixture(catalog);
+    try {
+      await expect(
+        f.runtime.validateExecutorPolicy('s', { model: 'gpt-6-luna', reasoningEffort: 'medium' }),
+      ).rejects.toThrow(code);
+      expect(f.calls.map((call) => call.method)).toEqual(['model/list']);
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
+  it('accepts exact runtime model/effort support without creating a child or receipt', async () => {
+    const f = await fixture({
+      data: [{ id: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }] }],
+    });
+    try {
+      await expect(
+        f.runtime.validateExecutorPolicy('s', { model: 'gpt-6-luna', reasoningEffort: 'medium' }),
+      ).resolves.toBeUndefined();
+      expect(f.calls.map((call) => call.method)).toEqual(['model/list']);
+    } finally {
+      f.runtime.stopAll();
+    }
+  });
   it('rejects unsupported new-policy work before turn/start, thread/resume or metadata probes', async () => {
     const f = await fixture();
     try {
