@@ -39,6 +39,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   import DebugIdentifiers from '../self-debug/DebugIdentifiers.svelte';
 
   type Props = {
+    rosterOnly?: boolean;
     allowanceFetcher?: typeof fetch;
     onallowanceerror?: () => void;
     sessions: RelaySession[];
@@ -103,6 +104,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   };
 
   let {
+    rosterOnly = false,
     allowanceFetcher,
     onallowanceerror = () => {},
     sessions,
@@ -233,7 +235,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {/if}
 {/snippet}
 
-<section aria-labelledby="sessions-title">
+<section class:roster-only={rosterOnly} aria-labelledby="sessions-title">
   <h2 id="sessions-title" class="visually-hidden">Sessions</h2>
   {#if allowanceFetcher}
     <CodexAllowance fetcher={allowanceFetcher} onerror={onallowanceerror} />
@@ -276,6 +278,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                 {/if}
                 <AgentActivityIndicators
                   compact
+                  popupAlign={rosterOnly ? 'start' : 'end'}
                   activity={activitySnapshots.get(session.id) ?? session.agentActivity ?? null}
                   rootModel={session.model ?? models?.[0]}
                   plan={session.plan}
@@ -403,240 +406,258 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   {:else if !openSessions.length}
     <p>No saved sessions yet.</p>
   {/if}
-  <form
-    onsubmit={(event) => {
-      event.preventDefault();
-      onstart();
-    }}
-  >
-    <h3 class="new-session-title">New session</h3>
-    <div class="session-base">
-      <FilesystemTree
-        roots={workspaceTree}
-        {expandedIds}
-        selectedId={selectedWorkspace?.id ?? null}
-        isSelectable={treeNodePolicies.sessionBase}
-        label="Session base"
-        {onexpandedchange}
-        onselect={(node) => onworkspacechange(node.id)}
-      />
-    </div>
-    <div class="essential-settings">
-      <label for="skills-profile"
-        >Skills profile
-        <select
-          id="skills-profile"
-          value={selectedSkillProfile}
-          onchange={(event) => onskillprofilechange(event.currentTarget.value)}
-        >
-          <option value="">Default</option>
-          {#each skillProfiles as profile (profile.name)}<option value={profile.name}
-              >{profile.name}</option
-            >{/each}
-        </select>
-      </label>
-      <label for="model"
-        >Model
-        <select
-          id="model"
-          value={selectedModel}
-          disabled={modelsLoading || models.length === 0}
-          onchange={(event) => onmodelchange(event.currentTarget.value)}
-        >
-          {#if modelsLoading}<option value="">Loading models…</option>
-          {:else if models.length === 0}<option value="">Choose automatically</option>{/if}
-          {#each models as model (model)}<option value={model}>{model}</option>{/each}
-        </select>
-      </label>
-    </div>
-    {#if skillProfileError}<p class="skills-profile-error" role="alert">{skillProfileError}</p>{/if}
-    <details class="advanced-settings" bind:open={advancedExpanded}>
-      <summary>Advanced settings</summary>
-      <div class="advanced-content">
-        <section class="session-settings" aria-label="New session settings">
-          <div class="advanced-model-settings">
-            {#if provider === 'codex'}
-              <fieldset class="executor-settings">
-                <legend>Org-plan executor</legend>
-                <label for="executor-model"
-                  >Executor model
-                  <select
-                    id="executor-model"
-                    value={executorModel}
-                    onchange={(event) => onexecutormodelchange(event.currentTarget.value)}
-                  >
-                    {#each [...new Set([executorModel, ...executorModels])] as model (model)}<option
-                        value={model}>{model}</option
-                      >{/each}
-                  </select>
-                </label>
-                <label for="executor-thinking"
-                  >Executor thinking
-                  <select
-                    id="executor-thinking"
-                    value={executorReasoningEffort}
-                    onchange={(event) =>
-                      onexecutorreasoningchange(event.currentTarget.value as ThinkingLevel)}
-                  >
-                    {#each thinkingLevels as level (level)}<option value={level}>{level}</option
-                      >{/each}
-                  </select>
-                </label>
-              </fieldset>
-            {/if}
-            <fieldset class="supervisor-settings">
-              <legend>Main supervisor</legend>
-              {#if provider === 'codex'}
-                <label for="model-thinking"
-                  >Model thinking
-                  <select
-                    id="model-thinking"
-                    value={reasoningEffort}
-                    onchange={(event) =>
-                      onreasoningchange(event.currentTarget.value as ThinkingLevel)}
-                  >
-                    {#each thinkingLevels as level (level)}<option value={level}>{level}</option
-                      >{/each}
-                  </select>
-                </label>
-              {/if}
-              <div class="provider-control">
-                <label for="session-provider">Provider</label>
-                <select
-                  id="session-provider"
-                  value={provider}
-                  onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
-                >
-                  <option value="codex">Codex</option>
-                  <option value="kimi" disabled={!kimiAvailable}
-                    >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
-                  >
-                </select>
-              </div>
-            </fieldset>
-          </div>
-          <div
-            class="session-setting-labels"
-            style:grid-template-columns={provider === 'kimi'
-              ? 'minmax(0, 1fr)'
-              : 'repeat(2, minmax(0, 1fr))'}
-          >
-            {#if provider !== 'kimi'}
-              <label for="sandbox">Sandbox</label>
-              <label for="approval-policy">Approval policy</label>
-            {/if}
-          </div>
-          <div
-            class="session-setting-controls"
-            style:grid-template-columns={provider === 'kimi'
-              ? 'minmax(0, 1fr)'
-              : 'repeat(2, minmax(0, 1fr))'}
-          >
-            {#if provider !== 'kimi'}
-              <select
-                id="sandbox"
-                value={sandbox}
-                onchange={(event) =>
-                  onsandboxchange(
-                    event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
-                  )}
-              >
-                <option value="workspace-git">workspace-git (Git writable)</option>
-                <option value="workspace-write">workspace-write</option>
-                <option value="read-only">read-only</option>
-                <option value="danger-full-access">danger-full-access</option>
-              </select>
-              <select
-                id="approval-policy"
-                value={approvalPolicy}
-                onchange={(event) =>
-                  onapprovalpolicychange(
-                    event.currentTarget.value as NonNullable<
-                      StartSessionSettings['approvalPolicy']
-                    >,
-                  )}
-              >
-                <option value="untrusted">Ask on all commands</option>
-                <option value="on-request">Ask out of workspace</option>
-                <option value="never">Never ask for approval</option>
-              </select>
-            {/if}
-          </div>
-          <div class="session-secondary-actions">
-            <AppControl
-              class="manage-profiles-button"
-              id="manage-skill-profiles"
-              onclick={(event) => onmanageprofiles(event.currentTarget)}
-              >Manage skill profiles
-            </AppControl>
-            <AppControl
-              class="save-defaults-button"
-              disabled={savingDefaults || modelsLoading || !selectedModel}
-              onclick={onsavedefaults}
-            >
-              {savingDefaults ? 'Saving…' : 'Save as defaults'}
-            </AppControl>
-          </div>
-        </section>
+  {#if !rosterOnly}
+    <form
+      onsubmit={(event) => {
+        event.preventDefault();
+        onstart();
+      }}
+    >
+      <h3 class="new-session-title">New session</h3>
+      <div class="session-base">
+        <FilesystemTree
+          roots={workspaceTree}
+          {expandedIds}
+          selectedId={selectedWorkspace?.id ?? null}
+          isSelectable={treeNodePolicies.sessionBase}
+          label="Session base"
+          {onexpandedchange}
+          onselect={(node) => onworkspacechange(node.id)}
+        />
       </div>
-    </details>
-    <div class="create-session-actions">
-      <AppControl
-        class="new-session-button"
-        type="submit"
-        full
-        primary
-        disabled={!selectedWorkspace ||
-          startingSession ||
-          modelsLoading ||
-          (models.length > 0 && !selectedModel)}
-      >
-        {startingSession ? 'Creating…' : 'Create session'}
-      </AppControl>
-    </div>
-  </form>
-  <section aria-labelledby="recent-sessions-title">
-    <h3 id="recent-sessions-title">Recent sessions</h3>
-    {#if otherRecentSessions.length}
-      <ul class="session-list recent-session-list" aria-label="Recent sessions">
-        {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
-          <li class="recent-session">
-            <div class="session-details">
-              {#if session.recencyAt !== null}
-                <time datetime={new Date(session.recencyAt * 1000).toISOString()}
-                  >{formatRelativeTime(session.recencyAt * 1000)}</time
-                >
-              {:else}
-                <div>{formatRelativeTime(null)}</div>
+      <div class="essential-settings">
+        <label for="skills-profile"
+          >Skills profile
+          <select
+            id="skills-profile"
+            value={selectedSkillProfile}
+            onchange={(event) => onskillprofilechange(event.currentTarget.value)}
+          >
+            <option value="">Default</option>
+            {#each skillProfiles as profile (profile.name)}<option value={profile.name}
+                >{profile.name}</option
+              >{/each}
+          </select>
+        </label>
+        <label for="model"
+          >Model
+          <select
+            id="model"
+            value={selectedModel}
+            disabled={modelsLoading || models.length === 0}
+            onchange={(event) => onmodelchange(event.currentTarget.value)}
+          >
+            {#if modelsLoading}<option value="">Loading models…</option>
+            {:else if models.length === 0}<option value="">Choose automatically</option>{/if}
+            {#each models as model (model)}<option value={model}>{model}</option>{/each}
+          </select>
+        </label>
+      </div>
+      {#if skillProfileError}<p class="skills-profile-error" role="alert">
+          {skillProfileError}
+        </p>{/if}
+      <details class="advanced-settings" bind:open={advancedExpanded}>
+        <summary>Advanced settings</summary>
+        <div class="advanced-content">
+          <section class="session-settings" aria-label="New session settings">
+            <div class="advanced-model-settings">
+              {#if provider === 'codex'}
+                <fieldset class="executor-settings">
+                  <legend>Org-plan executor</legend>
+                  <label for="executor-model"
+                    >Executor model
+                    <select
+                      id="executor-model"
+                      value={executorModel}
+                      onchange={(event) => onexecutormodelchange(event.currentTarget.value)}
+                    >
+                      {#each [...new Set( [executorModel, ...executorModels] )] as model (model)}<option
+                          value={model}>{model}</option
+                        >{/each}
+                    </select>
+                  </label>
+                  <label for="executor-thinking"
+                    >Executor thinking
+                    <select
+                      id="executor-thinking"
+                      value={executorReasoningEffort}
+                      onchange={(event) =>
+                        onexecutorreasoningchange(event.currentTarget.value as ThinkingLevel)}
+                    >
+                      {#each thinkingLevels as level (level)}<option value={level}>{level}</option
+                        >{/each}
+                    </select>
+                  </label>
+                </fieldset>
               {/if}
-              <div class="workspace-path">{displayWorkspacePath(session.cwd)}</div>
-              {#if session.model}<span class="profile-badge">Model: {session.model}</span>{/if}
-              {#if session.provider === 'kimi'}<span class="profile-badge">Kimi</span>{/if}
-              {#if session.skillProfile}<span class="profile-badge"
-                  >Skills profile: {session.skillProfile}</span
-                >{/if}
-              {#if session.orgPlanFilename}<span class="profile-badge"
-                  >Org plan: {session.orgPlanFilename}</span
-                >{/if}
+              <fieldset class="supervisor-settings">
+                <legend>Main supervisor</legend>
+                {#if provider === 'codex'}
+                  <label for="model-thinking"
+                    >Model thinking
+                    <select
+                      id="model-thinking"
+                      value={reasoningEffort}
+                      onchange={(event) =>
+                        onreasoningchange(event.currentTarget.value as ThinkingLevel)}
+                    >
+                      {#each thinkingLevels as level (level)}<option value={level}>{level}</option
+                        >{/each}
+                    </select>
+                  </label>
+                {/if}
+                <div class="provider-control">
+                  <label for="session-provider">Provider</label>
+                  <select
+                    id="session-provider"
+                    value={provider}
+                    onchange={(event) => onproviderchange(event.currentTarget.value as LlmProvider)}
+                  >
+                    <option value="codex">Codex</option>
+                    <option value="kimi" disabled={!kimiAvailable}
+                      >Kimi{kimiAvailable ? '' : ' (unavailable)'}</option
+                    >
+                  </select>
+                </div>
+              </fieldset>
             </div>
-            <div class="session-actions">
-              <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
-              {#if session.resumeCommand}
-                <AppControl onclick={() => oncopyresume(session.resumeCommand!)}
-                  >Copy to CLI</AppControl
-                >
+            <div
+              class="session-setting-labels"
+              style:grid-template-columns={provider === 'kimi'
+                ? 'minmax(0, 1fr)'
+                : 'repeat(2, minmax(0, 1fr))'}
+            >
+              {#if provider !== 'kimi'}
+                <label for="sandbox">Sandbox</label>
+                <label for="approval-policy">Approval policy</label>
               {/if}
             </div>
-          </li>
-        {/each}
-      </ul>
-    {:else}
-      <p>No other recent sessions found.</p>
-    {/if}
-  </section>
+            <div
+              class="session-setting-controls"
+              style:grid-template-columns={provider === 'kimi'
+                ? 'minmax(0, 1fr)'
+                : 'repeat(2, minmax(0, 1fr))'}
+            >
+              {#if provider !== 'kimi'}
+                <select
+                  id="sandbox"
+                  value={sandbox}
+                  onchange={(event) =>
+                    onsandboxchange(
+                      event.currentTarget.value as NonNullable<StartSessionSettings['sandbox']>,
+                    )}
+                >
+                  <option value="workspace-git">workspace-git (Git writable)</option>
+                  <option value="workspace-write">workspace-write</option>
+                  <option value="read-only">read-only</option>
+                  <option value="danger-full-access">danger-full-access</option>
+                </select>
+                <select
+                  id="approval-policy"
+                  value={approvalPolicy}
+                  onchange={(event) =>
+                    onapprovalpolicychange(
+                      event.currentTarget.value as NonNullable<
+                        StartSessionSettings['approvalPolicy']
+                      >,
+                    )}
+                >
+                  <option value="untrusted">Ask on all commands</option>
+                  <option value="on-request">Ask out of workspace</option>
+                  <option value="never">Never ask for approval</option>
+                </select>
+              {/if}
+            </div>
+            <div class="session-secondary-actions">
+              <AppControl
+                class="manage-profiles-button"
+                id="manage-skill-profiles"
+                onclick={(event) => onmanageprofiles(event.currentTarget)}
+                >Manage skill profiles
+              </AppControl>
+              <AppControl
+                class="save-defaults-button"
+                disabled={savingDefaults || modelsLoading || !selectedModel}
+                onclick={onsavedefaults}
+              >
+                {savingDefaults ? 'Saving…' : 'Save as defaults'}
+              </AppControl>
+            </div>
+          </section>
+        </div>
+      </details>
+      <div class="create-session-actions">
+        <AppControl
+          class="new-session-button"
+          type="submit"
+          full
+          primary
+          disabled={!selectedWorkspace ||
+            startingSession ||
+            modelsLoading ||
+            (models.length > 0 && !selectedModel)}
+        >
+          {startingSession ? 'Creating…' : 'Create session'}
+        </AppControl>
+      </div>
+    </form>
+    <section aria-labelledby="recent-sessions-title">
+      <h3 id="recent-sessions-title">Recent sessions</h3>
+      {#if otherRecentSessions.length}
+        <ul class="session-list recent-session-list" aria-label="Recent sessions">
+          {#each otherRecentSessions as session ((session.provider ?? 'codex') + ':' + session.id)}
+            <li class="recent-session">
+              <div class="session-details">
+                {#if session.recencyAt !== null}
+                  <time datetime={new Date(session.recencyAt * 1000).toISOString()}
+                    >{formatRelativeTime(session.recencyAt * 1000)}</time
+                  >
+                {:else}
+                  <div>{formatRelativeTime(null)}</div>
+                {/if}
+                <div class="workspace-path">{displayWorkspacePath(session.cwd)}</div>
+                {#if session.model}<span class="profile-badge">Model: {session.model}</span>{/if}
+                {#if session.provider === 'kimi'}<span class="profile-badge">Kimi</span>{/if}
+                {#if session.skillProfile}<span class="profile-badge"
+                    >Skills profile: {session.skillProfile}</span
+                  >{/if}
+                {#if session.orgPlanFilename}<span class="profile-badge"
+                    >Org plan: {session.orgPlanFilename}</span
+                  >{/if}
+              </div>
+              <div class="session-actions">
+                <AppControl onclick={() => onopenrecent(session)}>Open</AppControl>
+                {#if session.resumeCommand}
+                  <AppControl onclick={() => oncopyresume(session.resumeCommand!)}
+                    >Copy to CLI</AppControl
+                  >
+                {/if}
+              </div>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p>No other recent sessions found.</p>
+      {/if}
+    </section>
+  {/if}
 </section>
 
 <style>
+  .roster-only .managed-session {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+  .roster-only .managed-session > .session-actions {
+    grid-column: 1;
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .roster-only .session-actions > :global(.agent-activity) {
+    grid-column: 1 / -1;
+    --agents-popup-width: 100%;
+  }
   .session-list {
     display: grid;
     gap: 0.65rem;

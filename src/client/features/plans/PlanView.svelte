@@ -16,7 +16,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   type Props = {
     state: PlanState;
-    onclose: () => void;
+    onclose?: () => void;
+    compact?: boolean;
+    onopenfull?: () => void;
     verifiedReferences?: ReadonlySet<string>;
     onreference?: (path: string) => void;
   };
@@ -34,7 +36,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
   let {
     state: viewState,
-    onclose,
+    onclose = () => {},
+    compact = false,
+    onopenfull,
     onreference,
     verifiedReferences = new Set<string>(),
   }: Props = $props();
@@ -79,11 +83,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
         const details = detailsById[id];
         if (details) details.open = true;
       }
-      detailsById[currentStepId]?.scrollIntoView({
-        behavior: 'auto',
-        block: 'nearest',
-        inline: 'nearest',
-      });
+      if (!compact)
+        detailsById[currentStepId]?.scrollIntoView({
+          behavior: 'auto',
+          block: 'nearest',
+          inline: 'nearest',
+        });
     });
   });
 
@@ -125,7 +130,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   }
 
   function summary(step: PlanStep): string {
-    return step.description.goal ?? step.description.why ?? step.title;
+    return excerpt(step.description.goal ?? step.description.why ?? step.title);
+  }
+
+  function excerpt(value: string): string {
+    if (!compact) return value;
+    const text = value.replace(/\s+/g, ' ').trim();
+    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
   }
 
   function measurementSummary(step: PlanStep): string {
@@ -169,23 +180,28 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     <p>{viewState.error}</p>
   </section>
 {:else if plan}
-  <section class="plan" aria-labelledby="plan-title">
+  <section class="plan" class:compact aria-labelledby="plan-title">
     <header>
       <div>
         <h2 id="plan-title">{plan.title}</h2>
       </div>
-      <button class="close" aria-label="Close plan and return to list" onclick={onclose}>×</button>
+      {#if compact}
+        {#if onopenfull}<button type="button" onclick={onopenfull}>Full plan</button>{/if}
+      {:else}
+        <button class="close" aria-label="Close plan and return to list" onclick={onclose}>×</button
+        >
+      {/if}
     </header>
-    <PlanProgress {plan} />
-    <p>
-      {presentation?.label}. Current: {currentStep
-        ? `${currentPosition} ${currentStep.title} (${currentStep.state})`
-        : 'No current step'}
-    </p>
+    <PlanProgress {plan} {compact} />
+    {#if !compact}<p>
+        {presentation?.label}. Current: {currentStep
+          ? `${currentPosition} ${currentStep.title} (${currentStep.state})`
+          : 'No current step'}
+      </p>{/if}
     {#if viewState.kind === 'error'}
       <p>{viewState.error}</p>
     {/if}
-    {#if plan.subtitle || plan.date || plan.keywords}
+    {#if !compact && (plan.subtitle || plan.date || plan.keywords)}
       <dl class="metadata">
         {#if plan.subtitle}<div>
             <dt>Subtitle</dt>
@@ -217,13 +233,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                     ? ` · ${step.reviewStatus}`
                     : ''}</span
                 >
-                <span>{summary(step)}</span>
-                <span class="measurement">{measurementSummary(step)}</span>
+                {#if !compact}<span>{summary(step)}</span>{/if}
+                {#if !compact}<span class="measurement">{measurementSummary(step)}</span>{/if}
               </summary>
               {#each descriptionEntries(step) as [label, value] (label)}
                 <p>
                   <strong>{label}:</strong>
-                  <OrgNotes text={value} {onreference} {verifiedReferences} />
+                  <OrgNotes text={excerpt(value)} {onreference} {verifiedReferences} />
                 </p>
               {/each}
               {#if step.skills?.length}<p><strong>Skills:</strong> {step.skills.join(', ')}</p>{/if}
@@ -248,12 +264,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                               ? ` · ${child.reviewStatus}`
                               : ''}</span
                           >
-                          <span>{summary(child)}</span>
+                          {#if !compact}<span>{summary(child)}</span>{/if}
                         </summary>
                         {#each descriptionEntries(child) as [label, value] (label)}
                           <p>
                             <strong>{label}:</strong>
-                            <OrgNotes text={value} {onreference} {verifiedReferences} />
+                            <OrgNotes text={excerpt(value)} {onreference} {verifiedReferences} />
                           </p>
                         {/each}
                         {#if child.skills?.length}<p>
@@ -274,6 +290,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 {/if}
 
 <style>
+  .compact {
+    font-size: 0.875rem;
+  }
+  .compact header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-block-end: 0.75rem;
+  }
+  .compact h2 {
+    font-size: 1.125rem;
+  }
+  .compact .plan-steps {
+    padding-inline-start: 1rem;
+  }
   .plan {
     min-inline-size: 0;
     overflow-wrap: anywhere;

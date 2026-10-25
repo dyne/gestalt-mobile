@@ -141,8 +141,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     function update() {
       if (!details.open) return;
       const rect = summary.getBoundingClientRect();
-      const viewportTop = viewport?.offsetTop ?? 0;
-      const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+      let viewportTop = viewport?.offsetTop ?? 0;
+      let viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+      // A desktop sidebar can scroll independently of the page. Fit inside
+      // its clipping bounds as well as the visual viewport.
+      for (let parent = details.parentElement; parent; parent = parent.parentElement) {
+        if (['auto', 'scroll', 'hidden', 'clip'].includes(getComputedStyle(parent).overflowY)) {
+          const bounds = parent.getBoundingClientRect();
+          viewportTop = Math.max(viewportTop, bounds.top);
+          viewportBottom = Math.min(viewportBottom, bounds.bottom);
+        }
+      }
       const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.35;
       const above = Math.max(0, rect.top - viewportTop - gap - 8);
       const below = Math.max(0, viewportBottom - rect.bottom - gap - 8);
@@ -323,7 +332,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     box-sizing: border-box;
     display: grid;
     gap: 0.35rem;
-    inline-size: min(22rem, calc(100vw - max(2.5rem, 48px)));
+    inline-size: var(--agents-popup-width, min(22rem, calc(100vw - max(2.5rem, 48px))));
     max-block-size: min(20rem, 50vh, var(--agents-popup-space, 50vh));
     margin: 0;
     padding: 0.45rem;
