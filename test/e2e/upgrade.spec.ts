@@ -42,6 +42,7 @@ for (const width of [390, 1280]) {
     });
     await openRelay(page);
     const dialog = page.getByRole('dialog', { name: 'Upgrade Gestalt?' });
+    await expect(dialog).toContainText('installed Serena and XERJ components');
     await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
     expect(starts).toBe(0);
     await page.screenshot({ path: info.outputPath('upgrade-confirmation.png') });

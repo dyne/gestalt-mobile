@@ -325,8 +325,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 >
   <h2 id="upgrade-title">Upgrade Gestalt?</h2>
   <p id="upgrade-description">
-    Update Gestalt and restart Mobile with its current settings. Running work will be interrupted
-    when Mobile restarts. Saved sessions are preserved, and this page will reconnect automatically.
+    Update Gestalt, Agents, Mobile, context-mode, and installed Serena and XERJ components, then
+    restart Mobile with its current settings. Running work will be interrupted when Mobile restarts.
+    Saved sessions are preserved, and this page will reconnect automatically.
   </p>
   {#if upgradePending}<p role="status">Updating and waiting for Mobile to reconnect…</p>{/if}
   <div class="dialog-actions">
