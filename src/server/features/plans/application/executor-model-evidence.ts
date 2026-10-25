@@ -145,6 +145,8 @@ export class ExecutorModelEvidenceReader {
       runtimeEnforcement: false as const,
       assurance: context.plan.modelPolicyAssurance ?? 'configured',
       code: 'CHILD_BINDING_UNKNOWN' as string,
+      action:
+        'Child-only evidence. Use executorLaunch for prelaunch catalog validation; this report is not launch admission.',
       unknown: [] as string[],
     };
     const finish = (code: string) => {
@@ -160,8 +162,8 @@ export class ExecutorModelEvidenceReader {
       ];
       return report;
     };
+    if (!executor) return finish('CHILD_NOT_LAUNCHED');
     if (
-      !executor ||
       !identity ||
       !context.rootThreadId ||
       !context.planIdentity ||

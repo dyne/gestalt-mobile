@@ -140,6 +140,7 @@ import {
 import { agentCapacityRecoveryToolResponse } from '../shared/contracts/agent-capacity-recovery.js';
 import { isOrgPlanHealthCall } from '../shared/contracts/org-plan-health.js';
 import { ExecutorModelEvidenceReader } from './features/plans/application/executor-model-evidence.js';
+import { ExecutorLaunchValidationReader } from './features/plans/application/executor-launch-validation.js';
 import { requireModelPolicyAdmission } from './features/plans/domain/model-policy-admission.js';
 import { currentExecutableL1Index } from './features/plans/domain/supervised-plan.js';
 import type { OrgPlanAttentionTransitions } from './features/org-plan-attention/application/ports.js';
@@ -979,26 +980,30 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
   let closing = false;
   let runtime: CodexSessionRuntime | null = null;
   let kimiRuntime: KimiSessionRuntime | null = null;
-  const executorModelEvidence = new ExecutorModelEvidenceReader(
-    (sessionId) => {
-      const session = sessions.find(sessionId);
-      const plan = supervisedPlans.find(sessionId);
-      if (!session || session.provider !== 'codex' || plan?.modelPolicyVersion !== 1) return null;
-      return {
-        sessionId,
-        provider: session.provider,
-        rootThreadId: session.threadId ?? null,
-        planIdentity: supervisedPlans.identity(sessionId),
-        plan,
-        executor: autopilotStore.find(sessionId)?.executor ?? null,
-      };
-    },
-    {
-      read: (input) =>
-        runtime?.readExecutorConfiguration(input) ??
-        Promise.resolve({ kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' }),
-    },
-  );
+  const executorPolicyContext = (sessionId: string) => {
+    const session = sessions.find(sessionId);
+    const plan = supervisedPlans.find(sessionId);
+    if (!session || session.provider !== 'codex' || plan?.modelPolicyVersion !== 1) return null;
+    return {
+      sessionId,
+      provider: session.provider,
+      rootThreadId: session.threadId ?? null,
+      planIdentity: supervisedPlans.identity(sessionId),
+      modelPolicyStatus: supervisedPlans.modelPolicyStatus(sessionId),
+      plan,
+      executor: autopilotStore.find(sessionId)?.executor ?? null,
+    };
+  };
+  const executorModelEvidence = new ExecutorModelEvidenceReader(executorPolicyContext, {
+    read: (input) =>
+      runtime?.readExecutorConfiguration(input) ??
+      Promise.resolve({ kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' }),
+  });
+  const executorLaunchValidation = new ExecutorLaunchValidationReader(executorPolicyContext, {
+    read: (input) =>
+      runtime?.readExecutorPolicyCatalog(input) ??
+      Promise.resolve({ kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' }),
+  });
   /**
    * Shared acceptance path for a provider-neutral pending interaction: it
    * enters the durable store, requests human attention, and notifies autopilot.
@@ -1236,8 +1241,9 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
           if (isOrgPlanHealthCall(request)) {
-            const snapshot = autopilot.snapshot(sessionId);
             const modelPolicy = await executorModelEvidence.read(sessionId);
+            const executorLaunch = await executorLaunchValidation.read(sessionId);
+            const snapshot = autopilot.snapshot(sessionId);
             return (
               runtime?.resolveServerRequest(sessionId, String(request.id), {
                 success: true,
@@ -1253,6 +1259,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                         ? { executionAdmission: snapshot.executionAdmission }
                         : {}),
                       ...(modelPolicy ? { modelPolicy } : {}),
+                      ...(executorLaunch ? { executorLaunch } : {}),
                     }),
                   },
                 ],

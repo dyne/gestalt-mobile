@@ -8,7 +8,7 @@ export const gestaltOrgPlanHealthDynamicTool = {
   type: 'function',
   name: 'gestalt_org_plan_health',
   description:
-    'Read the current session’s authoritative Org execution health, using the same controller state as Mobile. Read-only; does not enable, resume, checkpoint, or change the Org Plan.',
+    'Read current Org execution health. executorLaunch validates requested model/effort against the owning runtime catalog before a child exists; modelPolicy describes child-only settings and may remain unknown. Read-only; does not enable, resume, checkpoint, or change the Org Plan.',
   inputSchema: { type: 'object', additionalProperties: false, properties: {} },
 } as const;
 

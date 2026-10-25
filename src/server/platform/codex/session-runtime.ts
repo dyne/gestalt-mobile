@@ -7,6 +7,7 @@
 import { ORG_PLAN_CAPABILITIES } from '../plans/org-plan-capabilities.js';
 import { readExecutorConfiguration } from './executor-configuration.js';
 import { decodeCodexPolicyCatalog } from './codex-model-catalog.js';
+import type { RuntimePolicyCatalogRead } from '../../features/plans/application/executor-launch-validation.js';
 
 import {
   RelaySession,
@@ -491,13 +492,15 @@ export class CodexSessionRuntime {
     return result;
   }
 
-  /** Uses the active writer's catalog; never upgrades requested settings to observations. */
-  async validateExecutorPolicy(
-    sessionId: string,
-    policy: { model: string; reasoningEffort: string },
-  ): Promise<void> {
-    const resource = this.sessions.get(sessionId);
-    if (!resource) throw new Error('EXECUTOR_CATALOG_UNAVAILABLE');
+  /** The same session-owned catalog source for health and pre-dispatch validation. */
+  async readExecutorPolicyCatalog(input: {
+    sessionId: string;
+    rootThreadId: string;
+  }): Promise<RuntimePolicyCatalogRead> {
+    const resource = this.sessions.get(input.sessionId);
+    if (!resource?.active) return { kind: 'unavailable', code: 'RUNTIME_UNAVAILABLE' };
+    if (!input.rootThreadId || resource.threadId !== input.rootThreadId)
+      return { kind: 'unavailable', code: 'ROOT_BINDING_MISMATCH' };
     let timer: ReturnType<typeof setTimeout> | undefined;
     let catalog;
     try {
@@ -509,11 +512,38 @@ export class CodexSessionRuntime {
           }),
         ]),
       );
+    } catch {
+      return { kind: 'unavailable', code: 'CATALOG_UNAVAILABLE' };
     } finally {
       if (timer) clearTimeout(timer);
     }
-    if (!catalog || this.sessions.get(sessionId) !== resource || !resource.active)
-      throw new Error('EXECUTOR_CATALOG_UNAVAILABLE');
+    if (
+      this.sessions.get(input.sessionId) !== resource ||
+      !resource.active ||
+      resource.threadId !== input.rootThreadId
+    )
+      return { kind: 'unavailable', code: 'CONTEXT_CHANGED' };
+    if (!catalog) return { kind: 'unavailable', code: 'CATALOG_UNAVAILABLE' };
+    return {
+      kind: 'observed',
+      source: 'runtime-model-list',
+      observedAt: new Date().toISOString(),
+      catalog,
+    };
+  }
+
+  /** Uses the active writer's catalog; never upgrades requested settings to observations. */
+  async validateExecutorPolicy(
+    sessionId: string,
+    policy: { model: string; reasoningEffort: string },
+  ): Promise<void> {
+    const resource = this.sessions.get(sessionId);
+    const result = await this.readExecutorPolicyCatalog({
+      sessionId,
+      rootThreadId: resource?.threadId ?? '',
+    });
+    if (result.kind !== 'observed') throw new Error('EXECUTOR_CATALOG_UNAVAILABLE');
+    const catalog = result.catalog;
     const model = catalog.models.find((entry) => entry.id === policy.model);
     if (!model) throw new Error('EXECUTOR_MODEL_UNAVAILABLE');
     if (!model.reasoningEfforts.includes(policy.reasoningEffort))

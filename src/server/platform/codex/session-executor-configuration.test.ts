@@ -85,6 +85,61 @@ async function fixture() {
 }
 
 describe('owned Codex child configuration port', () => {
+  it('reads a prelaunch catalog from the owning root without reading/creating/resuming a child', async () => {
+    const { runtime, calls, launches } = await fixture();
+    try {
+      expect(
+        await runtime.readExecutorPolicyCatalog({ sessionId: 'a', rootThreadId: 'root-a' }),
+      ).toMatchObject({
+        kind: 'observed',
+        source: 'runtime-model-list',
+        catalog: {
+          revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+          models: [{ id: 'gpt-6-luna', reasoningEfforts: ['medium'] }],
+        },
+      });
+      expect(
+        await runtime.readExecutorPolicyCatalog({ sessionId: 'a', rootThreadId: 'root-b' }),
+      ).toEqual({ kind: 'unavailable', code: 'ROOT_BINDING_MISMATCH' });
+      expect(calls.map((call) => [call.root, call.method])).toEqual([['root-a', 'model/list']]);
+      expect(launches()).toBe(2);
+    } finally {
+      runtime.stopAll();
+    }
+  });
+
+  it('discards a prelaunch catalog if the owning writer stops during model/list', async () => {
+    const { runtime, setCatalog } = await fixture();
+    const pending = Promise.withResolvers<unknown>();
+    setCatalog(() => pending.promise);
+    try {
+      const reading = runtime.readExecutorPolicyCatalog({ sessionId: 'a', rootThreadId: 'root-a' });
+      runtime.stop('a');
+      pending.resolve(catalog);
+      expect(await reading).toEqual({ kind: 'unavailable', code: 'CONTEXT_CHANGED' });
+    } finally {
+      pending.resolve(catalog);
+      runtime.stopAll();
+    }
+  });
+
+  it('bounds a stalled prelaunch catalog read without starting a turn', async () => {
+    const { runtime, setCatalog, calls } = await fixture();
+    const pending = Promise.withResolvers<unknown>();
+    setCatalog(() => pending.promise);
+    vi.useFakeTimers();
+    try {
+      const reading = runtime.readExecutorPolicyCatalog({ sessionId: 'a', rootThreadId: 'root-a' });
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await reading).toEqual({ kind: 'unavailable', code: 'CATALOG_UNAVAILABLE' });
+      expect(calls.map((call) => call.method)).toEqual(['model/list']);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      pending.resolve(catalog);
+      runtime.stopAll();
+      vi.useRealTimers();
+    }
+  });
   it('isolates sessions, never substitutes Astra root settings, and launches no reader process/turn', async () => {
     const { runtime, calls, launches } = await fixture();
     try {
