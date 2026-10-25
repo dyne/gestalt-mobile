@@ -119,7 +119,14 @@ provide that capability. Manual Off is independently respected. Legacy plans
 without model policy keep their existing behavior.
 
 `gestalt_org_plan_health` reports `executionAdmission.allowed`, configured
-assurance and `runtimeEnforcement:false`. Its `modelPolicy` evidence separately
+assurance and `executorLaunch`, which checks the requested L1 model/effort using
+the owning runtime's `model/list` before any executor exists. `CATALOG_MATCH`
+includes a normalized-content fingerprint and observation time, never a fabricated
+server revision. Child `modelPolicy.catalogRevision:null` does not mean the
+prelaunch catalog is unavailable. `CHILD_NOT_LAUNCHED` is expected before dispatch.
+Actual missing/incompatible catalogs retain explicit failure codes.
+
+Health retains `runtimeEnforcement:false`. Its `modelPolicy` evidence separately
 reports `admissionScope: runtime-attestation`, `admitted:false`, `attested:false`,
 requested values and observed configured thread settings. Unknown values remain
 null, never copied from requests. A configured match is not runtime attestation.
@@ -129,7 +136,8 @@ Native collaboration spawn/followup calls remain cooperatively root-supervised;
 Mobile does not intercept them or guarantee universal pre-spawn enforcement.
 One writer per L1, independent review, evidence gates, checkpoint continuation
 and terminal whole-branch review remain required. See
-[update and rollback guidance](docs/org-plan-policy-compatibility.md).
+[update and rollback guidance](docs/org-plan-policy-compatibility.md) and
+[prelaunch catalog recovery](docs/org-plan-prelaunch-catalog.md).
 
 ## Skill profiles
 

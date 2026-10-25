@@ -538,6 +538,41 @@ describe('production composition', () => {
       });
       expect(JSON.stringify(start.params)).not.toContain('reasoning_effort high');
       const session = (await app.inject(`/api/sessions/${sessionId}`)).json();
+      const requestsBeforeHealth = handle.requests.length;
+      const healthResponse = (await handle.request!({
+        id: 9900,
+        method: 'item/tool/call',
+        params: {
+          threadId: session.threadId,
+          turnId: session.activeTurnId,
+          tool: 'gestalt_org_plan_health',
+          arguments: {},
+        },
+      })) as { success: boolean; contentItems: { text: string }[] };
+      expect(healthResponse.success).toBe(true);
+      expect(JSON.parse(healthResponse.contentItems[0]!.text)).toMatchObject({
+        executionAdmission: { allowed: true, assurance: 'configured' },
+        executorLaunch: {
+          scope: 'prelaunch-catalog',
+          validated: true,
+          code: 'CATALOG_MATCH',
+          requested: { model: 'gpt-6.1-sol', reasoningEffort: 'medium' },
+          catalog: {
+            source: 'runtime-model-list',
+            fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+            revisionSource: 'normalized-content-digest',
+          },
+        },
+        modelPolicy: {
+          code: 'CHILD_NOT_LAUNCHED',
+          catalogRevision: null,
+          effective: { model: null, reasoningEffort: null },
+          attested: false,
+        },
+      });
+      expect(handle.requests.slice(requestsBeforeHealth).map((call) => call.method)).toEqual([
+        'model/list',
+      ]);
       // Synthetic executor report: real composition validates the authoritative plan boundary.
       await writeFile(join(workspacePath, 'autopilot.org'), versionedText('DONE'));
       const result = await handle.request!({
@@ -580,6 +615,84 @@ describe('production composition', () => {
         handles.flatMap((handle) => handle.requests).filter((call) => call.method === 'turn/start'),
       ).toHaveLength(1);
     });
+
+    it.each(['missing', 'model', 'effort', 'manual-off'] as const)(
+      'exposes prechild catalog evidence without changing admission or Manual Off: %s',
+      async (scenario) => {
+        const f = await createProductionAutopilotFixture(
+          { autopilotSchedule: () => () => {} },
+          versionedText(),
+        );
+        onTestFinished(() => f.app.close());
+        const session = (await f.app.inject(`/api/sessions/${f.sessionId}`)).json();
+        const handle = f.handles.find((candidate) => candidate.request)!;
+        for (const candidate of f.handles)
+          candidate.respond = (method) =>
+            method !== 'model/list'
+              ? undefined
+              : scenario === 'missing'
+                ? {}
+                : scenario === 'model'
+                  ? {
+                      data: [
+                        {
+                          id: 'gpt-6-sol',
+                          supportedReasoningEfforts: [{ reasoningEffort: 'medium' }],
+                        },
+                      ],
+                    }
+                  : scenario === 'effort'
+                    ? {
+                        data: [
+                          {
+                            id: 'gpt-6.1-sol',
+                            supportedReasoningEfforts: [{ reasoningEffort: 'low' }],
+                          },
+                        ],
+                      }
+                    : policyCatalog;
+        if (scenario === 'manual-off')
+          await f.app.inject({
+            method: 'PUT',
+            url: `/api/sessions/${f.sessionId}/autopilot`,
+            payload: { enabled: false },
+          });
+        const beforeHealth = f.handles
+          .flatMap((candidate) => candidate.requests)
+          .filter((call) => ['turn/start', 'thread/read', 'thread/resume'].includes(call.method));
+        const response = (await handle.request!({
+          id: 9902,
+          method: 'item/tool/call',
+          params: {
+            threadId: session.threadId,
+            tool: 'gestalt_org_plan_health',
+            arguments: {},
+          },
+        })) as { contentItems: { text: string }[] };
+        const health = JSON.parse(response.contentItems[0]!.text);
+        expect(health).toMatchObject({
+          executionAdmission: { allowed: true },
+          executorLaunch: {
+            validated: scenario === 'manual-off',
+            code:
+              scenario === 'missing'
+                ? 'CATALOG_UNAVAILABLE'
+                : scenario === 'model'
+                  ? 'MODEL_UNAVAILABLE'
+                  : scenario === 'effort'
+                    ? 'EFFORT_UNSUPPORTED'
+                    : 'CATALOG_MATCH',
+          },
+        });
+        if (scenario === 'manual-off')
+          expect(health).toMatchObject({ enabled: false, reason: 'manualDisabled' });
+        expect(
+          f.handles
+            .flatMap((candidate) => candidate.requests)
+            .filter((call) => ['turn/start', 'thread/read', 'thread/resume'].includes(call.method)),
+        ).toEqual(beforeHealth);
+      },
+    );
 
     it('keeps explicit strict v1 blocked at production activation without scheduling', async () => {
       const timers: (() => void)[] = [];
