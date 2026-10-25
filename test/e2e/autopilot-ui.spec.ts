@@ -620,6 +620,71 @@ const cases: ReadonlyArray<{
   },
 ];
 
+for (const viewport of [...viewports, { name: 'desktop', width: 1280, height: 800 }]) {
+  test(`Agents popup follows available space at ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await install(page, 'monitoring', undefined, false, undefined, true);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Chat' }).click();
+    const chatActivity = page.getByLabel('Chat controls').getByLabel('Agent activity');
+    const chatButton = chatActivity.locator('summary');
+    await chatButton.focus();
+    await page.keyboard.press('Enter');
+    const chatList = chatActivity.locator('ul');
+    await expect(chatList).toBeVisible();
+    await expect(async () => {
+      const button = (await chatButton.boundingBox())!;
+      const list = (await chatList.boundingBox())!;
+      expect(list.y).toBeGreaterThan(button.y + button.height);
+      expect(list.y + list.height).toBeLessThanOrEqual(viewport.height - 7);
+    }).toPass();
+    await page.screenshot({ path: testInfo.outputPath('agents-chat.png') });
+
+    await page.getByRole('button', { name: 'Sessions' }).click();
+    const activity = page.getByLabel('Open sessions').getByLabel('Agent activity');
+    const button = activity.locator('summary');
+    // Exercise the real menu at opposite viewport edges without depending on
+    // incidental session-card height or scrolling the trigger out of view.
+    await activity.evaluate((element) => {
+      Object.assign((element as HTMLElement).style, {
+        position: 'fixed',
+        top: '80px',
+        bottom: 'auto',
+        right: '24px',
+        inlineSize: '10rem',
+        zIndex: '50',
+      });
+    });
+    await button.click();
+    const list = activity.locator('ul');
+    await expect(async () => {
+      const trigger = (await button.boundingBox())!;
+      const popup = (await list.boundingBox())!;
+      expect(popup.y).toBeGreaterThan(trigger.y + trigger.height);
+    }).toPass();
+    // Scrolling or a viewport change must reposition an already-open menu.
+    await activity.evaluate((element) => {
+      Object.assign((element as HTMLElement).style, { top: 'auto', bottom: '80px' });
+      window.dispatchEvent(new Event('scroll'));
+    });
+    await expect(async () => {
+      const trigger = (await button.boundingBox())!;
+      const popup = (await list.boundingBox())!;
+      expect(popup.y + popup.height).toBeLessThan(trigger.y);
+      expect(popup.y).toBeGreaterThanOrEqual(7);
+    }).toPass();
+    await page.setViewportSize({ width: viewport.width, height: viewport.height - 60 });
+    await expect(async () => {
+      const trigger = (await button.boundingBox())!;
+      const popup = (await list.boundingBox())!;
+      expect(popup.y + popup.height).toBeLessThan(trigger.y);
+      expect(popup.y).toBeGreaterThanOrEqual(7);
+    }).toPass();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath('agents-above.png') });
+  });
+}
+
 for (const item of cases) {
   test(`${item.name} is semantic, safe, and synchronized in Chat and Sessions`, async ({
     page,

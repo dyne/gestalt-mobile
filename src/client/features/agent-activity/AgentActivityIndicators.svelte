@@ -15,6 +15,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activity,
     compact = false,
     popupAlign = 'end',
+    popupPlacement = 'auto',
     rootModel,
     plan,
     onopen = () => {},
@@ -22,6 +23,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     activity: AgentActivitySnapshot | null;
     compact?: boolean;
     popupAlign?: 'start' | 'end';
+    popupPlacement?: 'auto' | 'below';
     rootModel?: string;
     plan?: SupervisedPlan;
     onopen?: () => void;
@@ -131,6 +133,41 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     );
   });
   let orderedSubagents = $derived(activity ? [...activity.subagents].sort(childOrder) : []);
+  function positionPopup(list: HTMLUListElement) {
+    const details = list.parentElement as HTMLDetailsElement;
+    const summary = details.querySelector('summary')!;
+    const placement = popupPlacement;
+    const viewport = window.visualViewport;
+    function update() {
+      if (!details.open) return;
+      const rect = summary.getBoundingClientRect();
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+      const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.35;
+      const above = Math.max(0, rect.top - viewportTop - gap - 8);
+      const below = Math.max(0, viewportBottom - rect.bottom - gap - 8);
+      const openAbove = placement === 'auto' && list.scrollHeight > below && above > below;
+      details.dataset.placement = openAbove ? 'above' : 'below';
+      list.style.setProperty('--agents-popup-space', `${openAbove ? above : below}px`);
+    }
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(summary);
+    observer?.observe(list);
+    details.addEventListener('toggle', update);
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    viewport?.addEventListener('resize', update);
+    viewport?.addEventListener('scroll', update);
+    update();
+    return () => {
+      observer?.disconnect();
+      details.removeEventListener('toggle', update);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+      viewport?.removeEventListener('resize', update);
+      viewport?.removeEventListener('scroll', update);
+    };
+  }
   onMount(() => {
     const timer = window.setInterval(() => (now = Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -169,7 +206,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       <AppControl element="summary" compact full state={compactState}
         >Agents ({(activity?.subagents.length ?? 0) + 1})</AppControl
       >
-      <ul>
+      <ul {@attach positionPopup}>
         {#if activity}
           {#each orderedAgents as agent (agent.key)}
             <li>
@@ -281,13 +318,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .compact .agents ul {
     position: absolute;
     z-index: 10;
-    inset-block-end: calc(100% + 0.35rem);
+    inset-block-start: calc(100% + 0.35rem);
     inset-inline-end: 0;
     box-sizing: border-box;
     display: grid;
     gap: 0.35rem;
     inline-size: min(22rem, calc(100vw - max(2.5rem, 48px)));
-    max-block-size: min(20rem, 50vh);
+    max-block-size: min(20rem, 50vh, var(--agents-popup-space, 50vh));
     margin: 0;
     padding: 0.45rem;
     overflow-y: auto;
@@ -297,6 +334,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
     border: 1px solid var(--theme-border);
     border-radius: 0.5rem;
     box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--theme-text) 18%, transparent);
+  }
+  .compact .agents:global([data-placement='above']) ul {
+    inset-block-start: auto;
+    inset-block-end: calc(100% + 0.35rem);
   }
   .compact.align-start .agents ul {
     inset-inline-start: 0;

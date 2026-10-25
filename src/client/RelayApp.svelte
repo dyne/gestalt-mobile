@@ -1790,6 +1790,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                   {/if}
                   <AgentActivityIndicators
                     compact
+                    popupPlacement="below"
                     activity={activitySnapshots.get(sessionId) ?? null}
                     rootModel={sessions.find((session) => session.id === sessionId)?.model ??
                       defaultSessionModel}
