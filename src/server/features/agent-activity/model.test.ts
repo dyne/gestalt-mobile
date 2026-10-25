@@ -121,7 +121,7 @@ describe('agent activity projector', () => {
     );
     expect(completed.subagents).toMatchObject([{ id: 'c', model: 'gpt-5.6-luna' }]);
   });
-  it('treats an executor interrupted after completion as terminal and retained', () => {
+  it('retains an interrupted executor as the same resumable writer', () => {
     const working = projectAgentActivity(
       createAgentActivitySnapshot('s', at),
       fact('collaboration', {
@@ -135,8 +135,20 @@ describe('agent activity projector', () => {
       fact('collaboration', { childId: 'c', childStatus: 'interrupted' }),
     );
     expect(interrupted.subagents).toMatchObject([
-      { id: 'c', canonicalPosition: 'L1', state: 'idle', outcome: 'cancelled' },
+      { id: 'c', canonicalPosition: 'L1', state: 'idle', outcome: 'partial' },
     ]);
+  });
+  it('keeps explicit close terminal even when its final status is interrupted', () => {
+    const closed = projectAgentActivity(
+      createAgentActivitySnapshot('s', at),
+      fact('collaboration', {
+        childId: 'c',
+        childTaskPath: '/root/l1',
+        childStatus: 'interrupted',
+        collaborationAction: 'close_agent',
+      }),
+    );
+    expect(closed.subagents).toMatchObject([{ id: 'c', outcome: 'cancelled' }]);
   });
   it('adds a model when reconciliation discovered the child before spawn metadata', () => {
     const discovered = projectAgentActivity(

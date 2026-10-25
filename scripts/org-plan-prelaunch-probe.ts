@@ -97,7 +97,10 @@ try {
   const modelPolicy = await new ExecutorModelEvidenceReader(context, {
     read: (input) => runtime.readExecutorConfiguration(input),
   }).read(session.id);
+  const topology = await runtime.readExecutorTopology(session);
   const passed =
+    topology.kind === 'observed' &&
+    topology.children.length === 0 &&
     executorLaunch?.validated === true &&
     modelPolicy?.code === 'CHILD_NOT_LAUNCHED' &&
     modelPolicy.effective.model === null &&
@@ -110,6 +113,10 @@ try {
       passed,
       modelTurns: turns,
       rootStarts,
+      topology: {
+        kind: topology.kind,
+        childCount: topology.kind === 'observed' ? topology.children.length : null,
+      },
       executorLaunch,
       childEvidence: {
         code: modelPolicy?.code,

@@ -1241,6 +1241,55 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
           const session = withPendingInteractions(sessions.find(sessionId));
           if (!session) return false;
           if (isOrgPlanHealthCall(request)) {
+            const observedPlan = supervisedPlans.find(sessionId);
+            let executorBinding =
+              observedPlan?.modelPolicyVersion === 1
+                ? autopilot.reconcileExecutorBinding(sessionId)
+                : null;
+            if (
+              executorBinding &&
+              [
+                'ROSTER_UNAVAILABLE',
+                'ROOT_BINDING_MISMATCH',
+                'EXECUTOR_NOT_OBSERVED',
+                'EXECUTOR_UNAVAILABLE',
+                'EXECUTOR_IDENTITY_INVALID',
+                'EXECUTOR_AMBIGUOUS',
+                'REPLACEMENT_NOT_AUTHORIZED',
+                'PREVIOUS_WRITER_ACTIVE',
+                'AUTHORIZED_REPLACEMENT_PENDING',
+              ].includes(executorBinding.code) &&
+              runtime
+            ) {
+              const topologyRevision = activity.observationRevision(sessionId);
+              const topology = await runtime.readExecutorTopology(session);
+              if (
+                topology.kind === 'observed' &&
+                activity.observationRevision(sessionId) === topologyRevision &&
+                sessions.find(sessionId)?.threadId === topology.rootThreadId
+              ) {
+                // Seed identity only. A topology read must not overwrite newer root turn activity.
+                if (!activity.snapshot(sessionId, topology.observedAt).rootThreadId)
+                  activity.observe({
+                    sessionId,
+                    kind: 'threadStarted',
+                    threadId: topology.rootThreadId,
+                    occurredAt: topology.observedAt,
+                  });
+                activity.childrenReconciled(sessionId, topology.observedAt, topology.children);
+                executorBinding = autopilot.reconcileExecutorBinding(sessionId);
+              } else {
+                executorBinding = autopilot.reconcileExecutorBinding(sessionId);
+                if (executorBinding.status !== 'ready')
+                  executorBinding = {
+                    ...executorBinding,
+                    status: 'unavailable',
+                    code: topology.kind === 'unavailable' ? topology.code : 'CONTEXT_CHANGED',
+                    action:
+                      'Current topology could not be verified. Keep the existing writer paused and retry a bounded health read after runtime evidence changes; do not replace it to repair a projection.',
+                  };
+              }
+            }
             const modelPolicy = await executorModelEvidence.read(sessionId);
             const executorLaunch = await executorLaunchValidation.read(sessionId);
             const snapshot = autopilot.snapshot(sessionId);
@@ -1260,6 +1309,7 @@ export async function composeRelayApp(options: ComposeRelayAppOptions) {
                         : {}),
                       ...(modelPolicy ? { modelPolicy } : {}),
                       ...(executorLaunch ? { executorLaunch } : {}),
+                      ...(executorBinding ? { executorBinding } : {}),
                     }),
                   },
                 ],

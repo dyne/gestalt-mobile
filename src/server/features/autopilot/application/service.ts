@@ -5,6 +5,7 @@
  */
 
 import type { AgentActivitySnapshot } from '../../agent-activity/model.js';
+import { parseOrgPlanAgentIdentity } from '../../../../shared/org-plan-position.js';
 import { assessModelPolicyAdmission } from '../../plans/domain/model-policy-admission.js';
 import type { ProviderFailure } from '../../../../shared/contracts/provider-failure.js';
 import { requirePlanFingerprint } from '../domain/plan-fingerprint.js';
@@ -76,6 +77,14 @@ import type {
   SupervisedExecutorController,
 } from './ports.js';
 
+export type ExecutorBindingReconciliation = Readonly<{
+  authorizesExecution: false;
+  status: 'ready' | 'pending' | 'conflict' | 'unavailable';
+  code: string;
+  canonicalPosition: string | null;
+  action: string;
+}>;
+
 export type AutopilotDependencies = Readonly<{
   modelPolicyStatus?(
     sessionId: string,
@@ -122,6 +131,260 @@ export class AutopilotCoordinator {
   private readonly operations = new Map<string, Promise<void>>();
   private readonly storeRecoveryAttempts = new Map<string, number>();
   constructor(private readonly deps: AutopilotDependencies) {}
+
+  /** Observe ownership independently of execution permission. Never dispatches or clears attention. */
+  reconcileExecutorBinding(sessionId: string): ExecutorBindingReconciliation {
+    const state = this.deps.store.find(sessionId);
+    const retained = this.deps.plan(sessionId);
+    const index = retained ? currentExecutableL1Index(retained.plan) : -1;
+    const position = index < 0 ? null : `L${index + 1}`;
+    const result = (
+      status: ExecutorBindingReconciliation['status'],
+      code: string,
+      action: string,
+    ): ExecutorBindingReconciliation => ({
+      status,
+      code,
+      canonicalPosition: position,
+      action,
+      authorizesExecution: false,
+    });
+    if (!state || !retained || index < 0 || retained.plan.executionComplete === true)
+      return result(
+        'pending',
+        'NO_EXECUTABLE_BINDING',
+        'No current supervised executor is expected.',
+      );
+    if (!this.modelPolicyAdmission(sessionId).allowed)
+      return result(
+        'unavailable',
+        'EXECUTION_POLICY_UNAVAILABLE',
+        'Resolve the separate executionAdmission denial; do not invent ownership.',
+      );
+    if (state.planIdentity !== retained.identity)
+      return result(
+        'conflict',
+        'PLAN_IDENTITY_MISMATCH',
+        'Reconcile the retained plan identity before adopting any executor.',
+      );
+    const activity = this.deps.activity(sessionId);
+    const root = this.deps.session(sessionId)?.threadId;
+    if (!activity || activity.confidence !== 'fresh')
+      return result(
+        'unavailable',
+        'ROSTER_UNAVAILABLE',
+        'Refresh the owning runtime roster once; do not replace or resume a writer from stale evidence.',
+      );
+    if (activity.sessionId !== sessionId || !root || activity.rootThreadId !== root)
+      return result(
+        'unavailable',
+        'ROOT_BINDING_MISMATCH',
+        'Read topology from the current owning root/session.',
+      );
+    const plan = retained.plan;
+    if (
+      plan.steps
+        .slice(0, index)
+        .some(
+          (step) =>
+            step.state !== 'DONE' ||
+            step.reviewStatus !== 'REVIEWED' ||
+            step.children.some((child) => child.state !== 'DONE'),
+        )
+    )
+      return result(
+        'conflict',
+        'PREVIOUS_MILESTONE_UNREVIEWED',
+        'Complete the preceding milestone review gates before handing off ownership.',
+      );
+    const live = (child: AgentActivitySnapshot['subagents'][number]) =>
+      ['working', 'awaitingAgent', 'awaitingHuman'].includes(child.state) ||
+      child.ownedProcesses?.some(
+        (process) => process.state === 'running' || process.state === 'detached-active',
+      );
+    if (
+      activity.subagents.some(
+        (child) => child.canonicalPosition && child.canonicalPosition !== position && live(child),
+      )
+    )
+      return result(
+        'conflict',
+        'PREVIOUS_WRITER_ACTIVE',
+        'Stop the previous milestone writer through the normal lifecycle, then refresh ownership; do not start another writer.',
+      );
+    const taskName = `l${index + 1}`;
+    const samePosition = state.executor?.canonicalPosition === position;
+    const assigned =
+      samePosition && state.executor
+        ? (state.executor.assignment ?? executorAssignment(state.executor))
+        : undefined;
+    const replacement =
+      samePosition &&
+      state.executor?.replacement &&
+      this.validReplacement(sessionId, state.executor.replacement)
+        ? state.executor.replacement
+        : undefined;
+    const candidates = activity.subagents.filter(
+      (child) =>
+        child.canonicalPosition === position ||
+        (child.taskPath &&
+          parseOrgPlanAgentIdentity(child.taskPath)?.canonicalPosition === position),
+    );
+    let eligible = candidates.filter((child) => {
+      const generation = child.continuationGeneration ?? 1;
+      return !(assigned && generation < assigned.generation && !live(child));
+    });
+    if (!eligible.length)
+      return result(
+        'pending',
+        'EXECUTOR_NOT_OBSERVED',
+        'The current executor is not yet observed. Refresh topology; do not replace an existing writer to repair a projection.',
+      );
+    if (eligible.length > 1) {
+      const replacementChildren = replacement
+        ? eligible.filter(
+            (child) =>
+              child.taskPath?.split('/').at(-1) === replacement.taskName &&
+              (child.continuationGeneration ?? 1) === replacement.generation,
+          )
+        : [];
+      const predecessor = (child: (typeof eligible)[number]) =>
+        assigned &&
+        (child.threadId ?? child.id) === assigned.threadId &&
+        child.taskPath === assigned.taskPath &&
+        (child.continuationGeneration ?? 1) === assigned.generation;
+      if (
+        replacementChildren.length === 1 &&
+        eligible.every((child) => child === replacementChildren[0] || predecessor(child))
+      ) {
+        const replacementChild = replacementChildren[0]!;
+        if (eligible.some((child) => child !== replacementChild && live(child)))
+          return result(
+            'pending',
+            'AUTHORIZED_REPLACEMENT_PENDING',
+            'The already-authorized replacement handoff must settle before work resumes.',
+          );
+        eligible = [replacementChild];
+      } else
+        return result(
+          'conflict',
+          'EXECUTOR_AMBIGUOUS',
+          'Multiple physical executors occupy this canonical position. Preserve the assigned owner; never choose a winner by recency.',
+        );
+    }
+    const child = eligible[0]!;
+    const identity = child.taskPath ? parseOrgPlanAgentIdentity(child.taskPath) : null;
+    if (
+      !identity ||
+      child.canonicalTaskName !== taskName ||
+      child.canonicalPosition !== position ||
+      identity.canonicalTaskName !== taskName ||
+      identity.generation !== (child.continuationGeneration ?? 1) ||
+      (child.threadId ?? child.id) === root
+    )
+      return result(
+        'conflict',
+        'EXECUTOR_IDENTITY_INVALID',
+        'Repair contradictory runtime topology; do not guess executor identity.',
+      );
+    const exactAssigned =
+      assigned &&
+      assigned.threadId === (child.threadId ?? child.id) &&
+      assigned.taskPath === child.taskPath &&
+      assigned.generation === identity.generation;
+    const exactReplacement =
+      replacement &&
+      replacement.generation === identity.generation &&
+      replacement.taskName === child.taskPath?.split('/').at(-1);
+    if (
+      (assigned && !exactAssigned && !exactReplacement) ||
+      (!assigned && identity.generation !== 1 && !exactReplacement)
+    )
+      return result(
+        'conflict',
+        'REPLACEMENT_NOT_AUTHORIZED',
+        'Resume the assigned physical executor or obtain the existing typed replacement authorization; observation alone cannot authorize replacement.',
+      );
+    if (exactAssigned && assigned.state !== 'resumable')
+      return result(
+        'conflict',
+        'ASSIGNMENT_CLOSED',
+        'A closed/unavailable assignment cannot be silently reopened. Use the normal lifecycle.',
+      );
+    if (child.outcome === 'cancelled' || child.state === 'disconnected')
+      return result(
+        'pending',
+        'EXECUTOR_UNAVAILABLE',
+        'The physical executor is unavailable. Preserve its identity and diagnose before replacement.',
+      );
+    let executor = this.currentExecutor(
+      sessionId,
+      plan,
+      0,
+      samePosition ? state.executor : undefined,
+      activity,
+    );
+    if (!executor)
+      return result(
+        'pending',
+        'EXECUTOR_NOT_OBSERVED',
+        'Refresh the existing executor topology before continuing.',
+      );
+    // Preserve retired command evidence, but no predecessor retry/replacement state can authorize this slot.
+    const changedWriter =
+      !samePosition ||
+      state.executor?.threadId !== executor.threadId ||
+      state.executor?.taskPath !== executor.taskPath;
+    if (changedWriter) executor = { ...executor, continuationCount: 0 };
+    if (changedWriter && state.executor?.commands?.length)
+      executor = {
+        ...executor,
+        commands: state.executor.commands.map((command) =>
+          ['scheduled', 'issued'].includes(command.status)
+            ? {
+                ...command,
+                status: 'superseded' as const,
+                ...(command.status === 'scheduled' ? { supersededBeforeIssue: true as const } : {}),
+                updatedAt: this.deps.now(),
+              }
+            : command,
+        ),
+      };
+    const bindingState = (value: ExecutorLifecycle | undefined) =>
+      value
+        ? JSON.stringify({
+            ...value,
+            lastActivityAt: undefined,
+            resumeFailures: value.resumeFailures || undefined,
+            ownedProcesses: value.ownedProcesses.map((process) => ({
+              ...process,
+              observedAt: undefined,
+              elapsedMs: undefined,
+              cpuPercent: undefined,
+              rssBytes: undefined,
+            })),
+          })
+        : null;
+    const changed = bindingState(state.executor) !== bindingState(executor);
+    if (changed)
+      this.persist({ ...state, executor, updatedAt: this.deps.now() }, undefined, [
+        {
+          sessionId,
+          type: 'autopilot.executor-binding-reconciled',
+          occurredAt: this.deps.now(),
+          payload: {
+            canonicalPosition: position,
+            previousThreadId: state.executor?.threadId ?? null,
+            threadId: executor.threadId,
+          },
+        },
+      ]);
+    return result(
+      'ready',
+      changed ? 'BINDING_RECONCILED' : 'BINDING_MATCH',
+      'Current canonical executor ownership is reconciled. Respect admission, Manual Off, attention and observed settings before resuming the same writer.',
+    );
+  }
 
   snapshot(sessionId: string): AutopilotSnapshot {
     let state: AutopilotSession;
@@ -553,7 +816,7 @@ export class AutopilotCoordinator {
       providerFailure: undefined,
       providerFailureTurnId: undefined,
       providerRetry: undefined,
-      executor: !replacing && prior.state === 'attentionRequired' ? prior.executor : undefined,
+      executor: !replacing ? prior.executor : undefined,
       blocking: undefined,
       supervision: recoverSafetyPause(
         consumeObsoleteWait(
@@ -720,6 +983,7 @@ export class AutopilotCoordinator {
     this.parkedSubscriptions.delete(sessionId);
   }
   evaluate(sessionId: string): AutopilotSnapshot {
+    const binding = this.reconcileExecutorBinding(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior) return this.snapshot(sessionId);
     if (this.rejectModelPolicyExecution(sessionId)) return this.snapshot(sessionId);
@@ -755,6 +1019,9 @@ export class AutopilotCoordinator {
           plan &&
           !this.requiresRootBoundary(prior, plan) &&
           !this.executorDiagnosisRequired(prior) &&
+          (plan.modelPolicyVersion !== 1 ||
+            binding.status === 'ready' ||
+            binding.code === 'AUTHORIZED_REPLACEMENT_PENDING') &&
           this.currentExecutor(sessionId, plan, prior.consecutiveNoProgress, prior.executor)
         ) {
           this.enqueue(sessionId, async () => {
@@ -1305,6 +1572,7 @@ export class AutopilotCoordinator {
   }
   /** Handles only plan lifecycle safety; ordinary plan mutations are ignored. */
   planStatusChanged(sessionId: string): void {
+    this.reconcileExecutorBinding(sessionId);
     const prior = this.deps.store.find(sessionId);
     if (!prior) return;
     if (this.rejectModelPolicyExecution(sessionId)) return;
@@ -1457,7 +1725,7 @@ export class AutopilotCoordinator {
       nextEvaluationAt: null,
       ...(cancelled ? { lastControlId: null } : {}),
       stopReason: null,
-      executor: undefined,
+      executor: replacing ? undefined : prior.executor,
       blocking: undefined,
       supervision: recoverSafetyPause(
         consumeObsoleteWait(
@@ -1478,8 +1746,13 @@ export class AutopilotCoordinator {
   }
   /** Reacts only to fresh actor status; plan mutations are not scheduling signals. */
   activityChanged(sessionId: string): void {
+    this.reconcileExecutorBinding(sessionId);
     let prior = this.deps.store.find(sessionId);
     if (!prior?.requestedEnabled) return;
+    if (this.deps.pendingInteraction(sessionId)) {
+      if (prior.state !== 'attentionRequired') this.evaluate(sessionId);
+      return;
+    }
     const activity = this.deps.activity(sessionId);
     // A stale or absent activity projection is itself a mandatory wake input.
     // Do not require a probe lease to restore the authoritative topology.
@@ -1758,6 +2031,7 @@ export class AutopilotCoordinator {
   }
   private async fire(sessionId: string, generation: number): Promise<void> {
     this.timers.delete(sessionId);
+    const binding = this.reconcileExecutorBinding(sessionId);
     const current = this.deps.store.find(sessionId);
     if (!current || current.generation !== generation || !current.requestedEnabled) return;
     if (this.rejectModelPolicyExecution(sessionId)) return;
@@ -1830,6 +2104,9 @@ export class AutopilotCoordinator {
       !current.executor?.replacement &&
       !this.requiresRootBoundary(current, retained.plan) &&
       !this.executorDiagnosisRequired(current) &&
+      (retained.plan.modelPolicyVersion !== 1 ||
+        binding.status === 'ready' ||
+        binding.code === 'AUTHORIZED_REPLACEMENT_PENDING') &&
       this.currentExecutor(
         sessionId,
         retained.plan,
@@ -2053,6 +2330,13 @@ export class AutopilotCoordinator {
     event: SupervisedLifecycleEvent,
   ): Promise<boolean> {
     if (this.rejectModelPolicyExecution(sessionId)) return true;
+    const binding = this.reconcileExecutorBinding(sessionId);
+    if (
+      this.deps.plan(sessionId)?.plan.modelPolicyVersion === 1 &&
+      binding.status !== 'ready' &&
+      binding.code !== 'AUTHORIZED_REPLACEMENT_PENDING'
+    )
+      return false;
     const controller = this.deps.executorController;
     const retained = this.deps.plan(sessionId);
     const state = this.deps.store.find(sessionId);

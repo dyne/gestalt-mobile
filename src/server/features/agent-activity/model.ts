@@ -333,8 +333,9 @@ function childOutcome(
 ): SubagentActivity['outcome'] | undefined {
   if (status === 'error' || status === 'failed' || status === 'systemError' || status === 'errored')
     return 'failed';
-  if (status === 'interrupted' || status === 'shutdown' || action === 'close_agent')
-    return 'cancelled';
+  if (status === 'shutdown' || action === 'close_agent') return 'cancelled';
+  // Interrupt ends the current turn; unlike close_agent it leaves this writer resumable.
+  if (status === 'interrupted') return 'partial';
   if (status === 'completed' || status === 'idle') return 'partial';
   // A follow-up reopens the same physical child. Do not keep presenting its
   // previous boundary completion while its new turn is running.
